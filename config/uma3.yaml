@@ -1,0 +1,79 @@
+# ================================================================
+# UMA-3 Unified Configuration
+# ================================================================
+
+# ------------------------------
+# DB ROOT (all SQL stores live under this path)
+# ------------------------------
+storage:
+  db_root: "data/"         # UMA-3 will create SQL DBs inside here
+  sql_backend: "sqlite"    # future: postgres, mysql, etc.
+  vector_backend: "faiss"  # or "pinecone", "weaviate", "inmemory"
+  graph_backend: "disabled"  # "neo4j", "memgraph", "disabled"
+
+graph:
+  uri: ...
+  user: ...
+  password: ...
+  max_pool_size: ...
+# ------------------------------
+# Working Memory
+# ------------------------------
+working_memory:
+  max_tokens: 4096
+  warning_ratio: 0.7
+  hard_limit_ratio: 0.95
+  chunk_size: 20
+  # How many recent messages to preserve during compaction (minimum)
+  keep_recent_messages: 4
+  # Token fraction of `max_tokens` that recent messages should cover before
+  # summarizing older messages (hybrid token+message rule)
+  keep_recent_token_fraction: 0.1
+
+# ------------------------------
+# Embeddings
+# ------------------------------
+embedding:
+  provider: "ollama"
+  model: "text-embedding-3-small"
+  dimension: 1536
+
+# ------------------------------
+# LLM (UMA-3 internal)
+# ------------------------------
+llm:
+  provider: "ollama"
+  model: "gpt-4.1-mini"
+  ollama_model: "llama3"
+
+# ------------------------------
+# Retrieval
+# ------------------------------
+retrieval:
+  max_episodes: 5
+  max_facts: 10
+  max_skills: 5
+  max_graph_items: 5
+
+# ------------------------------
+# Consolidation Engine
+# ------------------------------
+consolidation:
+  enabled: true
+  cluster_similarity: 0.75
+  max_episodes_per_cycle: 200
+  prune_min_fact_salience: 0.2
+
+# ------------------------------
+# Feature Flags
+# ------------------------------
+features:
+  procedural_enabled: true
+  consolidation_enabled: true
+
+# Security toggles
+security:
+  # Whether to allow execution of Python code embedded in the YAML config.
+  # Default: false. Enabling this allows advanced plugin code in config and
+  # should only be used in trusted environments.
+  allow_config_code: false

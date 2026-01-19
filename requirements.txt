@@ -1,0 +1,13 @@
+numpy
+matplotlib
+scikit-learn
+neo4j
+weaviate-client
+pinecone-client
+openai
+faiss-cpu
+pytest
+aiohttp
+
+# Optional DB backend for Postgres support
+psycopg2-binary>=2.9

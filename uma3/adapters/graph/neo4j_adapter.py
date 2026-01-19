@@ -1,0 +1,156 @@
+"""
+uma3.adapters.graph.neo4j_adapter
+=================================
+
+Neo4jAdapter — unified Neo4j graph backend for UMA-3.
+
+This adapter implements the GraphAdapter interface and is intended to be
+the single Neo4j integration point for UMA-3. It wraps the official
+`neo4j` Python driver with:
+
+- Connection pooling
+- Safe query execution
+- Structured logging
+- Clear error handling
+
+Design goals
+------------
+- Keep UMA-3 core independent from Neo4j driver details.
+- Provide a simple, consistent API for running Cypher queries.
+- Make it easy to add retries, tracing, or async support later without
+  changing core logic.
+
+Coding Agent Instructions
+-------------------------
+- Do NOT put application or temporal-graph logic here; this is pure I/O.
+- If you add retries, make them configurable (max attempts, backoff).
+- If you later introduce async, consider a separate AsyncNeo4jAdapter
+  implementing the same GraphAdapter interface but with awaitables.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, List, Optional
+
+from neo4j import GraphDatabase, basic_auth, Driver, Session
+
+from .base import GraphAdapter
+
+logger = logging.getLogger(__name__)
+
+
+class Neo4jAdapter(GraphAdapter):
+    """
+    Unified Neo4j backend implementation for UMA-3.
+
+    Parameters
+    ----------
+    uri : str
+        Neo4j connection URI (e.g. 'bolt://localhost:7687').
+    user : str
+        Username for Neo4j authentication.
+    password : str
+        Password for Neo4j authentication.
+    max_pool_size : int, default=50
+        Maximum number of connections in the driver pool.
+
+    Notes
+    -----
+    - This adapter is synchronous and uses neo4j.GraphDatabase.driver.
+    - All queries should go through `run_query()`.
+    - Use `close()` during shutdown to free resources.
+    """
+
+    def __init__(
+        self,
+        uri: str,
+        user: str,
+        password: str,
+        max_pool_size: int = 50,
+    ) -> None:
+        if not uri:
+            raise ValueError("Neo4jAdapter: uri must not be empty")
+        if not user:
+            raise ValueError("Neo4jAdapter: user must not be empty")
+
+        try:
+            self._driver: Driver = GraphDatabase.driver(
+                uri,
+                auth=basic_auth(user, password),
+                max_connection_pool_size=max_pool_size,
+            )
+            # Optionally test connectivity:
+            # self._driver.verify_connectivity()
+            logger.info(
+                "Neo4jAdapter connected to %s with max_pool_size=%d",
+                uri,
+                max_pool_size,
+            )
+        except Exception:
+            logger.exception("Neo4jAdapter: failed to create driver for %s", uri)
+            raise
+
+    # ------------------------------------------------------------------ #
+    # GraphAdapter implementation
+    # ------------------------------------------------------------------ #
+
+    def run_query(
+        self,
+        cypher: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Execute a Cypher query and return all records as dictionaries.
+
+        Parameters
+        ----------
+        cypher : str
+            Cypher query text.
+        params : Optional[Dict[str, Any]], default=None
+            Query parameters (if any).
+
+        Returns
+        -------
+        List[Dict[str, Any]]
+            Result rows as dictionaries. Returns an empty list on error.
+
+        Error handling
+        --------------
+        - Logs exceptions with stack trace and returns [].
+        - Does not raise to the caller to avoid crashing the agent loop.
+          If you need stricter behavior, wrap this method at the caller
+          or adjust the policy here.
+        """
+        if not cypher:
+            logger.warning("Neo4jAdapter.run_query called with empty Cypher string.")
+            return []
+
+        try:
+            with self._driver.session() as session: 
+                result = session.run(cypher, params or {})
+                records = [dict(record) for record in result]
+                logger.debug(
+                    "Neo4jAdapter.run_query: executed Cypher with %d row(s) returned.",
+                    len(records),
+                )
+                return records
+        except Exception:
+            logger.exception(
+                "Neo4jAdapter.run_query: query failed. Cypher=%r, params=%r",
+                cypher,
+                params,
+            )
+            return []
+
+    def close(self) -> None:
+        """
+        Close the underlying Neo4j driver and release resources.
+
+        This method should be called during clean shutdown of UMA-3.
+        """
+        try:
+            self._driver.close()
+            logger.info("Neo4jAdapter: driver closed.")
+        except Exception:
+            logger.exception("Neo4jAdapter: failed to close driver.")
