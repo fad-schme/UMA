@@ -11,3 +11,6 @@ aiohttp
 
 # Optional DB backend for Postgres support
 psycopg2-binary>=2.9
+
+# Optional PDF parsing for examples
+PyPDF2

@@ -1,0 +1,84 @@
+"""
+uma3.core.semantic.ingestor
+===========================
+
+SemanticIngestor — Extract -> filter -> embed -> upsert.
+
+Safety guarantees
+-----------------
+- Never raises: returns [] on failures.
+- Logs each failure with enough context.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, List
+
+from ...types_fact import Fact
+from .extractor import FactExtractor
+from .scorer import SalienceScorer
+
+logger = logging.getLogger(__name__)
+
+
+class SemanticIngestor:
+    """Production-grade semantic ingestion pipeline."""
+
+    def __init__(
+        self,
+        llm: Any,
+        embedder: Any,
+        semantic_store: Any,
+        salience_threshold: float = 0.3,
+    ) -> None:
+        self.extractor = FactExtractor(llm, SalienceScorer())
+        self.embedder = embedder
+        self.semantic_store = semantic_store
+        self.threshold = float(salience_threshold)
+        logger.info("SemanticIngestor initialized (threshold=%.2f).", self.threshold)
+
+    async def extract(self, subject: str, text: str) -> List[Fact]:
+        try:
+            return await self.extractor.extract_from_text(subject, text)
+        except Exception:
+            logger.exception("SemanticIngestor.extract failed.")
+            return []
+
+    async def ingest(self, subject: str, text: str) -> List[Fact]:
+        candidates = await self.extract(subject, text)
+        if not candidates:
+            return []
+
+        selected = [f for f in candidates if float(f.meta.get("salience", 0.0)) >= self.threshold]
+        if not selected:
+            logger.debug("SemanticIngestor: no facts above threshold.")
+            return []
+
+        # embed text per fact
+        embed_texts = [f"{f.subject} {f.predicate} {f.object}" for f in selected]
+
+        try:
+            vectors = await self.embedder.embed(embed_texts)
+        except Exception:
+            logger.exception("SemanticIngestor: embedding failed.")
+            return []
+
+        if not isinstance(vectors, list) or len(vectors) != len(selected):
+            logger.error(
+                "SemanticIngestor: embedder returned invalid shape: expected=%d got=%r",
+                len(selected),
+                type(vectors),
+            )
+            return []
+
+        persisted: List[Fact] = []
+        for fact, vec in zip(selected, vectors):
+            try:
+                await self.semantic_store.upsert_fact(fact, vec)
+                persisted.append(fact)
+            except Exception:
+                logger.exception("SemanticIngestor: upsert_fact failed (fact_id=%s).", fact.id)
+
+        logger.info("SemanticIngestor: persisted %d facts.", len(persisted))
+        return persisted
