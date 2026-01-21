@@ -1,5 +1,5 @@
 """
-EpisodicSQLStore — Episodic memory store for UMA-3 (SQL + Vector index)
+EpisodicSQLStore — Episodic memory store for UMA (SQL + Vector index)
 
 This refactored implementation inherits from BaseVectorSQLStore to avoid
 repetition of SQL connection logic, vector retrieval boilerplate, and
@@ -130,6 +130,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             )
             conn.commit()
         except Exception:
+            self._safe_rollback(conn, "init_db")
             logger.exception("EpisodicSQLStore: failed initializing schema.")
             raise
         finally:
@@ -165,8 +166,12 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         """
         embedding = None
         try:
-            if "embedding" in row.keys() and row["embedding"]:
-                embedding = json.loads(row["embedding"])
+            if hasattr(row, "get"):
+                emb_val = row.get("embedding")
+            else:
+                emb_val = row["embedding"] if "embedding" in row else None
+            if emb_val:
+                embedding = json.loads(emb_val)
         except Exception:
             logger.exception("EpisodicSQLStore: failed to parse embedding for id=%s", row["id"])
 
@@ -230,9 +235,6 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 params=payload,
                 log_context="add_episode",
             )
-            conn.commit()
-
-            # Insert or update vector embedding
             try:
                 self.vector_index.upsert(
                     ids=[ep.id],
@@ -244,6 +246,21 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                     "EpisodicSQLStore.add_episode: vector upsert failed for id=%s",
                     ep.id,
                 )
+                self._safe_rollback(conn, "add_episode")
+                raise
+
+            try:
+                conn.commit()
+            except Exception:
+                self._safe_rollback(conn, "add_episode_commit")
+                try:
+                    self.vector_index.delete([ep.id])
+                except Exception:
+                    logger.exception(
+                        "EpisodicSQLStore.add_episode: vector delete failed after commit error id=%s",
+                        ep.id,
+                    )
+                raise
 
             logger.info("EpisodicSQLStore: upserted episode id=%s", ep.id)
 
@@ -373,6 +390,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 )
 
         except Exception:
+            self._safe_rollback(conn, "delete_episode")
             logger.exception("EpisodicSQLStore.delete_episode failed id=%s", episode_id)
             raise
         finally:
@@ -407,7 +425,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             return [self._row_to_object(row) for row in rows]
         except Exception:
             logger.exception("EpisodicSQLStore.list_episodes failed user_id=%s", user_id)
-            return []
+            raise
         finally:
             conn.close()
 
@@ -440,7 +458,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             return [self._row_to_object(row) for row in rows]
         except Exception:
             logger.exception("EpisodicSQLStore.list_recent failed user_id=%s", user_id)
-            return []
+            raise
         finally:
             conn.close()
 
@@ -487,7 +505,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             return ordered
         except Exception:
             logger.exception("EpisodicSQLStore.fetch_summaries failed.")
-            return []
+            raise
         finally:
             conn.close()
 
@@ -531,7 +549,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             return ordered
         except Exception:
             logger.exception("EpisodicSQLStore.fetch_transcripts failed.")
-            return []
+            raise
         finally:
             conn.close()
 
@@ -584,17 +602,26 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                     params=[cluster_id],
                     log_context="delete_cluster_members",
                 )
+                insert_sql = (
+                    "INSERT OR IGNORE INTO episode_cluster_members (cluster_id, episode_id) "
+                    "VALUES (?, ?)"
+                    if getattr(self._db_adapter, "paramstyle", "qmark") == "qmark"
+                    else "INSERT INTO episode_cluster_members (cluster_id, episode_id) "
+                    "VALUES (?, ?) ON CONFLICT DO NOTHING"
+                )
                 self._executemany(
                     conn,
-                    "INSERT OR IGNORE INTO episode_cluster_members (cluster_id, episode_id) VALUES (?, ?)",
+                    insert_sql,
                     [(cluster_id, eid) for eid in episode_ids],
                     log_context="insert_cluster_members",
                 )
                 conn.commit()
             except Exception:
+                self._safe_rollback(conn, "upsert_cluster_members")
                 logger.exception("EpisodicSQLStore: failed to update cluster members.")
             logger.debug("EpisodicSQLStore: upserted cluster id=%s", cluster_id)
         except Exception:
+            self._safe_rollback(conn, "upsert_cluster_summary")
             logger.exception("EpisodicSQLStore.upsert_cluster_summary failed.")
         finally:
             conn.close()
@@ -648,7 +675,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             return out
         except Exception:
             logger.exception("EpisodicSQLStore.list_cluster_summaries failed.")
-            return []
+            raise
         finally:
             conn.close()
 
@@ -670,7 +697,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             return [r["episode_id"] for r in rows]
         except Exception:
             logger.exception("EpisodicSQLStore._cluster_member_ids failed.")
-            return []
+            raise
 
     def _latest_episode_snapshot(self, conn, episode_ids: List[str]) -> Optional[dict]:
         """
@@ -696,7 +723,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             return {"summary": row["summary"], "timestamp": row["timestamp"]}
         except Exception:
             logger.exception("EpisodicSQLStore._latest_episode_snapshot failed.")
-            return None
+            raise
     # ------------------------------------------------------------------ #
     # Semantic Search (vector → SQL → Episode)
     # ------------------------------------------------------------------ #
@@ -735,4 +762,4 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             )
         except Exception:
             logger.exception("EpisodicSQLStore.search failed.")
-            return []
+            raise

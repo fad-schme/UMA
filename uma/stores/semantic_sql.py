@@ -1,5 +1,5 @@
 """
-SemanticSQLStore — SQL + VectorIndex backed semantic memory store for UMA-3.
+SemanticSQLStore — SQL + VectorIndex backed semantic memory store for UMA.
 
 This refactored implementation inherits from BaseVectorSQLStore to unify:
 - vector search logic,
@@ -7,7 +7,7 @@ This refactored implementation inherits from BaseVectorSQLStore to unify:
 - SQL connection handling,
 - consistent logging and error management.
 
-Semantic memory stores *Facts*, which represent structured knowledge in UMA-3:
+Semantic memory stores *Facts*, which represent structured knowledge in UMA:
 subject, predicate, object triples with metadata and timestamps.
 
 Responsibilities
@@ -41,7 +41,7 @@ from .base_vector_sql_store import BaseVectorSQLStore
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from ..adapters.vector.faiss_adapter import FaissIndex
-from ..core.conflict import FactResolver, LatestWinsFactResolver
+from ..core.utils.conflict import FactResolver, LatestWinsFactResolver
 from ..types_fact import Fact
 
 logger = logging.getLogger(__name__)
@@ -122,6 +122,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
             )
             conn.commit()
         except Exception:
+            self._safe_rollback(conn, "init_db")
             logger.exception("SemanticSQLStore: failed initializing schema.")
             raise
         finally:
@@ -232,9 +233,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
                 params=payload,
                 log_context="semantic_upsert",
             )
-            conn.commit()
-
-            # Embedding upsert
+            # Embedding upsert (commit after vector update)
             try:
                 self.vector_index.upsert(
                     ids=[canonical.id],
@@ -246,6 +245,21 @@ class SemanticSQLStore(BaseVectorSQLStore):
                     "SemanticSQLStore: vector upsert failed for fact id=%s",
                     canonical.id,
                 )
+                self._safe_rollback(conn, "upsert_fact")
+                raise
+
+            try:
+                conn.commit()
+            except Exception:
+                self._safe_rollback(conn, "upsert_fact_commit")
+                try:
+                    self.vector_index.delete([canonical.id])
+                except Exception:
+                    logger.exception(
+                        "SemanticSQLStore: vector delete failed after commit error id=%s",
+                        canonical.id,
+                    )
+                raise
 
             logger.info("SemanticSQLStore: upserted fact id=%s", canonical.id)
 
@@ -281,7 +295,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
             )
         except Exception:
             logger.exception("SemanticSQLStore.search failed.")
-            return []
+            raise
 
     # ------------------------------------------------------------------ #
     # Fact Listing (required by Consolidator + Pruner)
@@ -316,7 +330,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
 
         except Exception:
             logger.exception("SemanticSQLStore.list_facts_for_subject failed.")
-            return []
+            raise
         finally:
             conn.close()
 
@@ -349,7 +363,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
             return ordered
         except Exception:
             logger.exception("SemanticSQLStore.fetch_facts_by_ids failed.")
-            return []
+            raise
         finally:
             conn.close()
 
@@ -388,6 +402,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
             logger.info("SemanticSQLStore: deleted fact id=%s", fact_id)
 
         except Exception:
+            self._safe_rollback(conn, "delete_fact")
             logger.exception("SemanticSQLStore.delete_fact failed.")
             raise
         finally:

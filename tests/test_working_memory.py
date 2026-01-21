@@ -1,6 +1,6 @@
 import asyncio
 
-from uma3.core.working_memory.core import WorkingMemoryCore
+from uma.core.working_memory.core import WorkingMemoryCore
 
 
 class DummyLLM:

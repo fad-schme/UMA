@@ -1,5 +1,5 @@
 """
-UMA-3 Semantic Memory Subsystem (Core)
+UMA Semantic Memory Subsystem (Core)
 =====================================
 
 This package implements:

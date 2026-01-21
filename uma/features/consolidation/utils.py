@@ -1,5 +1,5 @@
 """
-Utility helpers for UMA-3 consolidation subsystem.
+Utility helpers for UMA consolidation subsystem.
 
 Here you can add:
 - date range utilities

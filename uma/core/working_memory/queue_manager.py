@@ -1,5 +1,5 @@
 """
-Queue management logic for UMA-3 working memory.
+Queue management logic for UMA working memory.
 
 This module contains a small policy engine that determines:
 

@@ -1,4 +1,4 @@
-from uma3.adapters.vector.inmemory import InMemoryVectorIndex
+from uma.adapters.vector.inmemory import InMemoryVectorIndex
 
 
 def test_inmemory_delete_removes_vectors():

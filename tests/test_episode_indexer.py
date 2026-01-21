@@ -1,6 +1,6 @@
 import asyncio
 
-from uma3.core.episodic.indexer import EpisodeIndexer
+from uma.core.episodic.indexer import EpisodeIndexer
 
 
 class DummyLLM:

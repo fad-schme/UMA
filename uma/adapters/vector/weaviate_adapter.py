@@ -1,5 +1,5 @@
 """
-Weaviate vector index adapter for UMA-3.
+Weaviate vector index adapter for UMA.
 
 Supports:
 - Near-vector search
@@ -20,6 +20,7 @@ import os
 
 import weaviate
 from .base import VectorIndex
+from ...core.utils.retry import retry_sync
 
 logger = logging.getLogger(__name__)
 
@@ -42,17 +43,24 @@ class WeaviateIndex(VectorIndex):
     ) -> None:
         metadata = metadata or [{} for _ in ids]
 
-        with self.client.batch as batch:
-            for _id, vec, meta in zip(ids, vectors, metadata):
-                if len(vec) != self.dim:
-                    raise ValueError("Vector dimension mismatch in Weaviate upsert")
+        def _call() -> None:
+            with self.client.batch as batch:
+                for _id, vec, meta in zip(ids, vectors, metadata):
+                    if len(vec) != self.dim:
+                        raise ValueError("Vector dimension mismatch in Weaviate upsert")
 
-                batch.add_data_object(
-                    data_object=meta,
-                    class_name=self.class_name,
-                    vector=vec,
-                    uuid=_id,
-                )
+                    batch.add_data_object(
+                        data_object=meta,
+                        class_name=self.class_name,
+                        vector=vec,
+                        uuid=_id,
+                    )
+
+        try:
+            retry_sync(_call)
+        except Exception:
+            logger.exception("WeaviateIndex.upsert failed.")
+            raise
 
     def query(
         self,
@@ -60,6 +68,10 @@ class WeaviateIndex(VectorIndex):
         k: int = 10,
         filters: Optional[Dict] = None,
     ) -> List[Tuple[str, float]]:
+        if len(vector) != self.dim:
+            raise ValueError(
+                f"WeaviateIndex.query: expected dim={self.dim}, got={len(vector)}"
+            )
         query = (
             self.client.query
             .get(self.class_name, ["uuid"])
@@ -68,10 +80,17 @@ class WeaviateIndex(VectorIndex):
         )
 
         if filters:
-            # TODO: add filter conversion for Weaviate
-            pass
+            raise ValueError("WeaviateIndex.query does not support filters yet.")
 
-        res = query.do()
+        def _call():
+            return query.do()
+
+        try:
+            res = retry_sync(_call)
+        except Exception:
+            logger.exception("WeaviateIndex.query failed.")
+            return []
+
         matches = res["data"]["Get"].get(self.class_name, [])
 
         return [(obj["uuid"], 0.0) for obj in matches]
@@ -81,9 +100,20 @@ class WeaviateIndex(VectorIndex):
             return
         deleted = 0
         for _id in ids:
-            try:
+            def _call() -> None:
                 self.client.data_object.delete(uuid=_id, class_name=self.class_name)
+
+            try:
+                retry_sync(_call)
                 deleted += 1
             except Exception:
                 logger.exception("WeaviateIndex.delete failed for id=%s", _id)
         logger.debug("WeaviateIndex.delete: deleted %d ids", deleted)
+
+    def verify_connectivity(self) -> bool:
+        """Best-effort connectivity check."""
+        try:
+            return bool(self.client.is_ready())
+        except Exception:
+            logger.exception("WeaviateIndex.verify_connectivity failed.")
+            return False

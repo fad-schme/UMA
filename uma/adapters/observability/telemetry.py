@@ -1,5 +1,5 @@
 """
-Telemetry helpers for UMA-3.
+Telemetry helpers for UMA.
 
 Provides:
 - Logging decorators

@@ -1,5 +1,5 @@
 """
-uma3.core.semantic.ingestor
+uma.core.semantic.ingestor
 ===========================
 
 SemanticIngestor — Extract -> filter -> embed -> upsert.

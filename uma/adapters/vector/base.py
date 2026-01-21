@@ -1,7 +1,7 @@
 """
-Vector index abstraction for UMA-3.
+Vector index abstraction for UMA.
 
-This provides a backend-agnostic interface for vector indices, so UMA-3
+This provides a backend-agnostic interface for vector indices, so UMA
 can support FAISS, Pinecone, Weaviate, etc., via the same contract.
 
 Coding agent instructions

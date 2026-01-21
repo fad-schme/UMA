@@ -14,7 +14,7 @@ NOT FOR PRODUCTION.
 This backend performs O(N) similarity search using Python lists.
 It is memory-bound and should not be used for large vector sets.
 
-Implements the VectorIndex API so it can plug into UMA-3 seamlessly.
+Implements the VectorIndex API so it can plug into UMA seamlessly.
 """
 
 
@@ -49,8 +49,8 @@ class InMemoryVectorIndex(VectorIndex):
             raise ValueError(f"InMemoryVectorIndex: invalid dimension {dim}")
 
         self.dim = dim
-        self.dimension = dim   # UMA-3 expects this attribute
-        self.index = self      # UMA-3 expects vector_index.index.* API
+        self.dimension = dim   # UMA expects this attribute
+        self.index = self      # UMA expects vector_index.index.* API
 
         # In-memory storage
         self._vectors: Dict[str, List[float]] = {}
@@ -132,7 +132,7 @@ class InMemoryVectorIndex(VectorIndex):
     @classmethod
     def fallback_if_faiss_unavailable(cls, dim: int):
         """
-        Factory method used by UMA-3 when FAISSIndex import fails.
+        Factory method used by UMA when FAISSIndex import fails.
         Ensures consistent logging and safe instantiation.
         """
         logger.warning(

@@ -1,8 +1,8 @@
 """
-uma3.core.retrieval.selector
+uma.core.retrieval.selector
 ============================
 
-MemorySelector — deterministic ranking + truncation for UMA-3 retrieval results.
+MemorySelector — deterministic ranking + truncation for UMA retrieval results.
 
 Responsibilities
 ----------------

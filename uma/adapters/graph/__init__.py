@@ -1,5 +1,5 @@
 """
-UMA-3 Temporal Graph Subsystem
+UMA Temporal Graph Subsystem
 ==============================
 
 Exports:

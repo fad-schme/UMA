@@ -1,8 +1,8 @@
 """
-Episodic Memory Subsystem (UMA-3 Core)
+Episodic Memory Subsystem (UMA Core)
 ======================================
 
-This package contains the full episodic memory implementation for UMA-3:
+This package contains the full episodic memory implementation for UMA:
 
     core.py        – EpisodicCore orchestrator
     indexer.py     – Episode creation, summarization, embedding

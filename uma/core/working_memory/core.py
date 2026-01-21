@@ -1,5 +1,5 @@
 """
-uma3.core.working_memory.core
+uma.core.working_memory.core
 =============================
 
 WorkingMemoryCore — short-term, mutable working context (MemGPT-style RAM).
@@ -240,10 +240,11 @@ class WorkingMemoryCore:
             logger.warning("WM compact returned empty summary user=%s", user_id)
             return
 
+        summary_tokens = self._buffer._estimate_tokens(summary)
         summary_msg = WorkingMemoryMessage(
             role="summary",
             content=summary,
-            token_estimate=len(summary.split()),
+            token_estimate=summary_tokens,
             metadata={"summary_of_indices": list(range(len(old_msgs)))},
         )
 

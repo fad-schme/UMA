@@ -1,5 +1,5 @@
 """
-OllamaEmbedder — UMA-3 EmbeddingInterface implementation.
+OllamaEmbedder — UMA EmbeddingInterface implementation.
 
 This version uses the official `ollama` Python package instead of HTTP calls.
 
@@ -26,10 +26,12 @@ Coding agent instructions:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Iterable, List, Optional
 
 from ...adapters.llm.base import EmbeddingInterface
+from .retry_utils import retryable
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +44,7 @@ except Exception:
 
 class OllamaEmbedder(EmbeddingInterface):
     """
-    UMA-3 embedding adapter for Ollama.
+    UMA embedding adapter for Ollama.
 
     Parameters
     ----------
@@ -113,6 +115,7 @@ class OllamaEmbedder(EmbeddingInterface):
         logger.critical("Unexpected OllamaEmbedder mode: %s", self.mode)
         raise RuntimeError(f"Invalid mode: {self.mode}")
 
+    @retryable()
     async def _embed_native(self, texts: List[str]) -> List[List[float]]:
         """
         Perform embedding using the official Ollama Python API.
@@ -129,7 +132,7 @@ class OllamaEmbedder(EmbeddingInterface):
             # For multiple inputs, the recommended call is one-at-a-time OR if supported:
             #   ollama.embed(model=..., input=[...])
             # The Python client supports list input.
-            response = ollama.embed(model=self.model, input=texts)
+            response = await asyncio.to_thread(ollama.embed, model=self.model, input=texts)
         except Exception as exc:
             logger.exception("Ollama embedding call failed: %s", exc)
             raise RuntimeError("Ollama embedding request failed.") from exc
@@ -152,6 +155,12 @@ class OllamaEmbedder(EmbeddingInterface):
                 len(texts), len(vectors)
             )
             raise RuntimeError("Embedding count mismatch from Ollama.")
+
+        for vec in vectors:
+            if len(vec) != self._dimension:
+                raise RuntimeError(
+                    f"Embedding dimension mismatch: expected {self._dimension}, got {len(vec)}"
+                )
 
         logger.debug("Received %d embeddings from Ollama.", len(vectors))
         return vectors

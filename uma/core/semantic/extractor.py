@@ -1,5 +1,5 @@
 """
-uma3.core.semantic.extractor
+uma.core.semantic.extractor
 ============================
 
 FactExtractor — LLM-based semantic fact extraction.

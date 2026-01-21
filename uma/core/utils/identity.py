@@ -1,5 +1,5 @@
 """
-uma3.core.utils.identity
+uma.core.utils.identity
 =======================
 
 Identity and normalization helpers.

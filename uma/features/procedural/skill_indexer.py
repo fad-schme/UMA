@@ -1,5 +1,5 @@
 """
-SkillIndexer for UMA-3 Procedural Memory.
+SkillIndexer for UMA Procedural Memory.
 
 This class converts skill definitions into:
 

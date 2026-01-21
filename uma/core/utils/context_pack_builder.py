@@ -2,7 +2,7 @@
 context_pack_builder.py
 =======================
 
-Transforms UMA-3 memory (from UMAMemory.get_user_context) into a
+Transforms UMA memory (from UMAMemory.get_user_context) into a
 RAG-ready structured context pack.
 
 This module does NOT generate prompts. It produces structured, 
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 class ContextPackBuilder:
     """
-    Convert UMA-3 memory into a standardized, RAG-ready context pack.
+    Convert UMA memory into a standardized, RAG-ready context pack.
     
     The output is deterministic, structured, and LLM-agnostic.
     """
@@ -155,6 +155,66 @@ class ContextPackBuilder:
 
         logger.info("ContextPackBuilder: Built RAG-ready context pack.")
         return pack
+
+    @staticmethod
+    def render_snippet(pack: Dict[str, Any]) -> str:
+        """
+        Render a compact, human-readable snippet for LLM prompts.
+        """
+        lines: List[str] = []
+
+        wm = pack.get("working_memory", [])
+        if wm:
+            lines.append("Working memory:")
+            for msg in wm[-8:]:
+                role = msg.get("role")
+                text = (msg.get("text") or "").strip()
+                if text:
+                    lines.append(f"- {role}: {text}")
+
+        episodic = pack.get("episodic", [])
+        if episodic:
+            lines.append("\nEpisodic:")
+            for ep in episodic[:5]:
+                summary = (ep.get("summary") or "").strip()
+                if summary:
+                    lines.append(f"- {summary}")
+
+        semantic = pack.get("semantic", [])
+        if semantic:
+            lines.append("\nSemantic facts:")
+            for fact in semantic[:8]:
+                subject = fact.get("subject", "unknown")
+                predicate = fact.get("predicate", "related_to")
+                obj = fact.get("object")
+                if isinstance(obj, dict):
+                    title = obj.get("title") or obj.get("text") or str(obj)
+                    snippet = (obj.get("text") or "").strip()
+                    snippet = snippet[:400] if snippet else ""
+                    lines.append(f"- {subject} {predicate} {title}")
+                    if snippet:
+                        lines.append(f"  excerpt: {snippet}")
+                else:
+                    lines.append(f"- {subject} {predicate} {obj}")
+
+        procedural = pack.get("procedural", [])
+        if procedural:
+            lines.append("\nProcedural skills:")
+            for skill in procedural[:5]:
+                name = skill.get("name") or "Unnamed"
+                desc = (skill.get("description") or "").strip()
+                if desc:
+                    lines.append(f"- {name}: {desc}")
+                else:
+                    lines.append(f"- {name}")
+
+        graph = pack.get("graph", [])
+        if graph:
+            lines.append("\nGraph:")
+            for node in graph[:5]:
+                lines.append(f"- {node}")
+
+        return "\n".join(lines).strip()
 
 
 def _get_attr_or_key(obj: Any, key: str, default: Any = None) -> Any:

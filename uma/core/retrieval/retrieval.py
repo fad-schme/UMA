@@ -1,8 +1,8 @@
 """
-uma3.core.retrieval.retrieval
+uma.core.retrieval.retrieval
 =============================
 
-MultiStoreRetriever — UMA-3 raw multi-store retrieval engine.
+MultiStoreRetriever — UMA raw multi-store retrieval engine.
 
 Responsibilities
 ----------------
@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from ..utils.identity import ensure_user_subject
 
 if TYPE_CHECKING:
-    from ..uma3_memory import UMAMemory
+    from ..uma_memory import UMAMemory
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +159,8 @@ class MultiStoreRetriever:
         if user_id is None:
             return []
         try:
-            res = await store.search(emb, user_id, k)
+            subject = ensure_user_subject(user_id)
+            res = await store.search(emb, subject, k)
             return res if isinstance(res, list) else []
         except Exception:
             logger.exception("MultiStoreRetriever: semantic retrieval failed.")

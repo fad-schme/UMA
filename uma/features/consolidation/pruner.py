@@ -1,5 +1,5 @@
 """
-UMA-3 Memory Pruner (Forgetting Mechanism)
+UMA Memory Pruner (Forgetting Mechanism)
 =========================================
 
 This module removes low-value or outdated memory items from:
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 class Pruner:
     """
-    Implements UMA-3 forgetting rules.
+    Implements UMA forgetting rules.
 
     Episodic Forgetting:
     --------------------

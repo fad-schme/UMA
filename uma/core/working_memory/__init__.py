@@ -19,7 +19,7 @@ Coding Agent Instructions
 -------------------------
 - Do NOT attach methods dynamically onto UMAMemory here.
 - Keep this orchestrator thin; heavy logic is in buffer/summarizer.
-- ALL failures must be logged but should never break UMA-3.
+- ALL failures must be logged but should never break UMA.
 """
 
 from __future__ import annotations

@@ -1,5 +1,5 @@
 """
-BaseVectorSQLStore — Common foundation for UMA-3 stores requiring both SQL
+BaseVectorSQLStore — Common foundation for UMA stores requiring both SQL
 persistence and vector-index retrieval.
 
 This class provides a consistent implementation of the retrieval pipeline:
@@ -204,25 +204,32 @@ class BaseVectorSQLStore(BaseSQLStore):
         ctx = f" [{log_context}]" if log_context else ""
         conn = self._conn()
 
-        # Large IN queries may break SQLite; warn for future chunking logic.
-        if len(ids) > 500:
+        chunk_size = 500
+        if len(ids) > chunk_size:
             logger.warning(
-                "%s Large ranked ID list length=%d%s; consider chunking.",
+                "%s Large ranked ID list length=%d%s; chunking to %d.",
                 self.__class__.__name__,
                 len(ids),
                 ctx,
+                chunk_size,
             )
 
         try:
-            placeholders = ",".join("?" for _ in ids)
-            sql = f"SELECT * FROM {self._table_name} WHERE {self._id_column} IN ({placeholders})"
-            rows = self._query_all(
-                conn,
-                sql,
-                ids,
-                log_context=log_context,
-            )
-            row_map = {r[self._id_column]: r for r in rows}
+            row_map = {}
+            for i in range(0, len(ids), chunk_size):
+                chunk = ids[i : i + chunk_size]
+                placeholders = ",".join("?" for _ in chunk)
+                sql = (
+                    f"SELECT * FROM {self._table_name} "
+                    f"WHERE {self._id_column} IN ({placeholders})"
+                )
+                rows = self._query_all(
+                    conn,
+                    sql,
+                    chunk,
+                    log_context=log_context,
+                )
+                row_map.update({r[self._id_column]: r for r in rows})
         except Exception:
             logger.exception(
                 "%s SQL fetch by IDs failed%s",

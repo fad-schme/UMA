@@ -1,4 +1,4 @@
-# uma3/core/retrieval/rlm/controller.py
+# uma/core/retrieval/rlm/controller.py
 
 from __future__ import annotations
 import asyncio
@@ -21,7 +21,7 @@ class RLMController:
     RLMController — Recursive, Bounded Memory Retrieval Controller.
 
     This controller implements **Recursive Language Model (RLM)-style retrieval**
-    for UMA-3. It allows the system to explore long-term memory iteratively
+    for UMA. It allows the system to explore long-term memory iteratively
     instead of relying on a single retrieval pass.
 
     IMPORTANT:
@@ -29,12 +29,12 @@ class RLMController:
     This controller is **not an agent** and **does not answer user queries**.
     This controller performs **memory navigation only**.
     It never plans tasks, reasons about solutions, or decides what to say.
-    All agent reasoning and response generation remain outside UMA-3.
+    All agent reasoning and response generation remain outside UMA.
 
     Its sole responsibility is memory navigation:
     deciding which memory stores to query next in order to improve context coverage.
 
-    Role in UMA-3
+    Role in UMA
     -------------
     • Used exclusively by `UMAMemory.get_user_context()`
     • Activated only when enabled via `retrieval.rlm.enabled`
@@ -80,7 +80,7 @@ class RLMController:
     • Treat long-term memory as an external environment
     • Keep working context small and relevant
     • Trade time (iterations) for space (context window)
-    • Preserve UMA-3's role as a memory system, not an agent
+    • Preserve UMA's role as a memory system, not an agent
     """
 
     def __init__(
@@ -278,10 +278,22 @@ class RLMController:
         state = pack.snapshot()
         state["snippets"] = self._build_snippet_summary(pack)
         state["predicate_counts"] = self._predicate_counts(pack)
+        state_json = json.dumps(state)
+        if self.max_return_chars and len(state_json) > self.max_return_chars:
+            state_json = state_json[: self.max_return_chars]
+            pack.warnings.append("state_truncated")
+
         prompt = (
-            "You are UMA-3 Retrieval Controller.\n"
-            "Decide which memory to retrieve next using bounded, safe actions.\n"
-            "Return JSON ONLY matching ControllerDecision schema.\n\n"
+            "You are UMA Retrieval Controller.\n\n"
+            "Goal: choose the minimal, most relevant memory retrieval actions needed "
+            "to answer the user's query.\n\n"
+            "Think silently using this checklist (do NOT reveal reasoning):\n"
+            "- UNDERSTAND the core question and what a useful answer should enable.\n"
+            "- ANALYZE which memory types matter (episodic, semantic, procedural, graph).\n"
+            "- REASON about gaps in the current snippets and what to fetch next.\n"
+            "- SYNTHESIZE the smallest safe set of retrieval actions.\n"
+            "- CONCLUDE by selecting actions or stopping.\n\n"
+            "Return JSON ONLY matching ControllerDecision schema. No prose.\n\n"
             "Allowed actions:\n"
             "- search_semantic(k, filters)\n"
             "- search_episodic(k, time_range)\n"
@@ -293,14 +305,17 @@ class RLMController:
             "- retrieve(memory_type)\n"
             "- expand_graph(memory_type='graph')\n"
             "- stop\n\n"
-            f"STATE:\n{json.dumps(state)}\n"
+            f"STATE:\n{state_json}\n"
         )
 
         try:
-            raw = await self.llm.generate(
-                [{"role": "system", "content": prompt}],
-                max_tokens=self.llm_max_tokens,
-                temperature=0.0,
+            raw = await asyncio.wait_for(
+                self.llm.generate(
+                    [{"role": "system", "content": prompt}],
+                    max_tokens=self.llm_max_tokens,
+                    temperature=0.0,
+                ),
+                timeout=self.timeout_s,
             )
             return ControllerDecision.from_json(raw)
         except Exception:

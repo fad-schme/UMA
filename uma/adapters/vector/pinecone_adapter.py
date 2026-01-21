@@ -1,5 +1,5 @@
 """
-Pinecone vector index adapter for UMA-3.
+Pinecone vector index adapter for UMA.
 
 This backend is used when Pinecone is preferred for:
 - High-scale vector search
@@ -21,6 +21,7 @@ import os
 import pinecone
 
 from .base import VectorIndex
+from ...core.utils.retry import retry_sync
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +60,11 @@ class PineconeIndex(VectorIndex):
 
             items.append({"id": _id, "values": vec, "metadata": meta})
 
-        try:
+        def _call() -> None:
             self.index.upsert(items)
+
+        try:
+            retry_sync(_call)
         except Exception:
             logger.exception("PineconeIndex: upsert failed.")
             raise
@@ -71,8 +75,15 @@ class PineconeIndex(VectorIndex):
         k: int = 10,
         filters: Optional[Dict] = None,
     ) -> List[Tuple[str, float]]:
+        if len(vector) != self.dim:
+            raise ValueError(
+                f"PineconeIndex.query: expected dim={self.dim}, got={len(vector)}"
+            )
+        def _call():
+            return self.index.query(vector=vector, top_k=k, filter=filters)
+
         try:
-            results = self.index.query(vector=vector, top_k=k, filter=filters)
+            results = retry_sync(_call)
         except Exception:
             logger.exception("PineconeIndex.query failed.")
             return []
@@ -82,8 +93,20 @@ class PineconeIndex(VectorIndex):
     def delete(self, ids: List[str]) -> None:
         if not ids:
             return
-        try:
+        def _call() -> None:
             self.index.delete(ids=ids)
+
+        try:
+            retry_sync(_call)
             logger.debug("PineconeIndex.delete: deleted %d ids", len(ids))
         except Exception:
             logger.exception("PineconeIndex.delete failed.")
+
+    def verify_connectivity(self) -> bool:
+        """Best-effort connectivity check."""
+        try:
+            self.index.describe_index_stats()
+            return True
+        except Exception:
+            logger.exception("PineconeIndex.verify_connectivity failed.")
+            return False

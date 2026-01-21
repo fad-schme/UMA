@@ -1,5 +1,5 @@
 """
-Production-ready Ollama LLM adapter for UMA-3.
+Production-ready Ollama LLM adapter for UMA.
 
 This module implements:
 - LLMInterface for chat-style generation
@@ -8,7 +8,7 @@ This module implements:
 - Timeout control
 - Centralized logging
 
-This allows UMA-3 to run fully locally using models like:
+This allows UMA to run fully locally using models like:
 - llama3
 - mistral
 - mixtral
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 class OllamaLLM(LLMInterface):
     """
-    UMA-3 adapter that calls a locally running Ollama server.
+    UMA adapter that calls a locally running Ollama server.
 
     Default endpoint:
         http://localhost:11434/api/chat
@@ -62,6 +62,10 @@ class OllamaLLM(LLMInterface):
         chat_endpoint: str = "/api/chat",
         timeout: float = 30.0,
     ):
+        if aiohttp is None:
+            raise RuntimeError(
+                "OllamaLLM requires 'aiohttp' to be installed. Install with: pip install aiohttp"
+            )
         self.model = model
         self.base_url = host.rstrip("/")
         self.chat_url = f"{self.base_url}{chat_endpoint}"
@@ -103,11 +107,6 @@ class OllamaLLM(LLMInterface):
             },
         }
 
-        if aiohttp is None:
-            raise RuntimeError(
-                "OllamaLLM requires 'aiohttp' to be installed. Install with: pip install aiohttp"
-            )
-
         async with aiohttp.ClientSession() as session:
             try:
                 async with asyncio.wait_for(
@@ -133,4 +132,4 @@ class OllamaLLM(LLMInterface):
             return data["message"]["content"]
         except Exception:
             logger.error("Malformed Ollama response: %s", data)
-            return ""
+            raise RuntimeError("Malformed Ollama response.")

@@ -4,7 +4,7 @@ EpisodicRetentionPolicy
 
 Defines retention rules for episodic memory.
 
-This allows UMA-3 to:
+This allows UMA to:
 - prune old episodes
 - implement TTL (time-to-live)
 - enforce size limits
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 class EpisodicRetentionPolicy:
     """
-    Production-Grade Episodic Retention Policy for UMA-3
+    Production-Grade Episodic Retention Policy for UMA
     ====================================================
 
     This class implements a comprehensive retention strategy for episodic
@@ -150,8 +150,9 @@ class EpisodicRetentionPolicy:
         for ep in survivors:
             try:
                 sal = 0.0
-                if hasattr(ep, "meta") and isinstance(ep.meta, dict):
-                    sal = float(ep.meta.get("salience", 0.0))
+                meta = getattr(ep, "meta", None)
+                if isinstance(meta, dict):
+                    sal = float(meta.get("salience", 0.0))
                 if sal < self.minimum_salience:
                     prunable.append(ep)
                 else:
@@ -170,10 +171,16 @@ class EpisodicRetentionPolicy:
             try:
                 if self.prefer_high_salience:
                     # Sort by salience DESC, then timestamp DESC
+                    def _salience(ep):
+                        meta = getattr(ep, "meta", None)
+                        if isinstance(meta, dict):
+                            return float(meta.get("salience", 0.0))
+                        return 0.0
+
                     survivors_sorted = sorted(
                         survivors,
                         key=lambda ep: (
-                            float(ep.meta.get("salience", 0.0)) if hasattr(ep, "meta") else 0.0,
+                            _salience(ep),
                             getattr(ep, "timestamp", datetime.min),
                         ),
                         reverse=True,
@@ -196,7 +203,15 @@ class EpisodicRetentionPolicy:
         # --------------------------------------------------------------
         # Final Result
         # --------------------------------------------------------------
-        prunable_set = set(prunable)  # Remove duplicates
+        prunable_set = []
+        seen = set()
+        for ep in prunable:
+            ep_id = getattr(ep, "id", None)
+            key = ep_id if isinstance(ep_id, str) and ep_id else id(ep)
+            if key in seen:
+                continue
+            seen.add(key)
+            prunable_set.append(ep)
         logger.debug(
             "EpisodicRetentionPolicy: TTL=%d, min_salience=%.2f, max=%d → %d prunable episodes.",
             self.ttl_hours,
@@ -205,4 +220,4 @@ class EpisodicRetentionPolicy:
             len(prunable_set),
         )
 
-        return list(prunable_set)
+        return prunable_set

@@ -1,5 +1,5 @@
 """
-UMA-3 Consolidator (Sleep Cycle)
+UMA Consolidator (Sleep Cycle)
 ================================
 
 The consolidator merges episodic memories into semantic knowledge:
@@ -21,7 +21,7 @@ Production Guarantees:
 • Deduplication of extracted facts.
 • Structured logging.
 • Graceful degradation if LLM or embedder errors occur.
-• No mutation of unrelated UMA-3 subsystems.
+• No mutation of unrelated UMA subsystems.
 """
 
 from __future__ import annotations

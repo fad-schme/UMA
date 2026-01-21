@@ -1,16 +1,16 @@
-# uma3/core/retrieval/rlm/__init__.py
+# uma/core/retrieval/rlm/__init__.py
 from .controller import RLMController
 from .environment import MemoryEnvironment, UMAMemoryEnvironment
 from .context_pack import ContextPack
 
 """
-uma3.core.retrieval.rlm
+uma.core.retrieval.rlm
 ======================
 
-Recursive Language Model (RLM) retrieval components for UMA-3.
+Recursive Language Model (RLM) retrieval components for UMA.
 
 This package implements **bounded, recursive memory retrieval**, allowing
-UMA-3 to explore large memory stores iteratively instead of relying on a
+UMA to explore large memory stores iteratively instead of relying on a
 single retrieval pass.
 
 IMPORTANT:
@@ -23,22 +23,22 @@ These components:
 They exist solely to improve **memory recall quality** by deciding
 *what memory to retrieve next*, not *what to say*.
 
-All reasoning and response generation remains outside UMA-3.
+All reasoning and response generation remains outside UMA.
 
 
-uma3.core.retrieval.rlm_controller
+uma.core.retrieval.rlm_controller
 =================================
 
-RLMController — Recursive (bounded) retrieval controller for UMA-3.
+RLMController — Recursive (bounded) retrieval controller for UMA.
 
 Why this exists
 ---------------
-UMA-3 already has:
+UMA already has:
 - Working Memory (WM)
 - Multi-store retrieval (episodic/semantic/procedural/graph)
 - Deterministic ranking/truncation (MemorySelector)
 
-But UMA-3 retrieval is currently "single-shot":
+But UMA retrieval is currently "single-shot":
     embed(query) -> retrieve top-k -> rank -> return.
 
 Recursive Language Models (RLM) style retrieval adds:

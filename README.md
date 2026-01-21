@@ -37,19 +37,155 @@ RLMController iteratively queries memory with bounded recursion:
 - Salience scoring prioritizes what matters in retrieval
 - Cluster summaries are precomputed for fast "chapter" recall
 
+### Observability (Telemetry + Timing)
+UMA ships lightweight helpers for logging and timing critical paths. Use them around
+retrieval, embeddings, consolidation, and storage operations to surface latency and errors.
+
+```python
+from uma.adapters.observability.telemetry import log_call
+from uma.adapters.observability.timing import time_block, async_time_block, timed
+
+@log_call("embed_query")
+def embed_query(text: str):
+    ...
+
+@timed
+async def retrieve(user_id: str, query: str):
+    ...
+
+with time_block("vector_search"):
+    index.search(vec)
+
+async with async_time_block("consolidation_run"):
+    await memory.consolidation_run(user_id)
+```
+
+### Health checks
+UMA exposes a lightweight readiness report for dependency checks (SQL, vector, graph, LLM, embedder).
+
+```python
+status = memory.health_check()
+if status["status"] != "ok":
+    print("Health issues:", status)
+```
+
+### Retries and error boundaries
+External dependencies (LLMs, graph backends, vector services) can be transiently unavailable.
+UMA applies conservative retries around these calls and keeps read paths resilient.
+If you need different retry behavior, wrap your adapters or supply custom providers.
+
+### Data consistency and recovery
+If a vector index drifts from SQL state, you can rebuild it from stored data.
+
+```python
+result = await memory.rebuild_vector_indexes(user_id="user-123")
+print(result)
+```
+
+### Retrieval performance harness
+Use the built-in script to measure end-to-end retrieval latency and emit metrics snapshots.
+
+```bash
+python3 scripts/perf_retrieval.py --iterations 100 --concurrency 20
+```
+
+Snapshot keys to watch:
+- `uma.get_user_context.latency` (end-to-end retrieval latency)
+- `uma.get_user_context.calls|path=rlm|` / `path=classic` / `path=wm_only`
+
+### Security and config hygiene
+Keep secrets out of YAML configs. Use environment variables or a secret manager.
+The config loader emits warnings when it detects likely secrets in config files.
+
+### Logging configuration
+UMA logs to both stdout/stderr and a file by default. Configure with:
+- `UMA_LOG_PATH` (e.g., `stdout`, `stderr`, or a file path)
+- `UMA_LOG_TO_FILE` (set to `0` to disable file logging)
+
+### Custom LLM / Embedding Providers
+You can load any custom class or callable via config. Use an import path
+(`module:attr`) and pass provider-specific options under `config`.
+
+```yaml
+llm:
+  provider: "my_pkg.llm:MyLLM"
+  model: "my-model"
+  config:
+    timeout: 20.0
+
+embedding:
+  provider: "my_pkg.embed:embed"
+  dimension: 1536
+  config:
+    preflight: true
+```
+
+#### Consolidation feature usage
+Consolidation is an optional feature that runs an asynchronous "sleep cycle" for a user. It:
+1) Fetches recent episodic memories
+2) Clusters similar episodes
+3) Summarizes clusters (LLM)
+4) Extracts salient facts (LLM)
+5) Upserts facts into semantic memory
+6) Prunes low-value episodes
+
+This does not run automatically. You enable the feature in config, then call it from your own
+scheduler, batch job, or pipeline hook.
+
+```yaml
+features:
+  load:
+    - name: consolidation
+      enabled: true
+      provider: "uma.features.consolidation.feature:ConsolidationFeature"
+```
+
+```python
+# Run from your own scheduler / batch job
+result = await memory.consolidation_run(user_id="user-123")
+# result.data schema: {"facts": List[Fact], "fact_count": int}
+if result.ok:
+    print("facts:", result.data["fact_count"])
+else:
+    print("consolidation failed:", result.errors)
+```
+
+#### Procedural feature usage
+Procedural memory is an optional feature that lets you store and retrieve skills using
+semantic search plus rule-based matching. It exposes async methods that return FeatureResult.
+
+```yaml
+features:
+  load:
+    - name: procedural
+      enabled: true
+      provider: "uma.features.procedural.feature:ProceduralFeature"
+      config:
+        max_k: 50
+```
+
+```python
+result = await memory.procedural_add_skill(skill, embedding)
+if not result.ok:
+    print("add failed:", result.errors)
+
+result = await memory.procedural_find_skills("book a flight", k=5)
+if result.ok:
+    print("skills:", result.data)
+else:
+    print("find failed:", result.errors)
+```
+
 ## Typical Usage
 
 ```python
-from uma3.core.uma3_memory import UMAMemory
-from uma3.core.pipeline import MemoryPipeline
+from uma.core.uma_memory import UMAMemory
 
-memory = UMAMemory.from_yaml("config/uma3.yaml")
+memory = UMAMemory.from_yaml("config/uma.yaml")
 memory.initialize()
 
-pipeline = MemoryPipeline(memory_client=memory, hooks=memory.hooks)
-
 # After your agent generates a reply:
-await pipeline.process_turn(
+await memory.process_turn(
     user_id="user-123",
     user_msg="Hey, I love cold brew.",
     assistant_reply="Noted — I will remember that.",

@@ -2,7 +2,7 @@
 semantic/core.py
 ================
 
-SemanticCore — The unified interface for UMA-3 semantic memory.
+SemanticCore — The unified interface for UMA semantic memory.
 
 Exposes:
     - extract(subject_or_user_id, text)
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 class SemanticCore:
     """
-    High-level interface for UMA-3 semantic memory.
+    High-level interface for UMA semantic memory.
 
     Wraps:
         - FactExtractor

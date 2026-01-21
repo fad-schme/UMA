@@ -1,4 +1,4 @@
-from uma3.core.config_types import RetrievalConfig
+from uma.core.utils.config_types import RetrievalConfig
 
 
 def test_retrieval_config_from_dict_with_rlm():

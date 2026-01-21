@@ -1,8 +1,8 @@
 """
-MemgraphAdapter — skeleton graph backend for UMA-3.
+MemgraphAdapter — skeleton graph backend for UMA.
 
 This adapter implements the GraphAdapter interface and is intended as
-a future backend for UMA-3 using Memgraph (mgclient) or GQL-over-Bolt.
+a future backend for UMA using Memgraph (mgclient) or GQL-over-Bolt.
 
 Memgraph supports:
 - Cypher-compatible queries
@@ -10,7 +10,7 @@ Memgraph supports:
 - Bolt protocol (similar to Neo4j)
 
 This skeleton provides the correct structure, logging, and error
-handling patterns expected for all UMA-3 graph adapters.
+handling patterns expected for all UMA graph adapters.
 
 Coding agent instructions
 -------------------------
@@ -30,8 +30,10 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from neo4j import GraphDatabase, basic_auth, Driver, Session
+from neo4j.graph import Node, Relationship, Path
 
 from .base import GraphAdapter
+from ...core.utils.retry import retry_sync
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +72,8 @@ class MemgraphAdapter(GraphAdapter):
     ) -> None:
         if not uri:
             raise ValueError("MemgraphAdapter: uri must not be empty")
+        if user is not None and password is None:
+            raise ValueError("MemgraphAdapter: password required when user is set")
 
         try:
             auth = basic_auth(user, password) if user is not None else None
@@ -97,6 +101,37 @@ class MemgraphAdapter(GraphAdapter):
             logger.exception("MemgraphAdapter: connectivity check failed.")
             return False
 
+    def _normalize_value(self, value: Any) -> Any:
+        if isinstance(value, Node):
+            return {
+                "id": value.id,
+                "labels": list(value.labels),
+                "properties": dict(value),
+            }
+        if isinstance(value, Relationship):
+            return {
+                "id": value.id,
+                "type": value.type,
+                "start_id": value.start_node.id,
+                "end_id": value.end_node.id,
+                "properties": dict(value),
+            }
+        if isinstance(value, Path):
+            return {
+                "nodes": [self._normalize_value(n) for n in value.nodes],
+                "relationships": [self._normalize_value(r) for r in value.relationships],
+            }
+        if isinstance(value, list):
+            return [self._normalize_value(v) for v in value]
+        if isinstance(value, tuple):
+            return [self._normalize_value(v) for v in value]
+        if isinstance(value, dict):
+            return {k: self._normalize_value(v) for k, v in value.items()}
+        return value
+
+    def _normalize_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        return {k: self._normalize_value(v) for k, v in record.items()}
+
     def run_query(
         self,
         cypher: str,
@@ -106,15 +141,18 @@ class MemgraphAdapter(GraphAdapter):
             logger.warning("MemgraphAdapter.run_query called with empty Cypher string.")
             return []
 
-        try:
+        def _call() -> List[Dict[str, Any]]:
             with self._driver.session() as session:  # type: Session
                 result = session.run(cypher, params or {})
-                records = [dict(record) for record in result]
-                logger.debug(
-                    "MemgraphAdapter.run_query: executed Cypher with %d row(s) returned.",
-                    len(records),
-                )
-                return records
+                return [self._normalize_record(dict(record)) for record in result]
+
+        try:
+            records = retry_sync(_call)
+            logger.debug(
+                "MemgraphAdapter.run_query: executed Cypher with %d row(s) returned.",
+                len(records),
+            )
+            return records
         except Exception:
             logger.exception(
                 "MemgraphAdapter.run_query: query failed. Cypher=%r, params=%r",

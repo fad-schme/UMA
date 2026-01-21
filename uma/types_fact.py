@@ -1,8 +1,8 @@
 """
-Core types for UMA-3 semantic memory.
+Core types for UMA semantic memory.
 
 This module defines the `Fact` dataclass, which is the canonical representation
-of semantic knowledge in UMA-3. A Fact is typically something stable or
+of semantic knowledge in UMA. A Fact is typically something stable or
 long-lived (e.g., user preferences, profile attributes, project relationships).
 
 Coding agent instructions
@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 @dataclass
 class Fact:
     """
-    Semantic fact in UMA-3.
+    Semantic fact in UMA.
 
     Attributes
     ----------

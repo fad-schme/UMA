@@ -2,7 +2,7 @@
 TemporalGraphCore
 =================
 
-A unified graph reasoning subsystem for UMA-3.
+A unified graph reasoning subsystem for UMA.
 
 Responsibilities:
 -----------------
@@ -21,6 +21,7 @@ This class is intentionally thin and backend-agnostic:
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -28,10 +29,12 @@ from ...adapters.graph.base import GraphAdapter
 
 logger = logging.getLogger(__name__)
 
+_GRAPH_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 class TemporalGraphCore:
     """
-    Unified, production-grade graph engine for UMA-3.
+    Unified, production-grade graph engine for UMA.
 
     Provides:
     - add_entity
@@ -58,6 +61,21 @@ class TemporalGraphCore:
             adapter.__class__.__name__,
         )
 
+    def _validate_identifier(self, name: str, kind: str, context: str) -> Optional[str]:
+        if not name or not isinstance(name, str) or not name.strip():
+            logger.error("TemporalGraphCore: invalid %s (empty) in %s.", kind, context)
+            return None
+        if not _GRAPH_IDENT_RE.match(name):
+            logger.error("TemporalGraphCore: invalid %s=%r in %s.", kind, name, context)
+            return None
+        return name
+
+    def _validate_id(self, value: str, kind: str, context: str) -> Optional[str]:
+        if not value or not isinstance(value, str) or not value.strip():
+            logger.error("TemporalGraphCore: invalid %s (empty) in %s.", kind, context)
+            return None
+        return value
+
     # ------------------------------------------------------------------
     # Entity Handling
     # ------------------------------------------------------------------
@@ -81,7 +99,17 @@ class TemporalGraphCore:
             Additional properties stored in the node.
         """
         labels = labels or ["Entity"]
-        labels_str = ":".join(labels)
+        valid_labels = []
+        for label in labels:
+            if self._validate_identifier(label, "label", "add_entity"):
+                valid_labels.append(label)
+            else:
+                logger.warning("TemporalGraphCore: dropped invalid label=%r.", label)
+        if not valid_labels:
+            return
+        labels_str = ":".join(valid_labels)
+        if not self._validate_id(entity_id, "entity_id", "add_entity"):
+            return
 
         cypher = f"""
         MERGE (n:{labels_str} {{id: $id}})
@@ -118,6 +146,12 @@ class TemporalGraphCore:
             Custom properties for the edge (e.g., timestamp, confidence).
         """
         rel = relation.upper()
+        if not self._validate_identifier(rel, "relation", "add_relationship"):
+            return
+        if not self._validate_id(source_id, "source_id", "add_relationship"):
+            return
+        if not self._validate_id(target_id, "target_id", "add_relationship"):
+            return
 
         cypher = f"""
         MATCH (a {{id: $source_id}}),
@@ -205,6 +239,12 @@ class TemporalGraphCore:
         self.add_entity(obj, labels=["Entity"])
 
         rel = predicate.upper()
+        if not self._validate_identifier(rel, "predicate", "insert_fact_triplet"):
+            return
+        if not self._validate_id(subject, "subject", "insert_fact_triplet"):
+            return
+        if not self._validate_id(obj, "object", "insert_fact_triplet"):
+            return
         props = {"confidence": confidence, **meta}
 
         # Create predicate-scoped relationship

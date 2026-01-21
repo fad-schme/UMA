@@ -1,10 +1,10 @@
 """
-UMAMemory — Core UMA-3 Memory Runtime
+UMAMemory — Core UMA Memory Runtime
 =====================================
 
-UMA-3 is a **memory SDK**, not an autonomous agent.
+UMA is a **memory SDK**, not an autonomous agent.
 
-This class owns and orchestrates all UMA-3 memory subsystems:
+This class owns and orchestrates all UMA memory subsystems:
 
     • Working Memory (short-term conversational state)
     • Episodic Memory (indexed event history)
@@ -13,34 +13,34 @@ This class owns and orchestrates all UMA-3 memory subsystems:
     • Temporal Graph (optional knowledge graph)
     • RetrievalService (developer-facing recall API)
 
-UMA-3 does **not** generate assistant replies and does **not** perform
+UMA does **not** generate assistant replies and does **not** perform
 agent reasoning. Developers bring their own LLM or agent loop and use
-UMA-3 strictly for memory management.
+UMA strictly for memory management.
 
 Typical developer workflow
 --------------------------
 
-1. Initialize UMA-3:
+1. Initialize UMA:
 
-    memory = UMAMemory.from_yaml("uma3.yaml")
+    memory = UMAMemory.from_yaml("uma.yaml")
     memory.initialize()
 
 2. After the developer's agent produces a reply, store the memory turn:
 
-    await pipeline.process_turn(
+    await memory.process_turn(
         user_id=user_id,
         user_msg=user_message,
         assistant_reply=final_agent_reply,
     )
 
-   The MemoryPipeline handles:
+   This uses an internal ingestion pipeline for:
         - working memory update + compaction
         - episodic memory generation
         - semantic fact ingestion
         - graph updates
         - lifecycle hooks
 
-3. When constructing a prompt for the agent, fetch UMA-3 context:
+3. When constructing a prompt for the agent, fetch UMA context:
 
     ctx = await memory.get_user_context(
         user_id=user_id,
@@ -58,7 +58,7 @@ Typical developer workflow
         }
 
 4. Developers decide how to inject this memory into their agent prompts.
-   UMA-3 never performs reasoning or constructs prompts on its own.
+   UMA never performs reasoning or constructs prompts on its own.
 
 Internal retrieval components
 -----------------------------
@@ -66,14 +66,14 @@ Internal retrieval components
 
     • memory_env
         An instance of UMAMemoryEnvironment.
-        This provides a safe, read-only abstraction over UMA-3 memory stores
+        This provides a safe, read-only abstraction over UMA memory stores
         used exclusively by the RLMController.
 
     • rlm_controller
         An optional RLMController instance.
         When enabled via configuration, it performs bounded, recursive
         memory retrieval using the configured LLM as a control model.
-        When disabled or unavailable, UMA-3 falls back to classic retrieval.
+        When disabled or unavailable, UMA falls back to classic retrieval.
 
     These components:
     • Are not part of the public API
@@ -83,28 +83,30 @@ Internal retrieval components
 
 Design Philosophy
 -----------------
-- UMA-3 provides *memory operations*, not agent behaviors.
-- All reasoning, tool use, and final reply generation happen outside UMA-3.
-- UMA-3 focuses on correctness, retrieval quality, summarization, and
+- UMA provides *memory operations*, not agent behaviors.
+- All reasoning, tool use, and final reply generation happen outside UMA.
+- UMA focuses on correctness, retrieval quality, summarization, and
   long-term memory structure.
 """
 
 from __future__ import annotations
 
 import logging
+import inspect
 from typing import Any, Dict, Optional
 
 from .memory_config import UMAConfig     # YAML loader + validation (dict-like)
-from .config_types import (
+from .utils.config_types import (
     LLMConfig,
     EmbeddingConfig,
     WorkingMemorySettings,
     RetrievalConfig,
     FeaturesConfig,
     ConsolidationConfig,
+    parse_plugin_spec,
 )
 
-from .hooks import UMAHooks
+from .utils.hooks import UMAHooks
 from .working_memory.core import WorkingMemoryCore
 from .episodic.core import EpisodicCore
 from .episodic.indexer import EpisodeIndexer
@@ -112,6 +114,8 @@ from .episodic.policies import EpisodicRetentionPolicy
 from .semantic.core import SemanticCore
 from .retrieval.service import RetrievalService
 from .graph import TemporalGraphCore
+from ..adapters.llm.base import EmbeddingInterface, LLMInterface
+from ..adapters.llm.callable_adapter import CallableEmbedderAdapter, CallableLLMAdapter
 
 # Stores
 from ..stores.episodic_sql import EpisodicSQLStore
@@ -124,15 +128,14 @@ from ..adapters.vector.faiss_adapter import FaissIndex
 from ..adapters.graph.neo4j_adapter import Neo4jAdapter
 
 # Optional Features
-from ..features.procedural.feature import ProceduralFeature
-from ..features.consolidation.feature import ConsolidationFeature
+from .utils.registry import FeatureLoader, FeaturePolicy, default_feature_registry
 
 logger = logging.getLogger(__name__)
 
 
 class UMAMemory:
     """
-    UMA-3 Memory Runtime Container.
+    UMA Memory Runtime Container.
 
     This class:
         - Initializes all core subsystems
@@ -140,11 +143,11 @@ class UMAMemory:
     - Loads optional features via direct attachment
 
     Developers ONLY interact with:
-        memory = UMAMemory.from_yaml("uma3.yaml")
+        memory = UMAMemory.from_yaml("uma.yaml")
         memory.initialize()
 
         # after their own agent produces a reply:
-        await pipeline.process_turn(user_id, user_msg, assistant_reply)
+        await memory.process_turn(user_id=user_id, user_msg=user_msg, assistant_reply=assistant_reply)
 
         # when building prompts:
         ctx = await memory.get_user_context(user_id, query_text)
@@ -155,11 +158,11 @@ class UMAMemory:
         storage           – {db_root, sql_backend, vector_backend, graph_backend}
         working_memory    – WM token window + thresholds
         embedding         – provider, model, dimension
-        llm               – UMA-3 internal LLM provider + model
+        llm               – UMA internal LLM provider + model
         retrieval         – caps for episodes/facts/skills/graph items
         consolidation     – cluster_similarity, max_episodes_per_cycle,
                             prune_min_fact_salience
-        features          – {procedural_enabled, consolidation_enabled}
+        features          – {load, policy}
         graph             – (only required when storage.graph_backend != "disabled")
     """
 
@@ -205,6 +208,7 @@ class UMAMemory:
         # Hooks + Feature attachment registry
         self.hooks = UMAHooks()
         self.features: Dict[str, Any] = {}
+        self._feature_policy = FeaturePolicy()
 
         # Core runtime components (initialized later)
         self.llm: Any = None
@@ -228,7 +232,7 @@ class UMAMemory:
 
     def initialize(self) -> None:
         """
-        Initialize all REQUIRED UMA-3 subsystems in a safe, idempotent way.
+        Initialize all REQUIRED UMA subsystems in a safe, idempotent way.
 
         RetrievalService is wired exactly once and never overwritten.
         """
@@ -236,7 +240,7 @@ class UMAMemory:
             logger.debug("UMAMemory.initialize(): already initialized — skipping.")
             return
 
-        logger.info("Initializing UMA-3 Memory Runtime...")
+        logger.info("Initializing UMA Memory Runtime...")
 
         # 1. Load LLM + embedder
         self._init_llm_and_embedder()
@@ -253,7 +257,13 @@ class UMAMemory:
         # 5. Register optional features
         self._init_optional_features()
 
-        # 6. Wire RetrievalService EXACTLY once
+        # 6. Initialize pipeline for ingestion
+        if getattr(self, "pipeline", None) is None:
+            from .utils.pipeline import MemoryPipeline
+
+            self.pipeline = MemoryPipeline(memory_client=self, hooks=self.hooks)
+
+        # 7. Wire RetrievalService EXACTLY once
         if self.retrieval_service is None:
             try:
                 self.retrieval_service = RetrievalService(
@@ -267,7 +277,7 @@ class UMAMemory:
         else:
             logger.debug("RetrievalService already initialized — not overwriting.")
 
-        # 7. Wire RLM Controller (optional, retrieval-side only)
+        # 8. Wire RLM Controller (optional, retrieval-side only)
         rlm_cfg = self.retrieval_cfg.rlm
 
         if rlm_cfg is not None and rlm_cfg.enabled:
@@ -301,7 +311,7 @@ class UMAMemory:
 
         # Mark initialization complete
         self.initialized = True
-        logger.info("UMA-3 Memory Runtime initialized successfully.")
+        logger.info("UMA Memory Runtime initialized successfully.")
 
     # ----------------------------------------------------------------------
     # LLM + Embedder Initialization (Typed Configs)
@@ -319,33 +329,60 @@ class UMAMemory:
 
         # ----------------------------- LLM -----------------------------
         if self.llm_cfg.provider == "openai":
-            from uma3.adapters.llm.openai_llm import OpenAILLM
+            from uma.adapters.llm.openai_llm import OpenAILLM
 
-            self.llm = OpenAILLM(model=self.llm_cfg.model)
+            llm_kwargs = {**self.llm_cfg.config}
+            llm_kwargs.pop("model", None)
+            self.llm = OpenAILLM(
+                model=self.llm_cfg.model,
+                **llm_kwargs,
+            )
             logger.info("Loaded OpenAI LLM (model=%s)", self.llm_cfg.model)
 
         elif self.llm_cfg.provider == "ollama":
-            from uma3.adapters.llm.ollama_llm import OllamaLLM
+            from uma.adapters.llm.ollama_llm import OllamaLLM
 
             model = self.llm_cfg.ollama_model or self.llm_cfg.model
-            self.llm = OllamaLLM(model=model)
+            llm_kwargs = {**self.llm_cfg.config}
+            llm_kwargs.pop("model", None)
+            self.llm = OllamaLLM(model=model, **llm_kwargs)
             logger.info("Loaded Ollama LLM (model=%s)", model)
 
         else:
-            raise ValueError(f"Unsupported llm.provider={self.llm_cfg.provider!r}")
+            llm_cls = parse_plugin_spec(self.llm_cfg.provider)
+            llm_kwargs = {**self.llm_cfg.config}
+            if self.llm_cfg.model and "model" not in llm_kwargs:
+                llm_kwargs["model"] = self.llm_cfg.model
+            if isinstance(llm_cls, LLMInterface):
+                self.llm = llm_cls
+            elif inspect.isclass(llm_cls):
+                self.llm = llm_cls(**llm_kwargs)
+            elif callable(llm_cls):
+                self.llm = CallableLLMAdapter(
+                    callable_fn=llm_cls,
+                    name=self.llm_cfg.provider,
+                    preflight=bool(llm_kwargs.pop("preflight", True)),
+                    default_kwargs=llm_kwargs,
+                )
+            else:
+                raise TypeError(f"Unsupported LLM provider type: {type(llm_cls)}")
+            logger.info("Loaded custom LLM adapter (%s)", self.llm_cfg.provider)
 
         # --------------------------- EMBEDDER --------------------------
         if self.embedding_cfg.provider == "openai":
-            from uma3.adapters.llm.openai_embedding import OpenAIEmbedder
+            from uma.adapters.llm.openai_embedding import OpenAIEmbedder
 
+            embed_kwargs = {**self.embedding_cfg.config}
+            embed_kwargs.pop("model", None)
             self.embedder = OpenAIEmbedder(
                 model=self.embedding_cfg.model,
                 dimension=self.embedding_cfg.dimension,
+                **embed_kwargs,
             )
             logger.info("Loaded OpenAI embedder (model=%s)", self.embedding_cfg.model)
 
         elif self.embedding_cfg.provider == "ollama":
-            from uma3.adapters.llm.ollama_embedding import OllamaEmbedder
+            from uma.adapters.llm.ollama_embedding import OllamaEmbedder
 
             if not (self.embedding_cfg.model and self.embedding_cfg.dimension):
                 raise ValueError(
@@ -353,10 +390,15 @@ class UMAMemory:
                     "in the embedding configuration."
                 )
 
+            embed_kwargs = {**self.embedding_cfg.config}
+            embed_kwargs.pop("model", None)
+            embed_kwargs.pop("dimension", None)
+            if "mode" not in embed_kwargs:
+                embed_kwargs["mode"] = "native"
             self.embedder = OllamaEmbedder(
                 model=self.embedding_cfg.model,
-                mode="native",
                 dimension=self.embedding_cfg.dimension,
+                **embed_kwargs,
             )
             logger.info(
                 "Loaded Ollama embedder (model=%s, dimension=%d)",
@@ -365,7 +407,27 @@ class UMAMemory:
             )
 
         else:
-            raise ValueError(f"Unsupported embedding.provider={self.embedding_cfg.provider!r}")
+            embed_cls = parse_plugin_spec(self.embedding_cfg.provider)
+            embed_kwargs = {**self.embedding_cfg.config}
+            if self.embedding_cfg.model and "model" not in embed_kwargs:
+                embed_kwargs["model"] = self.embedding_cfg.model
+            if "dimension" not in embed_kwargs:
+                embed_kwargs["dimension"] = self.embedding_cfg.dimension
+            if isinstance(embed_cls, EmbeddingInterface):
+                self.embedder = embed_cls
+            elif inspect.isclass(embed_cls):
+                self.embedder = embed_cls(**embed_kwargs)
+            elif callable(embed_cls):
+                self.embedder = CallableEmbedderAdapter(
+                    callable_fn=embed_cls,
+                    dimension=self.embedding_cfg.dimension,
+                    name=self.embedding_cfg.provider,
+                    preflight=bool(embed_kwargs.pop("preflight", True)),
+                    default_kwargs=embed_kwargs,
+                )
+            else:
+                raise TypeError(f"Unsupported embedder provider type: {type(embed_cls)}")
+            logger.info("Loaded custom embedder adapter (%s)", self.embedding_cfg.provider)
 
         logger.info("LLM + Embedder initialization successful.")
 
@@ -376,7 +438,7 @@ class UMAMemory:
         """
         Initialize all SQL + vector stores according to the unified storage config.
 
-        storage.db_root        – root folder where UMA-3 creates all SQL DB files
+        storage.db_root        – root folder where UMA creates all SQL DB files
         storage.sql_backend    – sqlite | postgres
         storage.vector_backend – faiss | pinecone | weaviate | inmemory
 
@@ -411,7 +473,7 @@ class UMAMemory:
         elif sql_backend == "postgres":
             # Optional future backend: PostgresAdapter
             try:
-                from uma3.adapters.db.postgres_adapter import PostgresAdapter
+                from uma.adapters.db.postgres_adapter import PostgresAdapter
             except ImportError as exc:
                 logger.exception("PostgresAdapter import failed.")
                 raise RuntimeError(
@@ -436,7 +498,7 @@ class UMAMemory:
 
         if vector_backend == "faiss":
             # Prefer FAISS; fall back to in-memory if unavailable
-            from uma3.adapters.vector.inmemory import InMemoryVectorIndex
+            from uma.adapters.vector.inmemory import InMemoryVectorIndex
 
             def vector_init(d: int):
                 try:
@@ -448,12 +510,12 @@ class UMAMemory:
                     return InMemoryVectorIndex.fallback_if_faiss_unavailable(d)
 
         elif vector_backend == "inmemory":
-            from uma3.adapters.vector.inmemory import InMemoryVectorIndex
+            from uma.adapters.vector.inmemory import InMemoryVectorIndex
 
             vector_init = lambda d: InMemoryVectorIndex(d)
 
         elif vector_backend == "pinecone":
-            from uma3.adapters.vector.pinecone_adapter import PineconeIndex
+            from uma.adapters.vector.pinecone_adapter import PineconeIndex
 
             index_name = vector_cfg.get("index_name", "")
             if not index_name:
@@ -461,7 +523,7 @@ class UMAMemory:
             vector_init = lambda d: PineconeIndex(index_name=index_name, dim=d)
 
         elif vector_backend == "weaviate":
-            from uma3.adapters.vector.weaviate_adapter import WeaviateIndex
+            from uma.adapters.vector.weaviate_adapter import WeaviateIndex
 
             url = vector_cfg.get("url", "")
             api_key = vector_cfg.get("api_key", "")
@@ -511,7 +573,7 @@ class UMAMemory:
 
     def _init_core_subsystems(self) -> None:
         """
-        Initialize core UMA-3 subsystems that depend on:
+        Initialize core UMA subsystems that depend on:
             - LLM + embedder
             - SQL + vector stores
 
@@ -647,6 +709,7 @@ class UMAMemory:
             user = graph_cfg.get("user")
             password = graph_cfg.get("password")
             pool = graph_cfg.get("max_pool_size", 20)
+            database = graph_cfg.get("database")
 
             if not uri or not user or not password:
                 raise ValueError(
@@ -660,6 +723,7 @@ class UMAMemory:
                     user=user,
                     password=password,
                     max_pool_size=pool,
+                    database=database,
                 )
             except Exception as exc:
                 logger.exception("Neo4jAdapter initialization failed.")
@@ -669,7 +733,7 @@ class UMAMemory:
                 ) from exc
 
         elif backend == "memgraph":
-            from uma3.adapters.graph.memgraph_adapter import MemgraphAdapter
+            from uma.adapters.graph.memgraph_adapter import MemgraphAdapter
 
             uri = graph_cfg.get("uri")
             pool = graph_cfg.get("max_pool_size", 20)
@@ -716,31 +780,101 @@ class UMAMemory:
     # ----------------------------------------------------------------------
 
     def _init_optional_features(self) -> None:
-        """Attach optional UMA-3 features (procedural, consolidation)."""
-        if self.features_cfg.procedural_enabled:
-            try:
-                ProceduralFeature(
-                    store=self.procedural_store,
-                    embedder=self.embedder,
-                ).attach(self)
-                logger.info("ProceduralFeature attached.")
-            except Exception:
-                logger.exception("Failed to attach ProceduralFeature.")
+        """Attach optional UMA features from config."""
+        policy_cfg = self.features_cfg.policy or {}
+        self._feature_policy = FeaturePolicy(
+            on_attach_error=str(policy_cfg.get("on_attach_error", "log_and_skip")),
+            allow_method_override=bool(policy_cfg.get("allow_method_override", False)),
+        )
 
-        if self.features_cfg.consolidation_enabled:
-            try:
-                ConsolidationFeature(
-                    episodic_store=self.episodic_store,
-                    semantic_store=self.semantic_store,
-                    llm=self.llm,
-                    embedder=self.embedder,
-                    cluster_similarity=self.consolidation_cfg.cluster_similarity,
-                    max_episodes_per_cycle=self.consolidation_cfg.max_episodes_per_cycle,
-                ).attach(self)
-                logger.info("ConsolidationFeature attached.")
-            except Exception:
-                logger.exception("Failed to attach ConsolidationFeature.")
+        registry = default_feature_registry()
+        registry.register_entry_points()
+        loader = FeatureLoader(registry, self._feature_policy)
 
+        services = {
+            "store": self.procedural_store,
+            "episodic_store": self.episodic_store,
+            "semantic_store": self.semantic_store,
+            "llm": self.llm,
+            "embedder": self.embedder,
+            "hooks": self.hooks,
+            "graph_core": self.graph_core,
+            "cluster_similarity": self.consolidation_cfg.cluster_similarity,
+            "max_episodes_per_cycle": self.consolidation_cfg.max_episodes_per_cycle,
+        }
+
+        loader.load_from_config(
+            memory_client=self,
+            feature_cfgs=self.features_cfg.load,
+            services=services,
+        )
+
+    def register_methods(
+        self,
+        feature_name: str,
+        methods: Dict[str, Any],
+        allow_override: Optional[bool] = None,
+    ) -> None:
+        """Attach feature methods to UMAMemory with collision checks."""
+        allow_override = (
+            self._feature_policy.allow_method_override
+            if allow_override is None
+            else allow_override
+        )
+        for name, func in methods.items():
+            if not allow_override and hasattr(self, name):
+                raise ValueError(
+                    f"Feature '{feature_name}' attempted to override '{name}'"
+                )
+            setattr(self, name, func)
+
+    def health_check(self) -> Dict[str, Any]:
+        """
+        Run basic dependency readiness checks.
+
+        Returns a dict with overall status and per-dependency details.
+        """
+        if not self.initialized:
+            return {
+                "status": "error",
+                "checks": {
+                    "memory": {
+                        "name": "memory",
+                        "status": "error",
+                        "detail": "UMAMemory not initialized",
+                        "latency_ms": None,
+                    }
+                },
+            }
+
+        from .utils.health import run_health_checks
+
+        return run_health_checks(self)
+
+    async def rebuild_vector_indexes(
+        self,
+        *,
+        user_id: Optional[str] = None,
+        include_episodic: bool = True,
+        include_semantic: bool = True,
+        include_procedural: bool = True,
+        batch_size: int = 32,
+    ) -> Dict[str, Any]:
+        """
+        Rebuild vector indexes from SQL-backed data.
+
+        This is a recovery utility and should be used in maintenance jobs.
+        """
+        from .utils.maintenance import rebuild_vector_indexes
+
+        return await rebuild_vector_indexes(
+            self,
+            user_id=user_id,
+            include_episodic=include_episodic,
+            include_semantic=include_semantic,
+            include_procedural=include_procedural,
+            batch_size=batch_size,
+        )
     
     # ----------------------------------------------------------------------
     # PUBLIC DEVELOPER API — Unified User Context (WM + LT Retrieval)
@@ -749,7 +883,7 @@ class UMAMemory:
         """
         Return a unified, developer-facing context pack for retrieval-augmented agents.
 
-        UMA-3 is a memory SDK:
+        UMA is a memory SDK:
         - No assistant reply generation
         - No prompt building
         - Retrieval only
@@ -772,54 +906,72 @@ class UMAMemory:
                 "graph": [...],
             }
         """
+        from ..adapters.observability.metrics import increment, timed
+
         if not user_id or not isinstance(user_id, str):
             raise ValueError("UMAMemory.get_user_context: user_id must be a non-empty string.")
         if not query_text or not isinstance(query_text, str):
             raise ValueError("UMAMemory.get_user_context: query_text must be a non-empty string.")
 
-        # 1) Stored WM
-        try:
-            wm_stored = self.working_memory.get_context(user_id) if self.working_memory else []
-        except Exception:
-            logger.exception("UMAMemory.get_user_context: failed to load WM user=%s", user_id)
-            wm_stored = []
-
-        # If retrieval isn't wired, return WM only
-        if not getattr(self, "retrieval_service", None):
-            logger.warning("UMAMemory.get_user_context: retrieval_service not initialized; WM-only user=%s", user_id)
-            return {
-                "working_memory": wm_stored,
-                "episodic": [],
-                "semantic": [],
-                "procedural": [],
-                "graph": [],
-            }
-
-        # 2) Prefer RLM retrieval
-        if getattr(self, "rlm_controller", None) is not None:
+        with timed("uma.get_user_context.latency"):
+            # 1) Stored WM
             try:
-                pack = await self.rlm_controller.retrieve_context(user_id=user_id, query_text=query_text)
+                wm_stored = self.working_memory.get_context(user_id) if self.working_memory else []
+            except Exception:
+                logger.exception("UMAMemory.get_user_context: failed to load WM user=%s", user_id)
+                wm_stored = []
+
+            # If retrieval isn't wired, return WM only
+            if not getattr(self, "retrieval_service", None):
+                increment("uma.get_user_context.calls", tags={"path": "wm_only"})
+                logger.warning(
+                    "UMAMemory.get_user_context: retrieval_service not initialized; WM-only user=%s",
+                    user_id,
+                )
                 return {
                     "working_memory": wm_stored,
-                    "episodic": pack.episodes,
-                    "semantic": pack.facts,
-                    "procedural": pack.skills,
-                    "graph": pack.graph,
+                    "episodic": [],
+                    "semantic": [],
+                    "procedural": [],
+                    "graph": [],
                 }
+
+            # 2) Prefer RLM retrieval
+            if getattr(self, "rlm_controller", None) is not None:
+                try:
+                    pack = await self.rlm_controller.retrieve_context(
+                        user_id=user_id,
+                        query_text=query_text,
+                    )
+                    increment("uma.get_user_context.calls", tags={"path": "rlm"})
+                    return {
+                        "working_memory": wm_stored,
+                        "episodic": pack.episodes,
+                        "semantic": pack.facts,
+                        "procedural": pack.skills,
+                        "graph": pack.graph,
+                    }
+                except Exception:
+                    logger.exception(
+                        "UMAMemory.get_user_context: RLM failed; falling back to classic user=%s",
+                        user_id,
+                    )
+
+            # 3) Classic fallback
+            try:
+                retrieved = await self.retrieval_service.retrieve(
+                    user_id=user_id,
+                    memory_type="all",
+                    query_text_or_embedding=query_text,
+                )
             except Exception:
-                logger.exception("UMAMemory.get_user_context: RLM failed; falling back to classic user=%s", user_id)
+                logger.exception(
+                    "UMAMemory.get_user_context: classic retrieval failed user=%s",
+                    user_id,
+                )
+                retrieved = {}
 
-        # 3) Classic fallback
-        try:
-            retrieved = await self.retrieval_service.retrieve(
-                user_id=user_id,
-                memory_type="all",
-                query_text_or_embedding=query_text,
-            )
-        except Exception:
-            logger.exception("UMAMemory.get_user_context: classic retrieval failed user=%s", user_id)
-            retrieved = {}
-
+            increment("uma.get_user_context.calls", tags={"path": "classic"})
         return {
             "working_memory": wm_stored,
             "episodic": retrieved.get("episodes", []) or [],
@@ -828,13 +980,36 @@ class UMAMemory:
             "graph": retrieved.get("graph", []) or [],
         }
 
+    async def process_turn(
+        self,
+        *,
+        user_id: str,
+        user_msg: str,
+        assistant_reply: str,
+    ) -> None:
+        """
+        Ingest a full conversation turn into UMA memory.
+
+        This is the primary ingestion API and wraps the internal pipeline.
+        """
+        if not self.initialized:
+            raise RuntimeError("UMAMemory.process_turn requires initialized memory.")
+        if not getattr(self, "pipeline", None):
+            raise RuntimeError("UMAMemory.process_turn: pipeline not initialized.")
+
+        await self.pipeline.process_turn(
+            user_id=user_id,
+            user_msg=user_msg,
+            assistant_reply=assistant_reply,
+        )
+
     # ----------------------------------------------------------------------
     # OPTIONAL UTILITIES — RAG-Ready Context Pack Builder
     # ----------------------------------------------------------------------
 
     async def build_context_pack(self, user_id: str, query_text: str) -> dict:
         """
-        Build a RAG-ready structured context pack using UMA-3 memory.
+        Build a RAG-ready structured context pack using UMA memory.
 
         Convenience wrapper around:
             - UMAMemory.get_user_context()
@@ -845,13 +1020,40 @@ class UMAMemory:
         ctx = await self.get_user_context(user_id, query_text)
         return ContextPackBuilder.build(query_text, ctx)
 
+    async def build_prompt_messages(
+        self,
+        *,
+        user_id: str,
+        query_text: str,
+        system_prompt: str,
+    ) -> list:
+        """
+        Build LLM messages with UMA-RLM context embedded.
+
+        This wraps retrieval + context formatting so developers do not
+        manually collect memory slices.
+        """
+        from .utils.context_pack_builder import ContextPackBuilder
+
+        pack = await self.build_context_pack(user_id=user_id, query_text=query_text)
+        snippet = ContextPackBuilder.render_snippet(pack)
+        if snippet:
+            user_content = f"{query_text}\n\nRelevant memory:\n{snippet}"
+        else:
+            user_content = query_text
+
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+
     # ----------------------------------------------------------------------
     # OPTIONAL UTILITIES — Structured CoT Memory Builder
     # ----------------------------------------------------------------------
 
     async def build_cot_memory(self, user_id: str, query_text: str) -> dict:
         """
-        Build a structured chain-of-thought (CoT) knowledge scaffold from UMA-3.
+        Build a structured chain-of-thought (CoT) knowledge scaffold from UMA.
 
         This is NOT an LLM-generated chain-of-thought.
         Instead, it is a deterministic, structured template created from:

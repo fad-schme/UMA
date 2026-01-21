@@ -2,7 +2,7 @@
 pipeline.py
 ===========
 
-UMA-3 Memory Pipeline (Memory-Only Mode)
+UMA Memory Pipeline (Memory-Only Mode)
 
 This pipeline **does not perform retrieval** and **does not generate replies**.
 It does use LLMs for summarization and semantic fact extraction.
@@ -30,12 +30,14 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
+from ...adapters.observability.context import request_context
+from ...adapters.observability.metrics import increment, timed
 logger = logging.getLogger(__name__)
 
 
 class MemoryPipeline:
     """
-    UMA-3 internal memory pipeline (memory-only, no LLM).
+    UMA internal memory pipeline (memory-only, no LLM).
 
     Expected UMAMemory shape:
         - working_memory
@@ -70,7 +72,7 @@ class MemoryPipeline:
             user_msg          → final user input
             assistant_reply   → final agent output (external LLM)
 
-        UMA-3 stores:
+        UMA stores:
             - WM messages
             - Episodic memory
             - Semantic facts
@@ -79,31 +81,35 @@ class MemoryPipeline:
         No reply is returned.
         """
 
-        # 1) Hooks
-        await self._run_before_turn_hooks(user_id, user_msg)
+        with request_context(extra_meta.get("request_id") if extra_meta else None):
+            with timed("pipeline.process_turn.latency_s"):
+                increment("pipeline.process_turn.count")
 
-        # 2) Working memory update
-        self._update_working_memory(user_id, user_msg, assistant_reply)
+                # 1) Hooks
+                await self._run_before_turn_hooks(user_id, user_msg)
 
-        # 3) WM compaction
-        await self._maybe_compact_working_memory(user_id)
+                # 2) Working memory update
+                self._update_working_memory(user_id, user_msg, assistant_reply)
 
-        # 4) Episodic storage
-        episode = await self._store_episode(user_id, user_msg, assistant_reply)
+                # 3) WM compaction
+                await self._maybe_compact_working_memory(user_id)
 
-        # 5) Semantic ingestion
-        facts = await self._semantic_ingest(user_id, assistant_reply)
+                # 4) Episodic storage
+                episode = await self._store_episode(user_id, user_msg, assistant_reply)
 
-        # 6) Graph update
-        await self._update_graph(user_id, episode, facts)
+                # 5) Semantic ingestion
+                facts = await self._semantic_ingest(user_id, assistant_reply)
 
-        # 7) Hooks
-        await self._run_after_turn_hooks(
-            user_id=user_id,
-            user_msg=user_msg,
-            reply=assistant_reply,
-            extra_meta=extra_meta or {},
-        )
+                # 6) Graph update
+                await self._update_graph(user_id, episode, facts)
+
+                # 7) Hooks
+                await self._run_after_turn_hooks(
+                    user_id=user_id,
+                    user_msg=user_msg,
+                    reply=assistant_reply,
+                    extra_meta=extra_meta or {},
+                )
 
     # ------------------------------------------------------------------
     # HOOKS
@@ -217,7 +223,7 @@ class MemoryPipeline:
             return []
 
         # Canonical subject format in UMA-RLM v1: "user:<id>"
-        from .utils.identity import ensure_user_subject
+        from .identity import ensure_user_subject
         try:
             subject = ensure_user_subject(user_id)
         except Exception:

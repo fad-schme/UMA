@@ -75,6 +75,11 @@ class OpenAIEmbedder(EmbeddingInterface):
                 chunk_vecs = await asyncio.wait_for(
                     _embed_batch(batch), timeout=self.timeout
                 )
+                for vec in chunk_vecs:
+                    if len(vec) != self._dimension:
+                        raise RuntimeError(
+                            f"Embedding dimension mismatch: expected {self._dimension}, got {len(vec)}"
+                        )
                 vectors.extend(chunk_vecs)
             except Exception:
                 logger.exception("Embedding batch failed.")

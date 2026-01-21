@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from uma3.core.retrieval.rlm.decisions import ControllerDecision
+from uma.core.retrieval.rlm.decisions import ControllerDecision
 
 
 def test_controller_decision_validates_actions():

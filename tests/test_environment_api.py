@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from uma3.core.retrieval.rlm.environment import UMAMemoryEnvironment
+from uma.core.retrieval.rlm.environment import UMAMemoryEnvironment
 
 
 class DummyFact:
@@ -63,7 +63,7 @@ class DummyEpisodicStore:
 
 
 class DummyGraphCore:
-    def neighbors(self, **kwargs):
+    def get_neighbors(self, entity_id, depth=1):
         return [{"labels": ["Entity"], "properties": {"name": "x"}}]
 
 

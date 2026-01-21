@@ -1,8 +1,8 @@
 """
-Episodic memory datatypes for UMA-3.
+Episodic memory datatypes for UMA.
 
 Episodes store past events, conversations, or agent actions. They are the
-foundation of case-based reasoning in UMA-3 (Mem0 and Zep style).
+foundation of case-based reasoning in UMA.
 An Episode represents a single coherent event in the agent’s life:
 - A user request
 - A tool execution
@@ -28,7 +28,7 @@ from typing import Any, Dict, List
 @dataclass
 class Episode:
     """
-    Episodic memory unit in UMA-3.
+    Episodic memory unit in UMA.
 
     Attributes
     ----------

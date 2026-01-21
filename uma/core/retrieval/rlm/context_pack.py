@@ -1,4 +1,4 @@
-# uma3/core/retrieval/rlm/context_pack.py
+# uma/core/retrieval/rlm/context_pack.py
 
 from __future__ import annotations
 from dataclasses import dataclass, field

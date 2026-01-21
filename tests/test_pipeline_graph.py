@@ -1,6 +1,9 @@
 import asyncio
+import yaml
+from tempfile import TemporaryDirectory
+from pathlib import Path
 
-from uma3.core.pipeline import MemoryPipeline
+from uma.core.uma_memory import UMAMemory
 
 
 class DummyHooks:
@@ -84,33 +87,71 @@ class DummyGraphCore:
         self.calls.append(("link_temporal", prev_ep.id, next_ep.id))
 
 
-class DummyMemory:
-    def __init__(self):
-        self.working_memory = DummyWM()
-        self.episodic_core = DummyEpisodicCore()
-        self.semantic_core = DummySemanticCore()
-        self.graph_core = DummyGraphCore()
-        self.hooks = DummyHooks()
+def test_pipeline_updates_graph_with_facts_and_temporal_links():
+    with TemporaryDirectory() as tmp:
+        cfg = {
+            "storage": {
+                "db_root": str(Path(tmp) / "db") + "/",
+                "sql_backend": "sqlite",
+                "vector_backend": "inmemory",
+                "graph_backend": "disabled",
+            },
+            "working_memory": {
+                "max_tokens": 256,
+                "warning_ratio": 0.7,
+                "hard_limit_ratio": 0.95,
+                "chunk_size": 10,
+            },
+            "embedding": {
+                "provider": "tests.test_rebuild_indexes:fake_embed",
+                "dimension": 3,
+            },
+            "llm": {
+                "provider": "tests.test_rebuild_indexes:fake_llm",
+            },
+            "retrieval": {
+                "max_episodes": 5,
+                "max_facts": 5,
+                "max_skills": 5,
+                "max_graph_items": 5,
+            },
+            "consolidation": {
+                "enabled": True,
+                "cluster_similarity": 0.75,
+                "max_episodes_per_cycle": 50,
+                "prune_min_fact_salience": 0.2,
+            },
+            "features": {
+                "load": [],
+            },
+        }
+        cfg_path = Path(tmp) / "uma_test.yaml"
+        cfg_path.write_text(yaml.safe_dump(cfg))
+
+        mem = UMAMemory.from_yaml(str(cfg_path))
+        mem.initialize()
+
+        mem.working_memory = DummyWM()
+        mem.episodic_core = DummyEpisodicCore()
+        mem.semantic_core = DummySemanticCore()
+        mem.graph_core = DummyGraphCore()
+        mem.hooks = DummyHooks()
 
         prev = DummyEpisode("ep_prev", "u1")
         current = DummyEpisode("ep_current", "u1")
-        self.episodic_store = DummyEpisodicStore(current=current, prev=prev)
+        mem.episodic_store = DummyEpisodicStore(current=current, prev=prev)
+        mem.pipeline.hooks = mem.hooks
 
-
-def test_pipeline_updates_graph_with_facts_and_temporal_links():
-    mem = DummyMemory()
-    pipeline = MemoryPipeline(memory_client=mem, hooks=mem.hooks)
-
-    asyncio.run(
-        pipeline.process_turn(
-            user_id="u1",
-            user_msg="hello",
-            assistant_reply="hi",
+        asyncio.run(
+            mem.process_turn(
+                user_id="u1",
+                user_msg="hello",
+                assistant_reply="hi",
+            )
         )
-    )
 
-    calls = mem.graph_core.calls
-    assert ("add_episode", "ep_current") in calls
-    assert any(c[0] == "add_facts" for c in calls)
-    assert any(c[0] == "link_episode_to_facts" for c in calls)
-    assert ("link_temporal", "ep_prev", "ep_current") in calls
+        calls = mem.graph_core.calls
+        assert ("add_episode", "ep_current") in calls
+        assert any(c[0] == "add_facts" for c in calls)
+        assert any(c[0] == "link_episode_to_facts" for c in calls)
+        assert ("link_temporal", "ep_prev", "ep_current") in calls

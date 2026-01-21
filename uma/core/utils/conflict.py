@@ -1,5 +1,5 @@
 """
-Semantic Fact Conflict Resolution — UMA-3 Core
+Semantic Fact Conflict Resolution — UMA Core
 ==============================================
 
 Provides resolution strategies for semantic fact conflicts during upsert.
@@ -23,7 +23,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Iterable, List, Tuple
 
-from ..types_fact import Fact
+from ...types_fact import Fact
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 class FactResolver(ABC):
     """
-    Abstract base class for UMA-3 semantic conflict resolution.
+    Abstract base class for UMA semantic conflict resolution.
     """
 
     @abstractmethod

@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 class OpenAILLM(LLMInterface):
     """
-    UMA-3 adapter for OpenAI ChatCompletion models.
+    UMA adapter for OpenAI ChatCompletion models.
 
     Recommended models:
     - "gpt-4.1-mini"

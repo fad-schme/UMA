@@ -1,6 +1,6 @@
 """
 ProceduralSQLStore — Production-Grade SQL + VectorIndex Store
-for skill-based procedural memory in UMA-3.
+for skill-based procedural memory in UMA.
 
 This implementation is fully aligned with:
     • UMAMemory initialization
@@ -15,7 +15,7 @@ Enhancements in this version:
     • Added delete_skill(skill_id)
     • Added strict validation of Skill objects
     • Improved logging + error handling
-    • Ensures uniform store interface across UMA-3
+    • Ensures uniform store interface across UMA
 """
 
 from __future__ import annotations
@@ -87,6 +87,7 @@ class ProceduralSQLStore(BaseVectorSQLStore):
             conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_name ON skills(name);")
             conn.commit()
         except Exception:
+            self._safe_rollback(conn, "init_db")
             logger.exception("ProceduralSQLStore: failed initializing schema.")
             raise
         finally:
@@ -203,9 +204,6 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                 params=payload,
                 log_context="add_skill",
             )
-            conn.commit()
-
-            # Vector upsert
             try:
                 self.vector_index.upsert(
                     ids=[skill.id],
@@ -217,6 +215,21 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                     "ProceduralSQLStore: vector upsert failed for skill id=%s",
                     skill.id,
                 )
+                self._safe_rollback(conn, "add_skill")
+                raise
+
+            try:
+                conn.commit()
+            except Exception:
+                self._safe_rollback(conn, "add_skill_commit")
+                try:
+                    self.vector_index.delete([skill.id])
+                except Exception:
+                    logger.exception(
+                        "ProceduralSQLStore: vector delete failed after commit error id=%s",
+                        skill.id,
+                    )
+                raise
 
             logger.info("ProceduralSQLStore: upserted skill id=%s", skill.id)
             return skill
@@ -246,7 +259,24 @@ class ProceduralSQLStore(BaseVectorSQLStore):
             return self._row_to_object(rows[0])
         except Exception:
             logger.exception("ProceduralSQLStore.get_skill failed for id=%s", skill_id)
-            return None
+            raise
+        finally:
+            conn.close()
+
+    async def list_skills(self, limit: Optional[int] = None) -> List[Skill]:
+        """
+        List skills ordered by updated_at DESC.
+        """
+        conn = self._conn()
+        try:
+            sql = "SELECT * FROM skills ORDER BY updated_at DESC"
+            if limit:
+                sql += f" LIMIT {int(limit)}"
+            rows = self._query_all(conn, sql, log_context="list_skills")
+            return [self._row_to_object(r) for r in rows]
+        except Exception:
+            logger.exception("ProceduralSQLStore.list_skills failed.")
+            raise
         finally:
             conn.close()
 
@@ -275,6 +305,7 @@ class ProceduralSQLStore(BaseVectorSQLStore):
             logger.info("ProceduralSQLStore: deleted skill id=%s", skill_id)
 
         except Exception:
+            self._safe_rollback(conn, "delete_skill")
             logger.exception("ProceduralSQLStore.delete_skill failed id=%s", skill_id)
             raise
         finally:
@@ -290,9 +321,13 @@ class ProceduralSQLStore(BaseVectorSQLStore):
 
         Delegates ranking + row mapping to BaseVectorSQLStore.
         """
-        return await self._semantic_search(
-            query_embedding=query_embedding,
-            k=k,
-            filters=None,
-            log_context="procedural_search",
-        )
+        try:
+            return await self._semantic_search(
+                query_embedding=query_embedding,
+                k=k,
+                filters=None,
+                log_context="procedural_search",
+            )
+        except Exception:
+            logger.exception("ProceduralSQLStore.search failed.")
+            raise

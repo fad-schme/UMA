@@ -1,7 +1,7 @@
 """
-Base SQL Store for UMA-3.
+Base SQL Store for UMA.
 
-This module defines a reusable base class for UMA-3 stores that persist
+This module defines a reusable base class for UMA stores that persist
 data in a relational database via a DBAdapter abstraction.
 
 It centralizes:
@@ -30,6 +30,7 @@ Coding agent instructions
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Iterable, List, Optional, Sequence
 
 from ..adapters.db.base import DBAdapter, DBConnection
@@ -96,6 +97,33 @@ class BaseSQLStore:
         """
         return self._db_adapter.get_connection()
 
+    def _adapt_sql(self, sql: str) -> str:
+        """
+        Convert SQL parameter placeholders to the adapter's paramstyle.
+
+        Supported:
+        - qmark: "?"
+        - format: "%s"
+        - pyformat: "%(name)s" for named params
+        """
+        style = getattr(self._db_adapter, "paramstyle", "qmark")
+        if style == "qmark":
+            return sql
+        if style == "format":
+            return sql.replace("?", "%s")
+        if style == "pyformat":
+            sql = re.sub(r"(?<!:):([A-Za-z_][A-Za-z0-9_]*)", r"%(\1)s", sql)
+            return sql.replace("?", "%s")
+        return sql
+
+    def _safe_rollback(self, conn: DBConnection, log_context: str = "") -> None:
+        """Attempt a rollback, logging any failures without raising."""
+        ctx = f" [{log_context}]" if log_context else ""
+        try:
+            conn.rollback()
+        except Exception:
+            logger.exception("BaseSQLStore._safe_rollback%s: rollback failed.", ctx)
+
     # ------------------------------------------------------------------ #
     # Execution helpers
     # ------------------------------------------------------------------ #
@@ -133,10 +161,11 @@ class BaseSQLStore:
             # so we fallback if needed.
             cursor = conn.cursor()
             try:
+                adapted_sql = self._adapt_sql(sql)
                 if params is None:
-                    cursor.execute(sql)
+                    cursor.execute(adapted_sql)
                 else:
-                    cursor.execute(sql, params)
+                    cursor.execute(adapted_sql, params)
             finally:
                 cursor.close()
         except Exception as e:
@@ -182,7 +211,8 @@ class BaseSQLStore:
         try:
             cursor = conn.cursor()
             try:
-                cursor.executemany(sql, list(seq_of_params))
+                adapted_sql = self._adapt_sql(sql)
+                cursor.executemany(adapted_sql, list(seq_of_params))
             finally:
                 cursor.close()
         except Exception:
@@ -230,10 +260,11 @@ class BaseSQLStore:
         try:
             cursor = conn.cursor()
             try:
+                adapted_sql = self._adapt_sql(sql)
                 if params is None:
-                    cursor.execute(sql)
+                    cursor.execute(adapted_sql)
                 else:
-                    cursor.execute(sql, params)
+                    cursor.execute(adapted_sql, params)
                 return list(cursor.fetchall())
             finally:
                 cursor.close()
@@ -282,10 +313,11 @@ class BaseSQLStore:
         try:
             cursor = conn.cursor()
             try:
+                adapted_sql = self._adapt_sql(sql)
                 if params is None:
-                    cursor.execute(sql)
+                    cursor.execute(adapted_sql)
                 else:
-                    cursor.execute(sql, params)
+                    cursor.execute(adapted_sql, params)
                 return cursor.fetchone()
             finally:
                 cursor.close()

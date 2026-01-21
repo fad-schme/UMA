@@ -1,5 +1,5 @@
 """
-Lifecycle Hooks for UMA-3 Agent
+Lifecycle Hooks for UMA Agent
 
 This module defines well-structured callback hooks that the UMA Orchestrator
 uses to manage lifecycle events around each user turn.
@@ -28,7 +28,7 @@ AsyncHook = Callable[..., Awaitable[None]]
 
 class UMAHooks:
     """
-    Defines asynchronous lifecycle hooks for UMA-3 operations.
+    Defines asynchronous lifecycle hooks for UMA operations.
 
     Hooks are OPTIONAL. They are lists of functions.
     """
@@ -47,4 +47,4 @@ class UMAHooks:
             except Exception:
                 # Never break agent flow — hooks fail in isolation.
                 import logging
-                logging.getLogger(__name__).exception("UMA-3 Hook failure")
+                logging.getLogger(__name__).exception("UMA Hook failure")

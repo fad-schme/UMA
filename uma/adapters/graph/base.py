@@ -1,15 +1,15 @@
 """
-uma3.adapters.graph.base
+uma.adapters.graph.base
 ========================
 
-GraphAdapter — Abstract graph backend interface for UMA-3.
+GraphAdapter — Abstract graph backend interface for UMA.
 
 This module defines the common interface that all graph adapters must
 implement (e.g., Neo4jAdapter, MemgraphAdapter).
 
 Design goals
 ------------
-- Keep UMA-3 core logic independent of any specific graph database.
+- Keep UMA core logic independent of any specific graph database.
 - Allow plug-and-play replacement of graph backends.
 - Provide a minimal, expressive API (`run_query`, `close`).
 
@@ -33,7 +33,7 @@ class GraphAdapter(abc.ABC):
     """
     Abstract graph backend interface.
 
-    All UMA-3 graph drivers (Neo4j, Memgraph, etc.) must implement this.
+    All UMA graph drivers (Neo4j, Memgraph, etc.) must implement this.
 
     Required Methods
     ----------------
@@ -66,3 +66,16 @@ class GraphAdapter(abc.ABC):
         - Catch and log errors internally.
         """
         raise NotImplementedError
+
+    def verify_connectivity(self) -> bool:
+        """
+        Best-effort connectivity check for health probes.
+
+        Adapters may override this to use native driver checks for accuracy.
+        """
+        try:
+            self.run_query("RETURN 1 AS ok")
+            return True
+        except Exception:
+            logger.exception("GraphAdapter.verify_connectivity failed.")
+            return False

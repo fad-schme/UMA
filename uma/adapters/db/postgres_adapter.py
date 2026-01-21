@@ -1,9 +1,9 @@
 """
-PostgresAdapter — PostgreSQL database adapter for UMA-3.
+PostgresAdapter — PostgreSQL database adapter for UMA.
 
 This adapter implements the DBAdapter interface defined in
-`uma3.adapters.db.base` and provides a robust, production-oriented
-connection layer for PostgreSQL-backed UMA-3 stores.
+`uma.adapters.db.base` and provides a robust, production-oriented
+connection layer for PostgreSQL-backed UMA stores.
 
 Features
 --------
@@ -26,7 +26,7 @@ Coding agent instructions
 Error handling
 --------------
 - Any failure to create or obtain a connection should log the error and
-  propagate the exception so UMA-3 initialization fails visibly.
+  propagate the exception so UMA initialization fails visibly.
 
 Security / Notes
 ----------------
@@ -120,7 +120,7 @@ class _DirectConnWrapper:
 
 
 class PostgresAdapter(DBAdapter):
-    """PostgreSQL DBAdapter implementation for UMA-3.
+    """PostgreSQL DBAdapter implementation for UMA.
 
     Parameters
     ----------
@@ -200,6 +200,10 @@ class PostgresAdapter(DBAdapter):
         else:
             logger.info("PostgresAdapter initialized (pooling disabled)")
 
+    @property
+    def paramstyle(self) -> str:
+        return "pyformat"
+
     def get_connection(self) -> DBConnection:
         """Return a DB-API compatible connection.
 
@@ -234,4 +238,3 @@ class PostgresAdapter(DBAdapter):
             logger.info("PostgresAdapter: connection pool closed")
         except Exception:
             logger.exception("PostgresAdapter: failed to close connection pool")
-

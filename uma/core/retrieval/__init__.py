@@ -1,14 +1,14 @@
 """
-uma3.core.retrieval
+uma.core.retrieval
 ===================
 
-Core retrieval subsystem for UMA-3.
+Core retrieval subsystem for UMA.
 
 This package provides deterministic, single-shot retrieval (RetrievalService)
 and its supporting components (MultiStoreRetriever + MemorySelector).
 
 RLM (recursive retrieval) lives under:
-    uma3.core.retrieval.rlm
+    uma.core.retrieval.rlm
 
 Public exports
 --------------

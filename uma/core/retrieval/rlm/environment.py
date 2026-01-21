@@ -1,4 +1,4 @@
-# uma3/core/retrieval/rlm/environment.py
+# uma/core/retrieval/rlm/environment.py
 
 from __future__ import annotations
 import logging
@@ -123,6 +123,13 @@ class UMAMemoryEnvironment:
             return []
         try:
             subject = filters.get("subject") if isinstance(filters, dict) else None
+            if isinstance(filters, dict):
+                unsupported = [k for k in filters.keys() if k != "subject"]
+                if unsupported:
+                    logger.warning(
+                        "Environment.search_semantic: unsupported filters=%s",
+                        unsupported,
+                    )
             facts = await self._semantic_store.search(
                 query_embedding=list(query_embedding),
                 subject=subject,
@@ -131,7 +138,7 @@ class UMAMemoryEnvironment:
             return [self._fact_snippet(f) for f in facts]
         except Exception:
             logger.exception("Environment.search_semantic failed")
-            return []
+            raise
 
     async def fetch_facts_by_ids(self, user_id: str, ids: List[str]) -> List[Any]:
         if self._semantic_store is None:
@@ -142,7 +149,7 @@ class UMAMemoryEnvironment:
             return await self._semantic_store.fetch_facts_by_ids(ids)
         except Exception:
             logger.exception("Environment.fetch_facts_by_ids failed")
-            return []
+            raise
 
     async def search_episodic(
         self,
@@ -163,7 +170,7 @@ class UMAMemoryEnvironment:
             return [self._episode_snippet(ep) for ep in filtered]
         except Exception:
             logger.exception("Environment.search_episodic failed")
-            return []
+            raise
 
     async def fetch_episode_summaries(self, ids: List[str]) -> List[Dict[str, Any]]:
         if self._episodic_store is None:
@@ -175,7 +182,7 @@ class UMAMemoryEnvironment:
             return await self._episodic_store.fetch_summaries(ids)
         except Exception:
             logger.exception("Environment.fetch_episode_summaries failed")
-            return []
+            raise
 
     async def fetch_episode_transcripts(self, ids: List[str]) -> List[Dict[str, Any]]:
         if self._episodic_store is None:
@@ -187,7 +194,7 @@ class UMAMemoryEnvironment:
             return await self._episodic_store.fetch_transcripts(ids)
         except Exception:
             logger.exception("Environment.fetch_episode_transcripts failed")
-            return []
+            raise
 
     async def graph_neighbors(
         self,
@@ -200,16 +207,20 @@ class UMAMemoryEnvironment:
         if self._graph_core is None:
             return []
         try:
-            return self._graph_core.neighbors(
-                user_id=user_id,
-                node_id=node_id,
-                predicate_scope=predicate_scope,
+            if predicate_scope:
+                logger.warning(
+                    "Environment.graph_neighbors: predicate_scope not supported; ignoring."
+                )
+            results = self._graph_core.get_neighbors(
+                entity_id=node_id,
                 depth=depth,
-                k=k,
             )
+            if k:
+                return results[: int(k)]
+            return results
         except Exception:
             logger.exception("Environment.graph_neighbors failed")
-            return []
+            raise
 
     async def episodic_cluster_summaries(
         self,
@@ -229,7 +240,7 @@ class UMAMemoryEnvironment:
             )
         except Exception:
             logger.exception("Environment.episodic_cluster_summaries failed")
-            return []
+            raise
 
     async def get_working_memory(self, user_id: str, window: Optional[int] = None):
         try:

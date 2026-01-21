@@ -1,8 +1,8 @@
 """
-UMA-3 Temporal Graph Subsystem
+UMA Temporal Graph Subsystem
 ==============================
 
-This package contains the temporal graph memory subsystem for UMA-3.
+This package contains the temporal graph memory subsystem for UMA.
 
 Responsibilities
 ----------------
@@ -24,7 +24,7 @@ Modules
 - updater.py  : GraphUpdater (graph mapping & Cypher construction)
 
 Adapters live under:
-    uma3.adapters.graph.*
+    uma.adapters.graph.*
 """
 
 from .core import TemporalGraphCore

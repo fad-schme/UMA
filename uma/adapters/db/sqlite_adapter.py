@@ -1,16 +1,16 @@
 """
-SQLiteAdapter — SQLite database adapter for UMA-3.
+SQLiteAdapter — SQLite database adapter for UMA.
 
 This adapter implements the DBAdapter interface defined in
-`uma3.adapters.db.base` and provides a clean, production-grade
-connection layer for SQLite-based UMA-3 stores.
+`uma.adapters.db.base` and provides a clean, production-grade
+connection layer for SQLite-based UMA stores.
 
 Design goals
 ------------
 - Keep SQLite usage isolated from store logic.
 - Provide dict-like row access via sqlite3.Row.
 - Ensure that each call to `get_connection()` returns a fresh connection.
-- Support UMA-3’s store patterns (explicit commit/close in try/finally).
+- Support UMA’s store patterns (explicit commit/close in try/finally).
 
 Coding agent instructions
 -------------------------
@@ -39,26 +39,28 @@ logger = logging.getLogger(__name__)
 
 class SQLiteAdapter(DBAdapter):
     """
-    SQLite DBAdapter implementation for UMA-3.
+    SQLite DBAdapter implementation for UMA.
 
     Parameters
     ----------
     db_path : str
-        Filesystem path to the SQLite database file. UMA-3 stores use
+        Filesystem path to the SQLite database file. UMA stores use
         this adapter to create and manage DB connections for all DB
         operations.
+    pragmas : dict | None
+        Optional PRAGMA overrides applied per connection.
 
     Notes
     -----
     - Each call to `get_connection()` returns a **new** sqlite3 connection.
     - Connections set `row_factory = sqlite3.Row` to provide dict-like
       access for store query results.
-    - This adapter does not enable WAL or pragma tuning by default, so
-      that UMA-3 remains portable. You may extend this class for
-      performance tuning.
+    - This adapter applies conservative PRAGMA defaults by default
+      (WAL, foreign_keys, synchronous). You may override or disable
+      these via the `pragmas` parameter for portability/performance.
     """
 
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: str, pragmas: dict | None = None) -> None:
       # Basic validation
       if not isinstance(db_path, str):
         raise TypeError(f"db_path must be a string, got {type(db_path)}")
@@ -72,11 +74,29 @@ class SQLiteAdapter(DBAdapter):
       # Use URI mode when db_path begins with 'file:' allowing query params
       self.uri = db_path.startswith("file:")
       # Pragmas configurable per-connection (can be adjusted if needed)
-      self._pragmas = {
+      self._pragmas = pragmas if pragmas is not None else {
         "journal_mode": "WAL",
         "foreign_keys": 1,
         "synchronous": "NORMAL",
       }
+
+      # Ensure parent directory exists for file-backed DBs
+      if not self.uri:
+        import os
+
+        parent = os.path.dirname(self.db_path)
+      if parent and not os.path.exists(parent):
+        try:
+          os.makedirs(parent, exist_ok=True)
+          logger.debug("SQLiteAdapter: created parent directory %s", parent)
+        except Exception as exc:
+            logger.exception(
+              "SQLiteAdapter: failed to create parent directory %s", parent
+            )
+            raise RuntimeError(
+              f"SQLiteAdapter failed to create parent directory: {parent}. "
+              "Ensure the path is writable and the parent exists."
+            ) from exc
 
       logger.info("SQLiteAdapter initialized with db_path=%s uri=%s", db_path, self.uri)
 
@@ -95,20 +115,6 @@ class SQLiteAdapter(DBAdapter):
             If the connection cannot be established.
         """
         try:
-          # Ensure parent directory exists for file-backed DBs
-          if not self.uri:
-            import os
-
-            parent = os.path.dirname(self.db_path)
-            if parent and not os.path.exists(parent):
-              try:
-                os.makedirs(parent, exist_ok=True)
-                logger.debug("SQLiteAdapter: created parent directory %s", parent)
-              except Exception:
-                logger.exception(
-                  "SQLiteAdapter: failed to create parent directory %s", parent
-                )
-
           conn = sqlite3.connect(
             self.db_path,
             timeout=self.timeout,

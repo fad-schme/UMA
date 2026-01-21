@@ -1,5 +1,5 @@
 """
-Skill model for Procedural Memory in UMA-3.
+Skill model for Procedural Memory in UMA.
 
 A Skill represents a reusable workflow or capability that the agent can use
 to solve tasks. Skills are similar to "procedures" or "subroutines" in

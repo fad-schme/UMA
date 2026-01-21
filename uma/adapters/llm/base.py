@@ -1,5 +1,5 @@
 """
-LLM and embedding interfaces for UMA-3.
+LLM and embedding interfaces for UMA.
 
 This module defines the abstraction layer over any LLM / embeddings
 provider (OpenAI, Azure, Anthropic, etc).

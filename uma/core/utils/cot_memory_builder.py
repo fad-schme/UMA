@@ -2,11 +2,11 @@
 cot_memory_builder.py
 ======================
 
-Builds "Structured CoT Memory Sections" from UMA-3 long-term memory.
+Builds "Structured CoT Memory Sections" from UMA long-term memory.
 
 Purpose
 -------
-UMA-3 stores *structured* knowledge (facts, episodes, skills, graph).
+UMA stores *structured* knowledge (facts, episodes, skills, graph).
 This module converts retrieval output into a reusable chain-of-thought 
 memory artifact that the agent can use for:
     • planning
@@ -16,7 +16,7 @@ memory artifact that the agent can use for:
     • debugging and interpretability
 
 This is NOT an LLM-generated CoT. It is a deterministic, structured 
-knowledge template extracted from UMA-3 memory.
+knowledge template extracted from UMA memory.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 class CoTMemoryBuilder:
     """
-    Convert UMA-3 retrieved memory (episodic, semantic, procedural, graph)
+    Convert UMA retrieved memory (episodic, semantic, procedural, graph)
     into a structured CoT reasoning scaffold.
     """
 
@@ -114,7 +114,7 @@ class CoTMemoryBuilder:
         # -------------------------------
         # *Planning Scaffold*
         #
-        # UMA-3 can synthesize a rationale plan by combining:
+        # UMA can synthesize a rationale plan by combining:
         #   - skills
         #   - facts
         #   - recent events

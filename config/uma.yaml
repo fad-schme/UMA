@@ -1,19 +1,19 @@
 # ================================================================
-# UMA-3 Unified Configuration
+# UMA Unified Configuration
 # ================================================================
 
 # ------------------------------
 # DB ROOT (all SQL stores live under this path)
 # ------------------------------
 storage:
-  db_root: "data/"         # UMA-3 will create SQL DBs inside here
+  db_root: "data/"         # UMA will create SQL DBs inside here
   sql_backend: "sqlite"    # future: postgres, mysql, etc.
   vector_backend: "faiss"  # or "pinecone", "weaviate", "inmemory"
   graph_backend: "disabled"  # "neo4j", "memgraph", "disabled"
   # Vector backend configuration (required for pinecone/weaviate)
   vector_config:
     # Pinecone
-    index_name: "uma3-memory"
+    index_name: "uma-memory"
     # Weaviate
     url: "https://your-weaviate-host"
     api_key: "YOUR_WEAVIATE_API_KEY"
@@ -24,6 +24,7 @@ graph:
   user: ...
   password: ...
   max_pool_size: ...
+  database: ...
 # ------------------------------
 # Working Memory
 # ------------------------------
@@ -47,7 +48,7 @@ embedding:
   dimension: 1536
 
 # ------------------------------
-# LLM (UMA-3 internal)
+# LLM (UMA internal)
 # ------------------------------
 llm:
   provider: "ollama"
@@ -101,5 +102,18 @@ consolidation:
 # Feature Flags
 # ------------------------------
 features:
-  procedural_enabled: true
-  consolidation_enabled: true
+  load:
+    - name: procedural
+      enabled: true
+      provider: "uma.features.procedural.feature:ProceduralFeature"
+      config:
+        max_k: 50
+    - name: consolidation
+      enabled: true
+      provider: "uma.features.consolidation.feature:ConsolidationFeature"
+      config:
+        cluster_similarity: 0.75
+        max_episodes_per_cycle: 200
+  policy:
+    on_attach_error: "log_and_skip"
+    allow_method_override: false

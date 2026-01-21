@@ -1,4 +1,4 @@
-# uma3/core/retrieval/rlm/policy.py
+# uma/core/retrieval/rlm/policy.py
 
 from __future__ import annotations
 from typing import Any, Dict, List

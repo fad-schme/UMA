@@ -1,5 +1,5 @@
 """
-Timing utilities for UMA-3.
+Timing utilities for UMA.
 
 Includes:
 - time_block context manager

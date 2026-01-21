@@ -1,5 +1,5 @@
 """
-FAISS-based VectorIndex implementation for UMA-3.
+FAISS-based VectorIndex implementation for UMA.
 
 This module wraps a simple FAISS inner-product index and keeps Python-side
 mappings for IDs and metadata.
@@ -65,6 +65,10 @@ class FaissIndex(VectorIndex):
         self._rev_map[new_id] = sid
         return new_id
 
+    def _normalize(self, arr: np.ndarray) -> np.ndarray:
+        norms = np.linalg.norm(arr, axis=1, keepdims=True) + 1e-12
+        return arr / norms
+
     def upsert(
         self,
         ids: List[str],
@@ -83,6 +87,7 @@ class FaissIndex(VectorIndex):
             raise ValueError(
                 f"FaissIndex.upsert: expected vectors with dim={self.dim}, got {arr.shape}"
             )
+        arr = self._normalize(arr)
 
         int_ids = []
         to_remove = []
@@ -122,6 +127,7 @@ class FaissIndex(VectorIndex):
             raise ValueError(
                 f"FaissIndex.query: expected query vector dim={self.dim}, got {arr.shape[1]}"
             )
+        arr = self._normalize(arr)
 
         scores, idxs = self.index.search(arr, k)
         scores = scores[0]

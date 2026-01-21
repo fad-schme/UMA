@@ -1,9 +1,9 @@
 """
-UMA-3 Consolidation Subsystem (Optional Feature)
+UMA Consolidation Subsystem (Optional Feature)
 ================================================
 
 This package implements optional consolidation ("sleep cycle") logic
-for UMA-3. Consolidation merges episodic memory into higher-level
+for UMA. Consolidation merges episodic memory into higher-level
 semantic knowledge and prunes outdated content.
 
 Modules:
@@ -14,7 +14,7 @@ Modules:
     - pruner.py        → Forgetting logic
     - utils.py         → Simple helpers
 
-This subsystem is OPTIONAL. UMA-3 runs without it, but consolidation 
+This subsystem is OPTIONAL. UMA runs without it, but consolidation 
 improves long-term quality and reduces data bloat.
 """
 

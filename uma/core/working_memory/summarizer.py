@@ -88,8 +88,12 @@ class WorkingMemorySummarizer:
         # Build content to summarize
         text_blocks: List[str] = []
         for msg in messages:
-            role = msg.get("role", "unknown")
-            content = msg.get("content", "")
+            if isinstance(msg, dict):
+                role = msg.get("role", "unknown")
+                content = msg.get("content", "")
+            else:
+                role = getattr(msg, "role", "unknown")
+                content = getattr(msg, "content", "")
             # keep very defensive to avoid KeyError
             if not content:
                 continue

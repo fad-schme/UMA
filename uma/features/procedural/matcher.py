@@ -1,5 +1,5 @@
 """
-Procedural Skill Matcher for UMA-3.
+Procedural Skill Matcher for UMA.
 
 This module implements the logic for determining *which* skills apply
 to a given user query based on:

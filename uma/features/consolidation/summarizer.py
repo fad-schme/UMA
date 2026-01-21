@@ -1,5 +1,5 @@
 """
-Improved LLM-based summarizer for UMA-3 consolidation.
+Improved LLM-based summarizer for UMA consolidation.
 
 Summarizes clusters of related episodes into stable, compressed,
 and semantically meaningful summaries used for fact extraction.

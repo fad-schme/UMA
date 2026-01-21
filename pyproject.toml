@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uma-rlm"
+description = "UMA-RLM: modular memory and context manager for AI agents"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+  {name = "UMA-RLM Contributors"},
+]
+dynamic = ["version"]
+dependencies = [
+  "pyyaml",
+  "numpy",
+  "scikit-learn",
+  "aiohttp",
+  "openai",
+]
+
+[project.optional-dependencies]
+vector = ["faiss-cpu", "weaviate-client", "pinecone-client"]
+graph = ["neo4j"]
+postgres = ["psycopg2-binary>=2.9"]
+dev = ["pytest", "matplotlib", "PyPDF2"]
+
+[tool.setuptools.dynamic]
+version = {attr = "uma.version.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["uma*"]
+exclude = ["tests*", "examples*", "scripts*", ".venv*"]

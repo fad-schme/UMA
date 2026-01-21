@@ -29,7 +29,7 @@ import uuid
 from datetime import datetime
 from typing import Any, List
 
-from uma3.types_episode import Episode
+from uma.types_episode import Episode
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +123,7 @@ class EpisodeIndexer:
         """
         Convert WM entries (WMEntry objects OR dicts) into a unified transcript.
 
-        UMA-3 allows episodic indexing to receive either:
+        UMA allows episodic indexing to receive either:
             • WMEntry(role, content) objects
             • dicts of the form {"role": ..., "content": ...}
 

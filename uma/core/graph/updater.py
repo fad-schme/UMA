@@ -2,7 +2,7 @@
 Temporal Graph Updater (Core)
 =============================
 
-This module defines how UMA-3 projects episodic and semantic memory
+This module defines how UMA projects episodic and semantic memory
 into the temporal knowledge graph.
 
 Design Principles
@@ -12,7 +12,7 @@ Design Principles
 - Deterministic: no retrieval or reasoning logic here
 - Identity-consistent: ALL User nodes use "user:<id>"
 
-This class is effectively the *graph mapper* for UMA-3 v1.
+This class is effectively the *graph mapper* for UMA v1.
 """
 
 from __future__ import annotations

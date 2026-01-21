@@ -1,5 +1,5 @@
 """
-UMA-3 Unified Configuration Loader (Simplified Edition)
+UMA Unified Configuration Loader (Simplified Edition)
 
 This configuration format uses:
 • ONE db_root for all SQL stores
@@ -24,11 +24,11 @@ class UMAConfig(dict):
             with open(path, "r") as f:
                 data = yaml.safe_load(f)
         except Exception:
-            logger.exception("Failed to load UMA-3 config YAML")
+            logger.exception("Failed to load UMA config YAML")
             raise RuntimeError(f"Invalid config YAML at: {path}")
 
         if not isinstance(data, dict):
-            raise ValueError("UMA-3 config must be a dict at top-level")
+            raise ValueError("UMA config must be a dict at top-level")
 
         cfg = cls(data)
         cfg._validate()
@@ -64,9 +64,44 @@ class UMAConfig(dict):
         if not (0 < val < 1):
             raise ValueError(f"'{section}.{key}' must be between 0 and 1")
 
+    def _warn_on_secrets(self) -> None:
+        sensitive_keys = ("api_key", "apikey", "secret", "token", "password", "passwd", "pwd")
+        placeholders = ("YOUR_", "CHANGEME", "REPLACE", "INSERT", "<", "...")
+
+        def _is_placeholder(value: str) -> bool:
+            upper = value.strip().upper()
+            if not upper:
+                return True
+            if upper.startswith("YOUR_") or upper.startswith("CHANGEME"):
+                return True
+            if upper.startswith("REPLACE") or upper.startswith("INSERT"):
+                return True
+            if value.strip() in {"...", "<redacted>", "<REDACTED>"}:
+                return True
+            return False
+
+        def _walk(node: Any, path: str = "") -> None:
+            if isinstance(node, dict):
+                for key, val in node.items():
+                    key_str = str(key)
+                    new_path = f"{path}.{key_str}" if path else key_str
+                    if any(s in key_str.lower() for s in sensitive_keys):
+                        if isinstance(val, str) and not _is_placeholder(val):
+                            logger.warning(
+                                "Sensitive value detected in config at '%s'. "
+                                "Prefer environment variables or a secret manager.",
+                                new_path,
+                            )
+                    _walk(val, new_path)
+            elif isinstance(node, list):
+                for idx, item in enumerate(node):
+                    _walk(item, f"{path}[{idx}]")
+
+        _walk(self)
+
     # ----- MAIN VALIDATION -----
     def _validate(self):
-        logger.info("Validating UMA-3 config...")
+        logger.info("Validating UMA config...")
 
         # -----------------------
         # STORAGE
@@ -131,27 +166,32 @@ class UMAConfig(dict):
         # -----------------------
         self._require("embedding", "provider")
         provider = self.embedding.provider
-        if provider not in ("openai", "ollama"):
-            raise ValueError("embedding.provider must be 'openai' or 'ollama'")
+        if provider in ("openai", "ollama"):
+            self._require_nonempty_str("embedding", "model")
+        elif not isinstance(provider, str) or not provider.strip():
+            raise ValueError("embedding.provider must be a non-empty string")
 
-        self._require_nonempty_str("embedding", "model")
         self._require_positive_int("embedding", "dimension")
+        if "config" in self.embedding and not isinstance(self.embedding["config"], dict):
+            raise ValueError("'embedding.config' must be a mapping")
 
         # -----------------------
         # LLM
         # -----------------------
         self._require("llm", "provider")
         prov = self.llm.provider
-        if prov not in ("openai", "ollama"):
-            raise ValueError("llm.provider must be 'openai' or 'ollama'")
+        if not isinstance(prov, str) or not prov.strip():
+            raise ValueError("llm.provider must be a non-empty string")
 
         if prov == "openai":
             self._require_nonempty_str("llm", "model")
-        else:
+        elif prov == "ollama":
             if not (self.llm.get("model") or self.llm.get("ollama_model")):
                 raise ValueError(
                     "llm.provider='ollama' requires either 'model' or 'ollama_model'"
                 )
+        if "config" in self.llm and not isinstance(self.llm["config"], dict):
+            raise ValueError("'llm.config' must be a mapping")
 
         # -----------------------
         # RETRIEVAL
@@ -203,7 +243,43 @@ class UMAConfig(dict):
         # -----------------------
         # FEATURES
         # -----------------------
-        self._require("features", "procedural_enabled")
-        self._require("features", "consolidation_enabled")
+        features = self.get("features")
+        if not isinstance(features, dict):
+            raise ValueError("'features' must be a mapping")
 
-        logger.info("UMA-3 configuration validated successfully.")
+        if "load" in features:
+            load_cfg = features.get("load")
+            if not isinstance(load_cfg, list):
+                raise ValueError("'features.load' must be a list")
+            for item in load_cfg:
+                if not isinstance(item, dict):
+                    raise ValueError("Each entry in 'features.load' must be a mapping")
+                name = item.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    raise ValueError("'features.load[].name' must be a non-empty string")
+                if "enabled" in item and not isinstance(item["enabled"], bool):
+                    raise ValueError("'features.load[].enabled' must be boolean")
+                if "provider" in item and not isinstance(item["provider"], str):
+                    raise ValueError("'features.load[].provider' must be a string")
+                if "config" in item and not isinstance(item["config"], dict):
+                    raise ValueError("'features.load[].config' must be a mapping")
+        else:
+            self._require("features", "procedural_enabled")
+            self._require("features", "consolidation_enabled")
+
+        policy = features.get("policy")
+        if policy is not None:
+            if not isinstance(policy, dict):
+                raise ValueError("'features.policy' must be a mapping")
+            if "on_attach_error" in policy and policy["on_attach_error"] not in (
+                "log_and_skip",
+                "raise",
+            ):
+                raise ValueError("'features.policy.on_attach_error' must be 'log_and_skip' or 'raise'")
+            if "allow_method_override" in policy and not isinstance(
+                policy["allow_method_override"], bool
+            ):
+                raise ValueError("'features.policy.allow_method_override' must be boolean")
+
+        self._warn_on_secrets()
+        logger.info("UMA configuration validated successfully.")

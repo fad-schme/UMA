@@ -1,7 +1,7 @@
 import asyncio
 
-from uma3.core.retrieval.rlm.controller import RLMController
-from uma3.core.retrieval.rlm.environment import MemoryEnvironment
+from uma.core.retrieval.rlm.controller import RLMController
+from uma.core.retrieval.rlm.environment import MemoryEnvironment
 
 
 class DummyEnv(MemoryEnvironment):

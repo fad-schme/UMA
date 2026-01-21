@@ -2,13 +2,13 @@
 TemporalGraphCore
 =================
 
-High-level interface for UMA-3 temporal graph memory.
+High-level interface for UMA temporal graph memory.
 
 Responsibilities
 ----------------
 - Hold the GraphAdapter backend
 - Delegate all graph write logic to GraphUpdater
-- Ensure graph failures NEVER crash UMA-3
+- Ensure graph failures NEVER crash UMA
 
 Identity Convention (v1)
 ------------------------

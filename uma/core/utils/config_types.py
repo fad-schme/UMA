@@ -2,7 +2,7 @@
 config_types.py
 ================
 
-Typed, frozen dataclasses representing UMA-3 configuration sections.
+Typed, frozen dataclasses representing UMA configuration sections.
 
 These dataclasses replace dynamic UMAConfig attribute wrappers inside
 UMAMemory, ensuring type safety, autocomplete support, and predictable
@@ -13,10 +13,9 @@ UMAMemory should convert UMAConfig → these dataclasses at startup.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
 import importlib
-from typing import Optional, Dict, Any, Union
+from typing import Any, Dict, List, Optional, Union
 
 
 def parse_plugin_spec(spec: Union[str, Dict[str, Any]]):
@@ -60,8 +59,9 @@ def parse_plugin_spec(spec: Union[str, Dict[str, Any]]):
 @dataclass(frozen=True)
 class LLMConfig:
     provider: str
-    model: str
+    model: Optional[str]
     ollama_model: Optional[str] = None
+    config: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "LLMConfig":
@@ -69,21 +69,24 @@ class LLMConfig:
             provider=d["provider"],
             model=d.get("model"),
             ollama_model=d.get("ollama_model"),
+            config=d.get("config") or {},
         )
 
 
 @dataclass(frozen=True)
 class EmbeddingConfig:
     provider: str
-    model: str
+    model: Optional[str]
     dimension: int
+    config: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "EmbeddingConfig":
         return cls(
             provider=d["provider"],
-            model=d["model"],
+            model=d.get("model"),
             dimension=d["dimension"],
+            config=d.get("config") or {},
         )
 
 
@@ -214,14 +217,51 @@ class RLMConfig:
 
 @dataclass(frozen=True)
 class FeaturesConfig:
+    load: List[Dict[str, Any]]
+    policy: Dict[str, Any]
     procedural_enabled: bool
     consolidation_enabled: bool
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]):
+        load_cfg = d.get("load")
+        policy_cfg = d.get("policy") or {}
+        procedural_enabled = d.get("procedural_enabled", True)
+        consolidation_enabled = d.get("consolidation_enabled", True)
+
+        if isinstance(load_cfg, list):
+            return cls(
+                load=load_cfg,
+                policy=policy_cfg,
+                procedural_enabled=procedural_enabled,
+                consolidation_enabled=consolidation_enabled,
+            )
+
+        load: List[Dict[str, Any]] = []
+        if procedural_enabled:
+            load.append(
+                {
+                    "name": "procedural",
+                    "enabled": True,
+                    "provider": "uma.features.procedural.feature:ProceduralFeature",
+                    "config": {},
+                }
+            )
+        if consolidation_enabled:
+            load.append(
+                {
+                    "name": "consolidation",
+                    "enabled": True,
+                    "provider": "uma.features.consolidation.feature:ConsolidationFeature",
+                    "config": {},
+                }
+            )
+
         return cls(
-            procedural_enabled=d.get("procedural_enabled", True),
-            consolidation_enabled=d.get("consolidation_enabled", True),
+            load=load,
+            policy=policy_cfg,
+            procedural_enabled=procedural_enabled,
+            consolidation_enabled=consolidation_enabled,
         )
 
 
