@@ -10,6 +10,8 @@ retrieval controller that can recursively query the environment instead of
 packing long context into the prompt.
 It provides configuration hooks for storage and observability, but developers
 own deployment, infrastructure operations, and data lifecycle management.
+UMA-RLM only retrieves context from its stores; agent behavior, reasoning, and
+response generation are managed by developers.
 
 ## Release Gates (Must Be Green)
 - Integration tests pass against the intended DB/vector/graph backends.

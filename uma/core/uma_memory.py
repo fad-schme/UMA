@@ -1025,13 +1025,12 @@ class UMAMemory:
         *,
         user_id: str,
         query_text: str,
-        system_prompt: str,
     ) -> list:
         """
         Build LLM messages with UMA-RLM context embedded.
 
         This wraps retrieval + context formatting so developers do not
-        manually collect memory slices.
+        manually collect memory slices. It does not inject a system prompt.
         """
         from .utils.context_pack_builder import ContextPackBuilder
 
@@ -1042,10 +1041,7 @@ class UMAMemory:
         else:
             user_content = query_text
 
-        return [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ]
+        return [{"role": "user", "content": user_content}]
 
     # ----------------------------------------------------------------------
     # OPTIONAL UTILITIES — Structured CoT Memory Builder

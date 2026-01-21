@@ -2,7 +2,8 @@
 
 Universal Memory Architecture
 UMA-RLM is a production-first memory runtime for developers building AI agents.
-It combines working, episodic, semantic, procedural, and temporal graph memory into a single SDK, and implements the concept of RLM (Recursive Language Model): an inference-time strategy that lets an LLM handle inputs far beyond its context window by treating the long prompt as an external environment. Instead of stuffing the entire prompt into tokens, the model “loads” it into an environment and then programmatically inspects, decomposes, and recursively calls itself on relevant snippets. 
+It combines working, episodic, semantic, procedural, and temporal graph memory into a single SDK, and implements the concept of RLM (Recursive Language Model): an inference-time strategy that lets an LLM handle inputs far beyond its context window by treating the long prompt as an external environment. Instead of stuffing the entire prompt into tokens, the model “loads” it into an environment and then programmatically inspects, decomposes, and recursively calls itself on relevant snippets.
+UMA-RLM only retrieves context from its stores; the developer owns all agent behavior, reasoning, and response generation.
 
 ## Why UMA-RLM
 
@@ -36,6 +37,43 @@ RLMController iteratively queries memory with bounded recursion:
 - Consolidation cycles compress episodic data into durable facts
 - Salience scoring prioritizes what matters in retrieval
 - Cluster summaries are precomputed for fast "chapter" recall
+
+
+## Setup
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+## Typical Usage
+
+```python
+from uma.core.uma_memory import UMAMemory
+
+memory = UMAMemory.from_yaml("config/uma.yaml")
+memory.initialize()
+
+# Get UMA-RLM context (RLM retrieval) for the current user message:
+context_messages = await memory.build_prompt_messages(
+    user_id="user-123",
+    query_text=user_message,
+)
+
+# Your agent controls the system prompt and the LLM call:
+messages = [{"role": "system", "content": system_prompt}] + context_messages
+agent_reply = await agent_llm_generate(messages)
+
+# Persist the turn into UMA memory:
+await memory.process_turn(
+    user_id="user-123",
+    user_msg=user_message,
+    assistant_reply=agent_reply,
+)
+```
+
+
 
 ### Observability (Telemetry + Timing)
 UMA ships lightweight helpers for logging and timing critical paths. Use them around
@@ -176,35 +214,9 @@ else:
     print("find failed:", result.errors)
 ```
 
-## Typical Usage
 
-```python
-from uma.core.uma_memory import UMAMemory
 
-memory = UMAMemory.from_yaml("config/uma.yaml")
-memory.initialize()
 
-# After your agent generates a reply:
-await memory.process_turn(
-    user_id="user-123",
-    user_msg="Hey, I love cold brew.",
-    assistant_reply="Noted — I will remember that.",
-)
-
-# When building your next prompt:
-ctx = await memory.get_user_context(
-    user_id="user-123",
-    query_text="What should I recommend for coffee?"
-)
-```
-
-## Setup
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
 
 ## License
 MIT. See `LICENSE`.

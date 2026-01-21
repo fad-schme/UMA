@@ -18,6 +18,13 @@ SYSTEM_PROMPT_DEFAULT = (
 )
 
 
+async def agent_generate(messages: list) -> str:
+    """
+    Placeholder for the developer's agent LLM call.
+    """
+    raise NotImplementedError("Integrate your agent LLM here.")
+
+
 async def interactive_chat(
     config_path: str = "config/uma.yaml",
     user_id: str = "user:local",
@@ -67,19 +74,19 @@ async def interactive_chat(
             print(f"Ingested {n} documents into semantic memory.")
             continue
 
-        # Normal chat: build context and call LLM
+        # Normal chat: retrieve context only; agent behavior is developer-owned
         try:
-            messages = await memory.build_prompt_messages(
+            user_message = user
+            context_messages = await memory.build_prompt_messages(
                 user_id=user_subject,
-                query_text=user,
-                system_prompt=system_prompt,
+                query_text=user_message,
             )
-
-            reply = await memory.llm.generate(messages=messages, max_tokens=256)
+            messages = [{"role": "system", "content": system_prompt}] + context_messages
+            reply = await agent_generate(messages=messages)
             print("Assistant>", reply)
 
             # Update UMA memory with the turn
-            await memory.process_turn(user_id=user_subject, user_msg=user, assistant_reply=reply)
+            await memory.process_turn(user_id=user_subject, user_msg=user_message, assistant_reply=reply)
 
         except Exception as exc:
             logging.exception("Chat turn failed: %s", exc)
