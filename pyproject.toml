@@ -31,4 +31,4 @@ version = {attr = "uma.version.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["uma*"]
-exclude = ["tests*", "examples*", "scripts*", ".venv*"]
+exclude = ["tests*", "examples*", "scripts*", "config*", ".venv*", ".pytest_cache*"]
