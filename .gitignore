@@ -35,3 +35,7 @@ dist/
 
 # Secrets
 .env
+
+website/
+material/
+data/

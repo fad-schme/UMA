@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Protocol, Union
 
+from ...utils.identity import ensure_user_subject
+
 logger = logging.getLogger(__name__)
 
 NumericVector = List[Union[int, float]]
@@ -94,6 +96,11 @@ class UMAMemoryEnvironment:
         self._episodic_store = getattr(memory, "episodic_store", None)
         self._graph_core = getattr(memory, "graph_core", None)
         self._embedder = getattr(memory, "embedder", None)
+        self._allowed_topics = None
+        retrieval_cfg = getattr(memory, "retrieval_cfg", None)
+        ctx_cfg = getattr(retrieval_cfg, "context", None) if retrieval_cfg else None
+        if ctx_cfg and getattr(ctx_cfg, "allowed_topics", None):
+            self._allowed_topics = [t for t in ctx_cfg.allowed_topics if isinstance(t, str)]
 
         if self._retrieval is None:
             raise ValueError("UMAMemoryEnvironment requires retrieval_service")
@@ -122,9 +129,37 @@ class UMAMemoryEnvironment:
         if self._semantic_store is None:
             return []
         try:
-            subject = filters.get("subject") if isinstance(filters, dict) else None
+            # Enforce user scoping: default subject to the requesting user to
+            # prevent LLM-provided filters from performing cross-user retrieval.
+            user_subject = ensure_user_subject(user_id)
+            if isinstance(filters, dict) and "subject" in filters:
+                provided = filters.get("subject")
+                try:
+                    provided_subject = ensure_user_subject(str(provided))
+                except Exception as exc:
+                    logger.warning(
+                        "Environment.search_semantic: invalid subject filter %r: %s",
+                        provided,
+                        exc,
+                    )
+                    provided_subject = None
+
+                # If the LLM supplied a subject, do not allow accessing other
+                # users' data — enforce scoping to the requesting user.
+                if provided_subject and provided_subject != user_subject:
+                    logger.warning(
+                        "Environment.search_semantic: subject filter %r ignored for user=%s",
+                        provided_subject,
+                        user_subject,
+                    )
+                    subject = user_subject
+                else:
+                    subject = provided_subject or user_subject
+            else:
+                subject = user_subject
+            requested_topic = filters.get("topic") if isinstance(filters, dict) else None
             if isinstance(filters, dict):
-                unsupported = [k for k in filters.keys() if k != "subject"]
+                unsupported = [k for k in filters.keys() if k not in {"subject", "topic"}]
                 if unsupported:
                     logger.warning(
                         "Environment.search_semantic: unsupported filters=%s",
@@ -135,6 +170,10 @@ class UMAMemoryEnvironment:
                 subject=subject,
                 k=int(k),
             )
+            if requested_topic:
+                facts = [f for f in facts if (getattr(f, "meta", {}) or {}).get("topic") == requested_topic]
+            if self._allowed_topics:
+                facts = [f for f in facts if (getattr(f, "meta", {}) or {}).get("topic") in self._allowed_topics]
             return [self._fact_snippet(f) for f in facts]
         except Exception:
             logger.exception("Environment.search_semantic failed")
@@ -161,9 +200,10 @@ class UMAMemoryEnvironment:
         if self._episodic_store is None:
             return []
         try:
+            user_subject = ensure_user_subject(user_id)
             episodes = await self._episodic_store.search(
                 query_embedding=list(query_embedding),
-                user_id=user_id,
+                user_id=user_subject,
                 k=int(k),
             )
             filtered = self._filter_time_range(episodes, time_range)
@@ -207,17 +247,25 @@ class UMAMemoryEnvironment:
         if self._graph_core is None:
             return []
         try:
-            if predicate_scope:
-                logger.warning(
-                    "Environment.graph_neighbors: predicate_scope not supported; ignoring."
+            user_subject = ensure_user_subject(user_id)
+            if hasattr(self._graph_core, "neighbors"):
+                return self._graph_core.neighbors(
+                    user_id=user_subject,
+                    node_id=node_id,
+                    predicate_scope=predicate_scope,
+                    depth=depth,
+                    k=k,
                 )
-            results = self._graph_core.get_neighbors(
-                entity_id=node_id,
-                depth=depth,
-            )
-            if k:
-                return results[: int(k)]
-            return results
+            if hasattr(self._graph_core, "get_neighbors"):
+                results = self._graph_core.get_neighbors(
+                    entity_id=node_id,
+                    depth=depth,
+                )
+                if k:
+                    return results[: int(k)]
+                return results
+            logger.warning("Environment.graph_neighbors: graph_core has no neighbor query method.")
+            return []
         except Exception:
             logger.exception("Environment.graph_neighbors failed")
             raise
@@ -232,8 +280,9 @@ class UMAMemoryEnvironment:
         if self._episodic_store is None:
             return []
         try:
+            user_subject = ensure_user_subject(user_id)
             return await self._episodic_store.list_cluster_summaries(
-                user_id=user_id,
+                user_id=user_subject,
                 k=int(k),
                 time_range=time_range,
                 max_episodes=max_episodes,
@@ -244,7 +293,8 @@ class UMAMemoryEnvironment:
 
     async def get_working_memory(self, user_id: str, window: Optional[int] = None):
         try:
-            return self._wm.get_context(user_id, last_n=window) if self._wm else []
+            user_subject = ensure_user_subject(user_id)
+            return self._wm.get_context(user_subject, last_n=window) if self._wm else []
         except Exception:
             logger.exception("Environment.get_working_memory failed")
             return []
@@ -314,6 +364,7 @@ class UMAMemoryEnvironment:
             "object": getattr(fact, "object", None),
             "confidence": getattr(fact, "confidence", None),
             "salience": salience,
+            "meta": meta if isinstance(meta, dict) else {},
         }
 
     def _episode_snippet(self, ep: Any) -> Dict[str, Any]:

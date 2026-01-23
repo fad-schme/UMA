@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Optional, Literal
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -57,4 +58,15 @@ class ControllerDecision(BaseModel):
         try:
             return cls.model_validate_json(raw)
         except ValidationError as exc:
+            cleaned = raw.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.strip("`").strip()
+            start = cleaned.find("{")
+            end = cleaned.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                try:
+                    parsed = json.loads(cleaned[start : end + 1])
+                    return cls.model_validate(parsed)
+                except Exception:
+                    pass
             raise ValueError(f"Invalid controller JSON: {exc}")

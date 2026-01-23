@@ -81,22 +81,23 @@ class SQLiteAdapter(DBAdapter):
       }
 
       # Ensure parent directory exists for file-backed DBs
+      parent = None
       if not self.uri:
         import os
 
         parent = os.path.dirname(self.db_path)
-      if parent and not os.path.exists(parent):
-        try:
-          os.makedirs(parent, exist_ok=True)
-          logger.debug("SQLiteAdapter: created parent directory %s", parent)
-        except Exception as exc:
-            logger.exception(
-              "SQLiteAdapter: failed to create parent directory %s", parent
-            )
-            raise RuntimeError(
-              f"SQLiteAdapter failed to create parent directory: {parent}. "
-              "Ensure the path is writable and the parent exists."
-            ) from exc
+        if parent and not os.path.exists(parent):
+          try:
+            os.makedirs(parent, exist_ok=True)
+            logger.debug("SQLiteAdapter: created parent directory %s", parent)
+          except Exception as exc:
+              logger.exception(
+                "SQLiteAdapter: failed to create parent directory %s", parent
+              )
+              raise RuntimeError(
+                f"SQLiteAdapter failed to create parent directory: {parent}. "
+                "Ensure the path is writable and the parent exists."
+              ) from exc
 
       logger.info("SQLiteAdapter initialized with db_path=%s uri=%s", db_path, self.uri)
 

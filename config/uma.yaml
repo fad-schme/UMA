@@ -6,11 +6,12 @@
 # DB ROOT (all SQL stores live under this path)
 # ------------------------------
 storage:
-  db_root: "data/"         # UMA will create SQL DBs inside here
+  db_root: "./data/"         # UMA will create SQL DBs inside here
+  # db_root_base: "auto"   # auto | cwd | config (controls relative path resolution)
   sql_backend: "sqlite"    # future: postgres, mysql, etc.
   vector_backend: "faiss"  # or "pinecone", "weaviate", "inmemory"
-  graph_backend: "disabled"  # "neo4j", "memgraph", "disabled"
-  # Vector backend configuration (required for pinecone/weaviate)
+  graph_backend: "neo4j"  # "neo4j", "memgraph", "disabled"
+  # Vector backend configuration (required for pinecone/weaviate) umaIstheBest70
   vector_config:
     # Pinecone
     index_name: "uma-memory"
@@ -18,13 +19,14 @@ storage:
     url: "https://your-weaviate-host"
     api_key: "YOUR_WEAVIATE_API_KEY"
     class_name: "UMAMemory"
+    
 
 graph:
-  uri: ...
-  user: ...
-  password: ...
-  max_pool_size: ...
-  database: ...
+  uri: "neo4j://localhost:7687"
+  user: "neo4j"
+  password: "umaIstheBest70"
+  max_pool_size: 50
+  database: uma4j
 # ------------------------------
 # Working Memory
 # ------------------------------
@@ -44,50 +46,78 @@ working_memory:
 # ------------------------------
 embedding:
   provider: "ollama"
-  model: "text-embedding-3-small"
-  dimension: 1536
+  model: "all-minilm"
+  dimension: 384
 
 # ------------------------------
 # LLM (UMA internal)
 # ------------------------------
 llm:
   provider: "ollama"
-  model: "gpt-4.1-mini"
-  ollama_model: "llama3"
+  model: "qwen2.5:3b"
+  config:
+    timeout: 60
 
 # ------------------------------
 # Retrieval
 # ------------------------------
 retrieval:
-  max_episodes: 5
-  max_facts: 10
-  max_skills: 5
-  max_graph_items: 8
+  max_episodes: 3
+  max_facts: 5
+  max_skills: 3
+  max_graph_items: 3
+
+  context:
+    max_working_messages: 2
+    max_episodic: 2
+    max_semantic: 4
+    max_procedural: 2
+    max_graph: 2
+    prefer_semantic_only: true
 
   # Recursive Language Model (RLM) retrieval
   rlm:
     enabled: true
+    test_mode: true
+    extract_snippets: true
+    max_eval_rounds: 2
+    max_eval_chunks: 12
+    max_snippet_chars: 320
+    deterministic_only: false
 
     # Maximum recursive steps the controller can take
-    max_steps: 4
+    max_steps: 2
 
     # Maximum retrieval actions per step
-    max_actions_per_step: 2
+    max_actions_per_step: 1
 
     # Hard cap per memory type (safety)
     max_items_per_type: 30
 
     # LLM budget for controller decisions
-    llm_max_tokens: 300
+    llm_max_tokens: 120
 
     # Total wall-clock timeout for RLM retrieval
-    timeout_s: 20.0
+    timeout_s: 45.0
 
     # Max environment calls per request
-    max_env_calls: 12
+    max_env_calls: 8
 
     # Max characters per returned text field in RLM results
-    max_return_chars: 1200
+    max_return_chars: 800
+
+    # Deterministic coverage heuristics (optional)
+    # semantic_first: true
+    # clusters_first: true
+    # salience_threshold: 0.6
+    # min_semantic_facts: 4
+    # min_high_salience_facts: 2
+    # min_cluster_summaries: 1
+    # cluster_k: 3
+    # graph_predicate_limit: 2
+    predicate_weights:
+      LIKES: 1.0
+      PREFERS: 0.8
 
 # ------------------------------
 # Consolidation Engine

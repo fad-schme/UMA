@@ -58,6 +58,9 @@ def test_max_env_calls_and_truncation():
         max_actions_per_step=2,
         max_env_calls=1,
         max_return_chars=50,
+        semantic_first=False,
+        clusters_first=False,
+        deterministic_only=False,
     )
 
     pack = asyncio.run(ctl.retrieve_context("u1", "query"))

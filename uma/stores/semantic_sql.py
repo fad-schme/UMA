@@ -38,10 +38,16 @@ from datetime import datetime
 from typing import List, Optional, Any
 
 from .base_vector_sql_store import BaseVectorSQLStore
+
+try:
+    from ..core.utils.text import extract_query_terms
+except Exception:  # pragma: no cover
+    extract_query_terms = None
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from ..adapters.vector.faiss_adapter import FaissIndex
 from ..core.utils.conflict import FactResolver, LatestWinsFactResolver
+from ..core.utils.store_metadata import ensure_store_metadata
 from ..types_fact import Fact
 
 logger = logging.getLogger(__name__)
@@ -120,6 +126,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
                 ON facts(subject, predicate);
                 """
             )
+            ensure_store_metadata(self, conn, store_name="semantic")
             conn.commit()
         except Exception:
             self._safe_rollback(conn, "init_db")
@@ -235,10 +242,15 @@ class SemanticSQLStore(BaseVectorSQLStore):
             )
             # Embedding upsert (commit after vector update)
             try:
+                meta = canonical.meta if isinstance(canonical.meta, dict) else {}
+                topic = meta.get("topic")
+                vector_meta = {"subject": canonical.subject, "predicate": canonical.predicate}
+                if topic:
+                    vector_meta["topic"] = topic
                 self.vector_index.upsert(
                     ids=[canonical.id],
                     vectors=[embedding],
-                    metadata=[{"subject": canonical.subject, "predicate": canonical.predicate}],
+                    metadata=[vector_meta],
                 )
             except Exception:
                 logger.exception(
@@ -296,6 +308,48 @@ class SemanticSQLStore(BaseVectorSQLStore):
         except Exception:
             logger.exception("SemanticSQLStore.search failed.")
             raise
+
+    async def search_text(
+        self,
+        query: str,
+        subject: Optional[str] = None,
+        limit: int = 5,
+    ) -> List[Fact]:
+        """
+        Fallback lexical search over stored document text.
+        """
+        if not query or not isinstance(query, str):
+            return []
+        if extract_query_terms:
+            terms = extract_query_terms(query)
+        else:
+            terms = []
+        if not terms:
+            return []
+
+        conn = self._conn()
+        try:
+            where = ["predicate='document'"]
+            params: List[Any] = []
+            if subject:
+                where.append("subject=?")
+                params.append(subject)
+            for term in terms:
+                where.append("LOWER(object) LIKE ?")
+                params.append(f"%{term}%")
+            sql = f"""
+                SELECT * FROM facts
+                WHERE {' AND '.join(where)}
+                ORDER BY updated_at DESC
+                LIMIT {int(limit)}
+            """
+            rows = self._query_all(conn, sql, params=params, log_context="search_text")
+            return [self._row_to_object(r) for r in rows]
+        except Exception:
+            logger.exception("SemanticSQLStore.search_text failed.")
+            return []
+        finally:
+            conn.close()
 
     # ------------------------------------------------------------------ #
     # Fact Listing (required by Consolidator + Pruner)

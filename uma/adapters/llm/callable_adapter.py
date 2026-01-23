@@ -127,9 +127,35 @@ class CallableEmbedderAdapter(EmbeddingInterface):
 
     async def embed(self, texts: Iterable[str]) -> List[List[float]]:
         try:
+            if isinstance(texts, str):
+                raise TypeError(
+                    "CallableEmbedderAdapter.embed expects Iterable[str], not a single string."
+                )
+
+            texts = list(texts)
+            if not texts:
+                return []
+
+            normalized = []
+            for t in texts:
+                if not isinstance(t, str):
+                    raise TypeError(
+                        f"CallableEmbedderAdapter.embed expects strings, got {type(t)}"
+                    )
+                stripped = t.strip()
+                if not stripped:
+                    logger.warning(
+                        "CallableEmbedderAdapter.embed skipping empty/whitespace text."
+                    )
+                    continue
+                normalized.append(stripped)
+
+            if not normalized:
+                return []
+    
             call_kwargs = {}
             if self._accepts_texts or self._accepts_kwargs:
-                call_kwargs["texts"] = list(texts)
+                call_kwargs["texts"] = list(normalized)
             call_kwargs.update(self._default_kwargs)
             result = self._callable(**call_kwargs)
             if inspect.isawaitable(result):

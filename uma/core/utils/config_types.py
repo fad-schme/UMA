@@ -171,6 +171,7 @@ class RetrievalConfig:
     max_facts: int
     max_skills: int
     max_graph_items: int
+    context: "RetrievalContextConfig"
 
     # NEW
     rlm: Optional[RLMConfig] = None
@@ -182,6 +183,7 @@ class RetrievalConfig:
         if isinstance(rlm_cfg, dict):
             rlm_obj = RLMConfig(
                 enabled=bool(rlm_cfg.get("enabled", False)),
+                test_mode=bool(rlm_cfg.get("test_mode", False)),
                 max_steps=int(rlm_cfg.get("max_steps", 4)),
                 max_actions_per_step=int(rlm_cfg.get("max_actions_per_step", 2)),
                 max_items_per_type=int(rlm_cfg.get("max_items_per_type", 30)),
@@ -189,6 +191,24 @@ class RetrievalConfig:
                 timeout_s=float(rlm_cfg.get("timeout_s", 20.0)),
                 max_env_calls=int(rlm_cfg.get("max_env_calls", 12)),
                 max_return_chars=int(rlm_cfg.get("max_return_chars", 1200)),
+                extract_snippets=bool(rlm_cfg.get("extract_snippets", True)),
+                max_eval_rounds=int(rlm_cfg.get("max_eval_rounds", 2)),
+                max_eval_chunks=int(rlm_cfg.get("max_eval_chunks", 12)),
+                max_snippet_chars=int(rlm_cfg.get("max_snippet_chars", 320)),
+                deterministic_only=bool(rlm_cfg.get("deterministic_only", False)),
+                semantic_first=bool(rlm_cfg.get("semantic_first", True)),
+                clusters_first=bool(rlm_cfg.get("clusters_first", True)),
+                salience_threshold=float(rlm_cfg.get("salience_threshold", 0.6)),
+                min_semantic_facts=int(rlm_cfg.get("min_semantic_facts", 4)),
+                min_high_salience_facts=int(rlm_cfg.get("min_high_salience_facts", 2)),
+                min_cluster_summaries=int(rlm_cfg.get("min_cluster_summaries", 1)),
+                cluster_k=int(rlm_cfg.get("cluster_k", 3)),
+                graph_predicate_limit=int(rlm_cfg.get("graph_predicate_limit", 2)),
+                predicate_weights=(
+                    rlm_cfg.get("predicate_weights")
+                    if isinstance(rlm_cfg.get("predicate_weights"), dict)
+                    else None
+                ),
             )
 
         return cls(
@@ -196,6 +216,7 @@ class RetrievalConfig:
             max_facts=int(d["max_facts"]),
             max_skills=int(d["max_skills"]),
             max_graph_items=int(d["max_graph_items"]),
+            context=RetrievalContextConfig.from_dict(d.get("context") or {}),
             rlm=rlm_obj,
         )
 
@@ -203,6 +224,7 @@ class RetrievalConfig:
 @dataclass
 class RLMConfig:
     enabled: bool = False
+    test_mode: bool = False
     max_steps: int = 4
     max_actions_per_step: int = 2
     max_items_per_type: int = 30
@@ -210,6 +232,43 @@ class RLMConfig:
     timeout_s: float = 20.0
     max_env_calls: int = 12
     max_return_chars: int = 1200
+    extract_snippets: bool = True
+    max_eval_rounds: int = 2
+    max_eval_chunks: int = 12
+    max_snippet_chars: int = 320
+    deterministic_only: bool = False
+    semantic_first: bool = True
+    clusters_first: bool = True
+    salience_threshold: float = 0.6
+    min_semantic_facts: int = 4
+    min_high_salience_facts: int = 2
+    min_cluster_summaries: int = 1
+    cluster_k: int = 3
+    graph_predicate_limit: int = 2
+    predicate_weights: Optional[Dict[str, float]] = None
+
+
+@dataclass
+class RetrievalContextConfig:
+    max_working_messages: int = 4
+    max_episodic: int = 3
+    max_semantic: int = 5
+    max_procedural: int = 3
+    max_graph: int = 3
+    prefer_semantic_only: bool = True
+    allowed_topics: Optional[List[str]] = None
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "RetrievalContextConfig":
+        return cls(
+            max_working_messages=int(d.get("max_working_messages", 4)),
+            max_episodic=int(d.get("max_episodic", 3)),
+            max_semantic=int(d.get("max_semantic", 5)),
+            max_procedural=int(d.get("max_procedural", 3)),
+            max_graph=int(d.get("max_graph", 3)),
+            prefer_semantic_only=bool(d.get("prefer_semantic_only", True)),
+            allowed_topics=d.get("allowed_topics"),
+        )
 
 # ---------------------------------------------------------------------------
 # Feature flags

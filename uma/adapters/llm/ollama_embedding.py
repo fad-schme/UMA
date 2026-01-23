@@ -12,10 +12,13 @@ IMPORTANT:
     - "native"   → call `ollama.embed()` for real embeddings
     - "disabled" → raise error on use (safe default)
 
-Rationale:
-----------
-The Python API is more robust, faster, and officially recommended by Ollama.
-This avoids custom HTTP endpoints entirely.
+Embedding Contract (UMA3-RLM v1)
+--------------------------------
+    async def embed(texts: Iterable[str]) -> List[List[float]]
+
+- `texts` MUST be an iterable of strings
+- Passing a single string is a programming error
+- Output ordering MUST match input ordering
 
 Coding agent instructions:
 --------------------------
@@ -23,21 +26,20 @@ Coding agent instructions:
 - Ensure the model exists locally via `ollama pull <model>`.
 - If the model does not support embeddings, a RuntimeError will be raised.
 """
-
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Iterable, List, Optional
+from typing import Iterable, List
 
-from ...adapters.llm.base import EmbeddingInterface
+from .base import EmbeddingInterface
 from .retry_utils import retryable
 
 logger = logging.getLogger(__name__)
 
-# Try importing ollama; if missing, we raise at runtime.
+# Lazy import to avoid hard dependency if unused
 try:
-    import ollama
+    import ollama  # type: ignore
 except Exception:
     ollama = None
 
@@ -49,11 +51,13 @@ class OllamaEmbedder(EmbeddingInterface):
     Parameters
     ----------
     model : str
-        The Ollama model name to use for embedding.
+        Ollama model name (e.g. "nomic-embed-text")
+    dimension : int
+        Expected embedding dimensionality
+    timeout : float
+        Max seconds per embedding call
     mode : str
-        "native" or "disabled".
-    base_url, endpoint, timeout : ignored
-        Present for API compatibility only.
+        "native" or "disabled"
     """
 
     def __init__(
@@ -63,104 +67,144 @@ class OllamaEmbedder(EmbeddingInterface):
         timeout: float = 30.0,
         mode: str = "disabled",
     ) -> None:
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError("OllamaEmbedder: model must be a non-empty string.")
+        if not isinstance(dimension, int) or dimension <= 0:
+            raise ValueError("OllamaEmbedder: dimension must be a positive integer.")
+        if not isinstance(timeout, (int, float)) or timeout <= 0:
+            raise ValueError("OllamaEmbedder: timeout must be > 0.")
         if mode not in {"native", "disabled"}:
             raise ValueError(
-                f"Unsupported OllamaEmbedder mode '{mode}'. Allowed: 'native', 'disabled'."
+                f"OllamaEmbedder: invalid mode '{mode}'. Allowed: 'native', 'disabled'."
             )
 
         self.model = model
-        self.mode = mode
         self._dimension = dimension
-        self.timeout = timeout
+        self.timeout = float(timeout)
+        self.mode = mode
 
-        logger.info("OllamaEmbedder initialized (mode=%s, model=%s)", mode, model)
-        
+        logger.info(
+            "OllamaEmbedder initialized (model=%s, dimension=%d, mode=%s)",
+            self.model,
+            self._dimension,
+            self.mode,
+        )
+
+    # ------------------------------------------------------------------
+    # EmbeddingInterface
+    # ------------------------------------------------------------------
+
     @property
     def dimension(self) -> int:
+        """Return embedding dimensionality."""
         return self._dimension
 
     async def embed(self, texts: Iterable[str]) -> List[List[float]]:
         """
-        Embed text using Ollama's Python API.
+        Embed a batch of texts using Ollama.
 
-        Parameters
-        ----------
-        texts : Iterable[str] or str
-            Input texts.
-
-        Returns
-        -------
-        List[List[float]]
+        Contract
+        --------
+        - `texts` MUST be Iterable[str]
+        - Passing a single string is an error
         """
-
-        # Accept single string
+        # Prevent accidental character-level embedding
         if isinstance(texts, str):
-            texts_list = [texts]
-        else:
-            texts_list = list(texts)
+            raise TypeError(
+                "OllamaEmbedder.embed expects Iterable[str], not a single string."
+            )
 
+        texts_list = list(texts)
         if not texts_list:
-            logger.debug("OllamaEmbedder.embed called with empty list.")
+            logger.debug("OllamaEmbedder.embed called with empty iterable.")
+            return []
+
+        # Normalize input
+        normalized: List[str] = []
+        for t in texts_list:
+            if not isinstance(t, str):
+                raise TypeError(
+                    f"OllamaEmbedder.embed expects strings, got {type(t)}"
+                )
+            stripped = t.strip()
+            if not stripped:
+                logger.warning("OllamaEmbedder.embed skipping empty/whitespace text.")
+                continue
+            normalized.append(stripped)
+
+        if not normalized:
+            logger.warning("OllamaEmbedder.embed: no valid texts after normalization.")
             return []
 
         if self.mode == "disabled":
-            logger.error("Embedding called while mode='disabled'.")
+            logger.error("OllamaEmbedder.embed called while mode='disabled'.")
             raise RuntimeError(
                 "Ollama embedding is disabled. Enable mode='native' to use it."
             )
 
-        if self.mode == "native":
-            return await self._embed_native(texts_list)
+        # Enforce timeout around native embedding
+        try:
+            return await asyncio.wait_for(
+                self._embed_native(normalized),
+                timeout=self.timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.exception("OllamaEmbedder.embed timed out.")
+            raise RuntimeError("Ollama embedding timed out.")
 
-        logger.critical("Unexpected OllamaEmbedder mode: %s", self.mode)
-        raise RuntimeError(f"Invalid mode: {self.mode}")
+    # ------------------------------------------------------------------
+    # Native embedding
+    # ------------------------------------------------------------------
 
     @retryable()
     async def _embed_native(self, texts: List[str]) -> List[List[float]]:
         """
-        Perform embedding using the official Ollama Python API.
-        """
+        Perform embedding using Ollama's Python API.
 
+        This method embeds the entire batch at once.
+        (No batching is used in v1; acceptable for local Ollama models.)
+        """
         if ollama is None:
             logger.error("Ollama Python package not installed.")
             raise RuntimeError(
-                "The 'ollama' Python package is not installed. Install with: pip install ollama"
+                "OllamaEmbedder requires the 'ollama' package. Install with: pip install ollama"
             )
 
         try:
-            # ollama.embed returns a dict with an "embeddings" field containing a list of vectors.
-            # For multiple inputs, the recommended call is one-at-a-time OR if supported:
-            #   ollama.embed(model=..., input=[...])
-            # The Python client supports list input.
-            response = await asyncio.to_thread(ollama.embed, model=self.model, input=texts)
+            response = await asyncio.to_thread(
+                ollama.embed,
+                model=self.model,
+                input=texts,
+            )
         except Exception as exc:
-            logger.exception("Ollama embedding call failed: %s", exc)
+            logger.exception("Ollama embedding call failed.")
             raise RuntimeError("Ollama embedding request failed.") from exc
 
-        # Expected response format:
-        #   {"model": ..., "embeddings": [[...], [...]] }
-        try:
-            vectors = response.get("embeddings") or response.get("data")
-        except Exception:
-            logger.exception("Invalid embedding response structure: %r", response)
-            raise RuntimeError("Malformed embedding response from Ollama.")
+        # Ollama official response key
+        vectors = response.get("embeddings")
+        if vectors is None:
+            logger.error("Unexpected Ollama embedding response: %r", response)
+            raise RuntimeError("Ollama embedding response missing 'embeddings'.")
 
         if not isinstance(vectors, list):
-            logger.error("Embedding response missing 'embeddings' list: %r", response)
             raise RuntimeError("Ollama embedding response malformed.")
 
         if len(vectors) != len(texts):
-            logger.error(
-                "Ollama returned mismatched embedding count: expected %d, got %d",
-                len(texts), len(vectors)
+            raise RuntimeError(
+                f"Ollama returned {len(vectors)} embeddings for {len(texts)} inputs."
             )
-            raise RuntimeError("Embedding count mismatch from Ollama.")
 
-        for vec in vectors:
-            if len(vec) != self._dimension:
+        # Validate vectors
+        cleaned: List[List[float]] = []
+        for i, vec in enumerate(vectors):
+            if not isinstance(vec, list):
+                raise RuntimeError(f"Invalid embedding vector at index {i}.")
+            flt_vec = [float(x) for x in vec]
+            if len(flt_vec) != self._dimension:
                 raise RuntimeError(
-                    f"Embedding dimension mismatch: expected {self._dimension}, got {len(vec)}"
+                    f"Embedding dimension mismatch: expected {self._dimension}, got {len(flt_vec)}"
                 )
+            cleaned.append(flt_vec)
 
-        logger.debug("Received %d embeddings from Ollama.", len(vectors))
-        return vectors
+        logger.debug("OllamaEmbedder: received %d embeddings.", len(cleaned))
+        return cleaned

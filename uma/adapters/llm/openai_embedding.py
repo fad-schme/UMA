@@ -53,27 +53,69 @@ class OpenAIEmbedder(EmbeddingInterface):
     @retryable()
     async def embed(self, texts: Iterable[str]) -> List[List[float]]:
         """
-        Embed texts in batches.
+        Embed texts in batches using the OpenAI embeddings API.
+
+        Contract
+        --------
+        - `texts` MUST be an iterable of strings.
+        - Passing a single string is a programming error.
 
         Returns
         -------
         List[List[float]]
+            One embedding vector per input text (order preserved).
         """
-        texts = list(texts)
+        # Guard against accidental str usage
+        if isinstance(texts, str):
+            raise TypeError(
+                "OpenAIEmbedder.embed expects Iterable[str], not a single string."
+            )
+
+        texts_list = list(texts)
+        if not texts_list:
+            logger.debug("OpenAIEmbedder.embed called with empty iterable.")
+            return []
+
+        # Normalize inputs
+        normalized: List[str] = []
+        for t in texts_list:
+            if not isinstance(t, str):
+                raise TypeError(
+                    f"OpenAIEmbedder.embed expects strings, got {type(t)}"
+                )
+            stripped = t.strip()
+            if not stripped:
+                logger.warning("OpenAIEmbedder.embed skipping empty/whitespace text.")
+                continue
+            normalized.append(stripped)
+
+        if not normalized:
+            logger.warning(
+                "OpenAIEmbedder.embed: no valid texts after normalization."
+            )
+            return []
+
         vectors: List[List[float]] = []
 
-        async def _embed_batch(batch):
+        async def _embed_batch(batch: List[str]) -> List[List[float]]:
+            """
+            Embed a single batch of texts.
+
+            Separated as a nested helper for clarity and reuse.
+            """
             response = await self.client.embeddings.create(
                 model=self.model,
                 input=batch,
             )
             return [item.embedding for item in response.data]
 
-        for i in range(0, len(texts), self.batch_size):
-            batch = texts[i : i + self.batch_size]
+        # IMPORTANT: batch over *normalized*, not original texts
+        for i in range(0, len(normalized), self.batch_size):
+            batch = normalized[i : i + self.batch_size]
             try:
                 chunk_vecs = await asyncio.wait_for(
-                    _embed_batch(batch), timeout=self.timeout
+                    _embed_batch(batch),
+                    timeout=self.timeout,
                 )
                 for vec in chunk_vecs:
                     if len(vec) != self._dimension:
@@ -82,7 +124,7 @@ class OpenAIEmbedder(EmbeddingInterface):
                         )
                 vectors.extend(chunk_vecs)
             except Exception:
-                logger.exception("Embedding batch failed.")
+                logger.exception("OpenAIEmbedder: embedding batch failed.")
                 raise
 
         return vectors

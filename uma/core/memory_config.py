@@ -8,9 +8,11 @@ This configuration format uses:
 """
 
 from __future__ import annotations
-import yaml
 import logging
+import os
 from typing import Any, Dict
+
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,13 @@ class UMAConfig(dict):
             raise ValueError("UMA config must be a dict at top-level")
 
         cfg = cls(data)
+        try:
+            cfg._source_path = os.path.abspath(path)
+            cfg._source_dir = os.path.dirname(cfg._source_path)
+        except Exception:
+            # Keep non-fatal: path bookkeeping should not block config loading.
+            cfg._source_path = None
+            cfg._source_dir = None
         cfg._validate()
         return cfg
 
@@ -198,6 +207,19 @@ class UMAConfig(dict):
         # -----------------------
         for key in ("max_episodes", "max_facts", "max_skills", "max_graph_items"):
             self._require_positive_int("retrieval", key)
+        context_cfg = self.retrieval.get("context")
+        if context_cfg is not None:
+            if not isinstance(context_cfg, dict):
+                raise ValueError("'retrieval.context' must be a mapping")
+            for key in ("max_working_messages", "max_episodic", "max_semantic", "max_procedural", "max_graph"):
+                if key in context_cfg and (not isinstance(context_cfg[key], int) or context_cfg[key] < 0):
+                    raise ValueError(f"'retrieval.context.{key}' must be a non-negative integer")
+            if "prefer_semantic_only" in context_cfg and not isinstance(context_cfg["prefer_semantic_only"], bool):
+                raise ValueError("'retrieval.context.prefer_semantic_only' must be boolean")
+            if "allowed_topics" in context_cfg:
+                allowed = context_cfg["allowed_topics"]
+                if not isinstance(allowed, list) or not all(isinstance(x, str) for x in allowed):
+                    raise ValueError("'retrieval.context.allowed_topics' must be a list of strings")
 
         # -----------------------
         # RETRIEVAL.RLM (optional)
@@ -209,6 +231,8 @@ class UMAConfig(dict):
 
             if "enabled" in rlm and not isinstance(rlm["enabled"], bool):
                 raise ValueError("'retrieval.rlm.enabled' must be boolean")
+            if "test_mode" in rlm and not isinstance(rlm["test_mode"], bool):
+                raise ValueError("'retrieval.rlm.test_mode' must be boolean")
 
             def _pos_int(key):
                 if key in rlm and (not isinstance(rlm[key], int) or rlm[key] <= 0):
@@ -224,7 +248,12 @@ class UMAConfig(dict):
             _pos_int("llm_max_tokens")
             _pos_int("max_env_calls")
             _pos_int("max_return_chars")
+            _pos_int("max_eval_rounds")
+            _pos_int("max_eval_chunks")
+            _pos_int("max_snippet_chars")
             _pos_float("timeout_s")
+            if "extract_snippets" in rlm and not isinstance(rlm["extract_snippets"], bool):
+                raise ValueError("'retrieval.rlm.extract_snippets' must be boolean")
 
         # -----------------------
         # CONSOLIDATION

@@ -31,6 +31,7 @@ from typing import List, Optional
 from .base_vector_sql_store import BaseVectorSQLStore
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
+from ..core.utils.store_metadata import ensure_store_metadata
 from ..types_episode import Episode
 
 logger = logging.getLogger(__name__)
@@ -128,6 +129,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_cluster_members_ep ON episode_cluster_members(episode_id);"
             )
+            ensure_store_metadata(self, conn, store_name="episodic")
             conn.commit()
         except Exception:
             self._safe_rollback(conn, "init_db")

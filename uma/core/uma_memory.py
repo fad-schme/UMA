@@ -91,9 +91,15 @@ Design Philosophy
 
 from __future__ import annotations
 
-import logging
 import inspect
+import logging
+import os
 from typing import Any, Dict, Optional
+
+try:
+    from .utils.text import extract_query_terms
+except Exception:  # pragma: no cover
+    extract_query_terms = None
 
 from .memory_config import UMAConfig     # YAML loader + validation (dict-like)
 from .utils.config_types import (
@@ -107,6 +113,7 @@ from .utils.config_types import (
 )
 
 from .utils.hooks import UMAHooks
+from .utils.identity import ensure_user_subject
 from .working_memory.core import WorkingMemoryCore
 from .episodic.core import EpisodicCore
 from .episodic.indexer import EpisodeIndexer
@@ -174,9 +181,9 @@ class UMAMemory:
     def from_yaml(cls, path: str) -> "UMAMemory":
         """Load YAML config and construct UMAMemory."""
         cfg = UMAConfig.load_yaml(path)
-        return cls(cfg)
+        return cls(cfg, config_path=path)
 
-    def __init__(self, config: UMAConfig) -> None:
+    def __init__(self, config: UMAConfig, config_path: Optional[str] = None) -> None:
         """
         Convert nested config dicts into typed dataclasses where appropriate.
 
@@ -191,6 +198,8 @@ class UMAMemory:
         - This keeps the config surface minimal for developers.
         """
         self.raw_config = config  # keep original for debugging
+        self._config_path = config_path or getattr(config, "_source_path", None)
+        self._config_dir = getattr(config, "_source_dir", None)
         self.initialized: bool = False
 
         # RLM components (initialized later)
@@ -290,6 +299,7 @@ class UMAMemory:
                 self.rlm_controller = RLMController(
                     llm=self.llm,  # SAME LLM, control role
                     env=self.memory_env,
+                    test_mode=rlm_cfg.test_mode,
                     max_steps=rlm_cfg.max_steps,
                     max_actions_per_step=rlm_cfg.max_actions_per_step,
                     max_items_per_type=rlm_cfg.max_items_per_type,
@@ -297,6 +307,20 @@ class UMAMemory:
                     timeout_s=rlm_cfg.timeout_s,
                     max_env_calls=rlm_cfg.max_env_calls,
                     max_return_chars=rlm_cfg.max_return_chars,
+                    extract_snippets=rlm_cfg.extract_snippets,
+                    max_eval_rounds=rlm_cfg.max_eval_rounds,
+                    max_eval_chunks=rlm_cfg.max_eval_chunks,
+                    max_snippet_chars=rlm_cfg.max_snippet_chars,
+                    deterministic_only=rlm_cfg.deterministic_only,
+                    semantic_first=rlm_cfg.semantic_first,
+                    clusters_first=rlm_cfg.clusters_first,
+                    salience_threshold=rlm_cfg.salience_threshold,
+                    min_semantic_facts=rlm_cfg.min_semantic_facts,
+                    min_high_salience_facts=rlm_cfg.min_high_salience_facts,
+                    min_cluster_summaries=rlm_cfg.min_cluster_summaries,
+                    cluster_k=rlm_cfg.cluster_k,
+                    graph_predicate_limit=rlm_cfg.graph_predicate_limit,
+                    predicate_weights=rlm_cfg.predicate_weights,
                 )
 
                 logger.info("RLMController enabled and wired.")
@@ -456,11 +480,49 @@ class UMAMemory:
         # --------------------------------------------------------------
         # Validate and compute DB paths
         # --------------------------------------------------------------
-        db_root = storage_cfg.db_root.rstrip("/") + "/"
+        db_root = os.path.expandvars(os.path.expanduser(storage_cfg.db_root)).rstrip("/") + "/"
+        if not os.path.isabs(db_root):
+            cwd_root = os.path.abspath(db_root)
+            cfg_root = (
+                os.path.abspath(os.path.join(self._config_dir, db_root))
+                if self._config_dir
+                else None
+            )
+            db_root_base = (
+                (storage_cfg.get("db_root_base") or "auto")
+                if isinstance(storage_cfg, dict)
+                else "auto"
+            )
+            db_root_base = str(db_root_base).strip().lower() or "auto"
+            db_files = ("episodic.db", "semantic.db", "procedural.db")
 
-        episodic_db_path = db_root + "episodic.db"
-        semantic_db_path = db_root + "semantic.db"
-        procedural_db_path = db_root + "procedural.db"
+            def _has_db_files(root: str) -> bool:
+                return any(os.path.exists(os.path.join(root, name)) for name in db_files)
+
+            if db_root_base in {"config", "config_dir"}:
+                db_root = cfg_root or cwd_root
+            elif db_root_base in {"cwd", "workdir"}:
+                db_root = cwd_root
+            elif db_root_base == "auto":
+                if os.path.exists(cwd_root) and (
+                    _has_db_files(cwd_root) or not (cfg_root and os.path.exists(cfg_root))
+                ):
+                    db_root = cwd_root
+                elif cfg_root and os.path.exists(cfg_root):
+                    db_root = cfg_root
+                else:
+                    db_root = cwd_root
+            else:
+                logger.warning(
+                    "Unknown storage.db_root_base=%r; falling back to auto resolution.",
+                    db_root_base,
+                )
+                db_root = cwd_root
+        db_root = os.path.abspath(db_root.rstrip("/"))
+
+        episodic_db_path = os.path.join(db_root, "episodic.db")
+        semantic_db_path = os.path.join(db_root, "semantic.db")
+        procedural_db_path = os.path.join(db_root, "procedural.db")
 
         # --------------------------------------------------------------
         # SQL BACKEND SELECTION
@@ -867,9 +929,10 @@ class UMAMemory:
         """
         from .utils.maintenance import rebuild_vector_indexes
 
+        user_subject = ensure_user_subject(user_id) if user_id else None
         return await rebuild_vector_indexes(
             self,
-            user_id=user_id,
+            user_id=user_subject,
             include_episodic=include_episodic,
             include_semantic=include_semantic,
             include_procedural=include_procedural,
@@ -912,13 +975,21 @@ class UMAMemory:
             raise ValueError("UMAMemory.get_user_context: user_id must be a non-empty string.")
         if not query_text or not isinstance(query_text, str):
             raise ValueError("UMAMemory.get_user_context: query_text must be a non-empty string.")
+        user_subject = ensure_user_subject(user_id)
 
         with timed("uma.get_user_context.latency"):
             # 1) Stored WM
             try:
-                wm_stored = self.working_memory.get_context(user_id) if self.working_memory else []
+                wm_stored = (
+                    self.working_memory.get_context(user_subject)
+                    if self.working_memory
+                    else []
+                )
             except Exception:
-                logger.exception("UMAMemory.get_user_context: failed to load WM user=%s", user_id)
+                logger.exception(
+                    "UMAMemory.get_user_context: failed to load WM user=%s",
+                    user_subject,
+                )
                 wm_stored = []
 
             # If retrieval isn't wired, return WM only
@@ -940,45 +1011,101 @@ class UMAMemory:
             if getattr(self, "rlm_controller", None) is not None:
                 try:
                     pack = await self.rlm_controller.retrieve_context(
-                        user_id=user_id,
+                        user_id=user_subject,
                         query_text=query_text,
                     )
+                    if "insufficient_evidence" in (pack.warnings or []):
+                        increment("uma.get_user_context.calls", tags={"path": "rlm_empty"})
+                        return {
+                            "working_memory": [],
+                            "episodic": [],
+                            "semantic": [],
+                            "procedural": [],
+                            "graph": [],
+                        }
                     increment("uma.get_user_context.calls", tags={"path": "rlm"})
+                    semantic = await self._augment_semantic_with_text(user_id, query_text, pack.facts)
                     return {
                         "working_memory": wm_stored,
                         "episodic": pack.episodes,
-                        "semantic": pack.facts,
+                        "semantic": semantic,
                         "procedural": pack.skills,
                         "graph": pack.graph,
                     }
                 except Exception:
                     logger.exception(
                         "UMAMemory.get_user_context: RLM failed; falling back to classic user=%s",
-                        user_id,
+                        user_subject,
                     )
 
             # 3) Classic fallback
             try:
                 retrieved = await self.retrieval_service.retrieve(
-                    user_id=user_id,
+                    user_id=user_subject,
                     memory_type="all",
                     query_text_or_embedding=query_text,
                 )
             except Exception:
                 logger.exception(
                     "UMAMemory.get_user_context: classic retrieval failed user=%s",
-                    user_id,
+                    user_subject,
                 )
                 retrieved = {}
 
             increment("uma.get_user_context.calls", tags={"path": "classic"})
+        semantic = retrieved.get("facts", retrieved.get("semantic", [])) or []
+        semantic = await self._augment_semantic_with_text(user_subject, query_text, semantic)
         return {
             "working_memory": wm_stored,
             "episodic": retrieved.get("episodes", []) or [],
-            "semantic": retrieved.get("facts", retrieved.get("semantic", [])) or [],
+            "semantic": semantic,
             "procedural": retrieved.get("skills", retrieved.get("procedural", [])) or [],
             "graph": retrieved.get("graph", []) or [],
         }
+
+    async def _augment_semantic_with_text(
+        self,
+        user_id: str,
+        query_text: str,
+        semantic: list,
+    ) -> list:
+        if not query_text:
+            return semantic
+        if extract_query_terms:
+            terms = extract_query_terms(query_text)
+        else:
+            terms = []
+        if not terms:
+            return semantic
+        if semantic and self._semantic_contains_terms(semantic, terms):
+            return semantic
+        store = getattr(self, "semantic_store", None)
+        if store is None or not hasattr(store, "search_text"):
+            return semantic
+        try:
+            extras = await store.search_text(query_text, subject=user_id, limit=5)
+        except Exception:
+            return semantic
+        if not extras:
+            return semantic
+        existing_ids = {getattr(f, "id", None) for f in semantic}
+        for fact in extras:
+            if getattr(fact, "id", None) not in existing_ids:
+                semantic.append(fact)
+        return semantic
+
+    @staticmethod
+    def _semantic_contains_terms(semantic: list, terms: list[str]) -> bool:
+        for fact in semantic:
+            obj = getattr(fact, "object", None)
+            if isinstance(obj, dict):
+                text = " ".join(str(v) for v in obj.values() if v)
+            else:
+                text = str(obj or "")
+            haystack = f"{getattr(fact, 'subject', '')} {getattr(fact, 'predicate', '')} {text}".lower()
+            if any(t in haystack for t in terms):
+                return True
+        return False
 
     async def process_turn(
         self,
@@ -997,8 +1124,9 @@ class UMAMemory:
         if not getattr(self, "pipeline", None):
             raise RuntimeError("UMAMemory.process_turn: pipeline not initialized.")
 
+        user_subject = ensure_user_subject(user_id)
         await self.pipeline.process_turn(
-            user_id=user_id,
+            user_id=user_subject,
             user_msg=user_msg,
             assistant_reply=assistant_reply,
         )
@@ -1035,7 +1163,8 @@ class UMAMemory:
         from .utils.context_pack_builder import ContextPackBuilder
 
         pack = await self.build_context_pack(user_id=user_id, query_text=query_text)
-        snippet = ContextPackBuilder.render_snippet(pack)
+        ctx_cfg = getattr(self.retrieval_cfg, "context", None)
+        snippet = ContextPackBuilder.render_snippet(pack, ctx_cfg)
         if snippet:
             user_content = f"{query_text}\n\nRelevant memory:\n{snippet}"
         else:

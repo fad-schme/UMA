@@ -48,3 +48,15 @@ class UMAHooks:
                 # Never break agent flow — hooks fail in isolation.
                 import logging
                 logging.getLogger(__name__).exception("UMA Hook failure")
+
+    async def run_before_turn(self, *args, **kwargs) -> None:
+        await self.run_hooks(self.before_turn, *args, **kwargs)
+
+    async def run_after_turn(self, *args, **kwargs) -> None:
+        await self.run_hooks(self.after_turn, *args, **kwargs)
+
+    async def run_after_response(self, *args, **kwargs) -> None:
+        await self.run_hooks(self.after_response, *args, **kwargs)
+
+    async def run_after_memory_update(self, *args, **kwargs) -> None:
+        await self.run_hooks(self.after_memory_update, *args, **kwargs)

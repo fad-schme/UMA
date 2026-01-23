@@ -152,7 +152,8 @@ class GraphUpdater:
             # Predicate-scoped relationship
             self.graph.run_query(
                 f"""
-                MATCH (u:User {{id: $subject}}), (o:Entity {{id: $object}})
+                MATCH (u:User {{id: $subject}})
+                MATCH (o:Entity {{id: $object}})
                 MERGE (u)-[r:{predicate}]->(o)
                 SET r.confidence = $confidence,
                     r.updated_at = $updated_at
@@ -221,7 +222,8 @@ class GraphUpdater:
                 # Episode → Fact
                 self.graph.run_query(
                     """
-                    MATCH (e:Episode {id: $ep_id}), (f:Fact {id: $f_id})
+                    MATCH (e:Episode {id: $ep_id})
+                    MATCH (f:Fact {id: $f_id})
                     MERGE (e)-[:MENTIONS]->(f)
                     """,
                     {
@@ -238,7 +240,8 @@ class GraphUpdater:
 
                     self.graph.run_query(
                         f"""
-                        MATCH (e:Episode {{id: $ep_id}}), (o:Entity {{id: $object}})
+                        MATCH (e:Episode {{id: $ep_id}})
+                        MATCH (o:Entity {{id: $object}})
                         MERGE (e)-[:{predicate}]->(o)
                         """,
                         {
@@ -273,7 +276,8 @@ class GraphUpdater:
         try:
             self.graph.run_query(
                 """
-                MATCH (a:Episode {id: $a}), (b:Episode {id: $b})
+                MATCH (a:Episode {id: $a})
+                MATCH (b:Episode {id: $b})
                 MERGE (a)-[:PRECEDES]->(b)
                 MERGE (b)-[:FOLLOWS]->(a)
                 """,

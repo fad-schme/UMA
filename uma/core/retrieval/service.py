@@ -27,6 +27,7 @@ from .retrieval import MultiStoreRetriever
 from .selector import MemorySelector
 from ...adapters.observability.context import get_request_id, request_context
 from ...adapters.observability.metrics import increment, timed
+from ..utils.identity import ensure_user_subject
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,7 @@ class RetrievalService:
                     if not user_id or not isinstance(user_id, str):
                         raise ValueError("RetrievalService.retrieve: user_id must be a non-empty string.")
 
+                    user_subject = ensure_user_subject(user_id)
                     if query_text_or_embedding is None:
                         raise ValueError("RetrievalService.retrieve: query_text_or_embedding is required.")
 
@@ -140,14 +142,14 @@ class RetrievalService:
                         raise ValueError("RetrievalService.retrieve: memory_type must not be empty.")
 
                     if memory_type == "working_memory":
-                        return self._get_working_memory(user_id)
+                        return self._get_working_memory(user_subject)
 
                     embedding = await self._ensure_embedding(query_text_or_embedding)
 
                     raw = await self.retriever.retrieve(
                         memory=self.memory,
                         query_embedding=[float(x) for x in embedding],
-                        user_id=user_id,
+                        user_id=user_subject,
                     )
 
                     # selector expects keys: episodes/facts/skills/graph (+ optional WM)

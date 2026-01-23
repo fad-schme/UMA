@@ -102,17 +102,19 @@ class OllamaLLM(LLMInterface):
         payload = {
             "model": self.model,
             "messages": messages,
+            "stream": False,
             "options": {
                 "temperature": temperature,
+                "num_predict": max_tokens,
             },
         }
+        if "format" in kwargs and kwargs["format"]:
+            payload["format"] = kwargs["format"]
 
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             try:
-                async with asyncio.wait_for(
-                    session.post(self.chat_url, json=payload), timeout=self.timeout
-                ) as resp:
-
+                async with session.post(self.chat_url, json=payload) as resp:
                     if resp.status != 200:
                         text = await resp.text()
                         logger.error("Ollama LLM error: HTTP %s: %s", resp.status, text)

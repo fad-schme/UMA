@@ -137,14 +137,14 @@ def test_pipeline_updates_graph_with_facts_and_temporal_links():
         mem.graph_core = DummyGraphCore()
         mem.hooks = DummyHooks()
 
-        prev = DummyEpisode("ep_prev", "u1")
-        current = DummyEpisode("ep_current", "u1")
+        prev = DummyEpisode("ep_prev", "user:u1")
+        current = DummyEpisode("ep_current", "user:u1")
         mem.episodic_store = DummyEpisodicStore(current=current, prev=prev)
         mem.pipeline.hooks = mem.hooks
 
         asyncio.run(
             mem.process_turn(
-                user_id="u1",
+                user_id="user:u1",
                 user_msg="hello",
                 assistant_reply="hi",
             )

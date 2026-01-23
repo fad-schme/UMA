@@ -154,8 +154,8 @@ class TemporalGraphCore:
             return
 
         cypher = f"""
-        MATCH (a {{id: $source_id}}),
-              (b {{id: $target_id}})
+        MATCH (a {{id: $source_id}})
+        MATCH (b {{id: $target_id}})
         MERGE (a)-[r:{rel}]->(b)
         SET r += $props
         RETURN r
@@ -187,7 +187,8 @@ class TemporalGraphCore:
         self.add_entity(user_id, labels=["User"])
 
         cypher = """
-        MATCH (u {id: $user_id}), (e {id: $episode_id})
+        MATCH (u {id: $user_id})
+        MATCH (e {id: $episode_id})
         MERGE (u)-[r:HAS_EPISODE]->(e)
         SET r.timestamp = $ts
         RETURN r
@@ -250,7 +251,8 @@ class TemporalGraphCore:
         # Create predicate-scoped relationship
         self.adapter.run_query(
             f"""
-            MATCH (s {{id: $subject}}), (o {{id: $object}})
+            MATCH (s {{id: $subject}})
+            MATCH (o {{id: $object}})
             MERGE (s)-[r:{rel}]->(o)
             SET r += $props
             RETURN r

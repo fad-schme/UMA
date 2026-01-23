@@ -47,6 +47,10 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### Storage paths
+`storage.db_root` supports `~` and environment variables. For relative paths, set
+`storage.db_root_base` to control resolution (`auto`, `cwd`, or `config`).
+
 ## Typical Usage
 
 ```python

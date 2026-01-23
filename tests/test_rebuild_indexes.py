@@ -66,7 +66,7 @@ async def test_rebuild_vector_indexes(tmp_path):
     memory = UMAMemory.from_yaml(str(cfg_path))
     memory.initialize()
 
-    user_id = "user-123"
+    user_id = "user:123"
     embedding = [0.1, 0.1, 0.1]
 
     episode = Episode(
