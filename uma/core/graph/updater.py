@@ -75,12 +75,17 @@ class GraphUpdater:
         try:
             subject = ensure_user_subject(getattr(episode, "user_id", ""))
 
+            owner_type = getattr(episode, "owner_type", "user") or "user"
+            owner_id = getattr(episode, "owner_id", "") or getattr(episode, "user_id", "")
+
             self.graph.run_query(
                 """
                 MERGE (u:User {id: $subject})
                 MERGE (e:Episode {id: $id})
                 SET e.summary = $summary,
-                    e.timestamp = $timestamp
+                    e.timestamp = $timestamp,
+                    e.owner_type = $owner_type,
+                    e.owner_id = $owner_id
                 MERGE (u)-[:HAS_EPISODE]->(e)
                 """,
                 {
@@ -92,8 +97,11 @@ class GraphUpdater:
                         if hasattr(episode, "timestamp")
                         else None
                     ),
+                    "owner_type": owner_type,
+                    "owner_id": owner_id,
                 },
             )
+
         except Exception:
             logger.exception("GraphUpdater.add_episode_node failed.")
 
@@ -150,19 +158,26 @@ class GraphUpdater:
             )
 
             # Predicate-scoped relationship
+            owner_type = getattr(fact, "owner_type", "user") or "user"
+            owner_id = getattr(fact, "owner_id", "") or subject
+
             self.graph.run_query(
                 f"""
                 MATCH (u:User {{id: $subject}})
                 MATCH (o:Entity {{id: $object}})
                 MERGE (u)-[r:{predicate}]->(o)
                 SET r.confidence = $confidence,
-                    r.updated_at = $updated_at
+                    r.updated_at = $updated_at,
+                    r.owner_type = $owner_type,
+                    r.owner_id = $owner_id
                 """,
                 {
                     "subject": subject,
                     "object": obj,
                     "confidence": confidence,
                     "updated_at": updated_at,
+                    "owner_type": owner_type,
+                    "owner_id": owner_id,
                 },
             )
 
@@ -173,7 +188,9 @@ class GraphUpdater:
                 SET f.subject = $subject,
                     f.predicate = $predicate,
                     f.object = $object,
-                    f.updated_at = $updated_at
+                    f.updated_at = $updated_at,
+                    f.owner_type = $owner_type,
+                    f.owner_id = $owner_id
                 """,
                 {
                     "id": fact.id,
@@ -181,6 +198,8 @@ class GraphUpdater:
                     "predicate": raw_pred,
                     "object": obj,
                     "updated_at": updated_at,
+                    "owner_type": owner_type,
+                    "owner_id": owner_id,
                 },
             )
 

@@ -28,11 +28,23 @@ Coding Agent Instructions
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
-
+from typing import Any, Dict, Optional, List
+from .promotion import PromotionPolicy
 from ...adapters.observability.context import request_context
 from ...adapters.observability.metrics import increment, timed
 logger = logging.getLogger(__name__)
+
+def _get_fact_embedding(fact: Any) -> Optional[List[float]]:
+    """Extract an embedding from fact.meta if present."""
+    try:
+        meta = getattr(fact, "meta", None) or {}
+        emb = meta.get("embedding")
+        if isinstance(emb, list) and emb:
+            return [float(x) for x in emb]
+    except Exception:
+        return None
+    return None
+
 
 
 class MemoryPipeline:
@@ -50,10 +62,19 @@ class MemoryPipeline:
     retrieval_service.retrieve() outside this pipeline.
     """
 
-    def __init__(self, memory_client: Any, hooks: Any) -> None:
+    def __init__(self, memory_client: Any, hooks: Any, promotion_policy: Optional[PromotionPolicy] = None) -> None:
         self.mem = memory_client
         self.hooks = hooks
-        logger.info("MemoryPipeline initialized (memory-only mode).")
+        self.promotion_policy = promotion_policy
+        if promotion_policy is None:
+            logger.info("PromotionPolicy disabled (none provided).")
+        else:
+            try:
+                enabled = promotion_policy.is_enabled() if hasattr(promotion_policy, "is_enabled") else True
+                logger.info("PromotionPolicy configured (enabled=%s, max_promotions_per_turn=%s).", enabled, getattr(promotion_policy, "max_promotions_per_turn", "<unset>"))
+            except Exception:
+                logger.exception("PromotionPolicy provided but failed during initialization checks; disabling promotion.")
+                self.promotion_policy = None
 
     # ------------------------------------------------------------------
     # PUBLIC ENTRYPOINT
@@ -100,6 +121,9 @@ class MemoryPipeline:
                 # 5) Semantic ingestion
                 facts = await self._semantic_ingest(user_id, assistant_reply)
 
+                # 5b) Optional promotion of eligible facts to agent KB
+                await self._maybe_promote_facts(user_id=user_id, facts=facts)
+
                 # 6) Graph update
                 await self._update_graph(user_id, episode, facts)
 
@@ -112,10 +136,109 @@ class MemoryPipeline:
                 )
 
     # ------------------------------------------------------------------
+    # PROMOTION (OPTIONAL)
+    # ------------------------------------------------------------------
+    async def _maybe_promote_facts(self, user_id: str, facts: Any) -> None:
+        """Optionally promote eligible facts to agent-scoped knowledge.
+
+        This is a best-effort stage:
+        - NEVER raises to caller
+        - bounded by policy.max_promotions_per_turn
+        - only promotes if we can supply an embedding (so vector search stays correct)
+
+        Requirements on UMAMemory shape:
+        - semantic_store with async upsert_fact(fact, embedding)
+        # NOTE:
+        # Promotion requires embeddings to already exist on facts.
+        # v1 does NOT compute embeddings here to avoid adding LLM / embedder calls
+        # to the pipeline. Facts without embeddings are skipped intentionally.
+
+        """
+        policy = getattr(self, "promotion_policy", None)
+        if policy is None:
+            return
+
+        try:
+            if hasattr(policy, "is_enabled") and not policy.is_enabled():
+                return
+        except Exception:
+            logger.exception("PromotionPolicy.is_enabled() failed; disabling promotion for this turn.")
+            return
+
+        if not facts:
+            return
+
+        # Ensure iterable
+        try:
+            fact_list = list(facts)
+        except Exception:
+            logger.exception("Promotion stage received non-iterable facts; skipping.")
+            return
+
+        sem_store = getattr(self.mem, "semantic_store", None)
+        if sem_store is None:
+            logger.warning("Promotion enabled but semantic_store is missing; skipping promotions.")
+            return
+
+        max_promotions = getattr(policy, "max_promotions_per_turn", 5)
+        try:
+            max_promotions = int(max_promotions)
+        except Exception:
+            max_promotions = 5
+        if max_promotions <= 0:
+            return
+
+        promoted_count = 0
+
+        for fact in fact_list:
+            if promoted_count >= max_promotions:
+                break
+
+            try:
+                if not policy.is_eligible(fact):
+                    continue
+            except Exception:
+                logger.exception("PromotionPolicy.is_eligible failed; skipping fact.")
+                continue
+
+            # Require embedding to keep the agent KB searchable. If absent, skip.
+            embedding = _get_fact_embedding(fact)
+            if embedding is None:
+                logger.debug(
+                    "Skipping promotion for fact id=%r (no embedding present in fact.meta).",
+                    getattr(fact, "id", None),
+                )
+                continue
+
+            try:
+                promoted = policy.promote(fact)
+            except Exception:
+                logger.exception("PromotionPolicy.promote failed; skipping fact.")
+                continue
+
+            # Persist promoted fact into agent KB.
+            try:
+                await sem_store.upsert_fact(promoted, embedding=embedding)
+                promoted_count += 1
+                logger.info(
+                    "Promoted fact id=%r predicate=%r (user_id=%s)",
+                    getattr(promoted, "id", getattr(fact, "id", None)),
+                    getattr(promoted, "predicate", getattr(fact, "predicate", None)),
+                    user_id,
+                )
+            except Exception:
+                logger.exception("Failed to persist promoted fact; continuing.")
+
+        if promoted_count:
+            increment("pipeline.promotion.count")
+
+    # ------------------------------------------------------------------
     # HOOKS
     # ------------------------------------------------------------------
 
     async def _run_before_turn_hooks(self, user_id: str, user_msg: str) -> None:
+        if not self.hooks or not hasattr(self.hooks, "run_before_turn"):
+            return
         try:
             await self.hooks.run_before_turn(user_id=user_id, user_message=user_msg)
         except Exception:
@@ -128,6 +251,9 @@ class MemoryPipeline:
         reply: str,
         extra_meta: Dict[str, Any],
     ) -> None:
+        if not self.hooks or not hasattr(self.hooks, "run_after_turn"):
+            return
+        
         try:
             await self.hooks.run_after_turn(
                 user_id=user_id,

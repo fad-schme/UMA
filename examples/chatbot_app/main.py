@@ -6,12 +6,11 @@ import os
 from typing import Optional
 
 from uma.core.uma_memory import UMAMemory
-from uma.core.utils.identity import ensure_user_subject
 from uma.adapters.llm.base import LLMInterface
 
 from .loader import load_documents_folder
 
-logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT_DEFAULT = (
@@ -35,7 +34,6 @@ async def interactive_chat(
     system_prompt: Optional[str] = None,
 ):
     system_prompt = system_prompt or SYSTEM_PROMPT_DEFAULT
-    user_subject = ensure_user_subject(user_id)
 
     # Initialize UMA memory runtime
     memory = UMAMemory.from_yaml(config_path)
@@ -44,9 +42,9 @@ async def interactive_chat(
         logging.warning("RLM is disabled in config; enable retrieval.rlm.enabled for full UMA-RLM behavior.")
     vector_backend = getattr(memory.raw_config.storage, "vector_backend", "")
     if vector_backend in ("faiss", "inmemory"):
-        logging.info("Rebuilding vector indexes from SQL for user=%s", user_subject)
+        logging.info("Rebuilding vector indexes from SQL for user=%s", user_id)
         try:
-            await memory.rebuild_vector_indexes(user_id=user_subject)
+            await memory.rebuild_vector_indexes(user_id=user_id)
         except Exception:
             logging.exception("Vector index rebuild failed; continuing with empty index.")
 
@@ -88,14 +86,14 @@ async def interactive_chat(
                 if os.path.exists(alt):
                     resolved = alt
             print(f"Loading documents from {resolved} as topic '{topic}'...")
-            n = await load_documents_folder(resolved, topic, memory, user_subject)
+            n = await load_documents_folder(resolved, topic, memory, user_id)
             print(f"Ingested {n} documents into semantic memory.")
             continue
 
         # Normal chat: retrieve context only; agent behavior is developer-owned
         try:
             user_message = user
-            pack = await memory.build_context_pack(user_id=user_subject, query_text=user_message)
+            pack = await memory.build_context_pack(user_id=user_id, query_text=user_message)
             from uma.core.utils.context_pack_builder import ContextPackBuilder
 
             snippet = ContextPackBuilder.render_snippet(pack)
@@ -118,7 +116,7 @@ async def interactive_chat(
             print("Assistant>", reply)
 
             # Update UMA memory with the turn
-            await memory.process_turn(user_id=user_subject, user_msg=user_message, assistant_reply=reply)
+            await memory.process_turn(user_id=user_id, user_msg=user_message, assistant_reply=reply)
 
         except Exception as exc:
             logging.exception("Chat turn failed: %s", exc)
@@ -141,12 +139,10 @@ def main():
     args = parser.parse_args()
 
     if args.clear_all:
-        from uma.core.memory_config import UMAConfig
-
-        cfg = UMAConfig.load_yaml(args.config)
-        cfg_dir = os.path.dirname(os.path.abspath(args.config))
-        db_root = cfg.storage.db_root
-        abs_root = os.path.abspath(db_root if os.path.isabs(db_root) else os.path.join(cfg_dir, db_root))
+        cfg_path = os.path.abspath(args.config)
+        cfg_dir = os.path.dirname(cfg_path)
+        project_root = os.path.dirname(cfg_dir)  # sibling of config/
+        abs_root = os.path.join(project_root, "data")
         if abs_root in {"/", ""}:
             raise RuntimeError(f"Refusing to clear unsafe db_root path: {abs_root}")
         if os.path.exists(abs_root):

@@ -1,14 +1,11 @@
 """
 Skill model for Procedural Memory in UMA.
 
-A Skill represents a reusable workflow or capability that the agent can use
-to solve tasks. Skills are similar to "procedures" or "subroutines" in
-classical AI architectures.
-
-Typical examples:
-- "SQL debugging workflow"
-- "Explain a concept to a child"
-- "Generate a project status report"
+Skills are procedural units (how-to, playbooks, instructions).
+This version adds ownership so skills can live in:
+- agent KB (global skills)
+- user KB (personal procedures)
+- project KB (project playbooks)
 
 Coding agent instructions
 -------------------------
@@ -20,43 +17,56 @@ Coding agent instructions
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from .types_scope import OwnerType
 
 
 @dataclass
 class Skill:
-    """
-    Represents a procedural memory unit.
-
-    Attributes
-    ----------
-    id: str
-        Unique identifier for this skill (UUID recommended).
-    name: str
-        Human-readable name of the skill.
-    trigger_phrases: List[str]
-        Literal phrases that hint this skill should be used.
-    trigger_patterns: List[str]
-        Optional regex patterns for more flexible matching.
-    plan: Dict[str, Any]
-        Structured step-by-step plan, e.g.:
-            {"steps": ["Inspect logs", "Run test query", "Check indexes"]}
-    tools: List[str]
-        Set of tool names (external functions/APIs) required by the skill.
-    example: str
-        Example conversation or usage demonstration.
-    embedding: List[float] | None
-        Semantic vector representing this skill.
-    meta: Dict[str, Any]
-        Free-form metadata (e.g. domain, tags, confidence).
-    """
-
+    # Existing fields (DO NOT rename)
     id: str
     name: str
+    description: str
+    created_at: datetime
+    updated_at: datetime
+
+    # Ownership (NEW, safe defaults so old code doesn't break)
+    owner_type: OwnerType = "user"
+    owner_id: str = ""
+
+    salience: float = 0.0
+    tags: Dict[str, Any] = field(default_factory=dict)
+    source: Optional[str] = None
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    # Older fields for procedural memory (keep as-is)
     trigger_phrases: List[str] = field(default_factory=list)
     trigger_patterns: List[str] = field(default_factory=list)
     plan: Dict[str, Any] = field(default_factory=dict)
     tools: List[str] = field(default_factory=list)
     example: str = ""
-    embedding: List[float] | None = None
+    embedding: Optional[List[float]] = None
     meta: Dict[str, Any] = field(default_factory=dict)
+
+    def validate(self) -> None:
+        if not self.id or not isinstance(self.id, str):
+            raise ValueError("Skill.id must be a non-empty string")
+        if not self.name or not isinstance(self.name, str):
+            raise ValueError("Skill.name must be a non-empty string")
+        if not self.description or not isinstance(self.description, str):
+            raise ValueError("Skill.description must be a non-empty string")
+
+        if self.owner_type not in ("agent", "user", "project"):
+            raise ValueError(f"Invalid owner_type: {self.owner_type!r}")
+        if self.owner_id is not None and not isinstance(self.owner_id, str):
+            raise ValueError("Skill.owner_id must be a string")
+
+        if float(self.salience) < 0.0:
+            raise ValueError("Skill.salience must be >= 0")
+
+    @property
+    def scope_key(self) -> str:
+        derived_owner_id = self.owner_id.strip() or self.id
+        return f"{self.owner_type}:{derived_owner_id}"

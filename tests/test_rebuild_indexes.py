@@ -95,6 +95,11 @@ async def test_rebuild_vector_indexes(tmp_path):
     skill = Skill(
         id="skill-1",
         name="Make coffee",
+        description="Brews a cup of coffee.",
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+        owner_type="user",
+        owner_id="123",
         trigger_phrases=["coffee"],
         trigger_patterns=[],
         plan={"steps": ["boil", "brew"]},

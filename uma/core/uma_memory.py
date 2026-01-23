@@ -219,6 +219,9 @@ class UMAMemory:
         self.features: Dict[str, Any] = {}
         self._feature_policy = FeaturePolicy()
 
+        # Optional promotion policy (set by features or left None)
+        self.promotion_policy: Optional[Any] = None
+
         # Core runtime components (initialized later)
         self.llm: Any = None
         self.embedder: Any = None
@@ -270,7 +273,9 @@ class UMAMemory:
         if getattr(self, "pipeline", None) is None:
             from .utils.pipeline import MemoryPipeline
 
-            self.pipeline = MemoryPipeline(memory_client=self, hooks=self.hooks)
+            self.pipeline = MemoryPipeline(memory_client=self, hooks=self.hooks, promotion_policy=self.promotion_policy)
+
+            
 
         # 7. Wire RetrievalService EXACTLY once
         if self.retrieval_service is None:

@@ -139,6 +139,7 @@ class EpisodicCore:
         except Exception:
             logger.exception("EpisodicCore.cleanup failed for user=%s", user_id)
 
+    
     async def list_recent(self, user_id: str, n: int = 5):
         """
         Return the N most recent episodes for user_id.
@@ -147,4 +148,39 @@ class EpisodicCore:
             return await self.store.list_recent(user_id, n)
         except Exception:
             logger.exception("EpisodicCore.list_recent failed.")
+            return []
+        
+
+    async def list_cluster_summaries(
+        self,
+        user_id: str,
+        k: int = 5,
+        max_episodes: int = 50,
+        time_range: Optional[dict] = None,
+    ):
+        """
+        Return episodic cluster summaries for a user.
+
+        NOTE:
+        - Clustering logic is owned by the EpisodicSQLStore.
+        - EpisodicCore acts as the public façade for higher layers (pipeline / RLM).
+        """
+        try:
+            if not hasattr(self.store, "list_cluster_summaries"):
+                logger.warning(
+                    "EpisodicCore.list_cluster_summaries: store does not support clustering"
+                )
+                return []
+
+            return await self.store.list_cluster_summaries(
+                user_id=user_id,
+                k=int(k),
+                max_episodes=max_episodes,
+                time_range=time_range,
+            )
+        except Exception:
+            logger.exception(
+                "EpisodicCore.list_cluster_summaries failed for user_id=%s",
+                user_id,
+            )
             return []

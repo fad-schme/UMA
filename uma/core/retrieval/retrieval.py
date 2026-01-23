@@ -140,7 +140,11 @@ class MultiStoreRetriever:
         if user_id is None:
             return []
         try:
-            res = await store.search(emb, user_id, k)
+            res = await store.search(
+                query_embedding=emb,
+                user_id=user_id,
+                k=int(k),
+            )
             return res if isinstance(res, list) else []
         except Exception:
             logger.exception("MultiStoreRetriever: episodic retrieval failed.")
@@ -153,14 +157,29 @@ class MultiStoreRetriever:
         user_id: Optional[str],
         k: int,
     ) -> List[Any]:
+        """
+        Semantic retrieval.
+
+        IMPORTANT:
+        SemanticSQLStore.search() has signature:
+            search(query_embedding, subject=None, owner_type=None, owner_id=None, k=...)
+        so we MUST call it using keyword arguments to avoid positional mismatch.
+        """
         store = getattr(memory, "semantic_store", None)
         if store is None:
             return []
         if user_id is None:
             return []
+
         try:
             subject = ensure_user_subject(user_id)
-            res = await store.search(emb, subject, k)
+
+            # Call using keywords to avoid accidentally passing k as owner_type.
+            res = await store.search(
+                query_embedding=emb,
+                subject=subject,
+                k=int(k),
+            )
             return res if isinstance(res, list) else []
         except Exception:
             logger.exception("MultiStoreRetriever: semantic retrieval failed.")
@@ -222,10 +241,11 @@ class MultiStoreRetriever:
             return []
 
         cypher = """
-        MATCH (u:User {id: $subject})-[r*1..2]->(n)
-        RETURN DISTINCT n, labels(n) AS labels, properties(n) AS properties
-        LIMIT $limit
-        """
+            OPTIONAL MATCH (u:User)-[r*1..2]->(n)
+            WHERE u.id = $subject
+            RETURN DISTINCT n, labels(n) AS labels, properties(n) AS properties
+            LIMIT $limit
+            """
 
         try:
             res = adapter.run_query(

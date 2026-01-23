@@ -81,10 +81,14 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                     example TEXT NOT NULL,
                     meta TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    owner_type TEXT NOT NULL,
+                    owner_id TEXT NOT NULL
                 );
                 """
             )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_owner ON skills(owner_type, owner_id);")
+
             conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_name ON skills(name);")
             ensure_store_metadata(self, conn, store_name="procedural")
             conn.commit()
@@ -112,18 +116,61 @@ class ProceduralSQLStore(BaseVectorSQLStore):
     # ------------------------------------------------------------------ #
 
     def _row_to_object(self, row: Any) -> Skill:
+        # Support both dict-like rows and sqlite3.Row objects (which lack .get)
+        if hasattr(row, "get"):
+            owner_type = row.get("owner_type", "user")
+            owner_id = row.get("owner_id", "")
+            trigger_phrases_val = row.get("trigger_phrases")
+            trigger_patterns_val = row.get("trigger_patterns")
+            plan_val = row.get("plan")
+            tools_val = row.get("tools")
+            meta_val = row.get("meta")
+        else:
+            keys = list(row.keys()) if hasattr(row, "keys") else []
+            owner_type = row["owner_type"] if "owner_type" in keys else "user"
+            owner_id = row["owner_id"] if "owner_id" in keys else ""
+            trigger_phrases_val = row["trigger_phrases"] if "trigger_phrases" in keys else None
+            trigger_patterns_val = row["trigger_patterns"] if "trigger_patterns" in keys else None
+            plan_val = row["plan"] if "plan" in keys else None
+            tools_val = row["tools"] if "tools" in keys else None
+            meta_val = row["meta"] if "meta" in keys else None
+
+        try:
+            trigger_phrases = json.loads(trigger_phrases_val) if trigger_phrases_val else []
+        except Exception:
+            trigger_phrases = []
+        try:
+            trigger_patterns = json.loads(trigger_patterns_val) if trigger_patterns_val else []
+        except Exception:
+            trigger_patterns = []
+        try:
+            plan = json.loads(plan_val) if plan_val else {}
+        except Exception:
+            plan = {}
+        try:
+            tools = json.loads(tools_val) if tools_val else []
+        except Exception:
+            tools = []
+        try:
+            meta = json.loads(meta_val) if meta_val else {}
+        except Exception:
+            meta = {}
+
         return Skill(
             id=row["id"],
             name=row["name"],
-            trigger_phrases=json.loads(row["trigger_phrases"]),
-            trigger_patterns=json.loads(row["trigger_patterns"]),
-            plan=json.loads(row["plan"]),
-            tools=json.loads(row["tools"]),
+            description="",
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+            owner_type=owner_type,
+            owner_id=owner_id,
+            trigger_phrases=trigger_phrases,
+            trigger_patterns=trigger_patterns,
+            plan=plan,
+            tools=tools,
             example=row["example"],
-            embedding=None,
-            meta=json.loads(row["meta"]),
+            meta=meta,
         )
-
     # ------------------------------------------------------------------ #
     # Validation
     # ------------------------------------------------------------------ #
@@ -180,6 +227,8 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                 "meta": json.dumps(skill.meta),
                 "created_at": now,
                 "updated_at": now,
+                "owner_type": skill.owner_type or "user",
+                "owner_id": skill.owner_id or "",
             }
 
             self._execute(
@@ -187,11 +236,11 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                 """
                 INSERT INTO skills (
                     id, name, trigger_phrases, trigger_patterns, plan,
-                    tools, example, meta, created_at, updated_at
+                    tools, example, meta, created_at, updated_at, owner_type, owner_id
                 )
                 VALUES (
                     :id, :name, :trigger_phrases, :trigger_patterns, :plan,
-                    :tools, :example, :meta, :created_at, :updated_at
+                    :tools, :example, :meta, :created_at, :updated_at, :owner_type, :owner_id
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name,
@@ -210,7 +259,12 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                 self.vector_index.upsert(
                     ids=[skill.id],
                     vectors=[embedding],
-                    metadata=[{"name": skill.name}],
+                    metadata=[{
+                        "name": skill.name,
+                        "owner_type": skill.owner_type or "user",
+                        "owner_id": skill.owner_id or "",
+                        "scope_key": f"{skill.owner_type}:{skill.owner_id}",
+                    }],
                 )
             except Exception:
                 logger.exception(

@@ -15,6 +15,37 @@ UMA-RLM only retrieves context from its stores; the developer owns all agent beh
 - Pluggable backends: SQLite/Postgres, FAISS/Pinecone/Weaviate, Neo4j/Memgraph, OpenAI/Ollama.
 - SDK-first: UMA manages memory only; your agent owns reasoning, tools, and final responses.
 
+### Logical Separation of Agent and User Memories
+
+UMA-RLM enforces a **first-class logical separation** between an agent’s global knowledge and user-specific memory.
+
+- **Agent Memory (Agent KB)** contains durable, cross-user knowledge such as domain facts, policies, procedures, and learned generalizations.
+- **User Memory** contains private, user-scoped information such as conversations, preferences, and uploaded project data.
+- **Project Memory** further subdivides user memory into isolated sub-contexts, ensuring that information from one project never leaks into another unless explicitly promoted.
+
+This separation is not an afterthought or a naming convention. It is enforced at the data-model level across:
+- SQL storage
+- vector embeddings
+- graph nodes and edges
+- retrieval filters
+
+As a result, UMA-RLM can safely support long-lived agents that learn over time **without contaminating user privacy or cross-project boundaries**.
+
+### Hierarchical Knowledge Base Segmentation
+
+UMA-RLM organizes memory into a **hierarchical knowledge structure** instead of a flat vector store:
+
+- **Agent-level knowledge** sits at the top of the hierarchy and is shared across all users of the agent.
+- **User-level knowledge** is scoped to an individual user.
+- **Project-level knowledge** is scoped to a specific project within a user.
+
+Each memory item is tagged with explicit ownership metadata (agent / user / project), allowing retrieval to:
+- search the appropriate scope first,
+- merge results deterministically across scopes,
+- and apply promotion or demotion policies when knowledge should move between layers.
+
+This hierarchy enables UMA-RLM to scale from single-user assistants to enterprise, multi-user and multi-agent systems while preserving correctness, performance, and data governance.
+
 ## Core Features
 
 ### 1) Recursive Retrieval Controller (RLM)

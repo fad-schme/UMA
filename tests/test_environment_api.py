@@ -61,6 +61,18 @@ class DummyEpisodicStore:
             }
         ]
 
+class DummyEpisodicCore:
+    def __init__(self, store):
+        self._store = store
+
+    async def list_cluster_summaries(self, user_id, k=5, max_episodes=None, time_range=None):
+        return await self._store.list_cluster_summaries(
+            user_id=user_id,
+            k=k,
+            max_episodes=max_episodes,
+            time_range=time_range,
+        )
+
 
 class DummyGraphCore:
     def get_neighbors(self, entity_id, depth=1):
@@ -78,6 +90,7 @@ class DummyMemory:
         self.working_memory = DummyWM()
         self.semantic_store = DummySemanticStore()
         self.episodic_store = DummyEpisodicStore()
+        self.episodic_core = DummyEpisodicCore(self.episodic_store)
         self.graph_core = DummyGraphCore()
         self.embedder = DummyEmbedder()
 

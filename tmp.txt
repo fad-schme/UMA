@@ -1,0 +1,166 @@
+# file: uma/core/pipeline.py
+"""
+MemoryPipeline — UMA-RLM Ingestion Pipeline
+(edited to accept hooks as an injected dependency)
+
+[...existing module docstring...]
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Optional, TYPE_CHECKING, List, Any
+
+from .utils.promotion import PromotionPolicy
+
+if TYPE_CHECKING:
+    from .uma3_memory import UMA3Memory
+    from ..types_fact import Fact
+
+logger = logging.getLogger(__name__)
+
+
+class MemoryPipeline:
+    """
+    Memory ingestion pipeline for UMA-RLM.
+
+    Dependencies are injected at construction time:
+      - memory: UMA3Memory instance
+      - promotion_policy: optional PromotionPolicy
+      - hooks: optional hooks implementation (object with coroutine on_turn_complete)
+    """
+
+    def __init__(
+        self,
+        memory: "UMA3Memory",
+        promotion_policy: Optional[PromotionPolicy] = None,
+        hooks: Optional[Any] = None,
+    ) -> None:
+        self.mem = memory
+        self.promotion_policy = promotion_policy
+        self.hooks = hooks  # injected dependency (may be None)
+
+        logger.info(
+            "MemoryPipeline initialized (promotion=%s hooks=%s)",
+            "enabled" if promotion_policy else "disabled",
+            "present" if hooks else "none",
+        )
+
+    # ------------------------------------------------------------------
+    # PUBLIC API
+    # ------------------------------------------------------------------
+
+    async def process_turn(
+        self,
+        user_id: str,
+        user_msg: str,
+        assistant_reply: str,
+        *,
+        project_id: Optional[str] = None,
+        extra_meta: Optional[dict] = None,
+    ) -> None:
+        """
+        Persist memory after a completed agent turn.
+
+        This method is defensive: any error in one stage is logged and
+        ignored so the entire pipeline does not crash the caller.
+        """
+        if not user_id:
+            raise ValueError("MemoryPipeline.process_turn: user_id is required")
+        if assistant_reply is None:
+            raise ValueError("MemoryPipeline.process_turn: assistant_reply is required")
+
+        # 1) Working Memory update
+        try:
+            if getattr(self.mem, "working_memory", None):
+                await self.mem.working_memory.append(
+                    user_id=user_id,
+                    role="assistant",
+                    content=assistant_reply,
+                    metadata=extra_meta,
+                )
+        except Exception:
+            logger.exception("Working memory update failed (ignored)")
+
+        # 2) Episodic memory
+        episode = None
+        try:
+            if getattr(self.mem, "episodic_core", None):
+                episode = await self.mem.episodic_core.store_episode(
+                    user_id=user_id,
+                    user_msg=user_msg,
+                    assistant_reply=assistant_reply,
+                    project_id=project_id,
+                    meta=extra_meta,
+                )
+        except Exception:
+            logger.exception("Episodic memory ingestion failed (ignored)")
+
+        # 3) Semantic ingestion (user / project scope)
+        facts: List["Fact"] = []
+        try:
+            if getattr(self.mem, "semantic_core", None):
+                subject = user_id if not project_id else f"{user_id}:{project_id}"
+                facts = await self.mem.semantic_core.ingest(
+                    subject=subject,
+                    text=assistant_reply,
+                )
+        except Exception:
+            logger.exception("Semantic ingestion failed (ignored)")
+
+        # 4) Promotion stage (optional)
+        if self.promotion_policy and facts:
+            for fact in facts:
+                try:
+                    if self.promotion_policy.is_eligible(fact):
+                        promoted = self.promotion_policy.promote(fact)
+
+                        # Persist promoted fact into Agent KB (best effort)
+                        try:
+                            await self.mem.semantic_store.upsert_fact(
+                                promoted,
+                                embedding=fact.meta.get("embedding"),
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Semantic store upsert failed for promoted fact id=%s",
+                                promoted.id,
+                            )
+
+                        # Link provenance in graph (best effort)
+                        if getattr(self.mem, "graph_core", None):
+                            try:
+                                await self.mem.graph_core.add_facts([promoted])
+                            except Exception:
+                                logger.exception(
+                                    "Failed to add promoted fact to graph id=%s",
+                                    promoted.id,
+                                )
+
+                except Exception:
+                    logger.exception(
+                        "Promotion failed for fact id=%s (ignored)", getattr(fact, "id", "<unknown>")
+                    )
+
+        # 5) Graph update (episode + facts)
+        try:
+            if getattr(self.mem, "graph_core", None):
+                if episode:
+                    await self.mem.graph_core.add_episode(episode)
+                if episode and facts:
+                    await self.mem.graph_core.link_episode_to_facts(episode, facts)
+        except Exception:
+            logger.exception("Graph update failed (ignored)")
+
+        # 6) Hooks (call injected hooks object if present)
+        try:
+            if self.hooks and hasattr(self.hooks, "on_turn_complete"):
+                coro = getattr(self.hooks, "on_turn_complete")
+                # Expecting a coroutine function; call safely
+                await coro(
+                    user_id=user_id,
+                    episode=episode,
+                    facts=facts,
+                )
+        except Exception:
+            logger.exception("Hooks execution failed (ignored)")

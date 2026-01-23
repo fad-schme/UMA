@@ -105,19 +105,26 @@ class SemanticSQLStore(BaseVectorSQLStore):
         """
         conn = self._conn()
         try:
-            conn.execute(
+            # Use executescript for multiple DDL statements in sqlite3
+            conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS facts (
                     id TEXT PRIMARY KEY,
+                    owner_type TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
                     subject TEXT NOT NULL,
                     predicate TEXT NOT NULL,
                     object TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     source_ids TEXT NOT NULL,
+                    source TEXT,
+                    salience REAL NOT NULL,
                     confidence REAL NULL,
                     meta TEXT NOT NULL
                 );
+                CREATE INDEX IF NOT EXISTS idx_facts_owner ON facts(owner_type, owner_id);
+                CREATE INDEX IF NOT EXISTS idx_facts_spo ON facts(subject, predicate);
                 """
             )
             conn.execute(
@@ -155,18 +162,52 @@ class SemanticSQLStore(BaseVectorSQLStore):
         """
         Map a SQL row dict → Fact object.
         """
+        # Support both dict-like rows and sqlite3.Row objects (no .get)
+        if hasattr(row, "get"):
+            owner_type = row.get("owner_type", "user")
+            owner_id = row.get("owner_id", "")
+            source_ids_val = row.get("source_ids")
+            meta_val = row.get("meta")
+            object_val = row.get("object")
+            salience_val = row.get("salience")
+            confidence_val = row.get("confidence")
+        else:
+            keys = list(row.keys()) if hasattr(row, "keys") else []
+            owner_type = row["owner_type"] if "owner_type" in keys else "user"
+            owner_id = row["owner_id"] if "owner_id" in keys else ""
+            source_ids_val = row["source_ids"] if "source_ids" in keys else None
+            meta_val = row["meta"] if "meta" in keys else None
+            object_val = row["object"] if "object" in keys else None
+            salience_val = row["salience"] if "salience" in keys else 0.0
+            confidence_val = row["confidence"] if "confidence" in keys else None
+
+        try:
+            obj = json.loads(object_val) if object_val else None
+        except Exception:
+            obj = object_val
+        try:
+            source_ids = json.loads(source_ids_val) if source_ids_val else []
+        except Exception:
+            source_ids = []
+        try:
+            meta = json.loads(meta_val) if meta_val else {}
+        except Exception:
+            meta = {}
+
         return Fact(
             id=row["id"],
             subject=row["subject"],
             predicate=row["predicate"],
-            object=json.loads(row["object"]),
+            object=obj,
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
-            source_ids=json.loads(row["source_ids"]),
-            confidence=row["confidence"],
-            meta=json.loads(row["meta"]),
+            source_ids=source_ids,
+            confidence=confidence_val,
+            meta=meta,
+            salience=salience_val or 0.0,
+            owner_type=owner_type,
+            owner_id=owner_id,
         )
-
     # ------------------------------------------------------------------ #
     # Upsert Fact
     # ------------------------------------------------------------------ #
@@ -206,11 +247,18 @@ class SemanticSQLStore(BaseVectorSQLStore):
                 "id": canonical.id,
                 "subject": canonical.subject,
                 "predicate": canonical.predicate,
+                "owner_type": canonical.owner_type,
+                "owner_id": canonical.owner_id,
                 "object": json.dumps(canonical.object),
                 "created_at": canonical.created_at.isoformat(),
                 "updated_at": canonical.updated_at.isoformat(),
                 "source_ids": json.dumps(canonical.source_ids),
-                "confidence": canonical.confidence,
+                "salience": canonical.salience,
+                "confidence": (
+                    float(canonical.confidence)
+                    if canonical.confidence is not None
+                    else None
+                ),
                 "meta": json.dumps(canonical.meta),
             }
 
@@ -221,16 +269,19 @@ class SemanticSQLStore(BaseVectorSQLStore):
                 INSERT INTO facts (
                     id, subject, predicate, object,
                     created_at, updated_at, source_ids,
-                    confidence, meta
+                    confidence, meta, owner_type, owner_id, salience
                 ) VALUES (
                     :id, :subject, :predicate, :object,
                     :created_at, :updated_at, :source_ids,
-                    :confidence, :meta
+                    :confidence, :meta, :owner_type, :owner_id, :salience
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     subject=excluded.subject,
                     predicate=excluded.predicate,
                     object=excluded.object,
+                    owner_type=excluded.owner_type,
+                    owner_id=excluded.owner_id,
+                    salience=excluded.salience,
                     created_at=excluded.created_at,
                     updated_at=excluded.updated_at,
                     source_ids=excluded.source_ids,
@@ -244,7 +295,15 @@ class SemanticSQLStore(BaseVectorSQLStore):
             try:
                 meta = canonical.meta if isinstance(canonical.meta, dict) else {}
                 topic = meta.get("topic")
-                vector_meta = {"subject": canonical.subject, "predicate": canonical.predicate}
+
+                vector_meta = {
+                    "subject": canonical.subject,
+                    "predicate": canonical.predicate,
+                    "owner_type": canonical.owner_type,
+                    "owner_id": canonical.owner_id,
+                    "scope_key": f"{canonical.owner_type}:{canonical.owner_id}",
+                }
+
                 if topic:
                     vector_meta["topic"] = topic
                 self.vector_index.upsert(
@@ -289,6 +348,8 @@ class SemanticSQLStore(BaseVectorSQLStore):
         self,
         query_embedding: List[float],
         subject: Optional[str] = None,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
         k: int = 10,
     ) -> List[Fact]:
         """
@@ -299,6 +360,12 @@ class SemanticSQLStore(BaseVectorSQLStore):
         filters = {"subject": subject} if subject else None
 
         try:
+            filters = filters or {}
+            if owner_type:
+                filters["owner_type"] = owner_type
+            if owner_id:
+                filters["owner_id"] = owner_id
+
             return await self._semantic_search(
                 query_embedding=query_embedding,
                 k=k,
@@ -314,6 +381,8 @@ class SemanticSQLStore(BaseVectorSQLStore):
         query: str,
         subject: Optional[str] = None,
         limit: int = 5,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
     ) -> List[Fact]:
         """
         Fallback lexical search over stored document text.
@@ -337,6 +406,13 @@ class SemanticSQLStore(BaseVectorSQLStore):
             for term in terms:
                 where.append("LOWER(object) LIKE ?")
                 params.append(f"%{term}%")
+            if owner_type:
+                where.append("owner_type=?")
+                params.append(owner_type)
+            if owner_id:
+                where.append("owner_id=?")
+                params.append(owner_id) 
+
             sql = f"""
                 SELECT * FROM facts
                 WHERE {' AND '.join(where)}
@@ -354,7 +430,9 @@ class SemanticSQLStore(BaseVectorSQLStore):
     # ------------------------------------------------------------------ #
     # Fact Listing (required by Consolidator + Pruner)
     # ------------------------------------------------------------------ #
-    async def list_facts_for_subject(self, subject: str, limit: Optional[int] = None) -> List[Fact]:
+    async def list_facts_for_subject(self, subject: str, limit: Optional[int] = None,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,) -> List[Fact]:
         """
         Return all facts for a given subject, ordered by updated_at DESC.
 
@@ -371,15 +449,18 @@ class SemanticSQLStore(BaseVectorSQLStore):
         """
         conn = self._conn()
         try:
-            sql = """
-                SELECT * FROM facts
-                WHERE subject=?
-                ORDER BY updated_at DESC
-            """
+            where_clauses = ["subject=?"]
+            params = [subject]
+            if owner_type is not None and owner_id is not None:
+                where_clauses.append("owner_type=?")
+                where_clauses.append("owner_id=?")
+                params.extend([owner_type, owner_id])
+
+            sql = f"SELECT * FROM facts WHERE {' AND '.join(where_clauses)} ORDER BY updated_at DESC"
             if limit:
                 sql += f" LIMIT {int(limit)}"
 
-            rows = self._query_all(conn, sql, params=[subject], log_context="list_facts")
+            rows = self._query_all(conn, sql, params=params, log_context="list_facts")
             return [self._row_to_object(r) for r in rows]
 
         except Exception:
@@ -391,7 +472,8 @@ class SemanticSQLStore(BaseVectorSQLStore):
     # ------------------------------------------------------------------ #
     # Fetch Facts by IDs (snippet-first helpers)
     # ------------------------------------------------------------------ #
-    async def fetch_facts_by_ids(self, ids: List[str]) -> List[Fact]:
+    async def fetch_facts_by_ids(self, ids: List[str], owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,) -> List[Fact]:
         """
         Fetch Fact objects by ID, preserving requested order.
         """
@@ -401,10 +483,15 @@ class SemanticSQLStore(BaseVectorSQLStore):
         conn = self._conn()
         try:
             placeholders = ",".join("?" for _ in ids)
+            params = ids[:]
+            sql = f"SELECT * FROM facts WHERE id IN ({placeholders})"
+            if owner_type is not None and owner_id is not None:
+                sql += " AND owner_type=? AND owner_id=?"
+                params.extend([owner_type, owner_id])
             rows = self._query_all(
                 conn,
-                f"SELECT * FROM facts WHERE id IN ({placeholders})",
-                params=ids,
+                sql,
+                params=params,
                 log_context="fetch_facts_by_ids",
             )
             row_map = {r["id"]: r for r in rows}
@@ -424,7 +511,8 @@ class SemanticSQLStore(BaseVectorSQLStore):
     # ------------------------------------------------------------------ #
     # Fact Deletion (required by Pruner)
     # ------------------------------------------------------------------ #
-    async def delete_fact(self, fact_id: str) -> None:
+    async def delete_fact(self, fact_id: str, owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,) -> None:
         """
         Delete a fact from SQL + remove its embedding from VectorIndex.
 
@@ -435,13 +523,13 @@ class SemanticSQLStore(BaseVectorSQLStore):
         """
         conn = self._conn()
         try:
-            # SQL delete
-            self._execute(
-                conn,
-                "DELETE FROM facts WHERE id=?",
-                params=[fact_id],
-                log_context="delete_fact",
-            )
+            # SQL delete (conditionally filter by owner if provided)
+            sql = "DELETE FROM facts WHERE id=?"
+            params = [fact_id]
+            if owner_type is not None and owner_id is not None:
+                sql += " AND owner_type=? AND owner_id=?"
+                params.extend([owner_type, owner_id])
+            self._execute(conn, sql, params=params, log_context="delete_fact")
             conn.commit()
 
             # Vector index delete

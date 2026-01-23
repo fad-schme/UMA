@@ -90,6 +90,7 @@ class UMAMemoryEnvironment:
     """
 
     def __init__(self, memory: Any) -> None:
+        self._memory = memory
         self._retrieval = getattr(memory, "retrieval_service", None)
         self._wm = getattr(memory, "working_memory", None)
         self._semantic_store = getattr(memory, "semantic_store", None)
@@ -277,19 +278,30 @@ class UMAMemoryEnvironment:
         max_episodes: int = 50,
         time_range: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        if self._episodic_store is None:
-            return []
-        try:
-            user_subject = ensure_user_subject(user_id)
-            return await self._episodic_store.list_cluster_summaries(
-                user_id=user_subject,
-                k=int(k),
-                time_range=time_range,
-                max_episodes=max_episodes,
-            )
-        except Exception:
-            logger.exception("Environment.episodic_cluster_summaries failed")
-            raise
+            """
+            Return episodic cluster summaries for RLM.
+
+            IMPORTANT:
+            - Cluster logic lives in EpisodicCore, not EpisodicSQLStore.
+            - The environment must route through the core layer.
+            """
+            episodic_core = getattr(self._memory, "episodic_core", None)
+            if episodic_core is None:
+                logger.warning("Environment.episodic_cluster_summaries: episodic_core missing")
+                return []
+
+            try:
+                user_subject = ensure_user_subject(user_id)
+                clusters = await episodic_core.list_cluster_summaries(
+                    user_id=user_subject,
+                    k=int(k),
+                    max_episodes=max_episodes,
+                    time_range=time_range,
+                )
+                return clusters or []
+            except Exception:
+                logger.exception("Environment.episodic_cluster_summaries failed")
+                return []
 
     async def get_working_memory(self, user_id: str, window: Optional[int] = None):
         try:

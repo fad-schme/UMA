@@ -182,80 +182,46 @@ class BaseVectorSQLStore(BaseSQLStore):
         self,
         ids: List[str],
         log_context: str = "",
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
     ) -> List[Any]:
-        """
-        Fetch SQL rows for the given list of IDs, preserving ranking order.
-
-        Parameters
-        ----------
-        ids : List[str]
-            Ranked list of primary keys, as returned by ANN search.
-        log_context : str
-            Label used in logs for context.
-
-        Returns
-        -------
-        List[Any]
-            Domain model objects in ANN ranking order.
-        """
         if not ids:
             return []
 
         ctx = f" [{log_context}]" if log_context else ""
         conn = self._conn()
 
-        chunk_size = 500
-        if len(ids) > chunk_size:
-            logger.warning(
-                "%s Large ranked ID list length=%d%s; chunking to %d.",
-                self.__class__.__name__,
-                len(ids),
-                ctx,
-                chunk_size,
-            )
-
         try:
             row_map = {}
-            for i in range(0, len(ids), chunk_size):
-                chunk = ids[i : i + chunk_size]
-                placeholders = ",".join("?" for _ in chunk)
-                sql = (
-                    f"SELECT * FROM {self._table_name} "
-                    f"WHERE {self._id_column} IN ({placeholders})"
-                )
-                rows = self._query_all(
-                    conn,
-                    sql,
-                    chunk,
-                    log_context=log_context,
-                )
-                row_map.update({r[self._id_column]: r for r in rows})
+            placeholders = ",".join("?" for _ in ids)
+            sql = f"SELECT * FROM {self._table_name} WHERE {self._id_column} IN ({placeholders})"
+            params: List[Any] = list(ids)
+
+            if owner_type:
+                sql += " AND owner_type=?"
+                params.append(owner_type)
+            if owner_id:
+                sql += " AND owner_id=?"
+                params.append(owner_id)
+
+            rows = self._query_all(conn, sql, params, log_context)
+            row_map.update({r[self._id_column]: r for r in rows})
+
         except Exception:
-            logger.exception(
-                "%s SQL fetch by IDs failed%s",
-                self.__class__.__name__, ctx
-            )
+            logger.exception("%s SQL fetch failed%s", self.__class__.__name__, ctx)
             return []
         finally:
             conn.close()
 
-        # Preserve ranking order, warn on missing rows
         ordered = []
         for sid in ids:
             row = row_map.get(sid)
-            if row is None:
-                logger.debug(
-                    "%s Missing SQL row for id=%s%s (stale vector index?)",
-                    self.__class__.__name__, sid, ctx
-                )
+            if not row:
                 continue
-
             obj = self._row_to_object(row)
-            obj = self._postprocess_row(obj)
-            ordered.append(obj)
+            ordered.append(self._postprocess_row(obj))
 
         return ordered
-
     # ------------------------------------------------------------------ #
     # COMPLETE RETRIEVAL PIPELINE
     # ------------------------------------------------------------------ #
@@ -302,4 +268,6 @@ class BaseVectorSQLStore(BaseSQLStore):
         return await self._fetch_ranked_rows_by_ids(
             ids=ids,
             log_context=log_context,
+            owner_type=filters.get("owner_type") if filters else None,
+            owner_id=filters.get("owner_id") if filters else None,
         )
