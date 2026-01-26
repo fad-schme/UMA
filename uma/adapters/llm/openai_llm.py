@@ -23,6 +23,7 @@ from typing import List, Dict, Any
 
 from openai import AsyncOpenAI
 from ...adapters.llm.base import LLMInterface
+from ...core.utils.config_types import LLMConfig
 from .retry_utils import retryable
 
 logger = logging.getLogger(__name__)
@@ -88,3 +89,17 @@ class OpenAILLM(LLMInterface):
                 raise
 
         return await asyncio.wait_for(_call(), timeout=self.timeout)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_config(cls, cfg: LLMConfig) -> "OpenAILLM":
+        """
+        Build an OpenAILLM instance from UMA's typed LLMConfig.
+        """
+        model = cfg.model or "gpt-4.1-mini"
+        llm_kwargs = {**cfg.config}
+        llm_kwargs.pop("model", None)
+        return cls(model=model, **llm_kwargs)

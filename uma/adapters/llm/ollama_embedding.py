@@ -32,6 +32,7 @@ import asyncio
 import logging
 from typing import Iterable, List
 
+from ...core.utils.config_types import EmbeddingConfig
 from .base import EmbeddingInterface
 from .retry_utils import retryable
 
@@ -208,3 +209,26 @@ class OllamaEmbedder(EmbeddingInterface):
 
         logger.debug("OllamaEmbedder: received %d embeddings.", len(cleaned))
         return cleaned
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_config(cls, cfg: EmbeddingConfig) -> "OllamaEmbedder":
+        """
+        Construct an Ollama embedder from a typed config.
+        """
+        model = cfg.model
+        if not model:
+            raise ValueError("Ollama embedding config must define 'model'.")
+        embed_kwargs = {**cfg.config}
+        embed_kwargs.pop("model", None)
+        embed_kwargs.pop("dimension", None)
+        if "mode" not in embed_kwargs:
+            embed_kwargs["mode"] = "native"
+        return cls(
+            model=model,
+            dimension=cfg.dimension,
+            **embed_kwargs,
+        )

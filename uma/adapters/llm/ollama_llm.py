@@ -37,6 +37,7 @@ except Exception:  # pragma: no cover - optional dependency
     aiohttp = None
 
 from ...adapters.llm.base import LLMInterface
+from ...core.utils.config_types import LLMConfig
 from .retry_utils import retryable
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ class OllamaLLM(LLMInterface):
     def __init__(
         self,
         model: str = "llama3",
-        host: str = "http://localhost:11434",
+        host: str = "http://192.168.178.101:11434",
         chat_endpoint: str = "/api/chat",
         timeout: float = 30.0,
     ):
@@ -135,3 +136,17 @@ class OllamaLLM(LLMInterface):
         except Exception:
             logger.error("Malformed Ollama response: %s", data)
             raise RuntimeError("Malformed Ollama response.")
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_config(cls, cfg: LLMConfig) -> "OllamaLLM":
+        """
+        Build an OllamaLLM instance from UMA's typed LLMConfig.
+        """
+        model = cfg.ollama_model or cfg.model or "llama3"
+        llm_kwargs = {**cfg.config}
+        llm_kwargs.pop("model", None)
+        return cls(model=model, **llm_kwargs)

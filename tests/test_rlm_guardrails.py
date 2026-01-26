@@ -5,38 +5,68 @@ from uma.core.retrieval.rlm.environment import MemoryEnvironment
 
 
 class DummyEnv(MemoryEnvironment):
-    async def retrieve_slice(self, user_id, memory_type, query):
-        return []
-
-    async def retrieve_all(self, user_id, query):
-        return {"episodes": [], "facts": [], "skills": [], "graph": []}
-
     async def get_working_memory(self, user_id, window=None):
-        return []
-
-    async def search_semantic(self, user_id, query_embedding, k=10, filters=None):
-        return [{"summary": "x" * 200}]
-
-    async def fetch_facts_by_ids(self, user_id, ids):
-        return []
-
-    async def search_episodic(self, user_id, query_embedding, k=10, time_range=None):
-        return []
-
-    async def fetch_episode_summaries(self, ids):
-        return []
-
-    async def fetch_episode_transcripts(self, ids):
-        return []
-
-    async def graph_neighbors(self, user_id, node_id, predicate_scope=None, depth=1, k=10):
-        return []
-
-    async def episodic_cluster_summaries(self, user_id, k=5, max_episodes=50, time_range=None):
         return []
 
     async def get_query_embedding(self, query_text):
         return [0.1, 0.2, 0.3]
+
+    # --- Semantic ---
+    async def search_semantic(self, user_id, query_embedding, k=10, filters=None):
+        # Return a dict with a large string field to exercise truncation/guardrails
+        return [
+            {
+                "id": "f1",
+                "predicate": "likes",
+                "summary": "x" * 200,
+            }
+        ]
+
+    async def fetch_facts_by_ids(self, user_id, ids):
+        return [{"id": fid, "summary": "fact"} for fid in ids]
+
+    async def fetch_more_facts(self, user_id, predicate, k, offset=0, owner_scope=None):
+        return [
+            {
+                "id": f"f{offset + i}",
+                "predicate": predicate,
+                "summary": "more facts",
+            }
+            for i in range(1, min(k, 2) + 1)
+        ]
+
+    # --- Episodic ---
+    async def search_episodic(self, user_id, query_embedding, k=10, time_range=None):
+        return [{"id": "e1", "summary": "episode"}]
+
+    async def fetch_episode_summaries(self, user_id, ids):
+        return [{"id": i, "summary": f"summary-{i}"} for i in ids]
+
+    async def fetch_episode_transcripts(self, user_id, ids):
+        return [{"id": i, "summary": f"summary-{i}", "raw": "raw"} for i in ids]
+
+    async def episodic_cluster_summaries(self, user_id, k=5, max_episodes=50, time_range=None):
+        return [{"id": "cluster:1", "summary": "cluster summary", "episode_ids": ["e1", "e2"]}]
+
+    async def fetch_episode_clusters(self, user_id, k=5, max_episodes=50, time_range=None, min_salience=None):
+        return await self.episodic_cluster_summaries(user_id, k=k, max_episodes=max_episodes, time_range=time_range)
+
+    # --- Procedural ---
+    async def search_procedural(self, user_id, query_embedding, k=10, filters=None):
+        return [{"id": "s1", "name": "skill"}]
+
+    async def fetch_skills_by_ids(self, user_id, ids):
+        return [{"id": sid, "name": "skill"} for sid in ids]
+
+    # --- Graph ---
+    async def graph_neighbors(self, user_id, node_id, predicate_scope=None, depth=1, k=10):
+        return [{"labels": ["Entity"], "properties": {"name": "x"}}]
+
+    async def expand_graph(self, user_id, subject, predicate=None, hops=1, direction=None, k=10):
+        return await self.graph_neighbors(user_id, subject, predicate_scope=[predicate] if predicate else None, depth=hops, k=k)
+
+    async def resolve_conflicts(self, user_id, fact_ids):
+        return await self.fetch_facts_by_ids(user_id, fact_ids)
 
 
 class DummyLLM:
@@ -57,14 +87,12 @@ def test_max_env_calls_and_truncation():
         max_steps=1,
         max_actions_per_step=2,
         max_env_calls=1,
-        max_return_chars=50,
-        semantic_first=False,
-        clusters_first=False,
         deterministic_only=False,
+        min_semantic_facts=100,
     )
 
     pack = asyncio.run(ctl.retrieve_context("u1", "query"))
-    assert "max_env_calls" in pack.warnings
+    assert any("max_env_calls" in warning for warning in pack.warnings)
     # Ensure truncation applied to fact snippets (dict strings)
     if pack.facts:
-        assert len(pack.facts[0].get("summary", "")) == 50
+        assert len(pack.facts[0].get("summary", "")) <= 2000

@@ -58,6 +58,7 @@ class DummyEpisodicStore:
                 "episode_ids": ["e1", "e2"],
                 "latest_timestamp": datetime.utcnow().isoformat(),
                 "count": 2,
+                "salience": 0.75,
             }
         ]
 
@@ -65,7 +66,10 @@ class DummyEpisodicCore:
     def __init__(self, store):
         self._store = store
 
+        self.last_time_range = None
+
     async def list_cluster_summaries(self, user_id, k=5, max_episodes=None, time_range=None):
+        self.last_time_range = time_range
         return await self._store.list_cluster_summaries(
             user_id=user_id,
             k=k,
@@ -75,7 +79,7 @@ class DummyEpisodicCore:
 
 
 class DummyGraphCore:
-    def get_neighbors(self, entity_id, depth=1):
+    async def neighbors(self, user_id, node_id, predicate_scope=None, depth=1, k=10):
         return [{"labels": ["Entity"], "properties": {"name": "x"}}]
 
 
@@ -118,10 +122,10 @@ def test_environment_fetch_and_neighbors():
     facts = asyncio_run(env.fetch_facts_by_ids("u1", ["f1", "f2"]))
     assert len(facts) == 2
 
-    summaries = asyncio_run(env.fetch_episode_summaries(["e1"]))
+    summaries = asyncio_run(env.fetch_episode_summaries("u1", ["e1"]))
     assert summaries[0]["id"] == "e1"
 
-    transcripts = asyncio_run(env.fetch_episode_transcripts(["e1"]))
+    transcripts = asyncio_run(env.fetch_episode_transcripts("u1", ["e1"]))
     assert transcripts[0]["raw"] == "raw"
 
     neighbors = asyncio_run(env.graph_neighbors("u1", "node1", predicate_scope=["likes"], depth=2, k=5))
@@ -139,6 +143,49 @@ def test_environment_episode_clusters():
     clusters = asyncio_run(env.episodic_cluster_summaries("u1", k=2, max_episodes=10))
     assert clusters
     assert "episode_ids" in clusters[0]
+
+
+def test_environment_fetch_episode_clusters_filters():
+    env = UMAMemoryEnvironment(DummyMemory())
+    assert not asyncio_run(env.fetch_episode_clusters("u1", min_salience=0.8))
+    clusters = asyncio_run(env.fetch_episode_clusters("u1", min_salience=0.5))
+    assert clusters
+    assert clusters[0]["salience"] >= 0.5
+
+
+def test_environment_expand_graph():
+    env = UMAMemoryEnvironment(DummyMemory())
+    nodes = asyncio_run(
+        env.expand_graph("u1", "node1", predicate="likes", hops=2, direction="inbound", k=5)
+    )
+    assert nodes and nodes[0]["labels"] == ["Entity"]
+
+
+def test_environment_resolve_conflicts():
+    env = UMAMemoryEnvironment(DummyMemory())
+    resolved = asyncio_run(env.resolve_conflicts("u1", ["f1", "f2"]))
+    assert resolved and resolved[0]["id"] == "f1"
+
+
+def test_fetch_episode_clusters_sanitizes_time_range():
+    env = UMAMemoryEnvironment(DummyMemory())
+    env._memory.episodic_core.last_time_range = None
+    clusters = asyncio_run(
+        env.fetch_episode_clusters(
+            "u1",
+            min_salience=0.5,
+            time_range={"start": 1000, "end": 500, "offset": -5},
+        )
+    )
+    assert clusters
+    assert env._memory.episodic_core.last_time_range == {"start": 1000, "offset": 0}
+
+
+def test_resolve_conflicts_limits_ids():
+    env = UMAMemoryEnvironment(DummyMemory())
+    ids = [f"f{i}" for i in range(100)]
+    resolved = asyncio_run(env.resolve_conflicts("u1", ids))
+    assert len(resolved) == 50
 
 
 def asyncio_run(coro):

@@ -26,7 +26,7 @@ graph:
   user: "neo4j"
   password: "umaIstheBest70"
   max_pool_size: 50
-  database: uma4j-1
+  database: uma4j-2
 # ------------------------------
 # Working Memory
 # ------------------------------

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 uma.core.retrieval.service
 ===========================
@@ -18,10 +20,8 @@ No store-specific behavior here (belongs to MultiStoreRetriever).
 No ranking here (belongs to MemorySelector).
 """
 
-from __future__ import annotations
-
 import logging
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
 from .retrieval import MultiStoreRetriever
 from .selector import MemorySelector
@@ -127,21 +127,22 @@ class RetrievalService:
         - memory_type == "all" -> Dict[str, List[Any]]
         """
         with request_context(generate=(get_request_id() == "-")):
-            memory_type = (memory_type or "").strip().lower()
-            increment("retrieval.retrieve.count", tags={"memory_type": memory_type or "unknown"})
+            memory_type_norm = (memory_type or "").strip().lower()
+            increment("retrieval.retrieve.count", tags={"memory_type": memory_type_norm or "unknown"})
             try:
-                with timed("retrieval.retrieve.latency_s", tags={"memory_type": memory_type or "unknown"}):
+                with timed("retrieval.retrieve.latency_s", tags={"memory_type": memory_type_norm or "unknown"}):
                     if not user_id or not isinstance(user_id, str):
                         raise ValueError("RetrievalService.retrieve: user_id must be a non-empty string.")
 
                     user_subject = ensure_user_subject(user_id)
+
                     if query_text_or_embedding is None:
                         raise ValueError("RetrievalService.retrieve: query_text_or_embedding is required.")
 
-                    if not memory_type:
+                    if not memory_type_norm:
                         raise ValueError("RetrievalService.retrieve: memory_type must not be empty.")
 
-                    if memory_type == "working_memory":
+                    if memory_type_norm == "working_memory":
                         return self._get_working_memory(user_subject)
 
                     embedding = await self._ensure_embedding(query_text_or_embedding)
@@ -155,26 +156,33 @@ class RetrievalService:
                     # selector expects keys: episodes/facts/skills/graph (+ optional WM)
                     selected = self.selector.select(raw)
 
-                    # Route
-                    if memory_type == "episodic":
-                        return selected["episodes"]
-                    if memory_type == "semantic":
-                        return selected["facts"]
-                    if memory_type == "procedural":
-                        return selected["skills"]
-                    if memory_type == "graph":
-                        return selected["graph"]
-                    if memory_type == "all":
+                    # Extra defensive truncation guard:
+                    # Even if a store misbehaves or returns too many items,
+                    # RetrievalService MUST NEVER violate configured budgets.
+                    episodes = (selected.get("episodes") or [])[: self.selector.max_episodes]
+                    facts = (selected.get("facts") or [])[: self.selector.max_facts]
+                    skills = (selected.get("skills") or [])[: self.selector.max_skills]
+                    graph = (selected.get("graph") or [])[: self.selector.max_graph_items]
+
+                    if memory_type_norm == "episodic":
+                        return episodes
+                    if memory_type_norm == "semantic":
+                        return facts
+                    if memory_type_norm == "procedural":
+                        return skills
+                    if memory_type_norm == "graph":
+                        return graph
+                    if memory_type_norm == "all":
                         return {
-                            "episodes": selected["episodes"],
-                            "facts": selected["facts"],
-                            "skills": selected["skills"],
-                            "graph": selected["graph"],
+                            "episodes": episodes,
+                            "facts": facts,
+                            "skills": skills,
+                            "graph": graph,
                         }
 
-                    raise ValueError(f"RetrievalService.retrieve: unsupported memory_type={memory_type!r}")
+                    raise ValueError(f"RetrievalService.retrieve: unsupported memory_type={memory_type_norm!r}")
             except Exception:
-                increment("retrieval.retrieve.error", tags={"memory_type": memory_type or "unknown"})
+                increment("retrieval.retrieve.error", tags={"memory_type": memory_type_norm or "unknown"})
                 raise
 
     async def _ensure_embedding(self, query: Any) -> NumericVector:
@@ -186,7 +194,7 @@ class RetrievalService:
         # text query
         if isinstance(query, str) and query.strip():
             try:
-                # IMPORTANT: your embedders expect List[str] -> List[List[float]]
+                # IMPORTANT: embedders expect List[str] -> List[List[float]]
                 vectors = await self.memory.embedder.embed([query])
                 if not vectors or not isinstance(vectors, list) or not vectors[0]:
                     raise ValueError("Embedder returned empty embedding.")

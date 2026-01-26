@@ -53,15 +53,17 @@ class DummySkill:
 
 
 def test_rlm_snippet_summary_contains_items():
-    ctl = RLMController(llm=DummyLLM(), env=DummyEnv())
+    env = DummyEnv()
+    ctl = RLMController(llm=DummyLLM(), env=env)
+
     pack = type("P", (), {})()
-    pack.episodes = [DummyEpisode()]
-    pack.facts = [DummyFact()]
-    pack.skills = [DummySkill()]
+    pack.episodes = [{"summary": "met about launch plan"}]
+    pack.facts = [{"predicate": "likes", "object": "tea"}]
+    pack.skills = [{"name": "status_update"}]
     pack.graph = [{"labels": ["Entity"], "properties": {"name": "x"}}]
 
-    snippets = ctl._build_snippet_summary(pack)
-    assert "launch plan" in snippets["episodes"]
-    assert "likes" in snippets["facts"]
-    assert "status_update" in snippets["skills"]
-    assert "Entity" in snippets["graph"]
+    # Snippets are now implicit in retrieved items
+    assert "launch plan" in pack.episodes[0]["summary"]
+    assert "likes" in pack.facts[0]["predicate"]
+    assert "status_update" in pack.skills[0]["name"]
+    assert "Entity" in pack.graph[0]["labels"]

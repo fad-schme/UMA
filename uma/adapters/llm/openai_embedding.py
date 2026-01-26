@@ -21,6 +21,7 @@ from typing import Iterable, List
 
 from openai import AsyncOpenAI
 from ...adapters.llm.base import EmbeddingInterface
+from ...core.utils.config_types import EmbeddingConfig
 from .retry_utils import retryable
 
 logger = logging.getLogger(__name__)
@@ -128,3 +129,23 @@ class OpenAIEmbedder(EmbeddingInterface):
                 raise
 
         return vectors
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_config(cls, cfg: EmbeddingConfig) -> "OpenAIEmbedder":
+        """
+        Construct an OpenAI embedder from a typed config.
+        """
+        model = cfg.model
+        if not model:
+            raise ValueError("OpenAI embedding config must define 'model'.")
+        embed_kwargs = {**cfg.config}
+        embed_kwargs.pop("model", None)
+        return cls(
+            model=model,
+            dimension=cfg.dimension,
+            **embed_kwargs,
+        )

@@ -7,12 +7,18 @@ from uma.core.retrieval.rlm.decisions import ControllerDecision
 
 def test_controller_decision_validates_actions():
     payload = {
-        "actions": [
-            {"action": "search_semantic", "k": 3},
-            {"action": "fetch_facts", "ids": ["f1", "f2"]},
-            {"action": "graph_neighbors", "node_id": "n1", "predicate_scope": ["LIKES"]},
-        ],
-        "done": False,
+    "actions": [
+        {"action": "search_semantic", "k": 3},
+        {"action": "fetch_facts", "ids": ["f1", "f2"]},
+        {
+            "action": "graph_neighbors",
+            "node_id": "n1",
+            "predicate_scope": ["LIKES"],
+            "k": 5,
+            "depth": 1,
+        },
+    ],
+    "done": False,
     }
 
     decision = ControllerDecision.from_json(json.dumps(payload))
@@ -23,5 +29,38 @@ def test_controller_decision_validates_actions():
 
 def test_controller_decision_rejects_invalid_action():
     payload = {"actions": [{"action": "fetch_facts"}], "done": False}
+    with pytest.raises(ValueError):
+        ControllerDecision.from_json(json.dumps(payload))
+
+
+def test_controller_decision_accepts_extended_actions():
+    payload = {
+        "actions": [
+            {"action": "fetch_episode_clusters", "k": 2, "min_salience": 0.4},
+            {
+                "action": "expand_graph",
+                "k": 5,
+                "subject": "user:1",
+                "direction": "both",
+                "hops": 2,
+            },
+            {"action": "resolve_conflicts", "fact_ids": ["f1"]},
+        ],
+        "done": False,
+    }
+
+    decision = ControllerDecision.from_json(json.dumps(payload))
+    assert decision.actions[0].action == "fetch_episode_clusters"
+    assert decision.actions[1].subject == "user:1"
+    assert decision.actions[2].fact_ids == ["f1"]
+
+
+def test_resolve_conflicts_fact_id_limit():
+    payload = {
+        "actions": [
+            {"action": "resolve_conflicts", "fact_ids": [f"f{i}" for i in range(60)]},
+        ],
+        "done": False,
+    }
     with pytest.raises(ValueError):
         ControllerDecision.from_json(json.dumps(payload))
