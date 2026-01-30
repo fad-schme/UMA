@@ -18,7 +18,7 @@ Coding Agent Instructions
 """
 
 from __future__ import annotations
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, List
 
 import logging
@@ -123,7 +123,7 @@ class EpisodicRetentionPolicy:
             logger.debug("RetentionPolicy: no episodes provided.")
             return []
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=self.ttl_hours)
 
         prunable = []
@@ -135,6 +135,8 @@ class EpisodicRetentionPolicy:
         for ep in episodes:
             try:
                 ts = getattr(ep, "timestamp", None)
+                if ts and ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
                 if ts and ts < cutoff:
                     prunable.append(ep)
                 else:

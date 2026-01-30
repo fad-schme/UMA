@@ -1,9 +1,17 @@
 numpy
-faiss-cpu
 pytest
+pytest-asyncio
 aiohttp
-ollama
 pyyaml
-neo4j
+
 # Optional PDF parsing for examples
 PyPDF2
+#DB backends
+neo4j           #graph db
+sqlite          #sql db
+qdrant-client   #vector db
+#faiss-cpu    #vector db --- IGNORE ---
+
+# LLM integrations 
+ollama
+#openai

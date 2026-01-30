@@ -19,8 +19,8 @@ from typing import List, Dict, Tuple, Optional
 import os
 
 import weaviate
-from .base import VectorIndex
-from ...core.utils.retry import retry_sync
+from uma.adapters.vector.base import VectorIndex
+from uma.core.utils.retry import retry_sync
 
 logger = logging.getLogger(__name__)
 
@@ -85,11 +85,7 @@ class WeaviateIndex(VectorIndex):
         def _call():
             return query.do()
 
-        try:
-            res = retry_sync(_call)
-        except Exception:
-            logger.exception("WeaviateIndex.query failed.")
-            return []
+        res = retry_sync(_call)
 
         matches = res["data"]["Get"].get(self.class_name, [])
 
@@ -103,11 +99,8 @@ class WeaviateIndex(VectorIndex):
             def _call() -> None:
                 self.client.data_object.delete(uuid=_id, class_name=self.class_name)
 
-            try:
-                retry_sync(_call)
-                deleted += 1
-            except Exception:
-                logger.exception("WeaviateIndex.delete failed for id=%s", _id)
+            retry_sync(_call)
+            deleted += 1
         logger.debug("WeaviateIndex.delete: deleted %d ids", deleted)
 
     def verify_connectivity(self) -> bool:

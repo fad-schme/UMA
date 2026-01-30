@@ -22,9 +22,9 @@ import os
 from typing import List, Dict, Any
 
 from openai import AsyncOpenAI
-from ...adapters.llm.base import LLMInterface
-from ...core.utils.config_types import LLMConfig
-from .retry_utils import retryable
+from uma.adapters.llm.base import LLMInterface
+from uma.core.utils.config_types import LLMConfig
+from uma.adapters.llm.retry_utils import retryable
 
 logger = logging.getLogger(__name__)
 

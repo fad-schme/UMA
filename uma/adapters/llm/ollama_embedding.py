@@ -30,7 +30,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Iterable, List
+from typing import Iterable, List, Optional
+
+import os
 
 from ...core.utils.config_types import EmbeddingConfig
 from .base import EmbeddingInterface
@@ -40,9 +42,9 @@ logger = logging.getLogger(__name__)
 
 # Lazy import to avoid hard dependency if unused
 try:
-    import ollama  # type: ignore
-except Exception:
-    ollama = None
+    from ollama import Client  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    Client = None
 
 
 class OllamaEmbedder(EmbeddingInterface):
@@ -67,6 +69,7 @@ class OllamaEmbedder(EmbeddingInterface):
         dimension: int,
         timeout: float = 30.0,
         mode: str = "disabled",
+        host: Optional[str] = None,
     ) -> None:
         if not isinstance(model, str) or not model.strip():
             raise ValueError("OllamaEmbedder: model must be a non-empty string.")
@@ -83,12 +86,26 @@ class OllamaEmbedder(EmbeddingInterface):
         self._dimension = dimension
         self.timeout = float(timeout)
         self.mode = mode
+        self.host = host
+        self._preflight_checked = False
+
+        if Client is None:
+            raise RuntimeError(
+                "OllamaEmbedder requires the 'ollama' package. Install with: pip install ollama"
+            )
+        client_kwargs = {}
+        if host is not None:
+            client_kwargs["host"] = host
+        if timeout is not None:
+            client_kwargs["timeout"] = timeout
+        self._client = Client(**client_kwargs)
 
         logger.info(
-            "OllamaEmbedder initialized (model=%s, dimension=%d, mode=%s)",
+            "OllamaEmbedder initialized (model=%s, dimension=%d, mode=%s, host=%s)",
             self.model,
             self._dimension,
             self.mode,
+            self.host or os.getenv("OLLAMA_HOST"),
         )
 
     # ------------------------------------------------------------------
@@ -143,6 +160,30 @@ class OllamaEmbedder(EmbeddingInterface):
                 "Ollama embedding is disabled. Enable mode='native' to use it."
             )
 
+        logger.debug(
+            "OllamaEmbedder.embed: model=%s host=%s batch=%d",
+            self.model,
+            self.host or os.getenv("OLLAMA_HOST"),
+            len(normalized),
+        )
+
+        # One-time connectivity check to fail fast if Ollama is down.
+        if not self._preflight_checked:
+            try:
+                await asyncio.to_thread(self._client.embed, model=self.model, input=["ping"])
+                self._preflight_checked = True
+            except Exception as exc:
+                logger.error(
+                    "Ollama embedder preflight failed (host=%s, model=%s): %s",
+                    self.host or os.getenv("OLLAMA_HOST"),
+                    self.model,
+                    exc,
+                )
+                raise RuntimeError(
+                    "Ollama embedder preflight failed. Check that Ollama is running, "
+                    "the model supports embeddings, and OLLAMA_HOST/host are correct."
+                ) from exc
+
         # Enforce timeout around native embedding
         try:
             return await asyncio.wait_for(
@@ -165,21 +206,21 @@ class OllamaEmbedder(EmbeddingInterface):
         This method embeds the entire batch at once.
         (No batching is used in v1; acceptable for local Ollama models.)
         """
-        if ollama is None:
-            logger.error("Ollama Python package not installed.")
-            raise RuntimeError(
-                "OllamaEmbedder requires the 'ollama' package. Install with: pip install ollama"
-            )
-
         try:
             response = await asyncio.to_thread(
-                ollama.embed,
+                self._client.embed,
                 model=self.model,
                 input=texts,
             )
         except Exception as exc:
-            logger.exception("Ollama embedding call failed.")
-            raise RuntimeError("Ollama embedding request failed.") from exc
+            logger.exception(
+                "Ollama embedding call failed (host=%s, model=%s).",
+                self.host or os.getenv("OLLAMA_HOST"),
+                self.model,
+            )
+            raise RuntimeError(
+                "Ollama embedding request failed. Verify Ollama is reachable and the model supports embeddings."
+            ) from exc
 
         # Ollama official response key
         vectors = response.get("embeddings")
@@ -211,6 +252,33 @@ class OllamaEmbedder(EmbeddingInterface):
         return cleaned
 
     # ------------------------------------------------------------------
+    # Startup preflight (sync)
+    # ------------------------------------------------------------------
+
+    def preflight(self) -> None:
+        """
+        Best-effort connectivity check used at initialization time.
+        Logs a warning on failure but does not raise.
+        """
+        if self._preflight_checked:
+            return
+        try:
+            self._client.embed(model=self.model, input=["ping"])
+            self._preflight_checked = True
+            logger.info(
+                "OllamaEmbedder preflight OK (host=%s, model=%s)",
+                self.host or os.getenv("OLLAMA_HOST"),
+                self.model,
+            )
+        except Exception as exc:
+            logger.warning(
+                "OllamaEmbedder preflight failed at startup (host=%s, model=%s): %s",
+                self.host or os.getenv("OLLAMA_HOST"),
+                self.model,
+                exc,
+            )
+
+    # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
@@ -224,11 +292,17 @@ class OllamaEmbedder(EmbeddingInterface):
             raise ValueError("Ollama embedding config must define 'model'.")
         embed_kwargs = {**cfg.config}
         embed_kwargs.pop("model", None)
+        host = embed_kwargs.pop("host", None)
         embed_kwargs.pop("dimension", None)
+        if not host and not os.getenv("OLLAMA_HOST"):
+            raise ValueError(
+                "Ollama embedding config must include 'host' or set OLLAMA_HOST."
+            )
         if "mode" not in embed_kwargs:
             embed_kwargs["mode"] = "native"
         return cls(
             model=model,
             dimension=cfg.dimension,
+            host=host,
             **embed_kwargs,
         )

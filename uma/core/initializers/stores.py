@@ -8,11 +8,14 @@ import logging
 import os
 from typing import Any
 
+from ..utils.config_types import parse_plugin_spec
 from ...adapters.db.sqlite_adapter import SQLiteAdapter
 from ...adapters.vector.faiss_adapter import FaissIndex
 from ...stores.episodic_sql import EpisodicSQLStore
 from ...stores.semantic_sql import SemanticSQLStore
 from ...stores.procedural_sql import ProceduralSQLStore
+from ...stores.chunk_sql import ChunkSQLStore
+from ...stores.document_sql import DocumentSQLStore
 
 logger = logging.getLogger(__name__)
 
@@ -73,39 +76,39 @@ def initialize_stores(memory: "Any") -> None:
     episodic_db_path = os.path.join(db_root, "episodic.db")
     semantic_db_path = os.path.join(db_root, "semantic.db")
     procedural_db_path = os.path.join(db_root, "procedural.db")
+    chunks_db_path = os.path.join(db_root, "chunks.db")
+    documents_db_path = os.path.join(db_root, "documents.db")
 
     # --------------------------------------------------------------
     # SQL BACKEND SELECTION
     # --------------------------------------------------------------
     sql_backend = storage_cfg.sql_backend
+    sql_backend_str = str(sql_backend or "")
 
     if sql_backend == "sqlite":
         sql_adapter_cls = SQLiteAdapter
 
-    elif sql_backend == "postgres":
-        try:
-            from uma.adapters.db.postgres_adapter import PostgresAdapter
-        except ImportError as exc:
-            logger.exception("PostgresAdapter import failed.")
-            raise RuntimeError(
-                "storage.sql_backend='postgres' but PostgresAdapter is not available. "
-                "Install the required dependency or switch to 'sqlite'."
-            ) from exc
-        sql_adapter_cls = PostgresAdapter
-
     else:
-        raise ValueError(f"Unsupported storage.sql_backend={sql_backend!r}")
+        if ":" not in sql_backend_str:
+            raise ValueError(f"Unsupported storage.sql_backend={sql_backend!r}")
+        sql_plugin = parse_plugin_spec(sql_backend_str)
+        if not callable(sql_plugin):
+            raise TypeError("storage.sql_backend plugin must be a callable 'module:attr'")
+        sql_adapter_cls = sql_plugin
 
     # Instantiate DB adapters
     epi_db = sql_adapter_cls(episodic_db_path)
     sem_db = sql_adapter_cls(semantic_db_path)
     pro_db = sql_adapter_cls(procedural_db_path)
+    chunk_db = sql_adapter_cls(chunks_db_path)
+    doc_db = sql_adapter_cls(documents_db_path)
 
     # --------------------------------------------------------------
     # VECTOR BACKEND SELECTION
     # --------------------------------------------------------------
     vector_backend = storage_cfg.vector_backend
     vector_cfg = storage_cfg.get("vector_config", {}) if isinstance(storage_cfg, dict) else {}
+    vector_backend_str = str(vector_backend or "")
 
     if vector_backend == "faiss":
         from uma.adapters.vector.inmemory import InMemoryVectorIndex
@@ -124,43 +127,29 @@ def initialize_stores(memory: "Any") -> None:
 
         vector_init = lambda d: InMemoryVectorIndex(d)
 
-    elif vector_backend == "pinecone":
-        from uma.adapters.vector.pinecone_adapter import PineconeIndex
-
-        index_name = vector_cfg.get("index_name", "")
-        if not index_name:
-            raise ValueError("Pinecone vector backend requires storage.vector_config.index_name")
-        vector_init = lambda d: PineconeIndex(index_name=index_name, dim=d)
-
-    elif vector_backend == "weaviate":
-        from uma.adapters.vector.weaviate_adapter import WeaviateIndex
-
-        url = vector_cfg.get("url", "")
-        api_key = vector_cfg.get("api_key", "")
-        class_name = vector_cfg.get("class_name", "")
-        if not (url and api_key and class_name):
-            raise ValueError(
-                "Weaviate vector backend requires storage.vector_config.url, "
-                "storage.vector_config.api_key, and storage.vector_config.class_name"
-            )
-        vector_init = lambda d: WeaviateIndex(
-            url=url,
-            api_key=api_key,
-            class_name=class_name,
-            dim=d,
-        )
-
     else:
-        raise ValueError(f"Unsupported storage.vector_backend={vector_backend!r}")
+        if ":" not in vector_backend_str:
+            raise ValueError(f"Unsupported storage.vector_backend={vector_backend!r}")
+        plugin = parse_plugin_spec(vector_backend_str)
+        if not callable(plugin):
+            raise TypeError("storage.vector_backend plugin must be a callable 'module:attr'")
+        if not isinstance(vector_cfg, dict):
+            raise ValueError("storage.vector_config must be a mapping for plugin vector backend")
+
+        def vector_init(d: int):
+            return plugin(d, **vector_cfg)
 
     epi_idx = vector_init(dim)
     sem_idx = vector_init(dim)
     pro_idx = vector_init(dim)
+    chunk_idx = vector_init(dim)
 
     try:
         memory.episodic_store = EpisodicSQLStore(epi_db, epi_idx)
         memory.semantic_store = SemanticSQLStore(sem_db, sem_idx)
         memory.procedural_store = ProceduralSQLStore(pro_db, pro_idx)
+        memory.chunk_store = ChunkSQLStore(chunk_db, chunk_idx)
+        memory.document_store = DocumentSQLStore(doc_db)
     except Exception:
         logger.exception("Failed to initialize one or more SQL/vector stores.")
         raise

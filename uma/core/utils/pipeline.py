@@ -286,12 +286,13 @@ class MemoryPipeline:
                 content=user_msg,
                 metadata={"source": "user"},
             )
-            wm.append(
-                user_id=user_id,
-                role="assistant",
-                content=assistant_reply,
-                metadata={"source": "assistant"},
-            )
+            if assistant_reply and assistant_reply.strip():
+                wm.append(
+                    user_id=user_id,
+                    role="assistant",
+                    content=assistant_reply,
+                    metadata={"source": "assistant"},
+                )
         except Exception:
             logger.exception("Failed to append messages to WorkingMemory; continuing.")
 

@@ -24,7 +24,7 @@ dependencies = [
 vector = ["faiss-cpu", "weaviate-client", "pinecone-client"]
 graph = ["neo4j"]
 postgres = ["psycopg2-binary>=2.9"]
-dev = ["pytest", "matplotlib", "PyPDF2"]
+dev = ["pytest", "matplotlib", "PyPDF2", "pytest-asyncio"]
 
 [tool.setuptools.dynamic]
 version = {attr = "uma.version.__version__"}

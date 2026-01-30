@@ -29,7 +29,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import List, Dict, Any
+import os
+from typing import List, Dict, Any, Optional
 
 try:
     import aiohttp
@@ -59,7 +60,7 @@ class OllamaLLM(LLMInterface):
     def __init__(
         self,
         model: str = "llama3",
-        host: str = "http://192.168.178.101:11434",
+        host: Optional[str] = None,
         chat_endpoint: str = "/api/chat",
         timeout: float = 30.0,
     ):
@@ -68,11 +69,16 @@ class OllamaLLM(LLMInterface):
                 "OllamaLLM requires 'aiohttp' to be installed. Install with: pip install aiohttp"
             )
         self.model = model
-        self.base_url = host.rstrip("/")
+        resolved_host = host or os.getenv("OLLAMA_HOST")
+        if not resolved_host:
+            raise ValueError(
+                "OllamaLLM requires 'host' to be configured or set via OLLAMA_HOST."
+            )
+        self.base_url = resolved_host.rstrip("/")
         self.chat_url = f"{self.base_url}{chat_endpoint}"
         self.timeout = timeout
 
-        logger.info("OllamaLLM initialized (model=%s)", model)
+        logger.info("OllamaLLM initialized (model=%s, host=%s)", model, self.base_url)
 
     @retryable()
     async def generate(
@@ -132,7 +138,11 @@ class OllamaLLM(LLMInterface):
 
         # Ollama returns: {"message": {"role": "assistant", "content": "..."}}
         try:
-            return data["message"]["content"]
+            content = data["message"]["content"]
+            if not isinstance(content, str) or not content.strip():
+                logger.error("OllamaLLM.generate: empty content returned. Raw=%s", data)
+                return ""
+            return content
         except Exception:
             logger.error("Malformed Ollama response: %s", data)
             raise RuntimeError("Malformed Ollama response.")
@@ -148,5 +158,7 @@ class OllamaLLM(LLMInterface):
         """
         model = cfg.ollama_model or cfg.model or "llama3"
         llm_kwargs = {**cfg.config}
+        host = llm_kwargs.pop("host", None)
         llm_kwargs.pop("model", None)
-        return cls(model=model, **llm_kwargs)
+        return cls(model=model, host=host, **llm_kwargs)
+    

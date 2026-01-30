@@ -104,7 +104,7 @@ class TemporalGraphCore:
             logger.warning("TemporalGraphCore.neighbors: missing user_id or node_id.")
             return []
 
-        depth = max(1, int(depth))
+        depth = max(1, min(10, int(depth)))
         limit = max(1, int(k))
 
         preds = None
@@ -112,10 +112,10 @@ class TemporalGraphCore:
             preds = [self._sanitize_predicate(p) for p in predicate_scope if p]
             preds = [p for p in preds if p]
 
-        cypher = """
-        MATCH (u:User {id: $user_id})
-        MATCH (u)-[*0..3]->(n {id: $node_id})
-        MATCH path = (n)-[r*1..$depth]-(m)
+        cypher = f"""
+        MATCH (u:User {{id: $user_id}})
+        MATCH (u)-[*0..3]->(n {{id: $node_id}})
+        MATCH path = (n)-[r*1..{depth}]-(m)
         WHERE $preds IS NULL OR all(rel IN r WHERE type(rel) IN $preds)
         RETURN DISTINCT m, labels(m) AS labels, properties(m) AS properties
         LIMIT $limit
@@ -123,7 +123,6 @@ class TemporalGraphCore:
         params = {
             "user_id": user_id,
             "node_id": node_id,
-            "depth": depth,
             "limit": limit,
             "preds": preds,
         }

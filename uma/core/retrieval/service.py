@@ -21,10 +21,11 @@ No ranking here (belongs to MemorySelector).
 """
 
 import logging
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 from .retrieval import MultiStoreRetriever
 from .selector import MemorySelector
+from .policy import RetrievalPolicy
 from ...adapters.observability.context import get_request_id, request_context
 from ...adapters.observability.metrics import increment, timed
 from ..utils.identity import ensure_user_subject
@@ -117,13 +118,21 @@ class RetrievalService:
             max_graph_items,
         )
 
-    async def retrieve(self, user_id: str, memory_type: str, query_text_or_embedding: Any) -> Any:
+    async def retrieve(
+        self,
+        user_id: str,
+        memory_type: str,
+        query_text_or_embedding: Any,
+        *,
+        agent_id: Optional[str] = None,
+        project_id: Optional[str] = None,
+    ) -> Any:
         """
         Retrieve memory.
 
         Returns
         -------
-        - memory_type in {"episodic","semantic","procedural","graph","working_memory"} -> List[Any]
+        - memory_type in {"episodic","semantic","procedural","graph","chunks","working_memory"} -> List[Any]
         - memory_type == "all" -> Dict[str, List[Any]]
         """
         with request_context(generate=(get_request_id() == "-")):
@@ -145,22 +154,64 @@ class RetrievalService:
                     if memory_type_norm == "working_memory":
                         return self._get_working_memory(user_subject)
 
-                    embedding = await self._ensure_embedding(query_text_or_embedding)
+                    raw: Dict[str, List[Any]]
+                    embedding: List[float]
+                    try:
+                        embedding = await self._ensure_embedding(query_text_or_embedding)
+                        raw = await self.retriever.retrieve(
+                            memory=self.memory,
+                            query_embedding=[float(x) for x in embedding],
+                            user_id=user_subject,
+                            agent_id=agent_id,
+                            project_id=project_id,
+                        )
+                    except Exception:
+                        logger.exception("RetrievalService: embedding failed.")
+                        strict = bool(getattr(self.memory, "retrieval_cfg", None) and self.memory.retrieval_cfg.strict)
+                        if strict:
+                            raise
+                        # If embeddings fail (e.g., Ollama down), fall back to lexical chunks only.
+                        raw = {"episodes": [], "facts": [], "chunks": [], "skills": [], "graph": []}
 
-                    raw = await self.retriever.retrieve(
-                        memory=self.memory,
-                        query_embedding=[float(x) for x in embedding],
-                        user_id=user_subject,
-                    )
+                    # Lexical fallback if chunk search returns nothing (or embed failed).
+                    if not (raw.get("chunks") or []) and isinstance(query_text_or_embedding, str):
+                        store = getattr(self.memory, "chunk_store", None)
+                        if store is not None and hasattr(store, "search_text"):
+                            try:
+                                chunks: List[Any] = []
+                                for owner_type, owner_id in self._iter_owner_filters(
+                                    user_subject=user_subject,
+                                    agent_id=agent_id,
+                                    project_id=project_id,
+                                ):
+                                    found = await store.search_text(
+                                        query_text_or_embedding,
+                                        owner_type=owner_type,
+                                        owner_id=owner_id,
+                                        k=self.selector.max_facts,
+                                    )
+                                    if found:
+                                        chunks.extend(found)
+                                raw["chunks"] = chunks
+                            except Exception:
+                                logger.exception("RetrievalService: chunk lexical fallback failed.")
+                                strict = bool(getattr(self.memory, "retrieval_cfg", None) and self.memory.retrieval_cfg.strict)
+                                if strict:
+                                    raise
 
-                    # selector expects keys: episodes/facts/skills/graph (+ optional WM)
-                    selected = self.selector.select(raw)
+                    # selector expects keys: episodes/facts/chunks/skills/graph (+ optional WM)
+                    policy = RetrievalPolicy(query_text_or_embedding) if isinstance(query_text_or_embedding, str) else None
+                    selected = self.selector.select(raw, policy=policy)
 
                     # Extra defensive truncation guard:
                     # Even if a store misbehaves or returns too many items,
                     # RetrievalService MUST NEVER violate configured budgets.
                     episodes = (selected.get("episodes") or [])[: self.selector.max_episodes]
                     facts = (selected.get("facts") or [])[: self.selector.max_facts]
+                    chunks = (selected.get("chunks") or [])[: self.selector.max_facts]
+                    # Strict keyword gate for traditional RAG: only keep chunks that match query terms.
+                    if isinstance(query_text_or_embedding, str) and query_text_or_embedding.strip():
+                        chunks = self._filter_chunks_by_query(chunks, query_text_or_embedding)
                     skills = (selected.get("skills") or [])[: self.selector.max_skills]
                     graph = (selected.get("graph") or [])[: self.selector.max_graph_items]
 
@@ -168,6 +219,8 @@ class RetrievalService:
                         return episodes
                     if memory_type_norm == "semantic":
                         return facts
+                    if memory_type_norm == "chunks":
+                        return chunks
                     if memory_type_norm == "procedural":
                         return skills
                     if memory_type_norm == "graph":
@@ -176,6 +229,7 @@ class RetrievalService:
                         return {
                             "episodes": episodes,
                             "facts": facts,
+                            "chunks": chunks,
                             "skills": skills,
                             "graph": graph,
                         }
@@ -215,3 +269,75 @@ class RetrievalService:
         except Exception:
             logger.exception("RetrievalService._get_working_memory failed.")
             return []
+
+    @staticmethod
+    def _iter_owner_filters(
+        *,
+        user_subject: str,
+        agent_id: Optional[str],
+        project_id: Optional[str],
+    ) -> List[tuple[str, str]]:
+        filters: List[tuple[str, str]] = [("user", user_subject)]
+        if agent_id:
+            filters.append(("agent", agent_id))
+        if project_id:
+            filters.append(("project", f"{user_subject}:{project_id}"))
+        return filters
+
+    @staticmethod
+    def _filter_chunks_by_query(chunks: List[Any], query_text: str) -> List[Any]:
+        """
+        Hard filter: only keep chunks containing query terms (case-insensitive).
+        If no chunks match, return empty list.
+        """
+        try:
+            from ..utils.user_query_helper import extract_query_terms, expand_query_terms
+        except Exception:
+            extract_query_terms = None
+            expand_query_terms = None
+
+        if not chunks or not query_text:
+            return chunks
+        if expand_query_terms:
+            terms = expand_query_terms(query_text)
+        elif extract_query_terms:
+            terms = extract_query_terms(query_text)
+        else:
+            terms = []
+        terms = [t for t in (terms or []) if t]
+        if not terms:
+            # Fallback to simple tokenization if helper returns nothing.
+            import re
+            terms = re.findall(r"[a-zA-Z0-9]+", query_text.lower())
+            if not terms:
+                return []
+        # Drop stopwords and very short tokens to avoid matching everything.
+        stop = {
+            "the", "a", "an", "and", "or", "but", "if", "then", "else", "for", "to",
+            "of", "in", "on", "at", "by", "with", "about", "what", "who", "why",
+            "how", "when", "where", "is", "are", "was", "were", "be", "been",
+            "do", "does", "did", "you", "your", "know", "tell", "me", "please",
+        }
+        filtered_terms = []
+        for t in terms:
+            tl = t.lower()
+            if len(tl) < 3:
+                continue
+            if tl in stop:
+                continue
+            filtered_terms.append(tl)
+        if not filtered_terms:
+            return []
+
+        def _text(ch: Any) -> str:
+            txt = getattr(ch, "text", None)
+            if txt is None and isinstance(ch, dict):
+                txt = ch.get("text")
+            return (txt or "").lower()
+
+        kept = []
+        for ch in chunks:
+            hay = _text(ch)
+            if any(t in hay for t in filtered_terms):
+                kept.append(ch)
+        return kept

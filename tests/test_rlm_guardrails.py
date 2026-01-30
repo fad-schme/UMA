@@ -12,7 +12,7 @@ class DummyEnv(MemoryEnvironment):
         return [0.1, 0.2, 0.3]
 
     # --- Semantic ---
-    async def search_semantic(self, user_id, query_embedding, k=10, filters=None):
+    async def search_semantic(self, user_id, query_embedding, k=10, filters=None, query_text=None):
         # Return a dict with a large string field to exercise truncation/guardrails
         return [
             {

@@ -2,6 +2,20 @@ import logging
 import os
 from datetime import datetime
 
+_ORIGINAL_RECORD_FACTORY = logging.getLogRecordFactory()
+
+
+def _uma_record_factory(*args, **kwargs):
+    record = _ORIGINAL_RECORD_FACTORY(*args, **kwargs)
+    if not hasattr(record, "request_id"):
+        record.request_id = "-"
+    if not hasattr(record, "trace_id"):
+        record.trace_id = "-"
+    return record
+
+
+logging.setLogRecordFactory(_uma_record_factory)
+
 # -------------------------------------------------------------------
 # UMA Logging Setup
 # -------------------------------------------------------------------
@@ -33,7 +47,7 @@ def _configure_uma_logger() -> logging.Logger:
     while not interfering with root logging configuration.
     """
     logger = logging.getLogger("uma")
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
 
     # Avoid adding handlers multiple times if this module is imported more than once.
     if logger.handlers:

@@ -53,14 +53,14 @@ class SalienceScorer:
 
         salience = max(0.0, min(1.0, base_conf * decay_factor * weight))
 
-        logger.debug(
-            "Salience: id=%s conf=%.2f age=%.1f decay=%.2f weight=%.2f -> %.3f",
-            fact.id,
-            base_conf,
-            age_days,
-            decay_factor,
-            weight,
-            salience,
-        )
+        # logger.debug(
+        #     "Salience: id=%s conf=%.2f age=%.1f decay=%.2f weight=%.2f -> %.3f",
+        #     fact.id,
+        #     base_conf,
+        #     age_days,
+        #     decay_factor,
+        #     weight,
+        #     salience,
+        # )
 
         return salience

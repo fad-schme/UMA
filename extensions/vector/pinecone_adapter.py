@@ -20,8 +20,8 @@ from typing import List, Tuple, Dict, Optional
 import os
 import pinecone
 
-from .base import VectorIndex
-from ...core.utils.retry import retry_sync
+from uma.adapters.vector.base import VectorIndex
+from uma.core.utils.retry import retry_sync
 
 logger = logging.getLogger(__name__)
 
@@ -82,12 +82,7 @@ class PineconeIndex(VectorIndex):
         def _call():
             return self.index.query(vector=vector, top_k=k, filter=filters)
 
-        try:
-            results = retry_sync(_call)
-        except Exception:
-            logger.exception("PineconeIndex.query failed.")
-            return []
-
+        results = retry_sync(_call)
         return [(match["id"], match["score"]) for match in results["matches"]]
 
     def delete(self, ids: List[str]) -> None:

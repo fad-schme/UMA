@@ -12,8 +12,14 @@ from typing import Any, Dict, List, Optional
 from .context_pack import ContextPack
 from .decisions import ControllerDecision, RetrievalAction
 from .environment import MemoryEnvironment
-from .policy import assess_coverage, should_stop
+from .policy import assess_coverage
+from ..policy import RetrievalPolicy, should_stop
 from ...utils.identity import ensure_user_subject
+
+try:
+    from ...utils.user_query_helper import extract_query_terms
+except Exception:  # pragma: no cover - optional
+    extract_query_terms = None
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +62,14 @@ class RLMController:
         novelty_window: int = 2,
         min_recent_novelty: int = 1,
         max_state_chars: int = 1200,
+        test_mode: bool = False,
+        extract_snippets: bool = True,
+        max_return_chars: int = 1200,
+        max_eval_rounds: int = 2,
+        max_eval_chunks: int = 12,
+        max_snippet_chars: int = 320,
+        semantic_first: bool = True,
+        clusters_first: bool = True,
     ) -> None:
         self.llm = llm
         self.env = env
@@ -82,6 +96,14 @@ class RLMController:
         self.min_recent_novelty = max(0, int(min_recent_novelty))
 
         self.max_state_chars = max(200, int(max_state_chars))
+        self.test_mode = bool(test_mode)
+        self.extract_snippets = bool(extract_snippets)
+        self.max_return_chars = int(max_return_chars)
+        self.max_eval_rounds = int(max_eval_rounds)
+        self.max_eval_chunks = int(max_eval_chunks)
+        self.max_snippet_chars = int(max_snippet_chars)
+        self.semantic_first = bool(semantic_first)
+        self.clusters_first = bool(clusters_first)
 
     # ------------------------------------------------------------------
     # PUBLIC API
@@ -93,41 +115,81 @@ class RLMController:
         if not query_text or not isinstance(query_text, str):
             raise ValueError("query_text must be a non-empty string")
 
+        policy = RetrievalPolicy(query_text)
+        logger.info(
+            "RLMController.retrieve_context: start user_id=%s query=%r deterministic_only=%s",
+            user_id,
+            query_text,
+            self.deterministic_only,
+        )
         start = time.time()
         user_subject = ensure_user_subject(user_id)
 
+        # --- TRACE CONTEXT ---
+        trace_id = f"rlm:{user_subject}:{int(time.time()*1000)}"
+        logger.info(
+            "RLM_START trace_id=%s user=%s recall_query=%s",
+            trace_id,
+            user_subject,
+            any(k in query_text.lower() for k in ["remember", "recall", "previous", "earlier", "last time"]),
+        )
+
         pack = ContextPack(user_id=user_subject, query_text=query_text)
-        pack.record_seen()
 
         pack.working_memory = await self.env.get_working_memory(user_subject)
         query_embedding = await self.env.get_query_embedding(query_text)
 
-        await self._baseline_retrieval(pack, query_embedding)
+        # Pass trace_id to baseline retrieval
+        await self._baseline_retrieval(pack, query_embedding, trace_id=trace_id)
         pack.record_seen()
-
-        coverage = assess_coverage(
-            facts=pack.facts,
-            episodes=pack.episodes,
-            graph=pack.graph,
-            salience_threshold=self.salience_threshold,
-            min_semantic_facts=self.min_semantic_facts,
-            min_high_salience_facts=self.min_high_salience_facts,
-            min_cluster_summaries=self.min_cluster_summaries,
-            require_semantic=True,
-            prefer_clusters=True,
-            novelty_history=pack.novelty_history,
-            novelty_window=self.novelty_window,
-            min_recent_novelty=self.min_recent_novelty,
+        logger.debug(
+            "RLMController: baseline counts facts=%d chunks=%d episodes=%d graph=%d",
+            len(pack.facts),
+            len(getattr(pack, "chunks", [])),
+            len(pack.episodes),
+            len(pack.graph),
         )
+        logger.debug(
+            "RLMController: step=0 facts preview=%s",
+            [self._describe_fact(f)[:180] for f in pack.facts[:5]],
+        )
+
+        coverage = self._assess_coverage(pack)
         pack.steps.append({"step": 0, "coverage": coverage.to_dict()})
 
         stop, reason = should_stop(
-            coverage=coverage,
-            hard_budget_hit=False,
-            prefer_clusters=True,
+            recall_score=policy.recall_score,
+            coverage=coverage.to_dict(),
+            calls_made=0,
+            max_calls=self.max_env_calls,
+            tokens_used=0,  # baseline
+            token_budget=self.max_state_chars,
+            user_results_count=sum(1 for f in pack.facts if _is_user_owned(f)),
+        )
+        # --- COVERAGE + STOP DECISION TELEMETRY (baseline) ---
+        logger.info(
+            "RLM_COVERAGE trace_id=%s step=%d stop=%s reason=%s coverage=%s",
+            trace_id,
+            0,
+            stop,
+            reason,
+            coverage.to_dict(),
         )
         if stop:
             pack.warnings.append(f"stop:{reason}")
+            logger.info("RLMController: stop after baseline reason=%s", reason)
+            await self._prune_facts_with_llm(pack)
+            # --- TERMINATION TELEMETRY ---
+            logger.info(
+                "RLM_END trace_id=%s total_steps=%d total_calls=%d facts=%d episodes=%d graph=%d warnings=%s",
+                trace_id,
+                len(pack.steps),
+                0,
+                len(pack.facts),
+                len(pack.episodes),
+                len(pack.graph),
+                pack.warnings,
+            )
             return pack
 
         total_env_calls = 0
@@ -140,43 +202,79 @@ class RLMController:
                 pack.warnings.append("stop:max_env_calls")
                 break
 
-            coverage = assess_coverage(
-                facts=pack.facts,
-                episodes=pack.episodes,
-                graph=pack.graph,
-                salience_threshold=self.salience_threshold,
-                min_semantic_facts=self.min_semantic_facts,
-                min_high_salience_facts=self.min_high_salience_facts,
-                min_cluster_summaries=self.min_cluster_summaries,
-                require_semantic=True,
-                prefer_clusters=True,
-                novelty_history=pack.novelty_history,
-                novelty_window=self.novelty_window,
-                min_recent_novelty=self.min_recent_novelty,
-            )
+            coverage = self._assess_coverage(pack)
             pack.steps.append({"step": step, "coverage": coverage.to_dict()})
+            logger.debug(
+                "RLMController: step=%d coverage=%s",
+                step,
+                coverage.to_dict(),
+            )
 
             stop, reason = should_stop(
-                coverage=coverage,
-                hard_budget_hit=False,
-                prefer_clusters=True,
+                recall_score=policy.recall_score,
+                coverage=coverage.to_dict(),
+                calls_made=total_env_calls,
+                max_calls=self.max_env_calls,
+                tokens_used=len(json.dumps(pack.snapshot())),
+                token_budget=self.max_state_chars,
+                user_results_count=sum(1 for f in pack.facts if _is_user_owned(f)),
+            )
+            # --- COVERAGE + STOP DECISION TELEMETRY (loop) ---
+            logger.info(
+                "RLM_COVERAGE trace_id=%s step=%d stop=%s reason=%s coverage=%s",
+                trace_id,
+                step,
+                stop,
+                reason,
+                coverage.to_dict(),
             )
             if stop:
                 pack.warnings.append(f"stop:{reason}")
+                logger.info("RLMController: stop step=%d reason=%s", step, reason)
                 break
 
             decision = self._deterministic_decision(pack, coverage)
             if not decision or not decision.actions:
+                logger.info("RLMController: no actions at step=%d; stopping", step)
                 break
+            logger.debug(
+                "RLMController: step=%d actions=%s",
+                step,
+                [a.action for a in decision.actions],
+            )
 
             hard_budget_hit = False
             for action in decision.actions[: self.max_actions_per_step]:
+                logger.debug(
+                    "RLMController: executing action=%s k=%s",
+                    action.action,
+                    action.k,
+                )
+                # --- ACTION EXECUTION TELEMETRY ---
+                logger.info(
+                    "RLM_ACTION trace_id=%s step=%d action=%s k=%s",
+                    trace_id,
+                    step,
+                    action.action,
+                    action.k,
+                )
                 items = await self._execute_action(
                     user_subject=user_subject,
                     action=action,
                     query_embedding=query_embedding,
+                    query_text=pack.query_text,
+                    trace_id=trace_id,
+                    step=step,
                 )
                 items = self._truncate_items(items)
+                # --- ACTION RESULT TELEMETRY ---
+                logger.info(
+                    "RLM_ACTION_RESULT trace_id=%s step=%d action=%s returned=%d",
+                    trace_id,
+                    step,
+                    action.action,
+                    len(items or []),
+                )
 
                 if action.action in {
                     "search_semantic",
@@ -207,20 +305,85 @@ class RLMController:
 
             if hard_budget_hit:
                 break
+            logger.debug(
+                "RLMController: step=%d facts preview=%s",
+                step,
+                [self._describe_fact(f)[:180] for f in pack.facts[:5]],
+            )
 
+        await self._prune_facts_with_llm(pack)
+        self._apply_scope_bias(pack, policy)
+        logger.info(
+            "RLMController.retrieve_context: done facts=%d episodes=%d graph=%d warnings=%s",
+            len(pack.facts),
+            len(pack.episodes),
+            len(pack.graph),
+            pack.warnings,
+        )
+        # --- TERMINATION TELEMETRY ---
+        logger.info(
+            "RLM_END trace_id=%s total_steps=%d total_calls=%d facts=%d episodes=%d graph=%d warnings=%s",
+            trace_id,
+            len(pack.steps),
+            total_env_calls,
+            len(pack.facts),
+            len(pack.episodes),
+            len(pack.graph),
+            pack.warnings,
+        )
         return pack
 
     # ------------------------------------------------------------------
     # BASELINE RETRIEVAL
     # ------------------------------------------------------------------
 
-    async def _baseline_retrieval(self, pack: ContextPack, query_embedding: List[float]) -> None:
+    async def _baseline_retrieval(self, pack: ContextPack, query_embedding: List[float], trace_id: str = None) -> None:
         if query_embedding:
+            try:
+                results = await self.env.search_semantic(
+                    pack.user_id,
+                    query_embedding,
+                    k=self.max_items_per_type,
+                    query_text=pack.query_text,
+                )
+            except TypeError:
+                # Backward compatibility: older envs may not accept query_text
+                results = await self.env.search_semantic(
+                    pack.user_id,
+                    query_embedding,
+                    k=self.max_items_per_type,
+                )
             pack.facts = _merge_unique(
                 pack.facts,
-                await self.env.search_semantic(pack.user_id, query_embedding, k=self.max_items_per_type),
+                results,
                 self.max_items_per_type,
             )
+            # Optional chunk retrieval if environment supports it
+            if hasattr(self.env, "search_chunks"):
+                try:
+                    chunks = await self.env.search_chunks(
+                        pack.user_id,
+                        query_embedding,
+                        k=self.max_items_per_type,
+                    )
+                    pack.chunks = _merge_unique(
+                        getattr(pack, "chunks", []),
+                        chunks,
+                        self.max_items_per_type,
+                    )
+                except Exception:
+                    logger.exception("RLMController: search_chunks failed")
+
+        # Procedural baseline (skills)
+        try:
+            skills = await self.env.search_procedural(
+                pack.user_id,
+                query_embedding,
+                k=self.max_items_per_type,
+            )
+            pack.skills = _merge_unique(pack.skills, skills, self.max_items_per_type)
+        except Exception:
+            logger.exception("RLMController: search_procedural failed")
 
         pack.episodes = _merge_unique(
             pack.episodes,
@@ -243,10 +406,35 @@ class RLMController:
             ),
             self.max_items_per_type,
         )
+        # --- BASELINE RETRIEVAL TELEMETRY ---
+        if trace_id is not None:
+            logger.info(
+                "RLM_BASELINE trace_id=%s facts=%d episodes=%d graph=%d",
+                trace_id,
+                len(pack.facts),
+                len(pack.episodes),
+                len(pack.graph),
+            )
 
     # ------------------------------------------------------------------
     # DECISION LOGIC
     # ------------------------------------------------------------------
+
+    def _assess_coverage(self, pack: ContextPack):
+        return assess_coverage(
+            facts=pack.facts,
+            episodes=pack.episodes,
+            graph=pack.graph,
+            salience_threshold=self.salience_threshold,
+            min_semantic_facts=self.min_semantic_facts,
+            min_high_salience_facts=self.min_high_salience_facts,
+            min_cluster_summaries=self.min_cluster_summaries,
+            require_semantic=True,
+            prefer_clusters=True,
+            novelty_history=pack.novelty_history,
+            novelty_window=self.novelty_window,
+            min_recent_novelty=self.min_recent_novelty,
+        )
 
     def _deterministic_decision(self, pack: ContextPack, coverage) -> Optional[ControllerDecision]:
         actions: List[RetrievalAction] = []
@@ -306,6 +494,7 @@ class RLMController:
 
         return ControllerDecision(actions=actions) if actions else None
 
+
     # ------------------------------------------------------------------
     # ACTION EXECUTION
     # ------------------------------------------------------------------
@@ -316,55 +505,78 @@ class RLMController:
         user_subject: str,
         action: RetrievalAction,
         query_embedding: List[float],
+        query_text: Optional[str] = None,
+        trace_id: str = None,
+        step: int = None,
     ) -> List[Any]:
 
         k = int(action.k) if action.k else self.max_items_per_type
 
         if action.action == "search_semantic":
-            return await self.env.search_semantic(
+            results = await self.env.search_semantic(
                 user_id=user_subject,
                 query_embedding=query_embedding,
                 k=k,
                 filters=action.filters,
+                query_text=query_text,
             )
+            logger.debug("RLMController: search_semantic returned %d", len(results or []))
+            return results
 
         if action.action == "fetch_more_facts":
             offset = int(action.filters.get("offset", 0)) if action.filters else 0
-            return await self.env.fetch_more_facts(
+            # --- FETCH_MORE_FACTS-SPECIFIC TELEMETRY ---
+            if trace_id is not None:
+                logger.info(
+                    "RLM_FETCH_MORE_FACTS trace_id=%s predicate=%s offset=%s k=%s",
+                    trace_id,
+                    action.predicate,
+                    offset,
+                    k,
+                )
+            results = await self.env.fetch_more_facts(
                 user_id=user_subject,
                 predicate=action.predicate,
                 k=k,
                 offset=offset,
                 owner_scope=action.owner_scope,
             )
+            logger.debug("RLMController: fetch_more_facts returned %d", len(results or []))
+            return results
 
         if action.action == "episodic_clusters":
-            return await self.env.episodic_cluster_summaries(
+            results = await self.env.episodic_cluster_summaries(
                 user_id=user_subject,
                 k=k,
                 max_episodes=self.max_items_per_type,
             )
+            logger.debug("RLMController: episodic_clusters returned %d", len(results or []))
+            return results
 
         if action.action == "fetch_episode_clusters":
-            return await self.env.fetch_episode_clusters(
+            results = await self.env.fetch_episode_clusters(
                 user_id=user_subject,
                 k=k,
                 max_episodes=self.max_items_per_type,
                 time_range=action.time_range,
                 min_salience=action.min_salience,
             )
+            logger.debug("RLMController: fetch_episode_clusters returned %d", len(results or []))
+            return results
 
         if action.action == "graph_neighbors":
-            return await self.env.graph_neighbors(
+            results = await self.env.graph_neighbors(
                 user_id=user_subject,
                 node_id=action.node_id,
                 predicate_scope=action.predicate_scope,
                 depth=int(action.depth or 1),
                 k=k,
             )
+            logger.debug("RLMController: graph_neighbors returned %d", len(results or []))
+            return results
 
         if action.action == "expand_graph":
-            return await self.env.expand_graph(
+            results = await self.env.expand_graph(
                 user_id=user_subject,
                 subject=action.subject,
                 predicate=action.predicate,
@@ -372,9 +584,13 @@ class RLMController:
                 direction=action.direction,
                 k=k,
             )
+            logger.debug("RLMController: expand_graph returned %d", len(results or []))
+            return results
 
         if action.action == "resolve_conflicts":
-            return await self.env.resolve_conflicts(user_id=user_subject, fact_ids=action.fact_ids or [])
+            results = await self.env.resolve_conflicts(user_id=user_subject, fact_ids=action.fact_ids or [])
+            logger.debug("RLMController: resolve_conflicts returned %d", len(results or []))
+            return results
 
         return []
 
@@ -406,6 +622,42 @@ class RLMController:
             return {}
         return {str(k).upper(): float(v) for k, v in weights.items() if isinstance(v, (int, float))}
 
+    def _apply_scope_bias(self, pack: ContextPack, policy: RetrievalPolicy) -> None:
+        """
+        Apply recall/scope bias to retrieved items to prefer user memory for recall intent.
+        """
+        if not policy:
+            return
+
+        def _score_fact(f: Any) -> float:
+            base = 0.0
+            if isinstance(f, dict):
+                sal = (f.get("meta") or {}).get("salience")
+                conf = f.get("confidence")
+            else:
+                sal = getattr(f, "salience", None)
+                conf = getattr(f, "confidence", None)
+            try:
+                base = (float(sal or 0.0) + float(conf or 0.5)) / 2.0
+            except Exception:
+                base = 0.0
+            return base * policy.scope_weight(_get_owner_scope(f))
+
+        def _score_chunk(c: Any) -> float:
+            try:
+                pos = getattr(c, "position", None)
+                if pos is None and isinstance(c, dict):
+                    pos = c.get("position")
+                base = 1.0 / max(1, int(pos or 1))
+            except Exception:
+                base = 0.0
+            return base * policy.scope_weight(_get_owner_scope(c))
+
+        if pack.facts:
+            pack.facts = sorted(pack.facts, key=_score_fact, reverse=True)
+        if getattr(pack, "chunks", None):
+            pack.chunks = sorted(pack.chunks, key=_score_chunk, reverse=True)
+
     def _truncate_items(self, items: List[Any]) -> List[Any]:
         if not items:
             return items
@@ -415,6 +667,130 @@ class RLMController:
             else it
             for it in items
         ]
+
+    async def _prune_facts_with_llm(self, pack: ContextPack) -> None:
+        if not self.llm or not pack.facts:
+            logger.debug("RLMController: prune skipped (llm=%s facts=%d)", bool(self.llm), len(pack.facts))
+            return
+
+        logger.info("RLMController: pruning facts with LLM (count=%d)", len(pack.facts))
+        descriptions = []
+        for idx, fact in enumerate(pack.facts, start=1):
+            desc = self._describe_fact(fact)
+            descriptions.append(f"{idx}. {desc}")
+
+        if not descriptions:
+            logger.debug("RLMController: prune skipped (no descriptions)")
+            return
+        logger.debug("RLMController: prune input facts=%s", descriptions)
+
+        system_prompt = (
+            "You are a retrieval assistant that filters facts. Given a question and "
+            "a numbered list of facts, return ONLY valid JSON with a key `keep` whose value "
+            "is an array of 1-based indices of the facts that directly answer the question. "
+            "Return an empty array if none apply."
+        )
+        user_prompt = f"Question: {pack.query_text}\nFacts:\n" + "\n".join(descriptions)
+
+        try:
+            response = await self.llm.generate(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=128,
+                temperature=0.0,
+            )
+        except Exception:
+            logger.exception("RLMController: final pruning request failed.")
+            return
+
+        logger.debug("RLMController: prune response=%r", response)
+
+        selected = self._parse_keep_list(response)
+        if not selected:
+            logger.info("RLMController: prune response empty; applying fallback filter")
+            selected = self._fallback_keep_by_query(pack.query_text, pack.facts)
+            if not selected:
+                logger.info("RLMController: prune fallback kept 0 facts")
+                return
+
+        filtered = []
+        for idx in sorted(selected):
+            if 1 <= idx <= len(pack.facts):
+                filtered.append(pack.facts[idx - 1])
+        if filtered:
+            pack.facts = filtered
+            logger.info("RLMController: prune kept %d facts", len(pack.facts))
+
+    def _describe_fact(self, fact: Any) -> str:
+        meta = self._get_attr_or_key(fact, "meta", {})
+        if isinstance(meta, dict):
+            excerpt = meta.get("excerpt") or meta.get("description")
+            if excerpt:
+                return str(excerpt).replace("\n", " ").strip()
+        obj = self._get_attr_or_key(fact, "object")
+        if isinstance(obj, dict):
+            text = obj.get("text") or ""
+        else:
+            text = str(obj)
+        if text and text.strip():
+            return text.strip()
+        sub = self._get_attr_or_key(fact, "subject", "user")
+        pred = self._get_attr_or_key(fact, "predicate", "related_to")
+        return f"{sub} {pred}"
+
+    def _parse_keep_list(self, response: str) -> List[int]:
+        response = response.strip()
+        values: List[int] = []
+        try:
+            parsed = json.loads(response)
+            if isinstance(parsed, dict) and isinstance(parsed.get("keep"), list):
+                values = [int(x) for x in parsed["keep"] if isinstance(x, int)]
+            elif isinstance(parsed, list):
+                values = [int(x) for x in parsed if isinstance(x, int)]
+        except Exception:
+            tokens = response.replace(",", " ").split()
+            for tok in tokens:
+                if tok.isdigit():
+                    values.append(int(tok))
+        return sorted(set(values))
+
+    def _fallback_keep_by_query(self, query: str, facts: List[Any]) -> List[int]:
+        """
+        Heuristic fallback if LLM pruning fails: keep facts that mention any query term.
+        """
+        stop = {
+            "what", "do", "you", "know", "about", "the", "a", "an", "of", "to",
+            "and", "or", "is", "are", "in", "on", "for", "with", "that", "this",
+        }
+        terms = []
+        if extract_query_terms:
+            try:
+                terms = [t for t in (extract_query_terms(query) or []) if t and t not in stop]
+            except Exception:
+                terms = []
+        if not terms:
+            terms = [
+                t for t in re.split(r"\W+", query.lower())
+                if t and len(t) >= 4 and t not in stop
+            ]
+        if not terms:
+            return []
+        logger.debug("RLMController: prune fallback terms=%s", terms)
+        kept = []
+        for idx, fact in enumerate(facts, start=1):
+            text = self._describe_fact(fact).lower()
+            if any(t in text for t in terms):
+                kept.append(idx)
+        return kept
+
+    def _get_attr_or_key(self, obj: Any, key: str, default: Any = None) -> Any:
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        if hasattr(obj, key):
+            return getattr(obj, key, default)
+        return default
 
 
 def _merge_unique(existing: List[Any], research: List[Any], limit: int) -> List[Any]:
@@ -436,3 +812,13 @@ def _merge_unique(existing: List[Any], research: List[Any], limit: int) -> List[
             break
 
     return out
+
+
+def _get_owner_scope(item: Any) -> str:
+    if isinstance(item, dict):
+        return (item.get("owner_type") or item.get("owner_scope") or "").lower()
+    return (getattr(item, "owner_type", None) or getattr(item, "owner_scope", None) or "").lower()
+
+
+def _is_user_owned(item: Any) -> bool:
+    return _get_owner_scope(item) == "user"

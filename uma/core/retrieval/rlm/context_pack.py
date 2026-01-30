@@ -35,6 +35,7 @@ class ContextPack:
     working_memory: List[Any] = field(default_factory=list)
     episodes: List[Any] = field(default_factory=list)
     facts: List[Any] = field(default_factory=list)
+    chunks: List[Any] = field(default_factory=list)
     skills: List[Any] = field(default_factory=list)
     graph: List[Any] = field(default_factory=list)
 
@@ -44,6 +45,7 @@ class ContextPack:
 
     # --- Evidence accounting ---
     seen_fact_ids: Set[str] = field(default_factory=set)
+    seen_chunk_ids: Set[str] = field(default_factory=set)
     seen_episode_ids: Set[str] = field(default_factory=set)
     seen_skill_ids: Set[str] = field(default_factory=set)
     seen_graph_ids: Set[str] = field(default_factory=set)
@@ -60,11 +62,13 @@ class ContextPack:
                 "wm": len(self.working_memory),
                 "episodes": len(self.episodes),
                 "facts": len(self.facts),
+                "chunks": len(self.chunks),
                 "skills": len(self.skills),
                 "graph": len(self.graph),
             },
             "seen": {
                 "facts": len(self.seen_fact_ids),
+                "chunks": len(self.seen_chunk_ids),
                 "episodes": len(self.seen_episode_ids),
                 "skills": len(self.seen_skill_ids),
                 "graph": len(self.seen_graph_ids),
@@ -81,9 +85,18 @@ class ContextPack:
     def record_seen(self) -> None:
         try:
             self.seen_fact_ids.update(_collect_ids(self.facts))
+            self.seen_chunk_ids.update(_collect_ids(self.chunks))
             self.seen_episode_ids.update(_collect_ids(self.episodes))
             self.seen_skill_ids.update(_collect_ids(self.skills))
             self.seen_graph_ids.update(_collect_ids(self.graph))
+            logger.debug(
+                "ContextPack.record_seen: facts=%d chunks=%d episodes=%d skills=%d graph=%d",
+                len(self.seen_fact_ids),
+                len(self.seen_chunk_ids),
+                len(self.seen_episode_ids),
+                len(self.seen_skill_ids),
+                len(self.seen_graph_ids),
+            )
         except Exception:
             logger.exception("ContextPack.record_seen failed")
 
@@ -101,9 +114,10 @@ class ContextPack:
         novelty = self.compute_novelty(items, store)
         ids = _collect_ids(items)
         self._seen_set(store).update(ids)
-        payload = {"facts": 0, "episodes": 0, "skills": 0, "graph": 0}
+        payload = {"facts": 0, "chunks": 0, "episodes": 0, "skills": 0, "graph": 0}
         payload[store] = novelty
         self.novelty_history.append(payload)
+        logger.debug("ContextPack.apply_novelty: store=%s novelty=%d", store, novelty)
         return payload
 
     def get_predicate_offset(self, predicate: str) -> int:
@@ -115,12 +129,16 @@ class ContextPack:
         return self.predicate_offsets[key]
 
     def _seen_set(self, store: str) -> Set[str]:
-        return {
+        mapping = {
             "facts": self.seen_fact_ids,
+            "chunks": self.seen_chunk_ids,
             "episodes": self.seen_episode_ids,
             "skills": self.seen_skill_ids,
             "graph": self.seen_graph_ids,
-        }[store]
+        }
+        if store not in mapping:
+            raise KeyError(f"Unknown store: {store}")
+        return mapping[store]
 
 
 def _collect_ids(items: List[Any]) -> Set[str]:

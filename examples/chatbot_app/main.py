@@ -7,9 +7,8 @@ from typing import Optional
 
 from uma.core.uma_memory import UMAMemory
 from uma.adapters.llm.base import LLMInterface
-
-from .loader import load_documents_folder
-
+from uma.core.ingest.parser import FileContentParser
+from uma.core.utils.context_pack_builder import ContextPackBuilder#
 logger = logging.getLogger(__name__)
 
 
@@ -24,102 +23,139 @@ async def agent_generate(messages: list, llm: Optional[LLMInterface] = None) -> 
     Generate a response using UMA's configured LLM.
     """
     if llm is None:
-        raise RuntimeError("No LLM configured; set llm.provider in config/uma.yaml.")
-    return await llm.generate(messages=messages, max_tokens=128, temperature=0.2)
+        raise RuntimeError("No LLM configured; set llms.agent in config/uma.yaml.")
+    reply = await llm.generate(messages=messages, max_tokens=128, temperature=0.2)
+    if not isinstance(reply, str) or not reply.strip():
+        logger.warning("agent_generate: LLM returned empty reply.")
+    return reply
 
 
 async def interactive_chat(
     config_path: str = "config/uma.yaml",
     user_id: str = "user:local",
     system_prompt: Optional[str] = None,
+    auto_load_material: bool = False,
 ):
     system_prompt = system_prompt or SYSTEM_PROMPT_DEFAULT
 
     # Initialize UMA memory runtime
     memory = UMAMemory.from_yaml(config_path)
     memory.initialize()
-    if memory.rlm_controller is None:
-        logging.warning("RLM is disabled in config; enable retrieval.rlm.enabled for full UMA-RLM behavior.")
-    vector_backend = getattr(memory.raw_config.storage, "vector_backend", "")
-    if vector_backend in ("faiss", "inmemory"):
-        logging.info("Rebuilding vector indexes from SQL for user=%s", user_id)
-        try:
-            await memory.rebuild_vector_indexes(user_id=user_id)
-        except Exception:
-            logging.exception("Vector index rebuild failed; continuing with empty index.")
+    try:
+        if memory.rlm_controller is None:
+            logging.warning(
+                "RLM is disabled in config; enable retrieval.rlm.enabled for full UMA-RLM behavior."
+            )
+        vector_backend = getattr(memory.raw_config.storage, "vector_backend", "")
+        if vector_backend in ("faiss", "inmemory"):
+            logging.info("Rebuilding vector indexes from SQL for user=%s", user_id)
+            try:
+                await memory.rebuild_vector_indexes(user_id=user_id)
+            except Exception:
+                logging.exception("Vector index rebuild failed; continuing with empty index.")
 
-    # Pipeline for turn processing
-    print("UMA-RLM chatbot ready. Commands: /load <folder> <topic>, /setprompt, /quit")
+        # Pipeline for turn processing
+        print("UMA-RLM chatbot ready. Commands: /load, /setprompt, /quit")
 
-    config_dir = os.path.dirname(os.path.abspath(config_path))
+        config_dir = os.path.dirname(os.path.abspath(config_path))
+        project_root = os.path.dirname(config_dir)
+        material_dir = os.path.join(project_root, "material")
 
-    while True:
-        try:
-            user = input("You> ").strip()
-        except (KeyboardInterrupt, EOFError):
-            print("\nExiting.")
-            break
+        async def _load_material() -> int:
+            if not os.path.isdir(material_dir):
+                logger.warning("Material folder not found: %s", material_dir)
+                return 0
+            parser = FileContentParser()
+            supported = set(parser.supported_ext())
+            count = 0
+            for root, _, filenames in os.walk(material_dir):
+                for fn in filenames:
+                    path = os.path.join(root, fn)
+                    ext = os.path.splitext(path)[1].lower()
+                    if ext not in supported:
+                        continue
+                    try:
+                        print(f"Ingesting {fn} ...")
+                        await memory.ingest_document(
+                            path,
+                            owner_scope="agent",
+                            user_id=user_id,
+                            agent_id="agent-default",
+                            project_id=None,
+                        )
+                        count += 1
+                    except Exception:
+                        logger.exception("Failed to ingest %s", path)
+                        continue
+            return count
 
-        if not user:
-            continue
+        if auto_load_material:
+            print(f"Loading documents from {material_dir} ...")
+            n = await _load_material()
+            print(f"Ingested {n} documents from /material.")
 
-        if user.lower().startswith("/quit"):
-            break
+        while True:
+            try:
+                user = input("You> ").strip()
+            except (KeyboardInterrupt, EOFError):
+                print("\nExiting.")
+                break
 
-        if user.lower().startswith("/setprompt"):
-            print("Enter new system prompt (empty to cancel):")
-            p = input().strip()
-            if p:
-                system_prompt = p
-                print("System prompt updated.")
-            continue
-
-        if user.lower().startswith("/load "):
-            parts = user.split(maxsplit=2)
-            if len(parts) < 3:
-                print("Usage: /load <folder> <topic>")
+            if not user:
                 continue
-            folder, topic = parts[1], parts[2]
-            resolved = folder
-            if not os.path.isabs(resolved) and not os.path.exists(resolved):
-                alt = os.path.join(config_dir, resolved)
-                if os.path.exists(alt):
-                    resolved = alt
-            print(f"Loading documents from {resolved} as topic '{topic}'...")
-            n = await load_documents_folder(resolved, topic, memory, user_id)
-            print(f"Ingested {n} documents into semantic memory.")
-            continue
 
-        # Normal chat: retrieve context only; agent behavior is developer-owned
-        try:
-            user_message = user
-            pack = await memory.build_context_pack(user_id=user_id, query_text=user_message)
-            from uma.core.utils.context_pack_builder import ContextPackBuilder
+            if user.lower().startswith("/q"):
+                break
 
-            snippet = ContextPackBuilder.render_snippet(pack)
-            if not snippet:
-                context_messages = [{"role": "user", "content": user_message}]
-                reply = (
-                    "I don't have relevant memory stored for that question. "
-                    "Please load documents or provide more context."
+            if user.lower().startswith("/load"):
+                print(f"Loading documents from {material_dir} ...")
+                n = await _load_material()
+                print(f"Ingested {n} documents from /material.")
+                continue
+
+            # Normal chat: retrieve context only; agent behavior is developer-owned
+            try:
+                user_message = user
+                # One-liner to get a rendered snippet
+                snippet = await memory.build_context_snippet_for_query(
+                    user_id=user_id, query_text=user_message
                 )
-            else:
-                user_content = f"{user_message}\n\nRelevant memory:\n{snippet}"
-                context_messages = [{"role": "user", "content": user_content}]
+                if not snippet:
+                    context_messages = [{"role": "user", "content": user_message}]
+                    reply = (
+                        "I don't have relevant memory stored for that question. "
+                        "Please load documents or provide more context."
+                    )
+                else:
+                    user_content = f"{user_message}\n\nRelevant memory:\n{snippet}"
+                    context_messages = [{"role": "user", "content": user_content}]
+
+                print("\n\n**** context:", context_messages)
+                print("***** context/\n\n")
+                
+
                 reply = await agent_generate(
                     messages=[{"role": "system", "content": system_prompt}] + context_messages,
-                    llm=memory.llm,
+                    llm=getattr(memory, "agent_llm", None) or memory.llm,
+                )
+                print("Assistant-1>", reply)
+                if not isinstance(reply, str) or not reply.strip():
+                    reply = "I don't have enough information to answer that yet."
+
+                print("Assistant>", reply)
+                # Update UMA memory with the turn
+                await memory.process_turn(
+                    user_id=user_id, user_msg=user_message, assistant_reply=reply
                 )
 
-            print("***** context:", context_messages)
-            print("***** context/")
-            print("Assistant>", reply)
-
-            # Update UMA memory with the turn
-            await memory.process_turn(user_id=user_id, user_msg=user_message, assistant_reply=reply)
-
-        except Exception as exc:
-            logging.exception("Chat turn failed: %s", exc)
+            except Exception as exc:
+                logging.exception("Chat turn failed: %s", exc)
+    finally:
+        # Ensure graph driver (and other resources) are closed to avoid driver warnings.
+        try:
+            memory.shutdown()
+        except Exception:
+            logger.exception("Failed to shut down UMA memory.")
 
 
 def main():
@@ -149,9 +185,24 @@ def main():
             shutil.rmtree(abs_root)
         os.makedirs(abs_root, exist_ok=True)
         print(f"Cleared UMA storage at {abs_root}")
+        asyncio.run(
+            interactive_chat(
+                config_path=args.config,
+                user_id=args.user,
+                system_prompt=args.system_prompt,
+                auto_load_material=True,
+            )
+        )
         return
 
-    asyncio.run(interactive_chat(config_path=args.config, user_id=args.user, system_prompt=args.system_prompt))
+    asyncio.run(
+        interactive_chat(
+            config_path=args.config,
+            user_id=args.user,
+            system_prompt=args.system_prompt,
+            auto_load_material=False,
+        )
+    )
 
 
 if __name__ == "__main__":

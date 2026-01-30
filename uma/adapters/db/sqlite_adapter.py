@@ -144,6 +144,12 @@ class SQLiteAdapter(DBAdapter):
             # If pragmas fail, log but continue — pragmas are optimizations
             logger.exception("SQLiteAdapter: failed to apply PRAGMA settings")
 
+          if logger.isEnabledFor(logging.DEBUG):
+            def _trace(stmt: str) -> None:
+              logger.debug("SQLiteAdapter: sql db=%s stmt=%s", self.db_path, stmt)
+
+            conn.set_trace_callback(_trace)
+
           return conn  # type: ignore[return-value]
         except Exception:
           logger.exception(

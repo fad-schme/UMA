@@ -23,9 +23,12 @@ The controller may:
 """
 
 import json
+import logging
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
+
+logger = logging.getLogger(__name__)
 
 
 MAX_FACT_IDS = 50
@@ -264,4 +267,5 @@ class ControllerDecision(BaseModel):
             if start != -1 and end != -1 and end > start:
                 parsed = json.loads(cleaned[start : end + 1])
                 return cls.model_validate(parsed)
+            logger.exception("ControllerDecision.from_json failed to parse decision.")
             raise

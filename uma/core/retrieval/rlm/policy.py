@@ -49,7 +49,12 @@ def assess_coverage(
     novelty_window: int = 2,
     min_recent_novelty: int = 1,
 ) -> CoverageReport:
-
+    logger.debug(
+        "assess_coverage: facts=%d episodes=%d graph=%d",
+        len(facts),
+        len(episodes),
+        len(graph),
+    )
     semantic_total = len(facts)
     semantic_high_salience = sum(
         1 for f in facts if _fact_salience(f) >= salience_threshold
@@ -112,21 +117,32 @@ def compute_novelty_signals(
     return last, total, total < min_recent_sum
 
 
-def should_stop(
-    *,
-    coverage: CoverageReport,
-    hard_budget_hit: bool,
-    prefer_clusters: bool,
-) -> Tuple[bool, str]:
-    if hard_budget_hit:
-        return True, "budget"
-    if coverage.enough:
-        return True, "enough"
-    if prefer_clusters and coverage.needs_clusters:
-        return False, "needs_clusters"
+def compute_confidence(coverage: CoverageReport) -> Dict[str, float]:
+    """
+    Compute a simple confidence score from coverage signals.
+    """
+    score = 0.0
+    if coverage.semantic_enough:
+        score += 0.4
+    if coverage.cluster_summaries > 0 or coverage.episode_summaries > 0:
+        score += 0.2
+    if coverage.graph_total > 0:
+        score += 0.1
+    if coverage.novelty_recent_sum > 0:
+        score += 0.2
+    if coverage.has_contradictions:
+        score -= 0.2
     if coverage.diminishing_returns:
-        return True, "diminishing_returns"
-    return False, "continue"
+        score -= 0.1
+    score = max(0.0, min(1.0, score))
+    return {
+        "score": score,
+        "semantic_enough": 1.0 if coverage.semantic_enough else 0.0,
+        "clusters_present": 1.0 if coverage.cluster_summaries > 0 else 0.0,
+        "graph_present": 1.0 if coverage.graph_total > 0 else 0.0,
+        "novelty_recent": float(coverage.novelty_recent_sum),
+        "contradictions": 1.0 if coverage.has_contradictions else 0.0,
+    }
 
 
 # --- helpers (unchanged logic) ---

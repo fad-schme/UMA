@@ -4,13 +4,15 @@ from uma.core.retrieval.rlm.environment import UMAMemoryEnvironment
 
 
 class DummyFact:
-    def __init__(self, fid, subject, predicate, obj):
+    def __init__(self, fid, subject, predicate, obj, owner_type="user", owner_id="user:1"):
         self.id = fid
         self.subject = subject
         self.predicate = predicate
         self.object = obj
         self.confidence = 0.8
         self.meta = {"salience": 0.6}
+        self.owner_type = owner_type
+        self.owner_id = owner_id
 
 
 class DummyEpisode:
@@ -22,11 +24,21 @@ class DummyEpisode:
 
 
 class DummySemanticStore:
-    async def search(self, query_embedding, subject=None, k=10):
-        return [DummyFact("f1", subject or "user:1", "likes", "tea")]
+    def __init__(self):
+        self.calls = []
+
+    async def search(self, query_embedding, subject=None, owner_type=None, owner_id=None, k=10, offset=None):
+        self.calls.append((owner_type, owner_id))
+        label = owner_type or "user"
+        return [DummyFact(f"f_{label}", subject or "user:1", "likes", label, owner_type=owner_type or "user", owner_id=owner_id or "user:1")]
 
     async def fetch_facts_by_ids(self, ids):
         return [DummyFact(fid, "user:1", "likes", "tea") for fid in ids]
+
+    async def search_text(self, query, subject=None, limit=5, owner_type=None, owner_id=None):
+        self.calls.append((owner_type, owner_id))
+        label = owner_type or "user"
+        return [DummyFact(f"f_text_{label}", subject or "user:1", "document", label, owner_type=owner_type or "user", owner_id=owner_id or "user:1")]
 
 
 class DummyEpisodicStore:
@@ -97,6 +109,8 @@ class DummyMemory:
         self.episodic_core = DummyEpisodicCore(self.episodic_store)
         self.graph_core = DummyGraphCore()
         self.embedder = DummyEmbedder()
+        self.agent_id = "agent-1"
+        self.project_id = "proj-1"
 
 
 class DummyEmbedder:
@@ -105,10 +119,18 @@ class DummyEmbedder:
 
 
 def test_environment_semantic_and_episodic_search():
-    env = UMAMemoryEnvironment(DummyMemory())
+    memory = DummyMemory()
+    env = UMAMemoryEnvironment(memory)
 
     facts = asyncio_run(env.search_semantic("u1", [0.1, 0.2], k=1, filters={"subject": "user:1"}))
     assert facts and facts[0]["predicate"] == "likes"
+    owner_types = {f.get("owner_type") for f in facts}
+    assert owner_types == {"user", "agent", "project"}
+    assert set(memory.semantic_store.calls) == {
+        ("user", "user:u1"),
+        ("agent", "agent-1"),
+        ("project", "user:u1:proj-1"),
+    }
 
     start = datetime.utcnow() - timedelta(days=1)
     eps = asyncio_run(env.search_episodic("u1", [0.1, 0.2], k=10, time_range={"start": start}))

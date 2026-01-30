@@ -12,7 +12,7 @@ UMA-RLM only retrieves context from its stores; the developer owns all agent beh
 - Predicate-scoped graph navigation: expand memory through semantic edges to keep recall precise and controllable.
 - Episodic clusters as chapters: precomputed cluster summaries give quick orientation before diving into raw episodes.
 - Salience-aware facts: semantic memory acts as a truth layer with conflict resolution and confidence scores.
-- Pluggable backends: SQLite/Postgres, FAISS/Pinecone/Weaviate, Neo4j/Memgraph, OpenAI/Ollama.
+- Pluggable backends: SQLite/Postgres (via extensions), FAISS/Pinecone/Weaviate (via extensions), Neo4j/Memgraph (via extensions), OpenAI/Ollama (via extensions).
 - SDK-first: UMA manages memory only; your agent owns reasoning, tools, and final responses.
 
 ### Logical Separation of Agent and User Memories
@@ -108,6 +108,15 @@ await memory.process_turn(
 )
 ```
 
+### Context pack vs snippet (important)
+`build_context_pack()` returns a **structured data product** (facts, episodes, chunks, graph).
+`build_context_snippet(pack)` is a **presentation layer** that formats that data
+into a string. Keeping them separate lets developers:
+- use `build_context_snippet_for_query(user_id, query_text)` as a one‑liner when they only need a rendered snippet
+- feed structured context to their own ranking/routing logic
+- render different prompt styles
+- log/debug retrieval results without string parsing
+
 
 
 ### Observability (Telemetry + Timing)
@@ -176,15 +185,21 @@ UMA logs to both stdout/stderr and a file by default. Configure with:
 - `UMA_LOG_TO_FILE` (set to `0` to disable file logging)
 
 ### Custom LLM / Embedding Providers
-You can load any custom class or callable via config. Use an import path
-(`module:attr`) and pass provider-specific options under `config`.
+You can configure **Agent‑LLM** and **UMA‑LLM** separately. If you only
+set a single `llm` section, UMA will use it for both (legacy mode).
 
 ```yaml
-llm:
-  provider: "my_pkg.llm:MyLLM"
-  model: "my-model"
-  config:
-    timeout: 20.0
+llms:
+  agent:
+    provider: "my_pkg.llm:MyLLM"
+    model: "my-model"
+    config:
+      timeout: 20.0
+  uma:
+    provider: "my_pkg.llm:MySmallLLM"
+    model: "my-small-model"
+    config:
+      timeout: 20.0
 
 embedding:
   provider: "my_pkg.embed:embed"
@@ -192,6 +207,35 @@ embedding:
   config:
     preflight: true
 ```
+
+### Extensions (custom adapters)
+UMA can load custom adapters from `extensions/` located at your project root
+(alongside `config/`). This is ideal for vector/db plugins you don't want to ship
+inside the UMA package.
+
+Folder layout:
+```
+project_root/
+  config/uma.yaml
+  extensions/
+    vector/
+      my_qdrant.py
+    db/
+      my_sql.py
+```
+
+Config example (vector):
+```yaml
+storage:
+  vector_backend: "vector.my_qdrant:make_index"
+  vector_config:
+    url: "http://localhost:6333"
+    collection: "uma_vectors"
+```
+
+Notes:
+- `vector_backend` accepts a plugin spec `module:callable`.
+- The callable must accept `dim` as the first argument and return a `VectorIndex`.
 
 #### Consolidation feature usage
 Consolidation is an optional feature that runs an asynchronous "sleep cycle" for a user. It:

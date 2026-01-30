@@ -46,6 +46,8 @@ def parse_plugin_spec(spec: Union[str, Dict[str, Any]]):
     raise ValueError("unsupported plugin spec type")
 
 
+
+
 # example problematic usage (do not use):
 # fn = types.FunctionType(source_string, globals())
 # Replace any direct FunctionType-from-string usage with:
@@ -71,6 +73,27 @@ class LLMConfig:
             ollama_model=d.get("ollama_model"),
             config=d.get("config") or {},
         )
+
+
+@dataclass(frozen=True)
+class LLMsConfig:
+    agent: LLMConfig
+    uma: LLMConfig
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "LLMsConfig":
+        # If explicit llms section exists, use it.
+        if "llms" in d and isinstance(d["llms"], dict):
+            llms = d["llms"]
+            return cls(
+                agent=LLMConfig.from_dict(llms.get("agent", {})),
+                uma=LLMConfig.from_dict(llms.get("uma", {})),
+            )
+        # Fallback to legacy single llm section for UMA.
+        if "llm" in d and isinstance(d["llm"], dict):
+            uma_cfg = LLMConfig.from_dict(d["llm"])
+            return cls(agent=uma_cfg, uma=uma_cfg)
+        raise ValueError("Missing LLM configuration; expected 'llm' or 'llms' section")
 
 
 @dataclass(frozen=True)
@@ -172,12 +195,14 @@ class RetrievalConfig:
     max_skills: int
     max_graph_items: int
     context: "RetrievalContextConfig"
+    strict: bool = True
 
     # NEW
     rlm: Optional[RLMConfig] = None
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "RetrievalConfig":
+        strict_mode = bool(d.get("strict", True))
         rlm_cfg = d.get("rlm")
         rlm_obj: Optional[RLMConfig] = None
         if isinstance(rlm_cfg, dict):
@@ -217,6 +242,7 @@ class RetrievalConfig:
             max_skills=int(d["max_skills"]),
             max_graph_items=int(d["max_graph_items"]),
             context=RetrievalContextConfig.from_dict(d.get("context") or {}),
+            strict=strict_mode,
             rlm=rlm_obj,
         )
 
@@ -253,9 +279,13 @@ class RetrievalContextConfig:
     max_working_messages: int = 4
     max_episodic: int = 3
     max_semantic: int = 5
+    max_chunks: int = 5
     max_procedural: int = 3
     max_graph: int = 3
-    prefer_semantic_only: bool = True
+    include_working_memory: bool = True
+    include_episodic: bool = True
+    include_graph: bool = True
+    include_procedural: bool = True
     allowed_topics: Optional[List[str]] = None
 
     @classmethod
@@ -264,9 +294,13 @@ class RetrievalContextConfig:
             max_working_messages=int(d.get("max_working_messages", 4)),
             max_episodic=int(d.get("max_episodic", 3)),
             max_semantic=int(d.get("max_semantic", 5)),
+            max_chunks=int(d.get("max_chunks", 5)),
             max_procedural=int(d.get("max_procedural", 3)),
             max_graph=int(d.get("max_graph", 3)),
-            prefer_semantic_only=bool(d.get("prefer_semantic_only", True)),
+            include_working_memory=bool(d.get("include_working_memory", True)),
+            include_episodic=bool(d.get("include_episodic", True)),
+            include_graph=bool(d.get("include_graph", True)),
+            include_procedural=bool(d.get("include_procedural", True)),
             allowed_topics=d.get("allowed_topics"),
         )
 

@@ -20,7 +20,7 @@ Coding agent instructions
     * neo4j bolt driver (Memgraph supports Bolt protocol)
 
 - Replace the NotImplementedError blocks with actual client logic.
-- Ensure run_query() NEVER raises — return [] on failure with logging.
+- Fail fast on query errors (exceptions propagate).
 - Ensure close() safely frees the client/driver resources.
 """
 
@@ -32,8 +32,8 @@ from typing import Any, Dict, List, Optional
 from neo4j import GraphDatabase, basic_auth, Driver, Session
 from neo4j.graph import Node, Relationship, Path
 
-from .base import GraphAdapter
-from ...core.utils.retry import retry_sync
+from uma.adapters.graph.base import GraphAdapter
+from uma.core.utils.retry import retry_sync
 
 logger = logging.getLogger(__name__)
 
@@ -138,28 +138,19 @@ class MemgraphAdapter(GraphAdapter):
         params: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         if not cypher:
-            logger.warning("MemgraphAdapter.run_query called with empty Cypher string.")
-            return []
+            raise ValueError("MemgraphAdapter.run_query called with empty Cypher string.")
 
         def _call() -> List[Dict[str, Any]]:
             with self._driver.session() as session:  # type: Session
                 result = session.run(cypher, params or {})
                 return [self._normalize_record(dict(record)) for record in result]
 
-        try:
-            records = retry_sync(_call)
-            logger.debug(
-                "MemgraphAdapter.run_query: executed Cypher with %d row(s) returned.",
-                len(records),
-            )
-            return records
-        except Exception:
-            logger.exception(
-                "MemgraphAdapter.run_query: query failed. Cypher=%r, params=%r",
-                cypher,
-                params,
-            )
-            return []
+        records = retry_sync(_call)
+        logger.debug(
+            "MemgraphAdapter.run_query: executed Cypher with %d row(s) returned.",
+            len(records),
+        )
+        return records
 
     def close(self) -> None:
         try:

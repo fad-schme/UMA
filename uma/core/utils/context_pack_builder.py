@@ -21,10 +21,11 @@ logger = logging.getLogger(__name__)
 
 try:
     from .config_types import RetrievalContextConfig
-    from .text import extract_query_terms
+    from .user_query_helper import extract_query_terms, expand_query_terms
 except Exception:  # pragma: no cover
     RetrievalContextConfig = None
     extract_query_terms = None
+    expand_query_terms = None
 
 class ContextPackBuilder:
     """
@@ -64,8 +65,11 @@ class ContextPackBuilder:
             "working_memory": [],
             "episodic": [],
             "semantic": [],
+            "chunks": [],
             "procedural": [],
             "graph": [],
+            "trace": [],
+            "confidence": {},
         }
 
         # -------------------------------
@@ -132,6 +136,24 @@ class ContextPackBuilder:
                 logger.exception("Failed to pack semantic fact.")
 
         # -------------------------------
+        # Document Chunks
+        # -------------------------------
+        for chunk in ctx.get("chunks", []):
+            try:
+                pack["chunks"].append(
+                    {
+                        "id": _get_attr_or_key(chunk, "id"),
+                        "doc_id": _get_attr_or_key(chunk, "doc_id"),
+                        "text": _get_attr_or_key(chunk, "text", ""),
+                        "page_range": _get_attr_or_key(chunk, "page_range"),
+                        "position": _get_attr_or_key(chunk, "position", 0),
+                        "meta": _get_attr_or_key(chunk, "meta", {}),
+                    }
+                )
+            except Exception:
+                logger.exception("Failed to pack chunk.")
+
+        # -------------------------------
         # Procedural Skills
         # -------------------------------
         for skill in ctx.get("procedural", []):
@@ -159,6 +181,20 @@ class ContextPackBuilder:
             except Exception:
                 logger.exception("Failed to pack graph node.")
 
+        # Best-effort trace/confidence if present on ctx
+        try:
+            trace = ctx.get("trace") if isinstance(ctx, dict) else None
+            if isinstance(trace, list):
+                pack["trace"] = trace
+        except Exception:
+            logger.exception("Failed to pack retrieval trace.")
+        try:
+            conf = ctx.get("confidence") if isinstance(ctx, dict) else None
+            if isinstance(conf, dict):
+                pack["confidence"] = conf
+        except Exception:
+            logger.exception("Failed to pack confidence metadata.")
+
         logger.info("ContextPackBuilder: Built RAG-ready context pack.")
         return pack
 
@@ -173,25 +209,21 @@ class ContextPackBuilder:
         lines: List[str] = []
         cfg = context_cfg or RetrievalContextConfig()
         query_text = (pack.get("query") or "").lower()
-        semantic_present = bool(pack.get("semantic"))
-        prefer_semantic = bool(cfg.prefer_semantic_only)
-        semantic_only = (
-            prefer_semantic
-            and semantic_present
-            and not any(k in query_text for k in ("remember", "recall", "previous", "earlier", "last time"))
-        )
+        # Note: WM/episodic/chunks/procedural/graph are always allowed per design.
 
         wm = pack.get("working_memory", [])
-        if wm and not semantic_only:
-            lines.append("Working memory:")
+        lines.append("Working memory:")
+        if wm:
             for msg in wm[-cfg.max_working_messages:]:
                 role = msg.get("role")
                 text = (msg.get("text") or "").strip()
                 if text:
                     lines.append(f"- {role}: {text}")
+        else:
+            lines.append("- (empty)")
 
         episodic = pack.get("episodic", [])
-        if episodic and not semantic_only:
+        if episodic:
             lines.append("\nEpisodic:")
             for ep in episodic[: cfg.max_episodic]:
                 summary = (ep.get("summary") or "").strip()
@@ -201,15 +233,18 @@ class ContextPackBuilder:
         semantic = pack.get("semantic", [])
         allowed_topics = cfg.allowed_topics or []
         if allowed_topics:
-            semantic = [
+            filtered = [
                 fact
                 for fact in semantic
-                if (fact.get("meta") or {}).get("topic") in allowed_topics
+                if any(
+                    t in allowed_topics
+                    for t in _semantic_topics(fact)
+                )
             ]
+            if filtered:
+                semantic = filtered
         semantic = _filter_semantic_by_query(semantic, query_text)
         if semantic:
-            if any((fact.get("predicate") == "document_snippet") for fact in semantic):
-                semantic = [fact for fact in semantic if fact.get("predicate") == "document_snippet"]
             deduped = []
             seen = set()
             for fact in semantic:
@@ -231,13 +266,30 @@ class ContextPackBuilder:
                 obj = fact.get("object")
                 if isinstance(obj, dict):
                     title = obj.get("title") or obj.get("text") or str(obj)
-                    snippet = (obj.get("text") or "").strip()
-                    snippet = snippet[:400] if snippet else ""
+                    raw_text = (obj.get("text") or "").strip()
+                    snippet = _extract_relevant_excerpt(raw_text, query_text, max_chars=320)
                     lines.append(f"- {subject} {predicate} {title}")
                     if snippet:
                         lines.append(f"  excerpt: {snippet}")
                 else:
                     lines.append(f"- {subject} {predicate} {obj}")
+
+        # -------------------------------
+        # Chunks (render snippets)
+        # -------------------------------
+        chunks = pack.get("chunks", [])
+        if chunks:
+            lines.append("\nDocument chunks:")
+            seen_chunk_text = set()
+            for ch in chunks[: cfg.max_chunks]:
+                text = (ch.get("text") or "").strip()
+                key = " ".join(text.split()).lower()
+                if not text or key in seen_chunk_text:
+                    continue
+                seen_chunk_text.add(key)
+                snippet = _extract_relevant_excerpt(text, query_text, max_chars=320)
+                if snippet:
+                    lines.append(f"- {snippet}")
 
         procedural = pack.get("procedural", [])
         if procedural:
@@ -262,7 +314,9 @@ class ContextPackBuilder:
 def _filter_semantic_by_query(semantic: List[Dict[str, Any]], query_text: str) -> List[Dict[str, Any]]:
     if not semantic or not query_text:
         return semantic
-    if extract_query_terms:
+    if expand_query_terms:
+        terms = expand_query_terms(query_text)
+    elif extract_query_terms:
         terms = extract_query_terms(query_text)
     else:
         terms = []
@@ -288,8 +342,62 @@ def _filter_semantic_by_query(semantic: List[Dict[str, Any]], query_text: str) -
     return [fact for _, fact in scored]
 
 
+def _extract_relevant_excerpt(text: str, query_text: str, max_chars: int = 320) -> str:
+    if not text:
+        return ""
+    cleaned = " ".join(text.split())
+    if not query_text or not extract_query_terms:
+        return cleaned[:max_chars]
+    if expand_query_terms:
+        terms = expand_query_terms(query_text)
+    else:
+        terms = extract_query_terms(query_text)
+    if not terms:
+        return cleaned[:max_chars]
+
+    lowered = cleaned.lower()
+    # Find first occurrence of any term
+    positions = [lowered.find(t.lower()) for t in terms if t]
+    positions = [p for p in positions if p >= 0]
+    if not positions:
+        return cleaned[:max_chars]
+
+    idx = min(positions)
+    # Try sentence window around match
+    before = lowered.rfind(". ", 0, idx)
+    after = lowered.find(". ", idx)
+    if before == -1:
+        before = 0
+    else:
+        before = before + 2
+    if after == -1:
+        after = len(cleaned)
+    else:
+        after = after + 1
+    snippet = cleaned[before:after].strip()
+    if len(snippet) <= max_chars:
+        return snippet
+    # Fallback to centered window
+    start = max(0, idx - max_chars // 3)
+    end = min(len(cleaned), start + max_chars)
+    return cleaned[start:end].strip()
+
+
 def _get_attr_or_key(obj: Any, key: str, default: Any = None) -> Any:
     """Normalize object/dict access for RLM snippets and domain models."""
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
+
+
+def _semantic_topics(fact: Dict[str, Any]) -> List[str]:
+    meta = fact.get("meta") or {}
+    if not isinstance(meta, dict):
+        return []
+    topics = meta.get("topics")
+    if isinstance(topics, list):
+        return [str(t) for t in topics if t]
+    topic = meta.get("topic")
+    if topic:
+        return [str(topic)]
+    return []

@@ -40,9 +40,9 @@ from typing import List, Optional, Any
 from .base_vector_sql_store import BaseVectorSQLStore
 
 try:
-    from ..core.utils.text import extract_query_terms
+    from ..core.utils.user_query_helper import expand_query_terms
 except Exception:  # pragma: no cover
-    extract_query_terms = None
+    expand_query_terms = None
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from ..adapters.vector.faiss_adapter import FaissIndex
@@ -90,9 +90,9 @@ class SemanticSQLStore(BaseVectorSQLStore):
         self._init_db()
 
         logger.info(
-            "SemanticSQLStore initialized with resolver=%s, faiss_dim=%d",
+            "SemanticSQLStore initialized with resolver=%s, vector_dim=%d",
             type(self.fact_resolver).__name__,
-            getattr(vector_index.index, "dimension", -1),
+            getattr(vector_index, "dim", getattr(vector_index, "dimension", -1)),
         )
 
     # ------------------------------------------------------------------ #
@@ -389,8 +389,8 @@ class SemanticSQLStore(BaseVectorSQLStore):
         """
         if not query or not isinstance(query, str):
             return []
-        if extract_query_terms:
-            terms = extract_query_terms(query)
+        if expand_query_terms:
+            terms = expand_query_terms(query)
         else:
             terms = []
         if not terms:

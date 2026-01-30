@@ -20,9 +20,9 @@ import os
 from typing import Iterable, List
 
 from openai import AsyncOpenAI
-from ...adapters.llm.base import EmbeddingInterface
-from ...core.utils.config_types import EmbeddingConfig
-from .retry_utils import retryable
+from uma.adapters.llm.base import EmbeddingInterface
+from uma.core.utils.config_types import EmbeddingConfig
+from uma.adapters.llm.retry_utils import retryable
 
 logger = logging.getLogger(__name__)
 

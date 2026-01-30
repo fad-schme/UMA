@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -55,12 +55,13 @@ class MemorySelector:
             self.max_graph_items,
         )
 
-    def select(self, raw: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
+    def select(self, raw: Dict[str, List[Any]], *, policy: Optional[Any] = None) -> Dict[str, List[Any]]:
         """Select/rank/truncate each memory type."""
         return {
             "working_memory": raw.get("working_memory", []) or [],
             "episodes": self._select_episodes(raw.get("episodes", []) or []),
-            "facts": self._select_facts(raw.get("facts", []) or []),
+            "facts": self._select_facts(raw.get("facts", []) or [], policy=policy),
+            "chunks": self._select_chunks(raw.get("chunks", []) or [], policy=policy),
             "skills": self._select_skills(raw.get("skills", []) or []),
             "graph": self._select_graph(raw.get("graph", []) or []),
         }
@@ -88,7 +89,7 @@ class MemorySelector:
 
     # -------------------- Facts --------------------
 
-    def _select_facts(self, items: List[Any]) -> List[Any]:
+    def _select_facts(self, items: List[Any], *, policy: Optional[Any] = None) -> List[Any]:
         items = self._dedupe(items)
 
         def score(f: Any) -> float:
@@ -104,7 +105,28 @@ class MemorySelector:
             except Exception:
                 conf = 0.5
 
-            return (sal + conf) / 2.0
+            base = (sal + conf) / 2.0
+            if policy is None:
+                return base
+            return base * policy.scope_weight(_get_owner_scope(f))
+
+        ranked = sorted(items, key=score, reverse=True)
+        return ranked[: self.max_facts]
+
+    # -------------------- Chunks --------------------
+
+    def _select_chunks(self, items: List[Any], *, policy: Optional[Any] = None) -> List[Any]:
+        items = self._dedupe(items)
+
+        def score(ch: Any) -> float:
+            # Prefer earlier chunks to keep document context coherent.
+            try:
+                base = 1.0 / max(1, int(getattr(ch, "position", 1)))
+            except Exception:
+                base = 0.0
+            if policy is None:
+                return base
+            return base * policy.scope_weight(_get_owner_scope(ch))
 
         ranked = sorted(items, key=score, reverse=True)
         return ranked[: self.max_facts]
@@ -162,3 +184,9 @@ class MemorySelector:
             seen.add(key)
             out.append(it)
         return out
+
+
+def _get_owner_scope(item: Any) -> str:
+    if isinstance(item, dict):
+        return (item.get("owner_type") or item.get("owner_scope") or "").lower()
+    return (getattr(item, "owner_type", None) or getattr(item, "owner_scope", None) or "").lower()

@@ -41,7 +41,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from ..db.base import DBAdapter, DBConnection
+from uma.adapters.db.base import DBAdapter, DBConnection
 
 logger = logging.getLogger(__name__)
 

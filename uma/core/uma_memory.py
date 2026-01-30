@@ -97,23 +97,24 @@ import os
 from typing import Any, Dict, Optional
 
 try:
-    from .utils.text import extract_query_terms
+    from .utils.user_query_helper import extract_query_terms
 except Exception:  # pragma: no cover
     extract_query_terms = None
 
 from .memory_config import UMAConfig     # YAML loader + validation (dict-like)
 from .utils.config_types import (
     LLMConfig,
+    LLMsConfig,
     EmbeddingConfig,
     WorkingMemorySettings,
     RetrievalConfig,
     FeaturesConfig,
     ConsolidationConfig,
-    parse_plugin_spec,
 )
 
 from .utils.hooks import UMAHooks
 from .utils.identity import ensure_user_subject
+from .utils.logging_setup import logger as uma_logger  # noqa: F401 (init side‑effect)
 from .working_memory.core import WorkingMemoryCore
 from .episodic.core import EpisodicCore
 from .episodic.indexer import EpisodeIndexer
@@ -121,20 +122,14 @@ from .episodic.policies import EpisodicRetentionPolicy
 from .semantic.core import SemanticCore
 from .retrieval.service import RetrievalService
 from .graph import TemporalGraphCore
-from ..adapters.llm.base import EmbeddingInterface, LLMInterface
-from ..adapters.llm.callable_adapter import CallableEmbedderAdapter, CallableLLMAdapter
-from ..adapters.llm.provider_registry import (
-    get_embedder_factory,
-    get_llm_factory,
-)
+from .initializers.providers import initialize_embedder, initialize_llm
 
 # Stores
 from ..stores.episodic_sql import EpisodicSQLStore
 from ..stores.semantic_sql import SemanticSQLStore
 from ..stores.procedural_sql import ProceduralSQLStore
 
-# Graph adapters
-from ..adapters.graph.neo4j_adapter import Neo4jAdapter
+from .utils.config_types import parse_plugin_spec
 
 from .initializers.stores import initialize_stores
 
@@ -211,12 +206,22 @@ class UMAMemory:
         self.rlm_controller = None
 
         # Typed config objects for subsystems that benefit from strong typing
-        self.llm_cfg = LLMConfig.from_dict(config.llm)
+        # UMA LLM config (internal). Agent LLM is optional metadata.
+        llms_cfg = LLMsConfig.from_dict(config) if isinstance(config, dict) else None
+        self.llm_cfg = llms_cfg.uma if llms_cfg else LLMConfig.from_dict(config.llm)
+        self.agent_llm_cfg = llms_cfg.agent if llms_cfg else self.llm_cfg
         self.embedding_cfg = EmbeddingConfig.from_dict(config.embedding)
         self.working_memory_cfg = WorkingMemorySettings.from_dict(config.working_memory)
         self.retrieval_cfg = RetrievalConfig.from_dict(config.retrieval)
         self.features_cfg = FeaturesConfig.from_dict(config.features)
         self.consolidation_cfg = ConsolidationConfig.from_dict(config.consolidation)
+        self.agent_id = None
+        self.project_id = None
+        semantic_section = config.get("semantic", {}) if isinstance(config, dict) else {}
+        semantic_salience = semantic_section.get("salience_threshold")
+        if semantic_salience is None:
+            semantic_salience = self.consolidation_cfg.prune_min_fact_salience
+        self.semantic_salience_threshold = float(semantic_salience)
 
         # Hooks + Feature attachment registry
         self.hooks = UMAHooks()
@@ -228,11 +233,14 @@ class UMAMemory:
 
         # Core runtime components (initialized later)
         self.llm: Any = None
+        self.agent_llm: Any = None
         self.embedder: Any = None
 
         self.episodic_store: Optional[EpisodicSQLStore] = None
         self.semantic_store: Optional[SemanticSQLStore] = None
         self.procedural_store: Optional[ProceduralSQLStore] = None
+        self.chunk_store: Optional[Any] = None
+        self.document_store: Optional[Any] = None
 
         self.working_memory: Optional[WorkingMemoryCore] = None
         self.semantic_core: Optional[SemanticCore] = None
@@ -258,22 +266,25 @@ class UMAMemory:
 
         logger.info("Initializing UMA Memory Runtime...")
 
-        # 1. Load LLM + embedder
-        self._init_llm_and_embedder()
+        # 1. Load LLM
+        initialize_llm(self)
 
-        # 2. Load stores (episodic + semantic + procedural)
+        # 2. Load embedder
+        initialize_embedder(self)
+
+        # 3. Load stores (episodic + semantic + procedural)
         self._init_stores()
 
-        # 3. Load core subsystems (WM, EpisodicCore, SemanticCore)
+        # 4. Load core subsystems (WM, EpisodicCore, SemanticCore)
         self._init_core_subsystems()
 
-        # 4. Initialize graph backend (optional)
+        # 5. Initialize graph backend (optional)
         self._init_graph_core()
 
-        # 5. Register optional features
+        # 6. Register optional features
         self._init_optional_features()
 
-        # 6. Initialize pipeline for ingestion
+        # 7. Initialize pipeline for ingestion
         if getattr(self, "pipeline", None) is None:
             from .utils.pipeline import MemoryPipeline
 
@@ -281,7 +292,7 @@ class UMAMemory:
 
             
 
-        # 7. Wire RetrievalService EXACTLY once
+        # 8. Wire RetrievalService EXACTLY once
         if self.retrieval_service is None:
             try:
                 self.retrieval_service = RetrievalService(
@@ -295,7 +306,7 @@ class UMAMemory:
         else:
             logger.debug("RetrievalService already initialized — not overwriting.")
 
-        # 8. Wire RLM Controller (optional, retrieval-side only)
+        # 9. Wire RLM Controller (optional, retrieval-side only)
         rlm_cfg = self.retrieval_cfg.rlm
 
         if rlm_cfg is not None and rlm_cfg.enabled:
@@ -350,81 +361,6 @@ class UMAMemory:
     # LLM + Embedder Initialization (Typed Configs)
     # ----------------------------------------------------------------------
 
-    def _init_llm_and_embedder(self) -> None:
-        """
-        Initialize the LLM and embedding model based on typed dataclass configs:
-            - self.llm_cfg   (LLMConfig)
-            - self.embedding_cfg (EmbeddingConfig)
-
-        This method replaces the old dynamic config loader and guarantees that
-        UMAMemory always uses validated, structured configuration settings.
-        """
-
-        # ----------------------------- LLM -----------------------------
-        llm_factory = get_llm_factory(self.llm_cfg.provider)
-        if llm_factory:
-            self.llm = llm_factory(self.llm_cfg)
-            logger.info(
-                "Loaded %s LLM (model=%s)",
-                self.llm_cfg.provider,
-                getattr(self.llm, "model", "unknown"),
-            )
-
-        else:
-            llm_cls = parse_plugin_spec(self.llm_cfg.provider)
-            llm_kwargs = {**self.llm_cfg.config}
-            if self.llm_cfg.model and "model" not in llm_kwargs:
-                llm_kwargs["model"] = self.llm_cfg.model
-            if isinstance(llm_cls, LLMInterface):
-                self.llm = llm_cls
-            elif inspect.isclass(llm_cls):
-                self.llm = llm_cls(**llm_kwargs)
-            elif callable(llm_cls):
-                self.llm = CallableLLMAdapter(
-                    callable_fn=llm_cls,
-                    name=self.llm_cfg.provider,
-                    preflight=bool(llm_kwargs.pop("preflight", True)),
-                    default_kwargs=llm_kwargs,
-                )
-            else:
-                raise TypeError(f"Unsupported LLM provider type: {type(llm_cls)}")
-            logger.info("Loaded custom LLM adapter (%s)", self.llm_cfg.provider)
-
-        # --------------------------- EMBEDDER --------------------------
-        embed_factory = get_embedder_factory(self.embedding_cfg.provider)
-        if embed_factory:
-            self.embedder = embed_factory(self.embedding_cfg)
-            logger.info(
-                "Loaded %s embedder (model=%s, dimension=%s)",
-                self.embedding_cfg.provider,
-                getattr(self.embedder, "model", self.embedding_cfg.model),
-                getattr(self.embedder, "dimension", self.embedding_cfg.dimension),
-            )
-
-        else:
-            embed_cls = parse_plugin_spec(self.embedding_cfg.provider)
-            embed_kwargs = {**self.embedding_cfg.config}
-            if self.embedding_cfg.model and "model" not in embed_kwargs:
-                embed_kwargs["model"] = self.embedding_cfg.model
-            if "dimension" not in embed_kwargs:
-                embed_kwargs["dimension"] = self.embedding_cfg.dimension
-            if isinstance(embed_cls, EmbeddingInterface):
-                self.embedder = embed_cls
-            elif inspect.isclass(embed_cls):
-                self.embedder = embed_cls(**embed_kwargs)
-            elif callable(embed_cls):
-                self.embedder = CallableEmbedderAdapter(
-                    callable_fn=embed_cls,
-                    dimension=self.embedding_cfg.dimension,
-                    name=self.embedding_cfg.provider,
-                    preflight=bool(embed_kwargs.pop("preflight", True)),
-                    default_kwargs=embed_kwargs,
-                )
-            else:
-                raise TypeError(f"Unsupported embedder provider type: {type(embed_cls)}")
-            logger.info("Loaded custom embedder adapter (%s)", self.embedding_cfg.provider)
-
-        logger.info("LLM + Embedder initialization successful.")
 
     # ----------------------------------------------------------------------
     # Stores Initialization (uses unified storage config)
@@ -512,7 +448,7 @@ class UMAMemory:
 
         # ---------------------- Semantic Core ---------------------------
         try:
-            sal = self.consolidation_cfg.prune_min_fact_salience
+            sal = self.semantic_salience_threshold
             self.semantic_core = SemanticCore(
                 llm=self.llm,
                 embedder=self.embedder,
@@ -536,14 +472,13 @@ class UMAMemory:
         Initialize the graph subsystem using the unified storage config.
 
         Uses:
-            storage.graph_backend: "neo4j" | "memgraph" | "disabled"
-            graph: connection details for supported backends
+            storage.graph_backend: plugin spec "module:callable" | "disabled"
+            storage.graph_config: connection details for plugin adapter
 
         Rules:
         -------
         • If graph_backend="disabled" → skip cleanly.
-        • If neo4j → require uri, user, password.
-        • If memgraph → require uri; user/password optional.
+        • If plugin spec → load adapter factory and pass graph_config.
         • Never swallow connection failures silently.
         """
 
@@ -561,70 +496,43 @@ class UMAMemory:
         # --------------------------------------------------------------
         # 2) Load graph config block
         # --------------------------------------------------------------
-        if "graph" not in self.raw_config:
+        if "graph_config" not in storage_cfg:
             raise ValueError(
-                "Missing required 'graph' section in config when graph_backend "
-                f"is '{backend}'."
+                "Missing required 'storage.graph_config' section in config when "
+                f"graph_backend is '{backend}'."
             )
 
-        graph_cfg = self.raw_config.graph
+        graph_cfg = storage_cfg.get("graph_config") or {}
 
         # --------------------------------------------------------------
         # 3) Backend selection
         # --------------------------------------------------------------
-        if backend == "neo4j":
-            uri = graph_cfg.get("uri")
-            user = graph_cfg.get("user")
-            password = graph_cfg.get("password")
-            pool = graph_cfg.get("max_pool_size", 20)
-            database = graph_cfg.get("database")
+        if backend in {"neo4j", "memgraph"}:
+            raise ValueError(
+                "Graph backends are now loaded via extensions. "
+                "Set storage.graph_backend to a plugin spec 'module:callable'."
+            )
 
-            if not uri or not user or not password:
-                raise ValueError(
-                    "Graph backend 'neo4j' requires 'graph.uri', "
-                    "'graph.user', and 'graph.password'."
-                )
-
-            try:
-                adapter = Neo4jAdapter(
-                    uri=uri,
-                    user=user,
-                    password=password,
-                    max_pool_size=pool,
-                    database=database,
-                )
-            except Exception as exc:
-                logger.exception("Neo4jAdapter initialization failed.")
-                raise RuntimeError(
-                    "Failed to connect to Neo4j graph backend. "
-                    "Verify URI, credentials, and server availability."
-                ) from exc
-
-        elif backend == "memgraph":
-            from uma.adapters.graph.memgraph_adapter import MemgraphAdapter
-
-            uri = graph_cfg.get("uri")
-            pool = graph_cfg.get("max_pool_size", 20)
-
-            if not uri:
-                raise ValueError(
-                    "Graph backend 'memgraph' requires 'graph.uri' to be set."
-                )
-
-            try:
-                adapter = MemgraphAdapter(uri=uri, max_pool_size=pool)
-            except Exception as exc:
-                logger.exception("MemgraphAdapter initialization failed.")
-                raise RuntimeError(
-                    "Failed to connect to Memgraph backend. "
-                    "Verify URI and server availability."
-                ) from exc
-
-        else:
+        if ":" not in str(backend):
             raise ValueError(
                 f"Unsupported storage.graph_backend={backend!r}. "
-                "Expected: 'neo4j', 'memgraph', or 'disabled'."
+                "Expected: 'disabled' or plugin spec 'module:callable'."
             )
+
+        if not isinstance(graph_cfg, dict):
+            raise ValueError("'storage.graph_config' must be a mapping for plugin graph backends")
+
+        try:
+            adapter_factory = parse_plugin_spec(backend)
+            if not callable(adapter_factory):
+                raise TypeError("storage.graph_backend plugin must be a callable 'module:attr'")
+            adapter = adapter_factory(**graph_cfg)
+        except Exception as exc:
+            logger.exception("Graph adapter initialization failed.")
+            raise RuntimeError(
+                "Failed to initialize graph adapter. "
+                "Verify plugin path and configuration."
+            ) from exc
 
         # --------------------------------------------------------------
         # 4) Connect adapter to TemporalGraphCore
@@ -809,6 +717,7 @@ class UMAMemory:
                     "working_memory": wm_stored,
                     "episodic": [],
                     "semantic": [],
+                    "chunks": [],
                     "procedural": [],
                     "graph": [],
                 }
@@ -820,27 +729,39 @@ class UMAMemory:
                         user_id=user_subject,
                         query_text=query_text,
                     )
+                    coverage = getattr(pack, "coverage", None)
                     if "insufficient_evidence" in (pack.warnings or []):
                         increment("uma.get_user_context.calls", tags={"path": "rlm_empty"})
                         return {
                             "working_memory": [],
                             "episodic": [],
                             "semantic": [],
+                            "chunks": [],
                             "procedural": [],
                             "graph": [],
                         }
                     increment("uma.get_user_context.calls", tags={"path": "rlm"})
                     semantic = await self._augment_semantic_with_text(user_id, query_text, pack.facts)
+                    from .retrieval.rlm.policy import compute_confidence
                     return {
                         "working_memory": wm_stored,
                         "episodic": pack.episodes,
                         "semantic": semantic,
+                        "chunks": getattr(pack, "chunks", []),
                         "procedural": pack.skills,
                         "graph": pack.graph,
+                        "trace": pack.steps,
+                        "confidence": compute_confidence(coverage) if coverage is not None else {},
                     }
                 except Exception:
                     logger.exception(
-                        "UMAMemory.get_user_context: RLM failed; falling back to classic user=%s",
+                        "UMAMemory.get_user_context: RLM failed",
+                        extra={"user": user_subject},
+                    )
+                    if bool(getattr(self, "retrieval_cfg", None) and self.retrieval_cfg.strict):
+                        raise
+                    logger.warning(
+                        "UMAMemory.get_user_context: falling back to classic user=%s",
                         user_subject,
                     )
 
@@ -850,6 +771,8 @@ class UMAMemory:
                     user_id=user_subject,
                     memory_type="all",
                     query_text_or_embedding=query_text,
+                    agent_id=getattr(self, "agent_id", None),
+                    project_id=getattr(self, "project_id", None),
                 )
             except Exception:
                 logger.exception(
@@ -865,8 +788,11 @@ class UMAMemory:
             "working_memory": wm_stored,
             "episodic": retrieved.get("episodes", []) or [],
             "semantic": semantic,
+            "chunks": retrieved.get("chunks", []) or [],
             "procedural": retrieved.get("skills", retrieved.get("procedural", [])) or [],
             "graph": retrieved.get("graph", []) or [],
+            "trace": [],
+            "confidence": {},
         }
 
     async def _augment_semantic_with_text(
@@ -937,6 +863,32 @@ class UMAMemory:
             assistant_reply=assistant_reply,
         )
 
+    async def ingest_document(
+        self,
+        file_path: str,
+        *,
+        owner_scope: str,
+        user_id: str | None,
+        agent_id: str,
+        project_id: str | None,
+        config: Optional[Any] = None,
+    ) -> Any:
+        """
+        Ingest an unstructured document into UMA memory.
+        """
+        if not self.initialized:
+            raise RuntimeError("UMAMemory.ingest_document requires initialized memory.")
+        from .ingest.ingest_service import ingest_document as _ingest
+        return await _ingest(
+            file_path,
+            owner_scope=owner_scope,
+            user_id=user_id,
+            agent_id=agent_id,
+            project_id=project_id,
+            config=config,
+            memory=self,
+        )
+
     # ----------------------------------------------------------------------
     # OPTIONAL UTILITIES — RAG-Ready Context Pack Builder
     # ----------------------------------------------------------------------
@@ -948,11 +900,38 @@ class UMAMemory:
         Convenience wrapper around:
             - UMAMemory.get_user_context()
             - ContextPackBuilder.build()
+
+        Related:
+            - build_context_snippet(pack): render a snippet from an existing pack
+            - build_context_snippet_for_query(user_id, query_text): one-liner
         """
         from .utils.context_pack_builder import ContextPackBuilder
 
         ctx = await self.get_user_context(user_id, query_text)
         return ContextPackBuilder.build(query_text, ctx)
+
+    async def build_context_snippet(self, pack: dict) -> str:
+        """
+        Render a compact snippet from a ContextPack.
+
+        This is a presentation helper; use build_context_pack() for the data product.
+        """
+        from .utils.context_pack_builder import ContextPackBuilder
+        ctx_cfg = getattr(self.retrieval_cfg, "context", None)
+        return ContextPackBuilder.render_snippet(pack, ctx_cfg)
+
+    async def render_snippet(self, pack: dict) -> str:
+        """
+        API alias for build_context_snippet().
+        """
+        return await self.build_context_snippet(pack)
+
+    async def build_context_snippet_for_query(self, user_id: str, query_text: str) -> str:
+        """
+        Convenience helper: build a context pack and render a snippet in one call.
+        """
+        pack = await self.build_context_pack(user_id, query_text)
+        return await self.build_context_snippet(pack)
 
     async def build_prompt_messages(
         self,

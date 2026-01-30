@@ -1,0 +1,146 @@
+from uma.core.retrieval.policy import RetrievalPolicy
+from uma.core.retrieval.service import RetrievalService
+from uma.core.retrieval.selector import MemorySelector
+
+
+class DummyEmbedder:
+    async def embed(self, texts):
+        return [[0.1, 0.2, 0.3] for _ in texts]
+
+
+class DummyMemory:
+    def __init__(self):
+        self.embedder = DummyEmbedder()
+        self.chunk_store = DummyChunkStore()
+
+
+class DummyChunkStore:
+    async def search_text(self, query_text, *, owner_type=None, owner_id=None, k=10):
+        return [
+            {"id": "c_text", "text": "remember last time", "position": 1, "owner_type": owner_type}
+        ]
+
+
+class DummyRetriever:
+    async def retrieve(self, memory, query_embedding, user_id=None, agent_id=None, project_id=None):
+        return {
+            "episodes": [],
+            "facts": [
+                {"id": "a1", "meta": {"salience": 0.7}, "confidence": 0.7, "owner_type": "agent"},
+                {"id": "u1", "meta": {"salience": 0.6}, "confidence": 0.6, "owner_type": "user"},
+            ],
+            "chunks": [
+                {"id": "c1", "text": "agent chunk", "position": 2, "owner_type": "agent"},
+                {"id": "c2", "text": "user chunk", "position": 3, "owner_type": "user"},
+            ],
+            "skills": [],
+            "graph": [],
+        }
+
+
+class DummySelector:
+    def __init__(self):
+        self.captured_policy = None
+        self.max_episodes = 3
+        self.max_facts = 5
+        self.max_skills = 2
+        self.max_graph_items = 2
+
+    def select(self, raw, *, policy=None):
+        self.captured_policy = policy
+        # defer to real selector behavior in tests that need ordering
+        return raw
+
+
+class DummyRetrievalConfig:
+    max_episodes = 3
+    max_facts = 5
+    max_skills = 2
+    max_graph_items = 2
+
+
+def test_retrieval_service_passes_policy_for_text_query():
+    svc = RetrievalService(DummyMemory(), DummyRetrievalConfig())
+    svc.retriever = DummyRetriever()
+    selector = DummySelector()
+    svc.selector = selector
+
+    result = asyncio_run(
+        svc.retrieve(
+            user_id="u1",
+            memory_type="all",
+            query_text_or_embedding="remember last time",
+            agent_id="a1",
+            project_id="p1",
+        )
+    )
+    assert isinstance(selector.captured_policy, RetrievalPolicy)
+    assert result["facts"][0]["id"] == "a1"
+
+
+def test_retrieval_service_scope_weighting_affects_order():
+    svc = RetrievalService(DummyMemory(), DummyRetrievalConfig())
+    svc.retriever = DummyRetriever()
+    svc.selector = MemorySelector(
+        max_episodes=3,
+        max_facts=5,
+        max_skills=2,
+        max_graph_items=2,
+    )
+
+    result = asyncio_run(
+        svc.retrieve(
+            user_id="u1",
+            memory_type="all",
+            query_text_or_embedding="remember last time",
+            agent_id="a1",
+            project_id="p1",
+        )
+    )
+    assert result["facts"][0]["id"] == "u1"
+
+
+def test_retrieval_service_prefers_agent_without_recall():
+    svc = RetrievalService(DummyMemory(), DummyRetrievalConfig())
+    svc.retriever = DummyRetriever()
+    svc.selector = MemorySelector(
+        max_episodes=3,
+        max_facts=5,
+        max_skills=2,
+        max_graph_items=2,
+    )
+
+    result = asyncio_run(
+        svc.retrieve(
+            user_id="u1",
+            memory_type="all",
+            query_text_or_embedding="how to configure X",
+            agent_id="a1",
+            project_id="p1",
+        )
+    )
+    assert result["facts"][0]["id"] == "a1"
+
+
+def test_retrieval_service_no_policy_for_embedding_query():
+    svc = RetrievalService(DummyMemory(), DummyRetrievalConfig())
+    svc.retriever = DummyRetriever()
+    selector = DummySelector()
+    svc.selector = selector
+
+    asyncio_run(
+        svc.retrieve(
+            user_id="u1",
+            memory_type="all",
+            query_text_or_embedding=[0.1, 0.2, 0.3],
+            agent_id="a1",
+            project_id="p1",
+        )
+    )
+    assert selector.captured_policy is None
+
+
+def asyncio_run(coro):
+    import asyncio
+
+    return asyncio.run(coro)

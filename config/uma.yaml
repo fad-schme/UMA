@@ -8,25 +8,26 @@
 storage:
   db_root: "./data/"         # UMA will create SQL DBs inside here
   # db_root_base: "auto"   # auto | cwd | config (controls relative path resolution)
-  sql_backend: "sqlite"    # future: postgres, mysql, etc.
-  vector_backend: "faiss"  # or "pinecone", "weaviate", "inmemory"
-  graph_backend: "neo4j"  # "neo4j", "memgraph", "disabled"
-  # Vector backend configuration (required for pinecone/weaviate) umaIstheBest70
+  sql_backend: "sqlite"    # or plugin spec "db.postgres_adapter:PostgresAdapter"
+  vector_backend: "vector.qdrant_adapter:QdrantIndex"
+  graph_backend: "graph.neo4j_adapter:Neo4jAdapter"  # plugin spec or "disabled"
+  # Vector backend configuration (adapter-specific)
   vector_config:
-    # Pinecone
-    index_name: "uma-memory"
-    # Weaviate
-    url: "https://your-weaviate-host"
-    api_key: "YOUR_WEAVIATE_API_KEY"
-    class_name: "UMAMemory"
-    
+    # Qdrant (custom adapter)
+    url: "http://192.168.178.101:6333"
+    collection: "uma-rlm"
+    #api_key: ""
+    prefer_grpc: false
+    timeout_s: 10.0
+    distance: "cosine"
+    on_disk_payload: false
 
-graph:
-  uri: "neo4j://localhost:7687"
-  user: "neo4j"
-  password: "umaIstheBest70"
-  max_pool_size: 50
-  database: uma4j-2
+  graph_config:
+    uri: "neo4j://192.168.178.101:7687"
+    user: "neo4j"
+    password: "umaisthebest"
+    max_pool_size: 50
+    database: uma-rlm
 # ------------------------------
 # Working Memory
 # ------------------------------
@@ -46,17 +47,29 @@ working_memory:
 # ------------------------------
 embedding:
   provider: "ollama"
+  #model: "nomic-embed-text:latest"
   model: "all-minilm"
-  dimension: 384
+  dimension: 384 # all-minilm 384 768
+  config:
+   host: "http://192.168.178.101:11434"
+   # host: "http://localhost:11434"
 
 # ------------------------------
-# LLM (UMA internal)
+# LLMs (Agent + UMA internal)
 # ------------------------------
-llm:
-  provider: "ollama"
-  model: "qwen2.5:3b"
-  config:
-    timeout: 60
+llms:
+  agent:
+    provider: "ollama"
+    model: "qwen2.5:3b"
+    config:
+      timeout: 60
+      host: "http://192.168.178.101:11434"
+  uma:
+    provider: "ollama"
+    model: "qwen2.5:3b"
+    config:
+      timeout: 60
+      host: "http://192.168.178.101:11434"
 
 # ------------------------------
 # Retrieval
@@ -66,14 +79,20 @@ retrieval:
   max_facts: 5
   max_skills: 3
   max_graph_items: 3
+  strict: true
 
   context:
     max_working_messages: 2
     max_episodic: 2
     max_semantic: 4
+    max_chunks: 5
     max_procedural: 2
     max_graph: 2
-    prefer_semantic_only: true
+    include_working_memory: true
+    include_episodic: true
+    include_graph: true
+    include_procedural: true
+
 
   # Recursive Language Model (RLM) retrieval
   rlm:
@@ -118,6 +137,12 @@ retrieval:
     predicate_weights:
       LIKES: 1.0
       PREFERS: 0.8
+
+# ------------------------------
+# Semantic tuning
+# ------------------------------
+semantic:
+  salience_threshold: 0.45
 
 # ------------------------------
 # Consolidation Engine

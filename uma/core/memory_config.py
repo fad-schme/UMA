@@ -10,6 +10,7 @@ This configuration format uses:
 from __future__ import annotations
 import logging
 import os
+import sys
 from typing import Any, Dict
 
 import yaml
@@ -40,6 +41,7 @@ class UMAConfig(dict):
             # Keep non-fatal: path bookkeeping should not block config loading.
             cfg._source_path = None
             cfg._source_dir = None
+        _register_plugin_root(cfg._source_dir)
         cfg._validate()
         return cfg
 
@@ -118,31 +120,31 @@ class UMAConfig(dict):
         self._require_nonempty_str("storage", "db_root")
 
         sql_backend = self.storage.get("sql_backend")
-        if sql_backend not in ("sqlite", "postgres"):
-            raise ValueError("'storage.sql_backend' must be 'sqlite' or 'postgres'")
+        known_sql = ("sqlite",)
+        is_sql_plugin = isinstance(sql_backend, str) and ":" in sql_backend
+        if sql_backend not in known_sql and not is_sql_plugin:
+            raise ValueError(
+                "'storage.sql_backend' must be 'sqlite' or a plugin spec 'module:callable'"
+            )
 
         vector_backend = self.storage.get("vector_backend")
-        if vector_backend not in ("faiss", "pinecone", "weaviate", "inmemory"):
+        known_backends = ("faiss", "inmemory")
+        is_plugin_spec = isinstance(vector_backend, str) and ":" in vector_backend
+        if vector_backend not in known_backends and not is_plugin_spec:
             raise ValueError(
-                "'storage.vector_backend' must be one of: faiss, pinecone, weaviate, inmemory"
+                "'storage.vector_backend' must be one of: faiss, inmemory "
+                "or a plugin spec 'module:callable'"
             )
         vector_cfg = self.storage.get("vector_config") or {}
-        if vector_backend == "pinecone":
-            if not isinstance(vector_cfg, dict) or not vector_cfg.get("index_name"):
-                raise ValueError(
-                    "'storage.vector_config.index_name' is required for pinecone backend"
-                )
-        if vector_backend == "weaviate":
-            if not isinstance(vector_cfg, dict):
-                raise ValueError("'storage.vector_config' must be a mapping for weaviate backend")
-            for key in ("url", "api_key", "class_name"):
-                if not vector_cfg.get(key):
-                    raise ValueError(f"'storage.vector_config.{key}' is required for weaviate backend")
+        if is_plugin_spec and not isinstance(vector_cfg, dict):
+            raise ValueError("'storage.vector_config' must be a mapping for plugin vector backends")
+        # pinecone/weaviate are plugin-based now; plugin itself validates config
 
         graph_backend = self.storage.get("graph_backend")
-        if graph_backend not in ("neo4j", "memgraph", "disabled"):
+        is_graph_plugin = isinstance(graph_backend, str) and ":" in graph_backend
+        if graph_backend not in ("disabled",) and not is_graph_plugin:
             raise ValueError(
-                "'storage.graph_backend' must be 'neo4j', 'memgraph', or 'disabled'"
+                "'storage.graph_backend' must be 'disabled' or a plugin spec 'module:callable'"
             )
 
         # -----------------------
@@ -175,7 +177,7 @@ class UMAConfig(dict):
         # -----------------------
         self._require("embedding", "provider")
         provider = self.embedding.provider
-        if provider in ("openai", "ollama"):
+        if provider == "ollama":
             self._require_nonempty_str("embedding", "model")
         elif not isinstance(provider, str) or not provider.strip():
             raise ValueError("embedding.provider must be a non-empty string")
@@ -185,28 +187,45 @@ class UMAConfig(dict):
             raise ValueError("'embedding.config' must be a mapping")
 
         # -----------------------
-        # LLM
+        # LLM / LLMS
         # -----------------------
-        self._require("llm", "provider")
-        prov = self.llm.provider
-        if not isinstance(prov, str) or not prov.strip():
-            raise ValueError("llm.provider must be a non-empty string")
+        if "llms" in self and isinstance(self.llms, dict):
+            for key in ("agent", "uma"):
+                if key not in self.llms:
+                    raise ValueError(f"'llms.{key}' section is required")
+                section = self.llms.get(key)
+                if not isinstance(section, dict):
+                    raise ValueError(f"'llms.{key}' must be a mapping")
+                if "provider" not in section or not isinstance(section.get("provider"), str) or not section.get("provider").strip():
+                    raise ValueError(f"llms.{key}.provider must be a non-empty string")
+                prov = section.get("provider")
+                if prov == "ollama" and not (section.get("model") or section.get("ollama_model")):
+                    raise ValueError(
+                        f"llms.{key}.provider='ollama' requires either 'model' or 'ollama_model'"
+                    )
+                if "config" in section and not isinstance(section.get("config"), dict):
+                    raise ValueError(f"llms.{key}.config must be a mapping")
+        else:
+            self._require("llm", "provider")
+            prov = self.llm.provider
+            if not isinstance(prov, str) or not prov.strip():
+                raise ValueError("llm.provider must be a non-empty string")
 
-        if prov == "openai":
-            self._require_nonempty_str("llm", "model")
-        elif prov == "ollama":
-            if not (self.llm.get("model") or self.llm.get("ollama_model")):
-                raise ValueError(
-                    "llm.provider='ollama' requires either 'model' or 'ollama_model'"
-                )
-        if "config" in self.llm and not isinstance(self.llm["config"], dict):
-            raise ValueError("'llm.config' must be a mapping")
+            if prov == "ollama":
+                if not (self.llm.get("model") or self.llm.get("ollama_model")):
+                    raise ValueError(
+                        "llm.provider='ollama' requires either 'model' or 'ollama_model'"
+                    )
+            if "config" in self.llm and not isinstance(self.llm["config"], dict):
+                raise ValueError("'llm.config' must be a mapping")
 
         # -----------------------
         # RETRIEVAL
         # -----------------------
         for key in ("max_episodes", "max_facts", "max_skills", "max_graph_items"):
             self._require_positive_int("retrieval", key)
+        if "strict" in self.retrieval and not isinstance(self.retrieval.get("strict"), bool):
+            raise ValueError("'retrieval.strict' must be boolean")
         context_cfg = self.retrieval.get("context")
         if context_cfg is not None:
             if not isinstance(context_cfg, dict):
@@ -214,8 +233,6 @@ class UMAConfig(dict):
             for key in ("max_working_messages", "max_episodic", "max_semantic", "max_procedural", "max_graph"):
                 if key in context_cfg and (not isinstance(context_cfg[key], int) or context_cfg[key] < 0):
                     raise ValueError(f"'retrieval.context.{key}' must be a non-negative integer")
-            if "prefer_semantic_only" in context_cfg and not isinstance(context_cfg["prefer_semantic_only"], bool):
-                raise ValueError("'retrieval.context.prefer_semantic_only' must be boolean")
             if "allowed_topics" in context_cfg:
                 allowed = context_cfg["allowed_topics"]
                 if not isinstance(allowed, list) or not all(isinstance(x, str) for x in allowed):
@@ -270,6 +287,20 @@ class UMAConfig(dict):
             raise ValueError("'consolidation.prune_min_fact_salience' must be between 0 and 1")
 
         # -----------------------
+        # SEMANTIC (optional overrides)
+        # -----------------------
+        if "semantic" in self:
+            semantic_cfg = self.semantic
+            if not isinstance(semantic_cfg, dict):
+                raise ValueError("'semantic' section must be a mapping")
+            if "salience_threshold" in semantic_cfg:
+                val = semantic_cfg["salience_threshold"]
+                if not isinstance(val, (int, float)):
+                    raise ValueError("'semantic.salience_threshold' must be a number")
+                if not (0 <= val <= 1):
+                    raise ValueError("'semantic.salience_threshold' must be between 0 and 1")
+
+        # -----------------------
         # FEATURES
         # -----------------------
         features = self.get("features")
@@ -312,3 +343,24 @@ class UMAConfig(dict):
 
         self._warn_on_secrets()
         logger.info("UMA configuration validated successfully.")
+
+
+def _register_plugin_root(source_dir: str | None) -> None:
+    """
+    Add ROOT/plugins to sys.path so config plugin specs can import local modules.
+    """
+    if not source_dir:
+        return
+    root_dir = os.path.dirname(source_dir)
+    plugins_dir = os.path.join(root_dir, "plugins")
+    extensions_dir = os.path.join(root_dir, "extensions")
+    registered = False
+    for path in (extensions_dir, plugins_dir):
+        if not os.path.isdir(path):
+            continue
+        if path not in sys.path:
+            sys.path.insert(0, path)
+            logger.info("Registered plugin root on sys.path: %s", path)
+        registered = True
+    if not registered:
+        return

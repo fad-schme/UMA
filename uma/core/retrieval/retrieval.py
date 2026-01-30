@@ -43,6 +43,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _iter_owner_filters(
+    *,
+    user_subject: str,
+    agent_id: Optional[str],
+    project_id: Optional[str],
+) -> List[tuple[str, str]]:
+    filters: List[tuple[str, str]] = [("user", user_subject)]
+    if agent_id:
+        filters.append(("agent", agent_id))
+    if project_id:
+        filters.append(("project", f"{user_subject}:{project_id}"))
+    return filters
+
+
 class MultiStoreRetriever:
     """
     Raw multi-store retriever.
@@ -51,6 +65,7 @@ class MultiStoreRetriever:
         {
             "episodes": [...],
             "facts": [...],
+            "chunks": [...],
             "skills": [...],
             "graph": [...],
         }
@@ -81,6 +96,8 @@ class MultiStoreRetriever:
         memory: "UMAMemory",
         query_embedding: List[float],
         user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        project_id: Optional[str] = None,
     ) -> Dict[str, List[Any]]:
         """
         Perform raw retrieval from subsystems.
@@ -93,7 +110,24 @@ class MultiStoreRetriever:
                 self._episodic(memory, query_embedding, user_id, self.max_episodes)
             ),
             "facts": asyncio.create_task(
-                self._semantic(memory, query_embedding, user_id, self.max_facts)
+                self._semantic(
+                    memory,
+                    query_embedding,
+                    user_id,
+                    self.max_facts,
+                    agent_id=agent_id,
+                    project_id=project_id,
+                )
+            ),
+            "chunks": asyncio.create_task(
+                self._chunks(
+                    memory,
+                    query_embedding,
+                    user_id,
+                    self.max_facts,
+                    agent_id=agent_id,
+                    project_id=project_id,
+                )
             ),
             "skills": asyncio.create_task(
                 self._procedural(memory, query_embedding, self.max_skills)
@@ -114,6 +148,7 @@ class MultiStoreRetriever:
         final: Dict[str, List[Any]] = {
             "episodes": [],
             "facts": [],
+            "chunks": [],
             "skills": [],
             "graph": graph_res,
         }
@@ -156,6 +191,9 @@ class MultiStoreRetriever:
         emb: List[float],
         user_id: Optional[str],
         k: int,
+        *,
+        agent_id: Optional[str] = None,
+        project_id: Optional[str] = None,
     ) -> List[Any]:
         """
         Semantic retrieval.
@@ -173,13 +211,28 @@ class MultiStoreRetriever:
 
         try:
             subject = ensure_user_subject(user_id)
-
-            # Call using keywords to avoid accidentally passing k as owner_type.
-            res = await store.search(
-                query_embedding=emb,
-                subject=subject,
-                k=int(k),
-            )
+            res: List[Any] = []
+            for owner_type, owner_id in _iter_owner_filters(
+                user_subject=subject,
+                agent_id=agent_id,
+                project_id=project_id,
+            ):
+                try:
+                    found = await store.search(
+                        query_embedding=emb,
+                        subject=subject,
+                        owner_type=owner_type,
+                        owner_id=owner_id,
+                        k=int(k),
+                    )
+                    if found:
+                        res.extend(found)
+                except Exception:
+                    logger.exception(
+                        "MultiStoreRetriever: semantic retrieval failed owner=%s:%s",
+                        owner_type,
+                        owner_id,
+                    )
             return res if isinstance(res, list) else []
         except Exception:
             logger.exception("MultiStoreRetriever: semantic retrieval failed.")
@@ -201,6 +254,48 @@ class MultiStoreRetriever:
             logger.exception("MultiStoreRetriever: procedural retrieval failed.")
             return []
 
+    async def _chunks(
+        self,
+        memory: "UMAMemory",
+        emb: List[float],
+        user_id: Optional[str],
+        k: int,
+        *,
+        agent_id: Optional[str] = None,
+        project_id: Optional[str] = None,
+    ) -> List[Any]:
+        store = getattr(memory, "chunk_store", None)
+        if store is None:
+            return []
+        if user_id is None:
+            return []
+        try:
+            subject = ensure_user_subject(user_id)
+            res: List[Any] = []
+            for owner_type, owner_id in _iter_owner_filters(
+                user_subject=subject,
+                agent_id=agent_id,
+                project_id=project_id,
+            ):
+                try:
+                    found = await store.search(
+                        query_embedding=emb,
+                        owner_type=owner_type,
+                        owner_id=owner_id,
+                        k=int(k),
+                    )
+                    if found:
+                        res.extend(found)
+                except Exception:
+                    logger.exception(
+                        "MultiStoreRetriever: chunk retrieval failed owner=%s:%s",
+                        owner_type,
+                        owner_id,
+                    )
+            return res if isinstance(res, list) else []
+        except Exception:
+            logger.exception("MultiStoreRetriever: chunk retrieval failed.")
+            return []
     def _graph(
         self,
         memory: "UMAMemory",

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Literal, Optional, Protocol, Union
 
 from ...utils.identity import ensure_user_subject
+from ...utils.user_query_helper import extract_query_terms, expand_query_terms, build_fact_embedding_text
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,14 @@ class MemoryEnvironment(Protocol):
         query_embedding: NumericVector,
         k: int = 10,
         filters: Optional[Dict[str, Any]] = None,
+        query_text: Optional[str] = None,
+    ) -> List[Dict[str, Any]]: ...
+
+    async def search_chunks(
+        self,
+        user_id: str,
+        query_embedding: NumericVector,
+        k: int = 10,
     ) -> List[Dict[str, Any]]: ...
 
     async def fetch_facts_by_ids(self, user_id: str, ids: List[str]) -> List[Dict[str, Any]]: ...
@@ -110,9 +120,12 @@ class UMAMemoryEnvironment:
 
     def __init__(self, memory: Any) -> None:
         self._memory = memory
+        self._agent_id = getattr(memory, "agent_id", None)
+        self._project_id = getattr(memory, "project_id", None)
 
         self._wm = getattr(memory, "working_memory", None)
         self._semantic_store = getattr(memory, "semantic_store", None)
+        self._chunk_store = getattr(memory, "chunk_store", None)
         self._episodic_store = getattr(memory, "episodic_store", None)
         self._procedural_store = getattr(memory, "procedural_store", None)
         self._graph_core = getattr(memory, "graph_core", None)
@@ -137,12 +150,28 @@ class UMAMemoryEnvironment:
             logger.warning("UMAMemoryEnvironment: working_memory missing")
         if self._semantic_store is None:
             logger.warning("UMAMemoryEnvironment: semantic_store missing")
+        if self._chunk_store is None:
+            logger.warning("UMAMemoryEnvironment: chunk_store missing")
         if self._episodic_store is None:
             logger.warning("UMAMemoryEnvironment: episodic_store missing")
         if self._procedural_store is None:
             logger.warning("UMAMemoryEnvironment: procedural_store missing")
         if self._graph_core is None:
             logger.warning("UMAMemoryEnvironment: graph_core missing")
+
+    @staticmethod
+    def _iter_owner_filters(
+        *,
+        user_subject: str,
+        agent_id: Optional[str],
+        project_id: Optional[str],
+    ) -> List[tuple[str, str]]:
+        filters: List[tuple[str, str]] = [("user", user_subject)]
+        if agent_id:
+            filters.append(("agent", agent_id))
+        if project_id:
+            filters.append(("project", f"{user_subject}:{project_id}"))
+        return filters
 
     # ------------------------------------------------------------------
     # Internal helpers (bounds, sanitation)
@@ -215,6 +244,27 @@ class UMAMemoryEnvironment:
         return out
 
     @staticmethod
+    def _filter_time_range(episodes: List[Any], time_range: Optional[Dict[str, Any]]) -> List[Any]:
+        if not time_range:
+            return episodes
+        start = time_range.get("start") if isinstance(time_range, dict) else None
+        end = time_range.get("end") if isinstance(time_range, dict) else None
+        if start is None and end is None:
+            return episodes
+
+        filtered: List[Any] = []
+        for ep in episodes:
+            ts = getattr(ep, "timestamp", None)
+            if ts is None:
+                continue
+            if start is not None and ts < start:
+                continue
+            if end is not None and ts > end:
+                continue
+            filtered.append(ep)
+        return filtered
+
+    @staticmethod
     def _max_predicate_scope() -> int:
         return 20
     # ------------------------------------------------------------------
@@ -232,7 +282,9 @@ class UMAMemoryEnvironment:
             user_subject = ensure_user_subject(user_id)
             if not self._wm:
                 return []
-            return self._wm.get_context(user_subject, last_n=window) or []
+            results = self._wm.get_context(user_subject, last_n=window) or []
+            logger.debug("Environment.get_working_memory: returned %d", len(results))
+            return results
         except Exception:
             logger.exception("Environment.get_working_memory failed")
             return []
@@ -253,7 +305,9 @@ class UMAMemoryEnvironment:
             if not vectors or not isinstance(vectors, list) or not vectors[0]:
                 logger.error("Environment.get_query_embedding: empty embedding result")
                 return []
-            return [float(x) for x in vectors[0]]
+            vec = [float(x) for x in vectors[0]]
+            logger.debug("Environment.get_query_embedding: dim=%d", len(vec))
+            return vec
         except Exception:
             logger.exception("Environment.get_query_embedding failed")
             return []
@@ -268,6 +322,7 @@ class UMAMemoryEnvironment:
         query_embedding: NumericVector,
         k: int = 10,
         filters: Optional[Dict[str, Any]] = None,
+        query_text: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Vector search over semantic facts.
@@ -302,32 +357,55 @@ class UMAMemoryEnvironment:
 
             requested_topic = filters.get("topic") if isinstance(filters, dict) else None
 
-            # Best-effort offset support
-            try:
-                facts = await self._semantic_store.search(
-                    query_embedding=list(query_embedding),
-                    subject=subject,
-                    k=int(k),
-                    offset=int(offset),
-                )
-            except TypeError:
-                facts = await self._semantic_store.search(
-                    query_embedding=list(query_embedding),
-                    subject=subject,
-                    k=int(k),
-                )
+            facts: List[Any] = []
+            # Best-effort offset support + multi-scope owner filters
+            for owner_type, owner_id in self._iter_owner_filters(
+                user_subject=subject,
+                agent_id=self._agent_id,
+                project_id=self._project_id,
+            ):
+                try:
+                    try:
+                        found = await self._semantic_store.search(
+                            query_embedding=list(query_embedding),
+                            subject=subject,
+                            owner_type=owner_type,
+                            owner_id=owner_id,
+                            k=int(k),
+                            offset=int(offset),
+                        )
+                    except TypeError:
+                        found = await self._semantic_store.search(
+                            query_embedding=list(query_embedding),
+                            subject=subject,
+                            owner_type=owner_type,
+                            owner_id=owner_id,
+                            k=int(k),
+                        )
+                    if found:
+                        facts.extend(found)
+                except Exception:
+                    logger.exception(
+                        "Environment.search_semantic: owner=%s:%s failed",
+                        owner_type,
+                        owner_id,
+                    )
 
-            # Optional topic filtering
+            # Optional topic filtering (soft)
             if requested_topic:
-                facts = [
+                filtered = [
                     f for f in facts
-                    if (getattr(f, "meta", {}) or {}).get("topic") == requested_topic
+                    if requested_topic in _fact_topics(f)
                 ]
+                if filtered:
+                    facts = filtered
             if self._allowed_topics:
-                facts = [
+                filtered = [
                     f for f in facts
-                    if (getattr(f, "meta", {}) or {}).get("topic") in self._allowed_topics
+                    if any(t in self._allowed_topics for t in _fact_topics(f))
                 ]
+                if filtered:
+                    facts = filtered
 
             requested_predicate = filters.get("predicate") if isinstance(filters, dict) else None
             if requested_predicate:
@@ -337,7 +415,59 @@ class UMAMemoryEnvironment:
                     if getattr(f, "predicate", "").upper() == requested_predicate
                 ]
 
-            return [self._fact_snippet(f) for f in facts]
+            if query_text:
+                terms = expand_query_terms(query_text) or extract_query_terms(query_text)
+                if terms:
+                    lowered_terms = [t.lower() for t in terms]
+                    original_count = len(facts)
+                    filtered = []
+                    for fact in facts:
+                        text = build_fact_embedding_text(fact).lower()
+                        if any(t in text for t in lowered_terms):
+                            filtered.append(fact)
+                    if filtered:
+                        facts = filtered
+                        logger.debug(
+                            "Environment.search_semantic: lexical filter kept %d/%d",
+                            len(facts),
+                            original_count,
+                        )
+                    else:
+                        try:
+                            fallback: List[Any] = []
+                            for owner_type, owner_id in self._iter_owner_filters(
+                                user_subject=subject,
+                                agent_id=self._agent_id,
+                                project_id=self._project_id,
+                            ):
+                                try:
+                                    found = await self._semantic_store.search_text(
+                                        query=query_text,
+                                        subject=subject,
+                                        limit=int(k),
+                                        owner_type=owner_type,
+                                        owner_id=owner_id,
+                                    )
+                                    if found:
+                                        fallback.extend(found)
+                                except Exception:
+                                    logger.exception(
+                                        "Environment.search_semantic: lexical fallback owner=%s:%s failed",
+                                        owner_type,
+                                        owner_id,
+                                    )
+                            if fallback:
+                                facts = fallback
+                                logger.debug(
+                                    "Environment.search_semantic: lexical fallback returned %d",
+                                    len(facts),
+                                )
+                        except Exception:
+                            logger.exception("Environment.search_semantic: lexical fallback failed")
+
+            snippets = [self._fact_snippet(f) for f in facts]
+            logger.debug("Environment.search_semantic: returned %d", len(snippets))
+            return snippets
         except Exception:
             logger.exception("Environment.search_semantic failed")
             return []
@@ -355,7 +485,9 @@ class UMAMemoryEnvironment:
         try:
             _ = ensure_user_subject(user_id)  # ensures caller isn't passing garbage
             facts = await self._semantic_store.fetch_facts_by_ids(ids)
-            return [self._fact_snippet(f) for f in (facts or [])]
+            snippets = [self._fact_snippet(f) for f in (facts or [])]
+            logger.debug("Environment.fetch_facts_by_ids: returned %d", len(snippets))
+            return snippets
         except Exception:
             logger.exception("Environment.fetch_facts_by_ids failed")
             return []
@@ -376,37 +508,76 @@ class UMAMemoryEnvironment:
             k = self._validate_k("Environment.fetch_more_facts", k)
             offset = self._safe_offset(offset)
 
-            # enforce user scope for v1
-            if owner_scope and owner_scope != "user":
-                logger.debug("fetch_more_facts: owner_scope=%s ignored (v1)", owner_scope)
+            scope = (owner_scope or "").lower()
+            if scope and scope not in {"user", "agent", "project"}:
+                scope = ""
 
-            # First, try store.search with offset (works for stores that support offset)
-            try:
-                facts = await self._semantic_store.search(
-                    query_embedding=[],  # empty embedding intended for predicate-only retrieval
-                    subject=user_subject,
-                    k=int(k),
-                    offset=int(offset),
+            owner_filters: List[tuple[str, str]] = []
+            if scope:
+                if scope == "user":
+                    owner_filters = [("user", user_subject)]
+                elif scope == "agent" and self._agent_id:
+                    owner_filters = [("agent", self._agent_id)]
+                elif scope == "project" and self._project_id:
+                    owner_filters = [("project", f"{user_subject}:{self._project_id}")]
+                else:
+                    return []
+            else:
+                owner_filters = self._iter_owner_filters(
+                    user_subject=user_subject,
+                    agent_id=self._agent_id,
+                    project_id=self._project_id,
                 )
-            except TypeError:
-                # store doesn't support offset param => try without offset
+
+            facts: List[Any] = []
+            for owner_type, owner_id in owner_filters:
+                # First, try store.search with offset (works for stores that support offset)
                 try:
-                    facts = await self._semantic_store.search(
-                        query_embedding=[], subject=user_subject, k=int(k)
-                    )
+                    try:
+                        found = await self._semantic_store.search(
+                            query_embedding=[],  # empty embedding intended for predicate-only retrieval
+                            subject=user_subject,
+                            owner_type=owner_type,
+                            owner_id=owner_id,
+                            k=int(k),
+                            offset=int(offset),
+                        )
+                    except TypeError:
+                        found = await self._semantic_store.search(
+                            query_embedding=[],
+                            subject=user_subject,
+                            owner_type=owner_type,
+                            owner_id=owner_id,
+                            k=int(k),
+                        )
+                    if found:
+                        facts.extend(found)
                 except Exception:
                     # fallback: if store provides predicate_scan/fetch_by_predicate, use it
-                    facts = []
                     if hasattr(self._semantic_store, "fetch_by_predicate"):
                         try:
-                            facts = await self._semantic_store.fetch_by_predicate(
-                                subject=user_subject, predicate=predicate, limit=int(k), offset=int(offset)
+                            found = await self._semantic_store.fetch_by_predicate(
+                                subject=user_subject,
+                                predicate=predicate,
+                                limit=int(k),
+                                offset=int(offset),
+                                owner_type=owner_type,
+                                owner_id=owner_id,
                             )
+                            if found:
+                                facts.extend(found)
                         except Exception:
-                            facts = []
-            except Exception:
-                logger.exception("Environment.fetch_more_facts: semantic_store.search failed")
-                return []
+                            logger.exception(
+                                "Environment.fetch_more_facts: predicate fetch failed owner=%s:%s",
+                                owner_type,
+                                owner_id,
+                            )
+                    else:
+                        logger.exception(
+                            "Environment.fetch_more_facts: owner=%s:%s failed",
+                            owner_type,
+                            owner_id,
+                        )
 
             # Filter by predicate (normalize)
             predicate_u = (predicate or "").upper()
@@ -417,7 +588,9 @@ class UMAMemoryEnvironment:
                     filtered.append(f)
 
             # If underlying store returned object wrappers, map to snippet
-            return [self._fact_snippet(f) for f in filtered]
+            snippets = [self._fact_snippet(f) for f in filtered]
+            logger.debug("Environment.fetch_more_facts: returned %d", len(snippets))
+            return snippets
         except Exception:
             logger.exception("Environment.fetch_more_facts failed")
             return []
@@ -443,7 +616,6 @@ class UMAMemoryEnvironment:
         """
         if self._episodic_store is None:
             return []
-
         k = self._validate_k("Environment.search_episodic", k)
         offset = self._safe_offset(time_range.get("offset") if isinstance(time_range, dict) else None)
 
@@ -465,17 +637,73 @@ class UMAMemoryEnvironment:
                 )
 
             episodes = self._filter_time_range(episodes or [], time_range)
-            return [self._episode_snippet(ep) for ep in episodes]
+            snippets = [self._episode_snippet(ep) for ep in episodes]
+            logger.debug("Environment.search_episodic: returned %d", len(snippets))
+            return snippets
         except Exception:
             logger.exception("Environment.search_episodic failed")
             return []
+
+    async def search_chunks(
+        self,
+        user_id: str,
+        query_embedding: NumericVector,
+        k: int = 10,
+    ) -> List[Dict[str, Any]]:
+        if self._chunk_store is None:
+            return []
+        k = self._validate_k("Environment.search_chunks", k)
+        try:
+            user_subject = ensure_user_subject(user_id)
+            chunks: List[Any] = []
+            for owner_type, owner_id in self._iter_owner_filters(
+                user_subject=user_subject,
+                agent_id=self._agent_id,
+                project_id=self._project_id,
+            ):
+                try:
+                    found = await self._chunk_store.search(
+                        query_embedding=list(query_embedding),
+                        owner_type=owner_type,
+                        owner_id=owner_id,
+                        k=int(k),
+                    )
+                    if found:
+                        chunks.extend(found)
+                except Exception:
+                    logger.exception(
+                        "Environment.search_chunks: owner=%s:%s failed",
+                        owner_type,
+                        owner_id,
+                    )
+            snippets = [
+                {
+                    "id": getattr(c, "id", None),
+                    "doc_id": getattr(c, "doc_id", None),
+                    "text": getattr(c, "text", None),
+                    "page_range": getattr(c, "page_range", None),
+                    "position": getattr(c, "position", None),
+                    "meta": getattr(c, "meta", {}) or {},
+                    "owner_type": getattr(c, "owner_type", None),
+                    "owner_id": getattr(c, "owner_id", None),
+                }
+                for c in (chunks or [])
+            ]
+            logger.debug("Environment.search_chunks: returned %d", len(snippets))
+            return snippets
+        except Exception:
+            logger.exception("Environment.search_chunks failed")
+            return []
+        
 
     async def fetch_episode_summaries(self, user_id: str, ids: List[str]) -> List[Dict[str, Any]]:
         if self._episodic_store is None or not ids:
             return []
         try:
             _ = ensure_user_subject(user_id)
-            return await self._episodic_store.fetch_summaries(ids) or []
+            results = await self._episodic_store.fetch_summaries(ids) or []
+            logger.debug("Environment.fetch_episode_summaries: returned %d", len(results))
+            return results
         except Exception:
             logger.exception("Environment.fetch_episode_summaries failed")
             return []
@@ -485,7 +713,9 @@ class UMAMemoryEnvironment:
             return []
         try:
             _ = ensure_user_subject(user_id)
-            return await self._episodic_store.fetch_transcripts(ids) or []
+            results = await self._episodic_store.fetch_transcripts(ids) or []
+            logger.debug("Environment.fetch_episode_transcripts: returned %d", len(results))
+            return results
         except Exception:
             logger.exception("Environment.fetch_episode_transcripts failed")
             return []
@@ -519,7 +749,9 @@ class UMAMemoryEnvironment:
                 max_episodes=int(max_episodes),
                 time_range=time_range,
             )
-            return clusters or []
+            clusters = clusters or []
+            logger.debug("Environment.episodic_cluster_summaries: returned %d", len(clusters))
+            return clusters
         except Exception:
             logger.exception("Environment.episodic_cluster_summaries failed")
             return []
@@ -547,6 +779,7 @@ class UMAMemoryEnvironment:
             time_range=sanitized_time_range,
         )
         if min_salience is None:
+            logger.debug("Environment.fetch_episode_clusters: returned %d", len(clusters))
             return clusters
 
         min_salience = max(0.0, min(1.0, float(min_salience)))
@@ -555,6 +788,7 @@ class UMAMemoryEnvironment:
             sal = self._cluster_salience(cluster)
             if sal is None or sal >= min_salience:
                 filtered.append(cluster)
+        logger.debug("Environment.fetch_episode_clusters: returned %d", len(filtered))
         return filtered
 
     # ------------------------------------------------------------------
@@ -586,7 +820,9 @@ class UMAMemoryEnvironment:
                 user_id=user_subject,
                 k=int(k),
             )
-            return [self._skill_snippet(s) for s in (skills or [])]
+            snippets = [self._skill_snippet(s) for s in (skills or [])]
+            logger.debug("Environment.search_procedural: returned %d", len(snippets))
+            return snippets
         except Exception:
             logger.exception("Environment.search_procedural failed")
             return []
@@ -597,7 +833,9 @@ class UMAMemoryEnvironment:
         try:
             _ = ensure_user_subject(user_id)
             skills = await self._procedural_store.fetch_skills_by_ids(ids)
-            return [self._skill_snippet(s) for s in (skills or [])]
+            snippets = [self._skill_snippet(s) for s in (skills or [])]
+            logger.debug("Environment.fetch_skills_by_ids: returned %d", len(snippets))
+            return snippets
         except Exception:
             logger.exception("Environment.fetch_skills_by_ids failed")
             return []
@@ -635,16 +873,19 @@ class UMAMemoryEnvironment:
 
             # Prefer a consistent async API on TemporalGraphCore
             if hasattr(self._graph_core, "neighbors"):
-                results = await self._graph_core.neighbors(
+                results = self._graph_core.neighbors(
                     user_id=user_subject,
                     node_id=node_id,
                     predicate_scope=predicate_scope,
                     depth=depth_i,
                     k=k,
                 )
+                if asyncio.iscoroutine(results):
+                    results = await results
+                logger.debug("Environment.graph_neighbors: returned %d", len(results or []))
                 return results or []
 
-            logger.error("Environment.graph_neighbors: graph_core missing async neighbors()")
+            logger.error("Environment.graph_neighbors: graph_core missing neighbors()")
             return []
         except Exception:
             logger.exception("Environment.graph_neighbors failed")
@@ -732,6 +973,8 @@ class UMAMemoryEnvironment:
             "object": getattr(fact, "object", None),
             "confidence": getattr(fact, "confidence", None),
             "salience": salience,
+            "owner_type": getattr(fact, "owner_type", None),
+            "owner_id": getattr(fact, "owner_id", None),
             "meta": meta if isinstance(meta, dict) else {},
         }
 
@@ -772,22 +1015,15 @@ class UMAMemoryEnvironment:
                 continue
         return None
 
-    def _filter_time_range(self, episodes: List[Any], time_range: Optional[Dict[str, Any]]) -> List[Any]:
-        if not time_range:
-            return episodes
-        start = time_range.get("start") if isinstance(time_range, dict) else None
-        end = time_range.get("end") if isinstance(time_range, dict) else None
-        if start is None and end is None:
-            return episodes
 
-        filtered: List[Any] = []
-        for ep in episodes:
-            ts = getattr(ep, "timestamp", None)
-            if ts is None:
-                continue
-            if start is not None and ts < start:
-                continue
-            if end is not None and ts > end:
-                continue
-            filtered.append(ep)
-        return filtered
+def _fact_topics(fact: Any) -> List[str]:
+    meta = getattr(fact, "meta", {}) or {}
+    if not isinstance(meta, dict):
+        return []
+    topics = meta.get("topics")
+    if isinstance(topics, list):
+        return [str(t) for t in topics if t]
+    topic = meta.get("topic")
+    if topic:
+        return [str(topic)]
+    return []

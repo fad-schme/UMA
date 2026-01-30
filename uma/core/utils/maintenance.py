@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from ...types_fact import Fact
 from ...types_skill import Skill
 from .identity import ensure_user_subject
+from .user_query_helper import build_fact_embedding_text
 
 logger = logging.getLogger(__name__)
 
@@ -105,10 +106,19 @@ async def rebuild_vector_indexes(
                 subject = ensure_user_subject(user_id)
                 facts: List[Fact] = await memory.semantic_store.list_facts_for_subject(subject)
                 if facts:
-                    texts = [f"{f.subject} {f.predicate} {f.object}" for f in facts]
+                    texts = [build_fact_embedding_text(f) for f in facts]
                     vectors = await _embed_in_batches(embedder, texts, batch_size)
                     ids = [f.id for f in facts]
-                    metas = [{"subject": f.subject, "predicate": f.predicate} for f in facts]
+                    metas = [
+                        {
+                            "subject": f.subject,
+                            "predicate": f.predicate,
+                            "owner_type": f.owner_type,
+                            "owner_id": f.owner_id,
+                            "scope_key": f"{f.owner_type}:{f.owner_id}",
+                        }
+                        for f in facts
+                    ]
                     memory.semantic_store.vector_index.upsert(ids=ids, vectors=vectors, metadata=metas)
                 report["semantic"] = {"status": "ok", "count": len(facts)}
             except Exception:

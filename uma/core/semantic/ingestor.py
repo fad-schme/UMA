@@ -16,6 +16,7 @@ import logging
 from typing import Any, List
 
 from ...types_fact import Fact
+from ..utils.user_query_helper import build_fact_embedding_text
 from .extractor import FactExtractor
 from .scorer import SalienceScorer
 
@@ -56,7 +57,7 @@ class SemanticIngestor:
             return []
 
         # embed text per fact
-        embed_texts = [f"{f.subject} {f.predicate} {f.object}" for f in selected]
+        embed_texts = [build_fact_embedding_text(f) for f in selected]
 
         try:
             vectors = await self.embedder.embed(embed_texts)
