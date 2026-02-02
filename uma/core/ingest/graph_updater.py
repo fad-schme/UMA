@@ -1,11 +1,74 @@
+
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
-from typing import List, Any
+from typing import Any, Iterable, List, Optional
 
 from ...types_fact import Fact
 
 logger = logging.getLogger(__name__)
+
+
+def _get_source_chunk_id(fact: Fact) -> Optional[str]:
+    """Best-effort extraction of a single source chunk id from a Fact.
+
+    We prefer (in order):
+      1) fact.meta["source_chunk_id"]
+      2) first element of fact.source_ids if present
+
+    Returns None if unavailable.
+    """
+    try:
+        if isinstance(getattr(fact, "meta", None), dict):
+            scid = fact.meta.get("source_chunk_id")
+            if isinstance(scid, str) and scid.strip():
+                return scid.strip()
+    except Exception:
+        # Meta is best-effort; never let this crash ingestion.
+        pass
+
+    try:
+        src_ids = getattr(fact, "source_ids", None)
+        if isinstance(src_ids, list) and src_ids:
+            first = src_ids[0]
+            if isinstance(first, str) and first.strip():
+                return first.strip()
+    except Exception:
+        pass
+
+    return None
+
+
+def _validate_fact_for_graph(fact: Fact) -> None:
+    """Validate minimal invariants required for graph provenance."""
+    missing: List[str] = []
+
+    if not getattr(fact, "id", None):
+        missing.append("id")
+    if not getattr(fact, "subject", None):
+        missing.append("subject")
+    if not getattr(fact, "predicate", None):
+        missing.append("predicate")
+    if getattr(fact, "object", None) is None:
+        missing.append("object")
+
+    # Ownership is mandatory for graph to remain partition-safe.
+    if not getattr(fact, "owner_type", None):
+        missing.append("owner_type")
+    if not getattr(fact, "owner_id", None):
+        missing.append("owner_id")
+
+    if missing:
+        raise ValueError(f"Fact missing required fields for graph update: {missing}")
+
+
+async def _maybe_await(result: Any) -> Any:
+    """Await coroutine results; otherwise return as-is."""
+    if inspect.isawaitable(result):
+        return await result
+    return result
 
 
 async def update_graph(
@@ -13,20 +76,125 @@ async def update_graph(
     *,
     graph_core: Any,
 ) -> int:
-    """
-    Update graph with new facts.
+    """Update the temporal graph with newly extracted semantic facts.
 
-    Returns number of fact edges attempted.
+    This function closes the **fact → graph provenance gap** by ensuring that
+    each upsert includes:
+      - fact_id
+      - owner_type / owner_id
+      - source_chunk_id (best-effort)
+      - timestamps (if graph core supports it)
+
+    Graph is a *derived* store. Failures should not break ingestion, but must be
+    observable.
+
+    Parameters
+    ----------
+    facts:
+        List of semantic Fact objects (authoritative in SQL).
+    graph_core:
+        Graph core instance. Preferred API:
+            insert_fact_triplet(
+                *,
+                fact_id: str,
+                subject: str,
+                predicate: str,
+                object: str,
+                owner_type: str,
+                owner_id: str,
+                source_chunk_id: str | None = None,
+                created_at: datetime | None = None,
+                updated_at: datetime | None = None,
+                meta: dict | None = None,
+            )
+
+        Fallback API (legacy): add_facts(List[Fact])
+
+    Returns
+    -------
+    int
+        Number of fact edges attempted.
     """
     if not facts:
         return 0
+
     if graph_core is None:
         logger.warning("update_graph: graph_core missing; skipping")
         return 0
 
+    # Prefer a provenance-aware API if available.
+    has_insert = hasattr(graph_core, "insert_fact_triplet")
+    has_add_facts = hasattr(graph_core, "add_facts")
+
+    attempted = 0
+    failed = 0
+
+    if not has_insert and not has_add_facts:
+        logger.error(
+            "update_graph: graph_core exposes neither insert_fact_triplet nor add_facts; skipping"
+        )
+        return 0
+
+    if has_insert:
+        # Upsert each fact with explicit provenance.
+        for fact in facts:
+            try:
+                _validate_fact_for_graph(fact)
+                source_chunk_id = _get_source_chunk_id(fact)
+
+                # Meta can include any extra provenance fields; keep it small.
+                meta = {}
+                try:
+                    if isinstance(getattr(fact, "meta", None), dict):
+                        # Only copy a safe subset to avoid dumping large blobs.
+                        for k in ("source_chunk_id", "doc_id", "source_hash", "source_type"):
+                            if k in fact.meta and isinstance(fact.meta[k], (str, int, float, bool)):
+                                meta[k] = fact.meta[k]
+                except Exception:
+                    meta = {}
+
+                res = graph_core.insert_fact_triplet(
+                    fact_id=str(fact.id),
+                    subject=str(fact.subject),
+                    predicate=str(fact.predicate),
+                    object=str(fact.object),
+                    owner_type=str(fact.owner_type),
+                    owner_id=str(fact.owner_id),
+                    source_chunk_id=source_chunk_id,
+                    created_at=getattr(fact, "created_at", None),
+                    updated_at=getattr(fact, "updated_at", None),
+                    meta=meta or None,
+                )
+                await _maybe_await(res)
+                attempted += 1
+            except Exception:
+                failed += 1
+                logger.exception(
+                    "update_graph: failed to upsert fact into graph (fact_id=%s)",
+                    getattr(fact, "id", "<missing>"),
+                )
+
+        if failed:
+            logger.warning(
+                "update_graph: completed with failures attempted=%d failed=%d",
+                attempted,
+                failed,
+            )
+        else:
+            logger.info("update_graph: upserted %d fact(s) into graph", attempted)
+
+        return attempted
+
+    # Fallback path: legacy add_facts(List[Fact]).
+    # NOTE: This may NOT guarantee provenance in the graph backend.
     try:
-        graph_core.add_facts(facts)
-        return len(facts)
+        res = graph_core.add_facts(facts)
+        await _maybe_await(res)
+        attempted = len(facts)
+        logger.warning(
+            "update_graph: used legacy add_facts API; provenance fields may be missing in the graph"
+        )
+        return attempted
     except Exception:
-        logger.exception("update_graph: graph update failed")
+        logger.exception("update_graph: legacy graph update failed")
         return 0

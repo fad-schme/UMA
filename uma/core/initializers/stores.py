@@ -20,7 +20,7 @@ from ...stores.document_sql import DocumentSQLStore
 logger = logging.getLogger(__name__)
 
 
-def initialize_stores(memory: "Any") -> None:
+def initialize_stores(memory: "Any") -> dict:
     """
     Wire SQL + vector stores based on UMA's unified storage config.
     """
@@ -145,10 +145,12 @@ def initialize_stores(memory: "Any") -> None:
     chunk_idx = vector_init(dim)
 
     try:
-        memory.episodic_store = EpisodicSQLStore(epi_db, epi_idx)
-        memory.semantic_store = SemanticSQLStore(sem_db, sem_idx)
-        memory.procedural_store = ProceduralSQLStore(pro_db, pro_idx)
-        memory.chunk_store = ChunkSQLStore(chunk_db, chunk_idx)
+        stores = {
+            "episodic": EpisodicSQLStore(epi_db, epi_idx),
+            "semantic": SemanticSQLStore(sem_db, sem_idx),
+            "procedural": ProceduralSQLStore(pro_db, pro_idx),
+            "chunk": ChunkSQLStore(chunk_db, chunk_idx),
+        }
         memory.document_store = DocumentSQLStore(doc_db)
     except Exception:
         logger.exception("Failed to initialize one or more SQL/vector stores.")
@@ -161,3 +163,4 @@ def initialize_stores(memory: "Any") -> None:
         db_root,
         dim,
     )
+    return stores

@@ -13,17 +13,43 @@ class DummyLLM:
         self.last_messages = messages
         return "summary"
 
+class DummyWMConfig:
+    def __init__(
+        self,
+        max_tokens,
+        warning_ratio,
+        hard_limit_ratio,
+        chunk_size,
+        keep_recent_messages,
+        keep_recent_token_fraction,
+    ):
+        self.max_tokens = max_tokens
+        self.warning_ratio = warning_ratio
+        self.hard_limit_ratio = hard_limit_ratio
+        self.chunk_size = chunk_size
+        self.keep_recent_messages = keep_recent_messages
+        self.keep_recent_token_fraction = keep_recent_token_fraction
+
+
+class DummyMemoryClient:
+    def __init__(self, wm_cfg):
+        self.working_memory_cfg = wm_cfg
+
 
 def test_working_memory_chunked_compaction():
     llm = DummyLLM()
-    wm = WorkingMemoryCore(
-        llm=llm,
+    wm_cfg = DummyWMConfig(
         max_tokens=120,
         warning_ratio=0.2,
         hard_limit_ratio=0.9,
         chunk_size=2,
         keep_recent_messages=1,
         keep_recent_token_fraction=0.0,
+    )
+    mem = DummyMemoryClient(wm_cfg)
+    wm = WorkingMemoryCore(
+        llm=llm,
+        memory_client=mem,
     )
 
     user_id = "u1"
@@ -42,14 +68,18 @@ def test_working_memory_chunked_compaction():
 
 def test_working_memory_emergency_prune():
     llm = DummyLLM()
-    wm = WorkingMemoryCore(
-        llm=llm,
+    wm_cfg = DummyWMConfig(
         max_tokens=20,
         warning_ratio=0.1,
         hard_limit_ratio=0.9,
         chunk_size=2,
         keep_recent_messages=1,
         keep_recent_token_fraction=0.0,
+    )
+    mem = DummyMemoryClient(wm_cfg)
+    wm = WorkingMemoryCore(
+        llm=llm,
+        memory_client=mem,
     )
 
     user_id = "u2"

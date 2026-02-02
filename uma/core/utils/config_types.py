@@ -114,6 +114,31 @@ class EmbeddingConfig:
 
 
 # ---------------------------------------------------------------------------
+# Storage config
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class StorageConfig:
+    db_root: str
+    sql_backend: str
+    vector_backend: str
+    vector_config: Dict[str, Any] = field(default_factory=dict)
+    graph_backend: str = "disabled"
+    graph_config: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "StorageConfig":
+        return cls(
+            db_root=d["db_root"],
+            sql_backend=d["sql_backend"],
+            vector_backend=d["vector_backend"],
+            vector_config=d.get("vector_config") or {},
+            graph_backend=d.get("graph_backend", "disabled"),
+            graph_config=d.get("graph_config") or {},
+        )
+
+
+# ---------------------------------------------------------------------------
 # Memory stores: episodic, semantic, procedural
 # ---------------------------------------------------------------------------
 
@@ -207,7 +232,7 @@ class RetrievalConfig:
         rlm_obj: Optional[RLMConfig] = None
         if isinstance(rlm_cfg, dict):
             rlm_obj = RLMConfig(
-                enabled=bool(rlm_cfg.get("enabled", False)),
+                enabled=True,
                 test_mode=bool(rlm_cfg.get("test_mode", False)),
                 max_steps=int(rlm_cfg.get("max_steps", 4)),
                 max_actions_per_step=int(rlm_cfg.get("max_actions_per_step", 2)),
@@ -220,7 +245,6 @@ class RetrievalConfig:
                 max_eval_rounds=int(rlm_cfg.get("max_eval_rounds", 2)),
                 max_eval_chunks=int(rlm_cfg.get("max_eval_chunks", 12)),
                 max_snippet_chars=int(rlm_cfg.get("max_snippet_chars", 320)),
-                deterministic_only=bool(rlm_cfg.get("deterministic_only", False)),
                 semantic_first=bool(rlm_cfg.get("semantic_first", True)),
                 clusters_first=bool(rlm_cfg.get("clusters_first", True)),
                 salience_threshold=float(rlm_cfg.get("salience_threshold", 0.6)),
@@ -235,6 +259,8 @@ class RetrievalConfig:
                     else None
                 ),
             )
+        else:
+            rlm_obj = RLMConfig(enabled=True)
 
         return cls(
             max_episodes=int(d["max_episodes"]),
@@ -262,7 +288,6 @@ class RLMConfig:
     max_eval_rounds: int = 2
     max_eval_chunks: int = 12
     max_snippet_chars: int = 320
-    deterministic_only: bool = False
     semantic_first: bool = True
     clusters_first: bool = True
     salience_threshold: float = 0.6
@@ -375,4 +400,51 @@ class ConsolidationConfig:
             cluster_similarity=d["cluster_similarity"],
             max_episodes_per_cycle=d["max_episodes_per_cycle"],
             prune_min_fact_salience=d["prune_min_fact_salience"],   # ← REQUIRED FIELD
+        )
+
+
+# ---------------------------------------------------------------------------
+# Unified runtime config
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    storage: StorageConfig
+    llm: LLMConfig
+    agent_llm: LLMConfig
+    embedding: EmbeddingConfig
+    working_memory: WorkingMemorySettings
+    retrieval: RetrievalConfig
+    features: FeaturesConfig
+    consolidation: ConsolidationConfig
+    semantic_salience_threshold: float
+
+    @classmethod
+    def from_uma_config(cls, cfg: Dict[str, Any]) -> "RuntimeConfig":
+        llms_cfg = LLMsConfig.from_dict(cfg) if isinstance(cfg, dict) else None
+        llm_cfg = llms_cfg.uma if llms_cfg else LLMConfig.from_dict(cfg["llm"])
+        agent_llm_cfg = llms_cfg.agent if llms_cfg else llm_cfg
+
+        embedding_cfg = EmbeddingConfig.from_dict(cfg["embedding"])
+        working_memory_cfg = WorkingMemorySettings.from_dict(cfg["working_memory"])
+        retrieval_cfg = RetrievalConfig.from_dict(cfg["retrieval"])
+        features_cfg = FeaturesConfig.from_dict(cfg.get("features") or {})
+        consolidation_cfg = ConsolidationConfig.from_dict(cfg["consolidation"])
+        storage_cfg = StorageConfig.from_dict(cfg["storage"])
+
+        semantic_section = cfg.get("semantic", {}) if isinstance(cfg, dict) else {}
+        semantic_salience = semantic_section.get("salience_threshold")
+        if semantic_salience is None:
+            semantic_salience = consolidation_cfg.prune_min_fact_salience
+
+        return cls(
+            storage=storage_cfg,
+            llm=llm_cfg,
+            agent_llm=agent_llm_cfg,
+            embedding=embedding_cfg,
+            working_memory=working_memory_cfg,
+            retrieval=retrieval_cfg,
+            features=features_cfg,
+            consolidation=consolidation_cfg,
+            semantic_salience_threshold=float(semantic_salience),
         )

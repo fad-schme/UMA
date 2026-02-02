@@ -66,7 +66,7 @@ Internal retrieval components
 
     • memory_env
         An instance of UMAMemoryEnvironment.
-        This provides a safe, read-only abstraction over UMA memory stores
+        This provides a safe, read-only retrieval environment
         used exclusively by the RLMController.
 
     • rlm_controller
@@ -96,21 +96,9 @@ import logging
 import os
 from typing import Any, Dict, Optional
 
-try:
-    from .utils.user_query_helper import extract_query_terms
-except Exception:  # pragma: no cover
-    extract_query_terms = None
 
 from .memory_config import UMAConfig     # YAML loader + validation (dict-like)
-from .utils.config_types import (
-    LLMConfig,
-    LLMsConfig,
-    EmbeddingConfig,
-    WorkingMemorySettings,
-    RetrievalConfig,
-    FeaturesConfig,
-    ConsolidationConfig,
-)
+from .utils.config_types import RuntimeConfig
 
 from .utils.hooks import UMAHooks
 from .utils.identity import ensure_user_subject
@@ -120,18 +108,25 @@ from .episodic.core import EpisodicCore
 from .episodic.indexer import EpisodeIndexer
 from .episodic.policies import EpisodicRetentionPolicy
 from .semantic.core import SemanticCore
+from .procedural.core import ProceduralCore
+from .chunk.core import ChunkCore
 from .retrieval.service import RetrievalService
 from .graph import TemporalGraphCore
-from .initializers.providers import initialize_embedder, initialize_llm
+from .initializers.runtime import (
+    ensure_embedder,
+    ensure_features,
+    ensure_graph,
+    ensure_llm,
+    ensure_pipeline,
+    ensure_retrieval,
+    ensure_rlm,
+    ensure_cores,
+    ensure_stores,
+)
 
 # Stores
-from ..stores.episodic_sql import EpisodicSQLStore
-from ..stores.semantic_sql import SemanticSQLStore
-from ..stores.procedural_sql import ProceduralSQLStore
-
 from .utils.config_types import parse_plugin_spec
 
-from .initializers.stores import initialize_stores
 
 # Optional Features
 from .utils.registry import FeatureLoader, FeaturePolicy, default_feature_registry
@@ -200,28 +195,27 @@ class UMAMemory:
         self._config_path = config_path or getattr(config, "_source_path", None)
         self._config_dir = getattr(config, "_source_dir", None)
         self.initialized: bool = False
+        self._features_initialized: bool = False
 
         # RLM components (initialized later)
         self.memory_env = None
         self.rlm_controller = None
 
-        # Typed config objects for subsystems that benefit from strong typing
-        # UMA LLM config (internal). Agent LLM is optional metadata.
-        llms_cfg = LLMsConfig.from_dict(config) if isinstance(config, dict) else None
-        self.llm_cfg = llms_cfg.uma if llms_cfg else LLMConfig.from_dict(config.llm)
-        self.agent_llm_cfg = llms_cfg.agent if llms_cfg else self.llm_cfg
-        self.embedding_cfg = EmbeddingConfig.from_dict(config.embedding)
-        self.working_memory_cfg = WorkingMemorySettings.from_dict(config.working_memory)
-        self.retrieval_cfg = RetrievalConfig.from_dict(config.retrieval)
-        self.features_cfg = FeaturesConfig.from_dict(config.features)
-        self.consolidation_cfg = ConsolidationConfig.from_dict(config.consolidation)
+        # Unified runtime config
+        self.cfg = RuntimeConfig.from_uma_config(config)
+        self.llm_cfg = self.cfg.llm
+        self.agent_llm_cfg = self.cfg.agent_llm
+        self.embedding_cfg = self.cfg.embedding
+        self.working_memory_cfg = self.cfg.working_memory
+        self.retrieval_cfg = self.cfg.retrieval
+        self.features_cfg = self.cfg.features
+        self.consolidation_cfg = self.cfg.consolidation
+        self.semantic_salience_threshold = self.cfg.semantic_salience_threshold
         self.agent_id = None
         self.project_id = None
-        semantic_section = config.get("semantic", {}) if isinstance(config, dict) else {}
-        semantic_salience = semantic_section.get("salience_threshold")
-        if semantic_salience is None:
-            semantic_salience = self.consolidation_cfg.prune_min_fact_salience
-        self.semantic_salience_threshold = float(semantic_salience)
+
+        # Internal store registry (core-only access; no direct store usage outside cores)
+        self._stores: Dict[str, Any] = {}
 
         # Hooks + Feature attachment registry
         self.hooks = UMAHooks()
@@ -236,10 +230,6 @@ class UMAMemory:
         self.agent_llm: Any = None
         self.embedder: Any = None
 
-        self.episodic_store: Optional[EpisodicSQLStore] = None
-        self.semantic_store: Optional[SemanticSQLStore] = None
-        self.procedural_store: Optional[ProceduralSQLStore] = None
-        self.chunk_store: Optional[Any] = None
         self.document_store: Optional[Any] = None
 
         self.working_memory: Optional[WorkingMemoryCore] = None
@@ -247,6 +237,8 @@ class UMAMemory:
         self.episodic_core: Optional[EpisodicCore] = None
         self.retrieval_service: Optional[RetrievalService] = None
         self.graph_core: Optional[TemporalGraphCore] = None
+        self.procedural_core: Optional[ProceduralCore] = None
+        self.chunk_core: Optional[ChunkCore] = None
 
         logger.info("UMAMemory instance created with unified storage config.")
 
@@ -254,112 +246,57 @@ class UMAMemory:
     # Initialization Entry Point
     # ----------------------------------------------------------------------
 
-    def initialize(self) -> None:
+    def initialize(self, profile: str = "full") -> None:
         """
-        Initialize all REQUIRED UMA subsystems in a safe, idempotent way.
+        Initialize UMA subsystems in a safe, idempotent way.
 
-        RetrievalService is wired exactly once and never overwritten.
+        Profiles
+        --------
+        - minimal   : config-only (no heavy services)
+        - retrieval : embedder + stores + cores + retrieval (+ RLM if enabled)
+        - ingestion : llm + embedder + stores + cores + pipeline (+ features)
+        - full      : all subsystems
         """
         if self.initialized:
             logger.debug("UMAMemory.initialize(): already initialized — skipping.")
             return
 
-        logger.info("Initializing UMA Memory Runtime...")
+        self.warmup(profile=profile)
 
-        # 1. Load LLM
-        initialize_llm(self)
+        logger.info("UMA Memory Runtime initialized successfully (profile=%s).", profile)
 
-        # 2. Load embedder
-        initialize_embedder(self)
+    def warmup(self, profile: str = "full") -> None:
+        """
+        Warm up UMA subsystems on-demand.
+        """
+        profile_norm = (profile or "full").strip().lower()
+        logger.info("UMAMemory.warmup(profile=%s)", profile_norm)
 
-        # 3. Load stores (episodic + semantic + procedural)
-        self._init_stores()
+        if profile_norm == "minimal":
+            self.initialized = True
+            return
 
-        # 4. Load core subsystems (WM, EpisodicCore, SemanticCore)
-        self._init_core_subsystems()
+        if profile_norm in {"retrieval", "full"}:
+            ensure_llm(self)
+            ensure_embedder(self)
+            ensure_stores(self)
+            ensure_cores(self)
+            ensure_retrieval(self)
+            ensure_rlm(self)
 
-        # 5. Initialize graph backend (optional)
-        self._init_graph_core()
+        if profile_norm in {"ingestion", "full"}:
+            ensure_llm(self)
+            ensure_embedder(self)
+            ensure_stores(self)
+            ensure_cores(self)
+            ensure_features(self)
+            ensure_pipeline(self)
 
-        # 6. Register optional features
-        self._init_optional_features()
+        if profile_norm == "full":
+            ensure_graph(self)
 
-        # 7. Initialize pipeline for ingestion
-        if getattr(self, "pipeline", None) is None:
-            from .utils.pipeline import MemoryPipeline
-
-            self.pipeline = MemoryPipeline(memory_client=self, hooks=self.hooks, promotion_policy=self.promotion_policy)
-
-            
-
-        # 8. Wire RetrievalService EXACTLY once
-        if self.retrieval_service is None:
-            try:
-                self.retrieval_service = RetrievalService(
-                    memory=self,
-                    retr_cfg=self.retrieval_cfg,
-                )
-                logger.info("RetrievalService wired to UMAMemory.")
-            except Exception:
-                logger.exception("Failed to initialize RetrievalService.")
-                raise
-        else:
-            logger.debug("RetrievalService already initialized — not overwriting.")
-
-        # 9. Wire RLM Controller (optional, retrieval-side only)
-        rlm_cfg = self.retrieval_cfg.rlm
-
-        if rlm_cfg is not None and rlm_cfg.enabled:
-            try:
-                from .retrieval.rlm.environment import UMAMemoryEnvironment
-                from .retrieval.rlm.controller import RLMController
-
-                self.memory_env = UMAMemoryEnvironment(self)
-
-                self.rlm_controller = RLMController(
-                    llm=self.llm,  # SAME LLM, control role
-                    env=self.memory_env,
-                    test_mode=rlm_cfg.test_mode,
-                    max_steps=rlm_cfg.max_steps,
-                    max_actions_per_step=rlm_cfg.max_actions_per_step,
-                    max_items_per_type=rlm_cfg.max_items_per_type,
-                    llm_max_tokens=rlm_cfg.llm_max_tokens,
-                    timeout_s=rlm_cfg.timeout_s,
-                    max_env_calls=rlm_cfg.max_env_calls,
-                    max_return_chars=rlm_cfg.max_return_chars,
-                    extract_snippets=rlm_cfg.extract_snippets,
-                    max_eval_rounds=rlm_cfg.max_eval_rounds,
-                    max_eval_chunks=rlm_cfg.max_eval_chunks,
-                    max_snippet_chars=rlm_cfg.max_snippet_chars,
-                    deterministic_only=rlm_cfg.deterministic_only,
-                    semantic_first=rlm_cfg.semantic_first,
-                    clusters_first=rlm_cfg.clusters_first,
-                    salience_threshold=rlm_cfg.salience_threshold,
-                    min_semantic_facts=rlm_cfg.min_semantic_facts,
-                    min_high_salience_facts=rlm_cfg.min_high_salience_facts,
-                    min_cluster_summaries=rlm_cfg.min_cluster_summaries,
-                    cluster_k=rlm_cfg.cluster_k,
-                    graph_predicate_limit=rlm_cfg.graph_predicate_limit,
-                    predicate_weights=rlm_cfg.predicate_weights,
-                )
-
-                logger.info("RLMController enabled and wired.")
-
-            except Exception:
-                logger.exception(
-                    "Failed to initialize RLMController; falling back to classic retrieval."
-                )
-                self.rlm_controller = None
-        else:
-            logger.info("RLMController disabled by config.")
-
-        # Mark initialization complete
         self.initialized = True
-        logger.info("UMA Memory Runtime initialized successfully.")
 
-    # ----------------------------------------------------------------------
-    # LLM + Embedder Initialization (Typed Configs)
-    # ----------------------------------------------------------------------
 
 
     # ----------------------------------------------------------------------
@@ -369,7 +306,7 @@ class UMAMemory:
         """
         Delegate store wiring to the initializer helper.
         """
-        initialize_stores(self)
+        self._stores = initialize_stores(self)
 
     # ----------------------------------------------------------------------
     # Core Subsystems (WM, Episodic, Semantic ONLY — Retrieval wired in initialize)
@@ -385,6 +322,8 @@ class UMAMemory:
             - WorkingMemoryCore
             - EpisodicCore
             - SemanticCore
+            - ProceduralCore
+            - ChunkCore
 
         RetrievalService is *NOT* wired here anymore — it is initialized
         exactly once inside initialize() to preserve idempotency.
@@ -395,32 +334,19 @@ class UMAMemory:
                 "be initialized before core subsystems."
             )
 
-        if self.episodic_store is None or self.semantic_store is None:
+        if not self._stores:
             raise RuntimeError(
-                "UMAMemory._init_core_subsystems: episodic_store and "
-                "semantic_store must be initialized before core subsystems."
+                "UMAMemory._init_core_subsystems: stores must be initialized "
+                "before core subsystems."
             )
 
         # ---------------------- Working Memory Core ----------------------
         try:
-            wm_cfg = self.working_memory_cfg
             self.working_memory = WorkingMemoryCore(
                 llm=self.llm,
-                max_tokens=wm_cfg.max_tokens,
-                warning_ratio=wm_cfg.warning_ratio,
-                hard_limit_ratio=wm_cfg.hard_limit_ratio,
-                chunk_size=wm_cfg.chunk_size,
-                keep_recent_messages=getattr(wm_cfg, "keep_recent_messages", 4),
-                keep_recent_token_fraction=getattr(wm_cfg, "keep_recent_token_fraction", 0.1),
+                memory_client=self,
             )
-            logger.info("WorkingMemoryCore chunk_size set to %d", wm_cfg.chunk_size)
-
-            logger.info(
-                "WorkingMemoryCore initialized (max_tokens=%d, warn=%.2f, hard=%.2f)",
-                wm_cfg.max_tokens,
-                wm_cfg.warning_ratio,
-                wm_cfg.hard_limit_ratio,
-            )
+            logger.info("WorkingMemoryCore initialized.")
         except Exception:
             logger.exception("UMAMemory: failed to initialize WorkingMemoryCore.")
             raise
@@ -437,7 +363,7 @@ class UMAMemory:
             )
 
             self.episodic_core = EpisodicCore(
-                episodic_store=self.episodic_store,
+                episodic_store=self._stores["episodic"],
                 episode_indexer=indexer,
                 retention_policy=retention,
             )
@@ -452,7 +378,7 @@ class UMAMemory:
             self.semantic_core = SemanticCore(
                 llm=self.llm,
                 embedder=self.embedder,
-                semantic_store=self.semantic_store,
+                semantic_store=self._stores["semantic"],
                 salience_threshold=sal,
             )
             logger.info(
@@ -461,6 +387,22 @@ class UMAMemory:
             )
         except Exception:
             logger.exception("UMAMemory: failed to initialize SemanticCore.")
+            raise
+
+        # ---------------------- Procedural Core -------------------------
+        try:
+            self.procedural_core = ProceduralCore(self._stores["procedural"])
+            logger.info("ProceduralCore initialized.")
+        except Exception:
+            logger.exception("UMAMemory: failed to initialize ProceduralCore.")
+            raise
+
+        # ---------------------- Chunk Core ------------------------------
+        try:
+            self.chunk_core = ChunkCore(self._stores["chunk"])
+            logger.info("ChunkCore initialized.")
+        except Exception:
+            logger.exception("UMAMemory: failed to initialize ChunkCore.")
             raise
 
 
@@ -568,9 +510,9 @@ class UMAMemory:
         loader = FeatureLoader(registry, self._feature_policy)
 
         services = {
-            "store": self.procedural_store,
-            "episodic_store": self.episodic_store,
-            "semantic_store": self.semantic_store,
+            "procedural_core": self.procedural_core,
+            "episodic_core": self.episodic_core,
+            "semantic_core": self.semantic_core,
             "llm": self.llm,
             "embedder": self.embedder,
             "hooks": self.hooks,
@@ -630,7 +572,8 @@ class UMAMemory:
     async def rebuild_vector_indexes(
         self,
         *,
-        user_id: Optional[str] = None,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
         include_episodic: bool = True,
         include_semantic: bool = True,
         include_procedural: bool = True,
@@ -643,10 +586,10 @@ class UMAMemory:
         """
         from .utils.maintenance import rebuild_vector_indexes
 
-        user_subject = ensure_user_subject(user_id) if user_id else None
         return await rebuild_vector_indexes(
             self,
-            user_id=user_subject,
+            owner_type=owner_type,
+            owner_id=owner_id,
             include_episodic=include_episodic,
             include_semantic=include_semantic,
             include_procedural=include_procedural,
@@ -692,6 +635,8 @@ class UMAMemory:
         user_subject = ensure_user_subject(user_id)
 
         with timed("uma.get_user_context.latency"):
+            if not self.initialized:
+                self.warmup(profile="retrieval")
             # 1) Stored WM
             try:
                 wm_stored = (
@@ -729,19 +674,9 @@ class UMAMemory:
                         user_id=user_subject,
                         query_text=query_text,
                     )
-                    coverage = getattr(pack, "coverage", None)
-                    if "insufficient_evidence" in (pack.warnings or []):
-                        increment("uma.get_user_context.calls", tags={"path": "rlm_empty"})
-                        return {
-                            "working_memory": [],
-                            "episodic": [],
-                            "semantic": [],
-                            "chunks": [],
-                            "procedural": [],
-                            "graph": [],
-                        }
                     increment("uma.get_user_context.calls", tags={"path": "rlm"})
-                    semantic = await self._augment_semantic_with_text(user_id, query_text, pack.facts)
+                    coverage = getattr(pack, "coverage", None)
+                    semantic = pack.facts or []
                     from .retrieval.rlm.policy import compute_confidence
                     return {
                         "working_memory": wm_stored,
@@ -783,7 +718,6 @@ class UMAMemory:
 
             increment("uma.get_user_context.calls", tags={"path": "classic"})
         semantic = retrieved.get("facts", retrieved.get("semantic", [])) or []
-        semantic = await self._augment_semantic_with_text(user_subject, query_text, semantic)
         return {
             "working_memory": wm_stored,
             "episodic": retrieved.get("episodes", []) or [],
@@ -794,50 +728,6 @@ class UMAMemory:
             "trace": [],
             "confidence": {},
         }
-
-    async def _augment_semantic_with_text(
-        self,
-        user_id: str,
-        query_text: str,
-        semantic: list,
-    ) -> list:
-        if not query_text:
-            return semantic
-        if extract_query_terms:
-            terms = extract_query_terms(query_text)
-        else:
-            terms = []
-        if not terms:
-            return semantic
-        if semantic and self._semantic_contains_terms(semantic, terms):
-            return semantic
-        store = getattr(self, "semantic_store", None)
-        if store is None or not hasattr(store, "search_text"):
-            return semantic
-        try:
-            extras = await store.search_text(query_text, subject=user_id, limit=5)
-        except Exception:
-            return semantic
-        if not extras:
-            return semantic
-        existing_ids = {getattr(f, "id", None) for f in semantic}
-        for fact in extras:
-            if getattr(fact, "id", None) not in existing_ids:
-                semantic.append(fact)
-        return semantic
-
-    @staticmethod
-    def _semantic_contains_terms(semantic: list, terms: list[str]) -> bool:
-        for fact in semantic:
-            obj = getattr(fact, "object", None)
-            if isinstance(obj, dict):
-                text = " ".join(str(v) for v in obj.values() if v)
-            else:
-                text = str(obj or "")
-            haystack = f"{getattr(fact, 'subject', '')} {getattr(fact, 'predicate', '')} {text}".lower()
-            if any(t in haystack for t in terms):
-                return True
-        return False
 
     async def process_turn(
         self,
@@ -852,7 +742,7 @@ class UMAMemory:
         This is the primary ingestion API and wraps the internal pipeline.
         """
         if not self.initialized:
-            raise RuntimeError("UMAMemory.process_turn requires initialized memory.")
+            self.warmup(profile="ingestion")
         if not getattr(self, "pipeline", None):
             raise RuntimeError("UMAMemory.process_turn: pipeline not initialized.")
 
@@ -877,7 +767,7 @@ class UMAMemory:
         Ingest an unstructured document into UMA memory.
         """
         if not self.initialized:
-            raise RuntimeError("UMAMemory.ingest_document requires initialized memory.")
+            self.warmup(profile="ingestion")
         from .ingest.ingest_service import ingest_document as _ingest
         return await _ingest(
             file_path,

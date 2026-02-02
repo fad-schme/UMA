@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Optional
 
 from .context_pack import ContextPack
 from .decisions import ControllerDecision, RetrievalAction
-from .environment import MemoryEnvironment
 from .policy import assess_coverage
 from ..policy import RetrievalPolicy, should_stop
 from ...utils.identity import ensure_user_subject
@@ -43,67 +42,50 @@ class RLMController:
     def __init__(
         self,
         llm: Any,
-        env: MemoryEnvironment,
-        *,
-        deterministic_only: bool = True,
-        timeout_s: float = 20.0,
-        max_steps: int = 4,
-        max_actions_per_step: int = 2,
-        max_env_calls: int = 12,
-        max_items_per_type: int = 30,
-        llm_max_tokens: int = 300,
-        salience_threshold: float = 0.6,
-        min_semantic_facts: int = 4,
-        min_high_salience_facts: int = 2,
-        min_cluster_summaries: int = 1,
-        cluster_k: int = 3,
-        graph_predicate_limit: int = 2,
-        predicate_weights: Optional[Dict[str, float]] = None,
-        novelty_window: int = 2,
-        min_recent_novelty: int = 1,
-        max_state_chars: int = 1200,
-        test_mode: bool = False,
-        extract_snippets: bool = True,
-        max_return_chars: int = 1200,
-        max_eval_rounds: int = 2,
-        max_eval_chunks: int = 12,
-        max_snippet_chars: int = 320,
-        semantic_first: bool = True,
-        clusters_first: bool = True,
+        env: Any,
     ) -> None:
         self.llm = llm
         self.env = env
 
-        self.deterministic_only = bool(deterministic_only)
-        self.timeout_s = float(timeout_s)
+        rlm_cfg = None
+        try:
+            memory = getattr(env, "_memory", None)
+            retrieval_cfg = getattr(memory, "retrieval_cfg", None)
+            rlm_cfg = getattr(retrieval_cfg, "rlm", None) if retrieval_cfg else None
+        except Exception:
+            rlm_cfg = None
 
-        self.max_steps = int(max_steps)
-        self.max_actions_per_step = int(max_actions_per_step)
-        self.max_env_calls = int(max_env_calls)
-        self.max_items_per_type = int(max_items_per_type)
-        self.llm_max_tokens = int(llm_max_tokens)
+        self.timeout_s = float(getattr(rlm_cfg, "timeout_s", 20.0))
 
-        self.salience_threshold = float(salience_threshold)
-        self.min_semantic_facts = max(1, int(min_semantic_facts))
-        self.min_high_salience_facts = max(0, int(min_high_salience_facts))
-        self.min_cluster_summaries = max(0, int(min_cluster_summaries))
+        self.max_steps = int(getattr(rlm_cfg, "max_steps", 4))
+        self.max_actions_per_step = int(getattr(rlm_cfg, "max_actions_per_step", 2))
+        self.max_env_calls = int(getattr(rlm_cfg, "max_env_calls", 12))
+        self.max_items_per_type = int(getattr(rlm_cfg, "max_items_per_type", 30))
+        self.llm_max_tokens = int(getattr(rlm_cfg, "llm_max_tokens", 300))
 
-        self.cluster_k = max(1, int(cluster_k))
-        self.graph_predicate_limit = max(1, int(graph_predicate_limit))
-        self.predicate_weights = self._normalize_predicate_weights(predicate_weights)
+        self.salience_threshold = float(getattr(rlm_cfg, "salience_threshold", 0.6))
+        self.min_semantic_facts = max(1, int(getattr(rlm_cfg, "min_semantic_facts", 4)))
+        self.min_high_salience_facts = max(0, int(getattr(rlm_cfg, "min_high_salience_facts", 2)))
+        self.min_cluster_summaries = max(0, int(getattr(rlm_cfg, "min_cluster_summaries", 1)))
 
-        self.novelty_window = max(1, int(novelty_window))
-        self.min_recent_novelty = max(0, int(min_recent_novelty))
+        self.cluster_k = max(1, int(getattr(rlm_cfg, "cluster_k", 3)))
+        self.graph_predicate_limit = max(1, int(getattr(rlm_cfg, "graph_predicate_limit", 2)))
+        self.predicate_weights = self._normalize_predicate_weights(
+            getattr(rlm_cfg, "predicate_weights", None)
+        )
 
-        self.max_state_chars = max(200, int(max_state_chars))
-        self.test_mode = bool(test_mode)
-        self.extract_snippets = bool(extract_snippets)
-        self.max_return_chars = int(max_return_chars)
-        self.max_eval_rounds = int(max_eval_rounds)
-        self.max_eval_chunks = int(max_eval_chunks)
-        self.max_snippet_chars = int(max_snippet_chars)
-        self.semantic_first = bool(semantic_first)
-        self.clusters_first = bool(clusters_first)
+        self.novelty_window = max(1, int(getattr(rlm_cfg, "novelty_window", 2)))
+        self.min_recent_novelty = max(0, int(getattr(rlm_cfg, "min_recent_novelty", 1)))
+
+        self.max_state_chars = max(200, int(getattr(rlm_cfg, "max_state_chars", 1200)))
+        self.test_mode = bool(getattr(rlm_cfg, "test_mode", False))
+        self.extract_snippets = bool(getattr(rlm_cfg, "extract_snippets", True))
+        self.max_return_chars = int(getattr(rlm_cfg, "max_return_chars", 1200))
+        self.max_eval_rounds = int(getattr(rlm_cfg, "max_eval_rounds", 2))
+        self.max_eval_chunks = int(getattr(rlm_cfg, "max_eval_chunks", 12))
+        self.max_snippet_chars = int(getattr(rlm_cfg, "max_snippet_chars", 320))
+        self.semantic_first = bool(getattr(rlm_cfg, "semantic_first", True))
+        self.clusters_first = bool(getattr(rlm_cfg, "clusters_first", True))
 
     # ------------------------------------------------------------------
     # PUBLIC API
@@ -117,10 +99,9 @@ class RLMController:
 
         policy = RetrievalPolicy(query_text)
         logger.info(
-            "RLMController.retrieve_context: start user_id=%s query=%r deterministic_only=%s",
+            "RLMController.retrieve_context: start user_id=%s query=%r",
             user_id,
             query_text,
-            self.deterministic_only,
         )
         start = time.time()
         user_subject = ensure_user_subject(user_id)
@@ -134,9 +115,13 @@ class RLMController:
             any(k in query_text.lower() for k in ["remember", "recall", "previous", "earlier", "last time"]),
         )
 
-        pack = ContextPack(user_id=user_subject, query_text=query_text)
+        pack = ContextPack(user_id=user_subject, query_text=query_text, owner_type="user")
 
-        pack.working_memory = await self.env.get_working_memory(user_subject)
+        pack.working_memory = []
+        if hasattr(self.env, "_memory"):
+            wm = getattr(getattr(self.env, "_memory", None), "working_memory", None)
+            if wm is not None:
+                pack.working_memory = wm.get_context(user_subject)
         query_embedding = await self.env.get_query_embedding(query_text)
 
         # Pass trace_id to baseline retrieval
@@ -155,6 +140,7 @@ class RLMController:
         )
 
         coverage = self._assess_coverage(pack)
+        pack.coverage = coverage
         pack.steps.append({"step": 0, "coverage": coverage.to_dict()})
 
         stop, reason = should_stop(
@@ -203,6 +189,7 @@ class RLMController:
                 break
 
             coverage = self._assess_coverage(pack)
+            pack.coverage = coverage
             pack.steps.append({"step": step, "coverage": coverage.to_dict()})
             logger.debug(
                 "RLMController: step=%d coverage=%s",
@@ -280,7 +267,6 @@ class RLMController:
                     "search_semantic",
                     "fetch_more_facts",
                     "fetch_facts",
-                    "resolve_conflicts",
                 }:
                     pack.facts = _merge_unique(pack.facts, items, self.max_items_per_type)
                     pack.apply_novelty(items, "facts")
@@ -458,6 +444,9 @@ class RLMController:
                 actions.append(RetrievalAction(action="search_semantic", k=self.max_items_per_type))
 
         if coverage.needs_clusters:
+            has_cluster = any(
+                isinstance(ep, dict) and "episode_ids" in ep for ep in (pack.episodes or [])
+            )
             actions.append(
                 RetrievalAction(
                     action="fetch_episode_clusters",
@@ -466,31 +455,27 @@ class RLMController:
                     min_salience=self.salience_threshold,
                 )
             )
-
-        if coverage.has_contradictions:
-            fact_ids = list(pack.seen_fact_ids)[: self.max_items_per_type]
-            if fact_ids:
+            if not has_cluster and len(pack.steps) >= 2:
                 actions.append(
                     RetrievalAction(
-                        action="resolve_conflicts",
-                        fact_ids=fact_ids,
+                        action="search_episodic",
                         k=self.max_items_per_type,
-                        reason="contradictions",
                     )
                 )
 
         if not pack.graph and pack.facts:
             predicate_scope = self._next_predicate_scope(pack)
-            actions.append(
-                RetrievalAction(
-                    action="expand_graph",
-                    subject=pack.user_id,
-                    predicate=predicate_scope[0] if predicate_scope else None,
-                    hops=1,
-                    direction="outbound",
-                    k=min(self.max_items_per_type, 20),
+            if predicate_scope:
+                actions.append(
+                    RetrievalAction(
+                        action="expand_graph",
+                        subject=pack.user_id,
+                        predicate=predicate_scope[0],
+                        hops=1,
+                        direction="outbound",
+                        k=min(self.max_items_per_type, 20),
+                    )
                 )
-            )
 
         return ControllerDecision(actions=actions) if actions else None
 
@@ -523,6 +508,25 @@ class RLMController:
             logger.debug("RLMController: search_semantic returned %d", len(results or []))
             return results
 
+        if action.action == "search_episodic":
+            results = await self.env.search_episodic(
+                user_id=user_subject,
+                query_embedding=query_embedding,
+                k=k,
+                time_range=action.time_range,
+            )
+            logger.debug("RLMController: search_episodic returned %d", len(results or []))
+            return results
+
+        if action.action == "search_procedural":
+            results = await self.env.search_procedural(
+                user_id=user_subject,
+                query_embedding=query_embedding,
+                k=k,
+            )
+            logger.debug("RLMController: search_procedural returned %d", len(results or []))
+            return results
+
         if action.action == "fetch_more_facts":
             offset = int(action.filters.get("offset", 0)) if action.filters else 0
             # --- FETCH_MORE_FACTS-SPECIFIC TELEMETRY ---
@@ -542,6 +546,14 @@ class RLMController:
                 owner_scope=action.owner_scope,
             )
             logger.debug("RLMController: fetch_more_facts returned %d", len(results or []))
+            return results
+
+        if action.action == "fetch_facts":
+            results = await self.env.fetch_facts_by_ids(
+                user_id=user_subject,
+                ids=action.ids or [],
+            )
+            logger.debug("RLMController: fetch_facts returned %d", len(results or []))
             return results
 
         if action.action == "episodic_clusters":
@@ -587,11 +599,6 @@ class RLMController:
             logger.debug("RLMController: expand_graph returned %d", len(results or []))
             return results
 
-        if action.action == "resolve_conflicts":
-            results = await self.env.resolve_conflicts(user_id=user_subject, fact_ids=action.fact_ids or [])
-            logger.debug("RLMController: resolve_conflicts returned %d", len(results or []))
-            return results
-
         return []
 
     # ------------------------------------------------------------------
@@ -614,6 +621,9 @@ class RLMController:
         for p, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
             if p not in ordered:
                 ordered.append(p)
+
+        if not ordered:
+            ordered = ["RELATED_TO"]
 
         return ordered[: self.graph_predicate_limit]
 

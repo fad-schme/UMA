@@ -371,7 +371,14 @@ class ProceduralSQLStore(BaseVectorSQLStore):
     # Semantic Search
     # ------------------------------------------------------------------ #
 
-    async def search(self, query_embedding: List[float], k: int = 5) -> List[Skill]:
+    async def search(
+        self,
+        query_embedding: List[float],
+        *,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+        k: int = 5,
+    ) -> List[Skill]:
         """
         Retrieve top-k procedural skills by vector similarity.
 
@@ -381,7 +388,7 @@ class ProceduralSQLStore(BaseVectorSQLStore):
             return await self._semantic_search(
                 query_embedding=query_embedding,
                 k=k,
-                filters=None,
+                filters=({"owner_type": owner_type, "owner_id": owner_id} if owner_type and owner_id else None),
                 log_context="procedural_search",
             )
         except Exception:

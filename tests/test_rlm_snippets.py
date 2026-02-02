@@ -1,33 +1,29 @@
 from uma.core.retrieval.rlm.controller import RLMController
-from uma.core.retrieval.rlm.environment import MemoryEnvironment
 
 
-class DummyEnv(MemoryEnvironment):
-    async def retrieve_slice(self, user_id, memory_type, query):
+class DummyEnv:
+    async def search_semantic(self, user_id, query_embedding, k=10, filters=None, query_text=None):
         return []
 
-    async def retrieve_all(self, user_id, query):
-        return {"episodes": [], "facts": [], "skills": [], "graph": []}
-
-    async def get_working_memory(self, user_id):
-        return []
-
-    async def search_semantic(self, user_id, query_embedding, k=10, filters=None):
-        return []
-
-    async def fetch_facts_by_ids(self, user_id, ids):
+    async def search_chunks(self, user_id, query_embedding, k=10):
         return []
 
     async def search_episodic(self, user_id, query_embedding, k=10, time_range=None):
         return []
 
-    async def fetch_episode_summaries(self, ids):
+    async def episodic_cluster_summaries(self, user_id, k=5, max_episodes=50, time_range=None):
         return []
 
-    async def fetch_episode_transcripts(self, ids):
+    async def fetch_episode_clusters(self, user_id, k=5, max_episodes=50, time_range=None, min_salience=None):
+        return []
+
+    async def search_procedural(self, user_id, query_embedding, k=10, filters=None):
         return []
 
     async def graph_neighbors(self, user_id, node_id, predicate_scope=None, depth=1, k=10):
+        return []
+
+    async def expand_graph(self, user_id, subject, predicate=None, hops=1, direction=None, k=10):
         return []
 
     async def get_query_embedding(self, query_text):

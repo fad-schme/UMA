@@ -55,13 +55,20 @@ class EpisodeIndexer:
     # PUBLIC API
     # ------------------------------------------------------------------
 
-    async def build_episode(self, user_id: str, wm_entries: List[Any]):
+    async def build_episode(
+        self,
+        *,
+        owner_type: str,
+        owner_id: str,
+        wm_entries: List[Any],
+    ):
         """
         Build a structured Episode from WM entries.
 
         Parameters
         ----------
-        user_id : str
+        owner_type : str
+        owner_id : str
         wm_entries : List[WMEntry or mapping]
             A sequence of working-memory turns. Items may be WMEntry objects
             or dicts with keys {"role", "content"}. EpisodeMapper produces
@@ -95,12 +102,14 @@ class EpisodeIndexer:
             # Build episode model
             ep = Episode(
                 id=str(uuid.uuid4()),
-                user_id=user_id,
                 timestamp=datetime.utcnow(),
                 summary=summary,
+                user_id=owner_id,
                 raw=transcript,
                 tags=[],
                 meta={},
+                owner_type=owner_type,
+                owner_id=owner_id,
             )
 
             # Embed summary

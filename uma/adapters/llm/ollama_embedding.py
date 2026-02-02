@@ -198,7 +198,7 @@ class OllamaEmbedder(EmbeddingInterface):
     # Native embedding
     # ------------------------------------------------------------------
 
-    @retryable()
+    @retryable(max_attempts=1)
     async def _embed_native(self, texts: List[str]) -> List[List[float]]:
         """
         Perform embedding using Ollama's Python API.

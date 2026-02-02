@@ -8,10 +8,11 @@ Responsibilities
 ----------------
 - Accept an embedding vector (List[float]) and a user_id.
 - Retrieve candidates from:
-    - episodic_store   (async)
-    - semantic_store   (async)
-    - procedural_store (async)
-    - graph_core       (sync; driver-dependent)
+    - episodic_core    (async)
+    - semantic_core    (async)
+    - procedural_core  (async)
+    - chunk_core       (async)
+    - graph_core       (sync)
 - Concurrency: uses asyncio.gather for async stores.
 - NEVER raises: logs exceptions and returns safe empty lists.
 
@@ -21,12 +22,13 @@ Important
 - It does NOT do ranking, dedupe, or truncation logic beyond store-level k.
   Ranking/truncation belongs in MemorySelector.
 
-Expected store signatures (duck-typing)
----------------------------------------
-- episodic_store.search(embedding, user_id, k) -> List[Any]
-- semantic_store.search(embedding, user_id, k) -> List[Any]
-- procedural_store.search(embedding, k) -> List[Any]
-- graph_core.adapter.run_query(cypher, params=dict) -> List[dict]
+Expected core signatures (duck-typing)
+--------------------------------------
+- episodic_core.search(owner_type, owner_id, embedding, k) -> List[Any]
+- semantic_core.search(subject, embedding, k) -> List[Any]
+- procedural_core.search(embedding, k) -> List[Any]
+- chunk_core.search(embedding, k) -> List[Any]
+- graph_core.query(cypher, params=dict) -> List[dict]
 """
 
 from __future__ import annotations
@@ -169,15 +171,17 @@ class MultiStoreRetriever:
         user_id: Optional[str],
         k: int,
     ) -> List[Any]:
-        store = getattr(memory, "episodic_store", None)
-        if store is None:
+        core = getattr(memory, "episodic_core", None)
+        if core is None:
             return []
         if user_id is None:
             return []
         try:
-            res = await store.search(
+            subject = ensure_user_subject(user_id)
+            res = await core.search(
+                owner_type="user",
+                owner_id=subject,
                 query_embedding=emb,
-                user_id=user_id,
                 k=int(k),
             )
             return res if isinstance(res, list) else []
@@ -203,8 +207,8 @@ class MultiStoreRetriever:
             search(query_embedding, subject=None, owner_type=None, owner_id=None, k=...)
         so we MUST call it using keyword arguments to avoid positional mismatch.
         """
-        store = getattr(memory, "semantic_store", None)
-        if store is None:
+        core = getattr(memory, "semantic_core", None)
+        if core is None:
             return []
         if user_id is None:
             return []
@@ -218,9 +222,9 @@ class MultiStoreRetriever:
                 project_id=project_id,
             ):
                 try:
-                    found = await store.search(
-                        query_embedding=emb,
+                    found = await core.search(
                         subject=subject,
+                        query_embedding=emb,
                         owner_type=owner_type,
                         owner_id=owner_id,
                         k=int(k),
@@ -244,11 +248,11 @@ class MultiStoreRetriever:
         emb: List[float],
         k: int,
     ) -> List[Any]:
-        store = getattr(memory, "procedural_store", None)
-        if store is None:
+        core = getattr(memory, "procedural_core", None)
+        if core is None:
             return []
         try:
-            res = await store.search(emb, k)
+            res = await core.search(query_embedding=emb, k=int(k))
             return res if isinstance(res, list) else []
         except Exception:
             logger.exception("MultiStoreRetriever: procedural retrieval failed.")
@@ -264,8 +268,8 @@ class MultiStoreRetriever:
         agent_id: Optional[str] = None,
         project_id: Optional[str] = None,
     ) -> List[Any]:
-        store = getattr(memory, "chunk_store", None)
-        if store is None:
+        core = getattr(memory, "chunk_core", None)
+        if core is None:
             return []
         if user_id is None:
             return []
@@ -278,7 +282,7 @@ class MultiStoreRetriever:
                 project_id=project_id,
             ):
                 try:
-                    found = await store.search(
+                    found = await core.search(
                         query_embedding=emb,
                         owner_type=owner_type,
                         owner_id=owner_id,
@@ -320,13 +324,6 @@ class MultiStoreRetriever:
         if graph_core is None:
             return []
 
-        adapter = getattr(graph_core, "adapter", None)
-        if adapter is None or not hasattr(adapter, "run_query"):
-            logger.debug(
-                "MultiStoreRetriever._graph: missing adapter.run_query; skipping."
-            )
-            return []
-
         try:
             subject = ensure_user_subject(user_id)
         except Exception:
@@ -343,7 +340,7 @@ class MultiStoreRetriever:
             """
 
         try:
-            res = adapter.run_query(
+            res = graph_core.query(
                 cypher,
                 params={
                     "subject": subject,
@@ -352,5 +349,5 @@ class MultiStoreRetriever:
             )
             return res if isinstance(res, list) else []
         except Exception:
-            logger.exception("MultiStoreRetriever._graph: adapter query failed.")
+            logger.exception("MultiStoreRetriever._graph: graph_core.query failed.")
             return []

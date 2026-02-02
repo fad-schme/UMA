@@ -36,11 +36,11 @@ def _derive_owner(owner_scope: str, user_id: str | None, agent_id: str, project_
     if scope == "project":
         if not user_id or not project_id:
             raise ValueError("owner_scope=project requires user_id and project_id")
-        return "project", f"{user_id}:{project_id}"
+        return "project", f"user:{user_id}:{project_id}"
     # default: user
     if not user_id:
         raise ValueError("owner_scope=user requires user_id")
-    return "user", user_id
+    return "user", f"user:{user_id}"
 
 
 async def ingest_document(
@@ -54,10 +54,10 @@ async def ingest_document(
     memory: Any | None = None,
     embedder: Any | None = None,
     llm: Any | None = None,
-    semantic_store: Any | None = None,
+    semantic_core: Any | None = None,
+    chunk_core: Any | None = None,
+    episodic_core: Any | None = None,
     graph_core: Any | None = None,
-    episodic_store: Any | None = None,
-    chunk_store: Any | None = None,
     document_store: Any | None = None,
 ) -> IngestReport:
     """
@@ -73,10 +73,10 @@ async def ingest_document(
     if memory is not None:
         embedder = embedder or getattr(memory, "embedder", None)
         llm = llm or getattr(memory, "llm", None)
-        semantic_store = semantic_store or getattr(memory, "semantic_store", None)
-        chunk_store = chunk_store or getattr(memory, "chunk_store", None)
+        semantic_core = semantic_core or getattr(memory, "semantic_core", None)
+        chunk_core = chunk_core or getattr(memory, "chunk_core", None)
+        episodic_core = episodic_core or getattr(memory, "episodic_core", None)
         document_store = document_store or getattr(memory, "document_store", None)
-        episodic_store = episodic_store or getattr(memory, "episodic_store", None)
         graph_core = graph_core or getattr(memory, "graph_core", None)
 
     owner_type, owner_id = _derive_owner(owner_scope, user_id, agent_id, project_id)
@@ -84,10 +84,12 @@ async def ingest_document(
 
     if not pdf_path or not isinstance(pdf_path, str):
         raise ValueError("ingest_document: pdf_path must be a non-empty string")
-    if semantic_store is None:
-        raise ValueError("ingest_document: semantic_store is required")
-    if chunk_store is None:
-        raise ValueError("ingest_document: chunk_store is required")
+    if semantic_core is None:
+        raise ValueError("ingest_document: semantic_core is required")
+    if chunk_core is None:
+        raise ValueError("ingest_document: chunk_core is required")
+    if episodic_core is None:
+        raise ValueError("ingest_document: episodic_core is required")
     if document_store is None:
         raise ValueError("ingest_document: document_store is required")
     if embedder is None or not hasattr(embedder, "embed"):
@@ -113,6 +115,10 @@ async def ingest_document(
         sections,
         chunk_size_tokens=config.chunk_size_tokens,
         overlap_tokens=config.overlap_tokens,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        source_hash=parsed.source_hash,
+        source_type="pdf",
     )
     if not chunks:
         warnings.append("no chunks created")
@@ -176,7 +182,7 @@ async def ingest_document(
         if not row:
             continue
         try:
-            await chunk_store.upsert_chunk(row, emb)
+            await chunk_core.upsert_chunk(row, emb)
             created_chunks.append(row)
         except Exception:
             warnings.append(f"failed to persist chunk {chunk_id}")
@@ -229,7 +235,7 @@ async def ingest_document(
         if vectors and isinstance(vectors, list) and len(vectors) == len(extracted_fact_records):
             for fact, vec in zip(extracted_fact_records, vectors):
                 try:
-                    await semantic_store.upsert_fact(fact, vec)
+                    await semantic_core.upsert_fact(fact, vec)
                     facts_created += 1
                 except Exception:
                     logger.exception("ingest_document: failed to upsert extracted fact %s", fact.id)
@@ -249,8 +255,8 @@ async def ingest_document(
         owner_type=owner_type,
         owner_id=owner_id,
         user_id=user_id,
-        episodic_store=episodic_store,
         embedder=embedder,
+        episodic_core=episodic_core,
     )
 
     # 9) Optional consolidation trigger

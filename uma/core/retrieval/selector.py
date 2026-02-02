@@ -89,11 +89,25 @@ class MemorySelector:
 
     # -------------------- Facts --------------------
 
+    # -------------------- Facts --------------------
+
     def _select_facts(self, items: List[Any], *, policy: Optional[Any] = None) -> List[Any]:
+        """
+        Rank semantic facts deterministically.
+
+        Ranking logic (v1):
+        -------------------
+        - Base score = average(salience, confidence)
+        - Apply policy-based scope weighting (recall intent, etc.)
+        - Explicitly boost agent-scoped facts (promotion payoff)
+
+        NOTE:
+        This makes promotion *matter* without overwhelming user context.
+        """
         items = self._dedupe(items)
 
         def score(f: Any) -> float:
-            # Prefer high salience + confidence.
+            # --- Base score: salience + confidence ---
             try:
                 meta = getattr(f, "meta", {}) or {}
                 sal = float(meta.get("salience", 0.0))
@@ -106,9 +120,18 @@ class MemorySelector:
                 conf = 0.5
 
             base = (sal + conf) / 2.0
-            if policy is None:
-                return base
-            return base * policy.scope_weight(_get_owner_scope(f))
+
+            # --- Scope weighting via policy (if present) ---
+            scope = _get_owner_scope(f)
+            scope_weight = policy.scope_weight(scope) if policy else 1.0
+
+            # --- Explicit promotion boost (agent knowledge) ---
+            # This ensures that promoted agent facts surface naturally
+            # without dominating user/project memory.
+            if scope == "agent":
+                scope_weight *= 1.25  # conservative, deterministic boost
+
+            return base * scope_weight
 
         ranked = sorted(items, key=score, reverse=True)
         return ranked[: self.max_facts]

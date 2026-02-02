@@ -32,7 +32,8 @@ async def _embed_in_batches(embedder: Any, texts: List[str], batch_size: int) ->
 async def rebuild_vector_indexes(
     memory: Any,
     *,
-    user_id: Optional[str] = None,
+    owner_type: Optional[str] = None,
+    owner_id: Optional[str] = None,
     include_episodic: bool = True,
     include_semantic: bool = True,
     include_procedural: bool = True,
@@ -45,7 +46,7 @@ async def rebuild_vector_indexes(
     -----
     - Episodic embeddings are reused if present; otherwise summaries are embedded.
     - Semantic and procedural embeddings are recomputed from text representations.
-    - If user_id is not provided, semantic and episodic rebuilds are skipped.
+    - If owner_type or owner_id is not provided, semantic and episodic rebuilds are skipped.
     """
     report: Dict[str, Any] = {
         "episodic": {"status": "skipped", "count": 0},
@@ -63,11 +64,11 @@ async def rebuild_vector_indexes(
         }
 
     if include_episodic:
-        if not user_id:
+        if not owner_type or not owner_id:
             report["episodic"]["status"] = "skipped"
         else:
             try:
-                episodes = await memory.episodic_store.list_episodes(user_id)
+                episodes = await memory.episodic_core.list_episodes(owner_type, owner_id)
                 ids: List[str] = []
                 vectors: List[List[float]] = []
                 metas: List[Dict[str, Any]] = []
@@ -79,11 +80,11 @@ async def rebuild_vector_indexes(
                     if ep.embedding and len(ep.embedding) == dim:
                         ids.append(ep.id)
                         vectors.append(ep.embedding)
-                        metas.append({"user_id": ep.user_id})
+                        metas.append({"owner_type": ep.owner_type, "owner_id": ep.owner_id, "user_id": ep.user_id})
                     else:
                         text_ids.append(ep.id)
                         texts.append(ep.summary or "")
-                        text_metas.append({"user_id": ep.user_id})
+                        text_metas.append({"owner_type": ep.owner_type, "owner_id": ep.owner_id, "user_id": ep.user_id})
 
                 if texts:
                     text_vectors = await _embed_in_batches(embedder, texts, batch_size)
@@ -92,19 +93,22 @@ async def rebuild_vector_indexes(
                     metas.extend(text_metas)
 
                 if ids:
-                    memory.episodic_store.vector_index.upsert(ids=ids, vectors=vectors, metadata=metas)
+                    idx = memory.episodic_core.vector_index() if memory.episodic_core else None
+                    if idx is None:
+                        raise RuntimeError("episodic vector index missing")
+                    idx.upsert(ids=ids, vectors=vectors, metadata=metas)
                 report["episodic"] = {"status": "ok", "count": len(ids)}
             except Exception:
                 logger.exception("rebuild_vector_indexes: episodic rebuild failed.")
                 report["episodic"] = {"status": "error", "count": 0}
 
     if include_semantic:
-        if not user_id:
+        if not owner_type or not owner_id:
             report["semantic"]["status"] = "skipped"
         else:
             try:
-                subject = ensure_user_subject(user_id)
-                facts: List[Fact] = await memory.semantic_store.list_facts_for_subject(subject)
+                subject = ensure_user_subject(owner_id)
+                facts: List[Fact] = await memory.semantic_core.list_facts_for_subject(subject)
                 if facts:
                     texts = [build_fact_embedding_text(f) for f in facts]
                     vectors = await _embed_in_batches(embedder, texts, batch_size)
@@ -119,7 +123,10 @@ async def rebuild_vector_indexes(
                         }
                         for f in facts
                     ]
-                    memory.semantic_store.vector_index.upsert(ids=ids, vectors=vectors, metadata=metas)
+                    idx = memory.semantic_core.vector_index() if memory.semantic_core else None
+                    if idx is None:
+                        raise RuntimeError("semantic vector index missing")
+                    idx.upsert(ids=ids, vectors=vectors, metadata=metas)
                 report["semantic"] = {"status": "ok", "count": len(facts)}
             except Exception:
                 logger.exception("rebuild_vector_indexes: semantic rebuild failed.")
@@ -127,13 +134,16 @@ async def rebuild_vector_indexes(
 
     if include_procedural:
         try:
-            skills: List[Skill] = await memory.procedural_store.list_skills()
+            skills: List[Skill] = await memory.procedural_core.list_skills()
             if skills:
                 texts = [_skill_embedding_text(s) for s in skills]
                 vectors = await _embed_in_batches(embedder, texts, batch_size)
                 ids = [s.id for s in skills]
                 metas = [{"name": s.name} for s in skills]
-                memory.procedural_store.vector_index.upsert(ids=ids, vectors=vectors, metadata=metas)
+                idx = memory.procedural_core.vector_index() if memory.procedural_core else None
+                if idx is None:
+                    raise RuntimeError("procedural vector index missing")
+                idx.upsert(ids=ids, vectors=vectors, metadata=metas)
             report["procedural"] = {"status": "ok", "count": len(skills)}
         except Exception:
             logger.exception("rebuild_vector_indexes: procedural rebuild failed.")

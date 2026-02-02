@@ -17,23 +17,24 @@ async def write_document_episode(
     owner_type: str,
     owner_id: str,
     user_id: str | None,
-    episodic_store: Any,
     embedder: Any,
+    episodic_core: Any | None = None,
 ) -> Optional[str]:
     """
     Persist a document ingestion episode.
 
     Returns episode_id if written.
     """
-    if episodic_store is None or embedder is None:
-        logger.warning("write_document_episode: episodic_store or embedder missing")
+    if episodic_core is None:
+        logger.warning("write_document_episode: episodic_core missing")
+        return None
+    if embedder is None:
+        logger.warning("write_document_episode: embedder missing")
         return None
 
     if not doc_id or not summary_text:
         logger.warning("write_document_episode: missing doc_id or summary_text")
         return None
-
-    uid = user_id or owner_id
 
     try:
         vectors = await embedder.embed([summary_text])
@@ -46,9 +47,9 @@ async def write_document_episode(
 
     ep = Episode(
         id=str(uuid4()),
-        user_id=str(uid),
         timestamp=datetime.now(timezone.utc),
         summary=summary_text,
+        user_id=str(user_id or owner_id),
         raw=f"Document ingested: {doc_id}",
         tags=["document_ingest"],
         meta={"doc_id": doc_id},
@@ -57,7 +58,7 @@ async def write_document_episode(
     )
 
     try:
-        await episodic_store.add_episode(ep, embedding)
+        await episodic_core.add_episode(ep, embedding)
         return ep.id
     except Exception:
         logger.exception("write_document_episode: add_episode failed")

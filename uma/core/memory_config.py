@@ -246,8 +246,6 @@ class UMAConfig(dict):
             if not isinstance(rlm, dict):
                 raise ValueError("'retrieval.rlm' must be a mapping")
 
-            if "enabled" in rlm and not isinstance(rlm["enabled"], bool):
-                raise ValueError("'retrieval.rlm.enabled' must be boolean")
             if "test_mode" in rlm and not isinstance(rlm["test_mode"], bool):
                 raise ValueError("'retrieval.rlm.test_mode' must be boolean")
 

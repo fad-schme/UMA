@@ -206,8 +206,7 @@ class QdrantIndex(VectorIndex):
         qfilter = self._build_filter(filters)
 
         try:
-            hits = self._client.search(
-                collection_name=self.collection,
+            hits = self._search_points(
                 query_vector=vector,
                 query_filter=qfilter,
                 limit=k,
@@ -310,6 +309,28 @@ class QdrantIndex(VectorIndex):
             return None
 
         return qmodels.Filter(must=must)
+
+    def _search_points(self, **kwargs):
+        """
+        Compatibility shim for qdrant-client versions.
+        """
+        if hasattr(self._client, "search"):
+            return self._client.search(collection_name=self.collection, **kwargs)
+        if hasattr(self._client, "search_points"):
+            res = self._client.search_points(collection_name=self.collection, **kwargs)
+            return getattr(res, "points", res)
+        if hasattr(self._client, "query_points"):
+            try:
+                res = self._client.query_points(collection_name=self.collection, **kwargs)
+                return getattr(res, "points", res)
+            except (TypeError, AssertionError):
+                # Older clients use "query" instead of "query_vector"
+                query_vector = kwargs.pop("query_vector", None)
+                if query_vector is not None:
+                    kwargs["query"] = query_vector
+                res = self._client.query_points(collection_name=self.collection, **kwargs)
+                return getattr(res, "points", res)
+        raise AttributeError("Qdrant client does not support search/query methods.")
 
     @staticmethod
     def _normalize_id(pid: Any):

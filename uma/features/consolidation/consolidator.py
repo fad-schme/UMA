@@ -8,7 +8,7 @@ The consolidator merges episodic memories into semantic knowledge:
 2. Cluster similar episodes (EpisodeClusterer).
 3. Summarize clusters (ConsolidationSummarizer).
 4. Extract high-salience facts (FactExtractor + SalienceScorer).
-5. Upsert facts into SemanticSQLStore.
+5. Upsert facts into SemanticCore.
 6. Prune old/low-value memory (Pruner).
 
 This subsystem is OPTIONAL and enabled via ConsolidationFeature.
@@ -27,14 +27,11 @@ Production Guarantees:
 from __future__ import annotations
 
 import logging
-from typing import List
+from typing import List, Any
 
 from ...types_episode import Episode
 from ...types_fact import Fact
 from ...adapters.llm.base import LLMInterface, EmbeddingInterface
-from ...stores.semantic_sql import SemanticSQLStore
-from ...stores.episodic_sql import EpisodicSQLStore
-
 from ...core.semantic.extractor import FactExtractor
 from ...core.semantic.scorer import SalienceScorer
 
@@ -50,8 +47,8 @@ class Consolidator:
 
     def __init__(
         self,
-        episodic_store: EpisodicSQLStore,
-        semantic_store: SemanticSQLStore,
+        episodic_core: Any,
+        semantic_core: Any,
         llm: LLMInterface,
         embedder: EmbeddingInterface,
         cluster_similarity: float = 0.75,
@@ -59,8 +56,8 @@ class Consolidator:
         pruner: Pruner | None = None,
     ) -> None:
 
-        self.episodic_store = episodic_store
-        self.semantic_store = semantic_store
+        self.episodic_core = episodic_core
+        self.semantic_core = semantic_core
         self.clusterer = EpisodeClusterer(cluster_similarity)
         self.summarizer = ConsolidationSummarizer(llm)
         self.extractor = FactExtractor(llm, SalienceScorer())
@@ -85,8 +82,8 @@ class Consolidator:
             2. Cluster
             3. Summarize
             4. Extract facts
-            5. Upsert facts
-            6. Prune episodes
+        5. Upsert facts
+        6. Prune episodes
         """
 
         # STEP 1: Fetch recent episodes
@@ -121,12 +118,13 @@ class Consolidator:
             try:
                 episode_ids = [ep.id for ep in cluster if getattr(ep, "id", None)]
                 latest_ts = max(ep.timestamp for ep in cluster if getattr(ep, "timestamp", None))
-                await self.episodic_store.upsert_cluster_summary(
-                    user_id=user_id,
-                    episode_ids=episode_ids,
-                    summary=summary,
-                    latest_timestamp=latest_ts.isoformat(),
-                )
+                if self.episodic_core is not None:
+                    await self.episodic_core.upsert_cluster_summary(
+                        user_id=user_id,
+                        episode_ids=episode_ids,
+                        summary=summary,
+                        latest_timestamp=latest_ts.isoformat(),
+                    )
             except Exception:
                 logger.exception("Consolidator: failed to upsert cluster summary user=%s", user_id)
 
@@ -160,8 +158,11 @@ class Consolidator:
         Replaces any legacy embedding-based episode search.
         """
         try:
-            episodes = await self.episodic_store.list_recent(
-                user_id=user_id,
+            if self.episodic_core is None:
+                return []
+            episodes = await self.episodic_core.list_recent(
+                owner_type="user",
+                owner_id=user_id,
                 n=self.max_episodes,
             )
             return episodes
@@ -236,7 +237,8 @@ class Consolidator:
             # ---- 3. Upsert each fact ----
             for fact, emb in zip(batch, vectors):
                 try:
-                    await self.semantic_store.upsert_fact(fact, emb)
+                    if self.semantic_core is not None:
+                        await self.semantic_core.upsert_fact(fact, emb)
                     logger.debug(
                         "Consolidator.upsert: id=%s subj=%s pred=%s obj=%s",
                         fact.id,
@@ -265,20 +267,24 @@ class Consolidator:
         Steps:
         1. Load recent episodic memories
         2. Filter via Pruner.filter_episodes()
-        3. Remove pruned episodes from EpisodicSQLStore
+        3. Remove pruned episodes via EpisodicCore
         4. Load semantic facts
         5. Filter via Pruner.filter_facts()
-        6. Remove pruned facts from SemanticSQLStore
+        6. Remove pruned facts via SemanticCore
         """
 
         # ---------------------------------------------------------------
         # 1) EPISODIC PRUNING
         # ---------------------------------------------------------------
         try:
-            episodes = await self.episodic_store.list_recent(
-                user_id=user_id,
-                n=self.max_episodes,
-            )
+            if self.episodic_core is None:
+                episodes = []
+            else:
+                episodes = await self.episodic_core.list_recent(
+                    owner_type="user",
+                    owner_id=user_id,
+                    n=self.max_episodes,
+                )
         except Exception:
             logger.exception(
                 "Consolidator: episodic prune fetch failed for user=%s",
@@ -308,7 +314,9 @@ class Consolidator:
                 )
                 try:
                     for ep_id in to_remove:
-                        await self.episodic_store.delete_episode(ep_id)
+                        if self.episodic_core is None:
+                            break
+                        await self.episodic_core.delete_episode(ep_id)
                 except Exception:
                     logger.exception(
                         "Consolidator: failed deleting episodic items (user=%s).",
@@ -320,7 +328,10 @@ class Consolidator:
         # ---------------------------------------------------------------
         try:
             # NOTE: fetch all facts for subject=user
-            semantic_facts = await self.semantic_store.list_facts_for_subject(user_id)
+            if self.semantic_core is None:
+                semantic_facts = []
+            else:
+                semantic_facts = await self.semantic_core.list_facts_for_subject(user_id)
         except Exception:
             logger.exception(
                 "Consolidator: semantic prune fetch failed for user=%s",
@@ -352,7 +363,9 @@ class Consolidator:
             )
             try:
                 for fact_id in to_delete:
-                    await self.semantic_store.delete_fact(fact_id)
+                    if self.semantic_core is None:
+                        break
+                    await self.semantic_core.delete_fact(fact_id)
             except Exception:
                 logger.exception(
                     "Consolidator: failed deleting semantic facts (user=%s).",

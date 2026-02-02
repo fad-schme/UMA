@@ -30,7 +30,9 @@ def test_episode_indexer_embed_input_shape():
         {"role": "assistant", "content": "hi"},
     ]
 
-    ep, embedding = asyncio.run(indexer.build_episode("u1", wm_entries))
+    ep, embedding = asyncio.run(
+        indexer.build_episode(owner_type="user", owner_id="user:u1", wm_entries=wm_entries)
+    )
     assert ep.summary
     assert embedding == [0.1, 0.2, 0.3]
     assert embedder.last_texts == [ep.summary]

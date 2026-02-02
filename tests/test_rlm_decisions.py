@@ -44,7 +44,6 @@ def test_controller_decision_accepts_extended_actions():
                 "direction": "both",
                 "hops": 2,
             },
-            {"action": "resolve_conflicts", "fact_ids": ["f1"]},
         ],
         "done": False,
     }
@@ -52,15 +51,9 @@ def test_controller_decision_accepts_extended_actions():
     decision = ControllerDecision.from_json(json.dumps(payload))
     assert decision.actions[0].action == "fetch_episode_clusters"
     assert decision.actions[1].subject == "user:1"
-    assert decision.actions[2].fact_ids == ["f1"]
 
 
-def test_resolve_conflicts_fact_id_limit():
-    payload = {
-        "actions": [
-            {"action": "resolve_conflicts", "fact_ids": [f"f{i}" for i in range(60)]},
-        ],
-        "done": False,
-    }
+def test_controller_decision_rejects_unknown_action():
+    payload = {"actions": [{"action": "resolve_conflicts", "fact_ids": ["f1"]}], "done": False}
     with pytest.raises(ValueError):
         ControllerDecision.from_json(json.dumps(payload))

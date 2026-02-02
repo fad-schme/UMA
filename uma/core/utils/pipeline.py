@@ -147,7 +147,7 @@ class MemoryPipeline:
         - only promotes if we can supply an embedding (so vector search stays correct)
 
         Requirements on UMAMemory shape:
-        - semantic_store with async upsert_fact(fact, embedding)
+        - semantic_core with async upsert_fact(fact, embedding)
         # NOTE:
         # Promotion requires embeddings to already exist on facts.
         # v1 does NOT compute embeddings here to avoid adding LLM / embedder calls
@@ -175,9 +175,9 @@ class MemoryPipeline:
             logger.exception("Promotion stage received non-iterable facts; skipping.")
             return
 
-        sem_store = getattr(self.mem, "semantic_store", None)
-        if sem_store is None:
-            logger.warning("Promotion enabled but semantic_store is missing; skipping promotions.")
+        sem_core = getattr(self.mem, "semantic_core", None)
+        if sem_core is None:
+            logger.warning("Promotion enabled but semantic_core is missing; skipping promotions.")
             return
 
         max_promotions = getattr(policy, "max_promotions_per_turn", 5)
@@ -218,7 +218,7 @@ class MemoryPipeline:
 
             # Persist promoted fact into agent KB.
             try:
-                await sem_store.upsert_fact(promoted, embedding=embedding)
+                await sem_core.upsert_fact(promoted, embedding=embedding)
                 promoted_count += 1
                 logger.info(
                     "Promoted fact id=%r predicate=%r (user_id=%s)",
@@ -330,7 +330,8 @@ class MemoryPipeline:
 
         try:
             return await epi.store_episode(
-                user_id=user_id,
+                owner_type="user",
+                owner_id=user_id,
                 user_message=user_msg,
                 assistant_reply=assistant_reply,
                 working_memory_context=wm_context,
@@ -385,10 +386,10 @@ class MemoryPipeline:
 
         # Link temporal sequence (previous episode -> current)
         try:
-            store = getattr(self.mem, "episodic_store", None)
-            if store is None:
+            core = getattr(self.mem, "episodic_core", None)
+            if core is None:
                 return
-            recent = await store.list_recent(user_id=user_id, n=2)
+            recent = await core.list_recent(owner_type="user", owner_id=user_id, n=2)
             if len(recent) >= 2:
                 prev = recent[1]
                 graph.link_temporal(prev, episode)

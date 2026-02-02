@@ -96,6 +96,16 @@ def _configure_uma_logger() -> logging.Logger:
     if file_handler is not None:
         logger.addHandler(file_handler)
     logger.addHandler(console_handler)
+    logger.propagate = False
+
+    # Ensure non-"uma" loggers (e.g., extensions/*) are captured.
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        root_logger.setLevel(logging.INFO)
+        root_logger.addFilter(_ContextFilter())
+        if file_handler is not None:
+            root_logger.addHandler(file_handler)
+        root_logger.addHandler(console_handler)
 
     # Reduce noise from common noisy libraries
     logging.getLogger("asyncio").setLevel(logging.WARNING)

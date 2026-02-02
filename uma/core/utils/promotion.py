@@ -162,3 +162,41 @@ class PromotionPolicy:
         )
 
         return promoted
+    
+    def promote_and_update_graph(self, fact: Fact, graph_core) -> Fact:
+        """
+        Promote a fact to agent scope AND update the graph accordingly.
+
+        This ensures DAT consistency:
+        - Agent-level facts must have corresponding agent-scoped graph edges
+        - Original user/project facts remain untouched
+
+        Parameters
+        ----------
+        fact : Fact
+            Original fact (user/project scoped).
+        graph_core : TemporalGraphCore
+            Graph core used to write agent-scoped edges.
+        """
+        promoted = self.promote(fact)
+
+        # Write promoted fact to graph with agent ownership
+        try:
+            graph_core.insert_fact_triplet(
+                fact_id=promoted.id,
+                subject=promoted.subject,
+                predicate=promoted.predicate,
+                object=promoted.object,
+                owner_type=promoted.owner_type,
+                owner_id=promoted.owner_id,
+                source_chunk_id=promoted.meta.get("source_chunk_id"),
+                created_at=promoted.created_at,
+                updated_at=promoted.updated_at,
+            )
+        except Exception:
+            logger.exception(
+                "PromotionPolicy: graph update failed for promoted fact id=%s",
+                promoted.id,
+            )
+
+        return promoted

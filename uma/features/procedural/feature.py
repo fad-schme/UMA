@@ -28,7 +28,7 @@ from ...types_skill import Skill
 from .matcher import SkillMatcher
 
 if TYPE_CHECKING:
-    from ...stores.procedural_sql import ProceduralSQLStore
+    from ...core.procedural.core import ProceduralCore
     from ...adapters.llm.base import EmbeddingInterface
     from ...core.uma_memory import UMAMemory
 
@@ -43,7 +43,7 @@ class ProceduralFeature(UMAFeature):
 
     Design
     ------
-    - Skills are stored in ProceduralSQLStore with embeddings.
+    - Skills are stored via ProceduralCore with embeddings.
     - Semantic candidates are retrieved with vector search.
     - SkillMatcher applies trigger phrases + regex patterns on top.
     """
@@ -52,7 +52,7 @@ class ProceduralFeature(UMAFeature):
 
     def __init__(
         self,
-        store: "ProceduralSQLStore",
+        procedural_core: "ProceduralCore",
         embedder: "EmbeddingInterface",
         matcher: Optional[SkillMatcher] = None,
         max_k: int = 50,
@@ -60,20 +60,20 @@ class ProceduralFeature(UMAFeature):
         """
         Parameters
         ----------
-        store : ProceduralSQLStore
-            Backing store for skills + vector search.
+        procedural_core : ProceduralCore
+            Core interface for procedural skills.
         embedder : EmbeddingInterface
             Embedder used to embed queries and skills.
         matcher : SkillMatcher, optional
             Hybrid matcher; if omitted, a default instance is created.
         """
-        self.store = store
+        self.core = procedural_core
         self.embedder = embedder
         self.matcher = matcher or SkillMatcher()
         self.max_k = max_k
 
-        logger.info("ProceduralFeature initialized with store=%s embedder=%s",
-                    type(store).__name__, type(embedder).__name__)
+        logger.info("ProceduralFeature initialized with core=%s embedder=%s",
+                    type(procedural_core).__name__, type(embedder).__name__)
 
     # ------------------------------------------------------------------
     # UMAFeature API
@@ -90,17 +90,17 @@ class ProceduralFeature(UMAFeature):
         """
         memory_client = context.memory
 
-        if self.store is None or self.embedder is None:
-            logger.error("ProceduralFeature.attach: missing store or embedder.")
+        if self.core is None or self.embedder is None:
+            logger.error("ProceduralFeature.attach: missing core or embedder.")
             return FeatureHandle(name=self.name, methods=())
 
         def _health() -> FeatureResult:
-            ok = self.store is not None and self.embedder is not None
+            ok = self.core is not None and self.embedder is not None
             return FeatureResult.success() if ok else FeatureResult.failure(["missing dependencies"])
 
         async def procedural_add_skill(skill: Skill, embedding: List[float]) -> FeatureResult:
             """
-            Store a new procedural skill into the procedural store.
+            Store a new procedural skill via ProceduralCore.
             """
             if skill is None:
                 logger.warning("ProceduralFeature.add_skill: missing skill.")
@@ -109,7 +109,7 @@ class ProceduralFeature(UMAFeature):
                 logger.warning("ProceduralFeature.add_skill: invalid embedding.")
                 return FeatureResult.failure(["invalid embedding"])
             try:
-                await self.store.add_skill(skill, embedding)
+                await self.core.add_skill(skill, embedding)
                 logger.info("ProceduralFeature.add_skill: stored skill id=%s", skill.id)
                 return FeatureResult.success()
             except Exception as exc:
@@ -123,7 +123,7 @@ class ProceduralFeature(UMAFeature):
             Steps
             -----
             1. Embed query_text (semantic representation).
-            2. Use ProceduralSQLStore.search(...) to obtain candidates.
+            2. Use ProceduralCore.search(...) to obtain candidates.
             3. Use SkillMatcher.match_skills(...) to apply rule-based checks.
 
             Notes
@@ -158,9 +158,9 @@ class ProceduralFeature(UMAFeature):
 
             k_clamped = min(k_int, self.max_k)
             try:
-                candidates = await self.store.search(query_emb, k=k_clamped)
+                candidates = await self.core.search(query_embedding=query_emb, k=k_clamped)
             except Exception as exc:
-                logger.exception("ProceduralFeature.find_skills: store.search failed.")
+                logger.exception("ProceduralFeature.find_skills: core.search failed.")
                 return FeatureResult.failure([str(exc)], data=[])
 
             try:
@@ -189,7 +189,7 @@ class ProceduralFeature(UMAFeature):
                 return FeatureResult.failure(["empty skill_id"], data=None)
 
             try:
-                skill = await self.store.get_skill(skill_id)
+                skill = await self.core.get_skill(skill_id)
                 if skill is None:
                     logger.info("ProceduralFeature.get_skill: no skill for id=%s", skill_id)
                 else:

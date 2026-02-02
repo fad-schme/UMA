@@ -27,9 +27,14 @@ class ContextPack:
     - Track per-step novelty
     - Track predicate offsets for semantic expansion
     """
+# Todo  
+# here is ownership (owner_type, owner_id) info
+# check if the context pack is for a user or system
 
     user_id: str
     query_text: str
+    owner_type: Optional[str] = None
+    
 
     # Memory layers
     working_memory: List[Any] = field(default_factory=list)
@@ -42,6 +47,7 @@ class ContextPack:
     # Controller trace
     steps: List[Dict[str, Any]] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
+    coverage: Optional[Any] = None
 
     # --- Evidence accounting ---
     seen_fact_ids: Set[str] = field(default_factory=set)

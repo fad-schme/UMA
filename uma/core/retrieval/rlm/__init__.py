@@ -1,6 +1,6 @@
 # uma/core/retrieval/rlm/__init__.py
 from .controller import RLMController
-from .environment import MemoryEnvironment, UMAMemoryEnvironment
+from .environment import UMAMemoryEnvironment
 from .context_pack import ContextPack
 
 """
@@ -46,7 +46,7 @@ Recursive Language Models (RLM) style retrieval adds:
 
 This module implements a production-safe, bounded retrieval controller that:
 - Uses an LLM *only* to choose next retrieval actions (not to answer user queries).
-- Calls a safe MemoryEnvironment to retrieve additional items in small steps.
+- Calls a safe environment to retrieve additional items in small steps.
 - Stops deterministically based on budgets (steps, token budget, time).
 - Returns a developer-friendly ContextPack (RAG-ready), not prompt glue.
 
@@ -63,9 +63,8 @@ Integration points
       controller = RLMController(...)
       pack = await controller.retrieve_context(user_id, query_text)
 
-- Controller assumes a MemoryEnvironment implementation is provided.
-  A default UMAMemoryEnvironment is provided here which wraps RetrievalService
-  and graph adapter in a safe way.
+- Controller assumes an environment implementation is provided.
+- UMAMemoryEnvironment is provided as the default production wrapper.
 
 Python compatibility
 --------------------

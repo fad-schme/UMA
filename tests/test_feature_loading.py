@@ -15,11 +15,11 @@ class DummyMemory:
             setattr(self, name, func)
 
 
-class StubProceduralStore:
+class StubProceduralCore:
     async def add_skill(self, skill, embedding):
         return None
 
-    async def search(self, embedding, k=5):
+    async def search(self, query_embedding, k=5, owner_type=None, owner_id=None):
         return []
 
     async def get_skill(self, skill_id):
@@ -43,7 +43,7 @@ def test_feature_loader_registers_only_attached_features():
         feature_cfgs=[
             {"name": "procedural", "enabled": True, "config": {"max_k": 3}},
         ],
-        services={"store": StubProceduralStore(), "embedder": StubEmbedder()},
+        services={"procedural_core": StubProceduralCore(), "embedder": StubEmbedder()},
     )
 
     assert "procedural" in memory.features
@@ -62,7 +62,7 @@ def test_feature_loader_skips_failed_attachment():
         feature_cfgs=[
             {"name": "procedural", "enabled": True, "config": {"max_k": 3}},
         ],
-        services={"store": StubProceduralStore(), "embedder": None},
+        services={"procedural_core": StubProceduralCore(), "embedder": None},
     )
 
     assert "procedural" not in memory.features

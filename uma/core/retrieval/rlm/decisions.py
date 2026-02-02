@@ -41,12 +41,8 @@ ActionType = Literal[
     "fetch_episode_clusters",
     "search_procedural",
     "fetch_facts",
-    "fetch_episode_summaries",
-    "fetch_episode_transcripts",
-    "fetch_skills",
     "graph_neighbors",
     "expand_graph",
-    "resolve_conflicts",
     "stop",
 ]
 
@@ -195,31 +191,6 @@ class RetrievalAction(BaseModel):
                 self.hops = 1
             return self
 
-        if a == "resolve_conflicts":
-            if not self.fact_ids:
-                raise ValueError("resolve_conflicts requires fact_ids")
-            if self.filters or self.node_id or self.predicate or self.time_range:
-                raise ValueError("resolve_conflicts only accepts fact_ids and k")
-            if len(self.fact_ids) > MAX_FACT_IDS:
-                raise ValueError(f"resolve_conflicts accepts at most {MAX_FACT_IDS} fact_ids")
-            return self
-        # --- FETCH EPISODE SUMMARIES ---
-        if a == "fetch_episode_summaries":
-            if not self.ids:
-                raise ValueError("fetch_episode_summaries requires ids")
-            return self
-
-        # --- FETCH EPISODE TRANSCRIPTS ---
-        if a == "fetch_episode_transcripts":
-            if not self.ids:
-                raise ValueError("fetch_episode_transcripts requires ids")
-            return self
-
-        # --- FETCH SKILLS ---
-        if a == "fetch_skills":
-            if not self.ids:
-                raise ValueError("fetch_skills requires ids")
-            return self
 
         # --- GRAPH NEIGHBORS ---
         if a == "graph_neighbors":

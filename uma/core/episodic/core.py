@@ -21,7 +21,7 @@ and EpisodeMapper. It handles:
 from __future__ import annotations
 
 import logging
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 from .indexer import EpisodeIndexer
 from .archive import EpisodicArchive
@@ -58,7 +58,8 @@ class EpisodicCore:
 
     async def store_episode(
         self,
-        user_id: str,
+        owner_type: str,
+        owner_id: str,
         user_message: str,
         assistant_reply: str,
         working_memory_context: List[Any],
@@ -68,7 +69,8 @@ class EpisodicCore:
 
         Parameters
         ----------
-        user_id : str
+        owner_type : str
+        owner_id : str
         user_message : str
         assistant_reply : str
         working_memory_context : List[WorkingMemoryMessage]
@@ -95,7 +97,8 @@ class EpisodicCore:
             # 2. Build episode via LLM + embedder
             # ------------------------------
             episode, embedding = await self.indexer.build_episode(
-                user_id=user_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
                 wm_entries=all_entries,
             )
 
@@ -108,52 +111,118 @@ class EpisodicCore:
             # ------------------------------
             # 4. Apply retention policy
             # ------------------------------
-            await self.cleanup(user_id)
+            await self.cleanup(owner_type, owner_id)
 
             return episode
 
         except Exception:
-            logger.exception("EpisodicCore.store_episode failed for user_id=%s", user_id)
+            logger.exception(
+                "EpisodicCore.store_episode failed for owner=%s:%s",
+                owner_type,
+                owner_id,
+            )
             return None
+
+    async def add_episode(self, episode: Episode, embedding: List[float]) -> bool:
+        """
+        Persist a pre-built Episode + embedding.
+        """
+        if self.store is None:
+            return False
+        try:
+            await self.store.add_episode(episode, embedding)
+            return True
+        except Exception:
+            logger.exception("EpisodicCore.add_episode failed id=%s", getattr(episode, "id", None))
+            return False
 
     # ------------------------------------------------------------------
     # Retention / Cleanup
     # ------------------------------------------------------------------
 
-    async def cleanup(self, user_id: str) -> None:
+    async def cleanup(self, owner_type: str, owner_id: str) -> None:
         """
         Apply retention policy and prune old episodes.
         """
         try:
-            episodes = await self.store.list_episodes(user_id)
+            episodes = await self.store.list_episodes(owner_type, owner_id)
             prunable = self.policy.select_prunable(episodes)
 
             if prunable:
                 await self.archive.delete_many([ep.id for ep in prunable])
                 logger.debug(
-                    "EpisodicCore: pruned %d episode(s) for user_id=%s",
+                    "EpisodicCore: pruned %d episode(s) for owner=%s:%s",
                     len(prunable),
-                    user_id,
+                    owner_type,
+                    owner_id,
                 )
 
         except Exception:
-            logger.exception("EpisodicCore.cleanup failed for user=%s", user_id)
+            logger.exception(
+                "EpisodicCore.cleanup failed for owner=%s:%s",
+                owner_type,
+                owner_id,
+            )
 
     
-    async def list_recent(self, user_id: str, n: int = 5):
+    async def list_recent(self, owner_type: str, owner_id: str, n: int = 5):
         """
-        Return the N most recent episodes for user_id.
+        Return the N most recent episodes for an owner.
         """
         try:
-            return await self.store.list_recent(user_id, n)
+            return await self.store.list_recent(owner_type, owner_id, n)
         except Exception:
             logger.exception("EpisodicCore.list_recent failed.")
             return []
+
+    async def delete_episode(self, episode_id: str) -> bool:
+        if self.store is None or not episode_id:
+            return False
+        try:
+            await self.store.delete_episode(episode_id)
+            return True
+        except Exception:
+            logger.exception("EpisodicCore.delete_episode failed id=%s", episode_id)
+            return False
+
+    async def list_episodes(self, owner_type: str, owner_id: str) -> List[Episode]:
+        if self.store is None:
+            return []
+        try:
+            return await self.store.list_episodes(owner_type, owner_id)
+        except Exception:
+            logger.exception("EpisodicCore.list_episodes failed.")
+            return []
+
+    async def upsert_cluster_summary(
+        self,
+        user_id: str,
+        episode_ids: List[str],
+        summary: str,
+        latest_timestamp: str,
+    ) -> bool:
+        if self.store is None or not hasattr(self.store, "upsert_cluster_summary"):
+            return False
+        try:
+            await self.store.upsert_cluster_summary(
+                user_id=user_id,
+                episode_ids=episode_ids,
+                summary=summary,
+                latest_timestamp=latest_timestamp,
+            )
+            return True
+        except Exception:
+            logger.exception("EpisodicCore.upsert_cluster_summary failed user=%s", user_id)
+            return False
+
+    def vector_index(self) -> Any:
+        return getattr(self.store, "vector_index", None) if self.store is not None else None
         
 
     async def list_cluster_summaries(
         self,
-        user_id: str,
+        owner_type: str,
+        owner_id: str,
         k: int = 5,
         max_episodes: int = 50,
         time_range: Optional[dict] = None,
@@ -173,14 +242,217 @@ class EpisodicCore:
                 return []
 
             return await self.store.list_cluster_summaries(
-                user_id=user_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
                 k=int(k),
                 max_episodes=max_episodes,
                 time_range=time_range,
             )
         except Exception:
             logger.exception(
-                "EpisodicCore.list_cluster_summaries failed for user_id=%s",
-                user_id,
+                "EpisodicCore.list_cluster_summaries failed for owner=%s:%s",
+                owner_type,
+                owner_id,
             )
             return []
+
+    # ------------------------------------------------------------------
+    # RETRIEVAL API
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _iter_owner_filters(
+        *,
+        user_subject: str,
+        agent_id: Optional[str],
+        project_id: Optional[str],
+        owner_scope: Optional[str] = None,
+    ) -> List[Tuple[str, str]]:
+        scope = (owner_scope or "").lower()
+        if scope:
+            if scope == "user":
+                return [("user", user_subject)]
+            if scope == "agent" and agent_id:
+                return [("agent", agent_id)]
+            if scope == "project" and project_id:
+                return [("project", f"{user_subject}:{project_id}")]
+            return []
+
+        filters: List[Tuple[str, str]] = [("user", user_subject)]
+        if agent_id:
+            filters.append(("agent", agent_id))
+        if project_id:
+            filters.append(("project", f"{user_subject}:{project_id}"))
+        return filters
+
+    async def search_tiered(
+        self,
+        user_id: str,
+        query_embedding: List[float],
+        *,
+        k: int = 20,
+        offset: int = 0,
+        agent_id: Optional[str] = None,
+        project_id: Optional[str] = None,
+        owner_scope: Optional[str] = None,
+    ) -> List[Episode]:
+        if self.store is None:
+            return []
+        try:
+            user_subject = ensure_user_subject(user_id)
+        except Exception:
+            logger.exception("EpisodicCore.search_tiered: invalid subject=%r", user_id)
+            return []
+
+        episodes: List[Episode] = []
+        for owner_type, owner_id in self._iter_owner_filters(
+            user_subject=user_subject,
+            agent_id=agent_id,
+            project_id=project_id,
+            owner_scope=owner_scope,
+        ):
+            try:
+                try:
+                    found = await self.store.search(
+                        query_embedding=query_embedding,
+                        owner_type=owner_type,
+                        owner_id=owner_id,
+                        k=int(k),
+                        offset=int(offset),
+                    )
+                except TypeError:
+                    found = await self.store.search(
+                        query_embedding=query_embedding,
+                        owner_type=owner_type,
+                        owner_id=owner_id,
+                        k=int(k),
+                    )
+                if found:
+                    episodes.extend(found)
+            except Exception:
+                logger.exception(
+                    "EpisodicCore.search_tiered failed owner=%s:%s",
+                    owner_type,
+                    owner_id,
+                )
+        return _dedupe_items(episodes)
+
+    async def list_cluster_summaries_tiered(
+        self,
+        user_id: str,
+        *,
+        k: int = 5,
+        max_episodes: int = 50,
+        time_range: Optional[dict] = None,
+        agent_id: Optional[str] = None,
+        project_id: Optional[str] = None,
+        owner_scope: Optional[str] = None,
+    ) -> List[Any]:
+        if self.store is None or not hasattr(self.store, "list_cluster_summaries"):
+            logger.warning(
+                "EpisodicCore.list_cluster_summaries_tiered: store does not support clustering"
+            )
+            return []
+        try:
+            user_subject = ensure_user_subject(user_id)
+        except Exception:
+            logger.exception("EpisodicCore.list_cluster_summaries_tiered: invalid subject=%r", user_id)
+            return []
+
+        clusters: List[Any] = []
+        for owner_type, owner_id in self._iter_owner_filters(
+            user_subject=user_subject,
+            agent_id=agent_id,
+            project_id=project_id,
+            owner_scope=owner_scope,
+        ):
+            try:
+                found = await self.store.list_cluster_summaries(
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    k=int(k),
+                    max_episodes=max_episodes,
+                    time_range=time_range,
+                )
+                if found:
+                    clusters.extend(found)
+            except Exception:
+                logger.exception(
+                    "EpisodicCore.list_cluster_summaries_tiered failed owner=%s:%s",
+                    owner_type,
+                    owner_id,
+                )
+        return _dedupe_items(clusters)
+
+    async def search(
+        self,
+        owner_type: str,
+        owner_id: str,
+        query_embedding: List[float],
+        *,
+        k: int = 20,
+        offset: int = 0,
+    ) -> List[Episode]:
+        if self.store is None:
+            return []
+        try:
+            try:
+                return await self.store.search(
+                    query_embedding=query_embedding,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    k=int(k),
+                    offset=int(offset),
+                )
+            except TypeError:
+                return await self.store.search(
+                    query_embedding=query_embedding,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    k=int(k),
+                )
+        except Exception:
+            logger.exception(
+                "EpisodicCore.search failed owner=%s:%s",
+                owner_type,
+                owner_id,
+            )
+            return []
+
+    async def fetch_summaries(self, ids: List[str]) -> List[dict]:
+        if self.store is None or not hasattr(self.store, "fetch_summaries"):
+            return []
+        try:
+            return await self.store.fetch_summaries(ids)
+        except Exception:
+            logger.exception("EpisodicCore.fetch_summaries failed")
+            return []
+
+    async def fetch_transcripts(self, ids: List[str]) -> List[dict]:
+        if self.store is None or not hasattr(self.store, "fetch_transcripts"):
+            return []
+        try:
+            return await self.store.fetch_transcripts(ids)
+        except Exception:
+            logger.exception("EpisodicCore.fetch_transcripts failed")
+            return []
+
+
+def _dedupe_items(items: List[Any]) -> List[Any]:
+    if not items:
+        return []
+    seen = set()
+    out: List[Any] = []
+    for it in items:
+        key = None
+        if isinstance(it, dict):
+            key = it.get("id")
+        else:
+            key = getattr(it, "id", None)
+        if key is None:
+            key = id(it)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(it)
+    return out

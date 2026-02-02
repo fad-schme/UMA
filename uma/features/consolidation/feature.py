@@ -20,7 +20,7 @@ Coding Agent Instructions
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ...core.utils.registry import FeatureContext, FeatureHandle, FeatureResult, UMAFeature
 from ...types_fact import Fact
@@ -28,8 +28,8 @@ from .consolidator import Consolidator
 
 if TYPE_CHECKING:
     from ...core.uma_memory import UMAMemory
-    from ...stores.semantic_sql import SemanticSQLStore
-    from ...stores.episodic_sql import EpisodicSQLStore
+    from ...core.episodic.core import EpisodicCore
+    from ...core.semantic.core import SemanticCore
     from ...adapters.llm.base import LLMInterface, EmbeddingInterface
 
 logger = logging.getLogger(__name__)
@@ -41,26 +41,26 @@ class ConsolidationFeature(UMAFeature):
 
     def __init__(
         self,
-        episodic_store: "EpisodicSQLStore",
-        semantic_store: "SemanticSQLStore",
+        episodic_core: "EpisodicCore",
+        semantic_core: "SemanticCore",
         llm: "LLMInterface",
         embedder: "EmbeddingInterface",
         cluster_similarity: float = 0.75,
         max_episodes_per_cycle: int = 200,
     ) -> None:
 
-        self._episodic_store = episodic_store
-        self._semantic_store = semantic_store
+        self._episodic_core = episodic_core
+        self._semantic_core = semantic_core
         self._llm = llm
         self._embedder = embedder
 
         self.consolidator = Consolidator(
-            episodic_store=episodic_store,
-            semantic_store=semantic_store,
             llm=llm,
             embedder=embedder,
             cluster_similarity=cluster_similarity,
             max_episodes_per_cycle=max_episodes_per_cycle,
+            episodic_core=episodic_core,
+            semantic_core=semantic_core,
         )
 
         logger.info(
@@ -81,10 +81,10 @@ class ConsolidationFeature(UMAFeature):
         missing = []
         if self.consolidator is None:
             missing.append("consolidator")
-        if self._episodic_store is None:
-            missing.append("episodic_store")
-        if self._semantic_store is None:
-            missing.append("semantic_store")
+        if self._episodic_core is None:
+            missing.append("episodic_core")
+        if self._semantic_core is None:
+            missing.append("semantic_core")
         if self._embedder is None:
             missing.append("embedder")
         if self._llm is None:
@@ -101,10 +101,10 @@ class ConsolidationFeature(UMAFeature):
             missing_deps = []
             if self.consolidator is None:
                 missing_deps.append("consolidator")
-            if self._episodic_store is None:
-                missing_deps.append("episodic_store")
-            if self._semantic_store is None:
-                missing_deps.append("semantic_store")
+            if self._episodic_core is None:
+                missing_deps.append("episodic_core")
+            if self._semantic_core is None:
+                missing_deps.append("semantic_core")
             if self._embedder is None:
                 missing_deps.append("embedder")
             if self._llm is None:

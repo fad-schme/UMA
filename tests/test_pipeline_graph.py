@@ -29,9 +29,11 @@ class DummyWM:
 
 
 class DummyEpisode:
-    def __init__(self, eid, user_id):
+    def __init__(self, eid, owner_id):
         self.id = eid
-        self.user_id = user_id
+        self.user_id = owner_id
+        self.owner_type = "user"
+        self.owner_id = owner_id
         self.timestamp = _DummyTimestamp()
         self.summary = "summary"
 
@@ -53,21 +55,16 @@ class DummyFact:
 
 class DummyEpisodicCore:
     async def store_episode(self, **kwargs):
-        return DummyEpisode("ep_current", kwargs.get("user_id"))
+        return DummyEpisode("ep_current", kwargs.get("owner_id"))
+
+    async def list_recent(self, owner_type, owner_id, n=2):
+        return [DummyEpisode("ep_current", owner_id), DummyEpisode("ep_prev", owner_id)]
 
 
 class DummySemanticCore:
     async def ingest(self, subject, text):
         return [DummyFact("f1", subject, "likes", "sushi")]
 
-
-class DummyEpisodicStore:
-    def __init__(self, current, prev):
-        self._current = current
-        self._prev = prev
-
-    async def list_recent(self, user_id, n=2):
-        return [self._current, self._prev]
 
 
 class DummyGraphCore:
@@ -137,9 +134,6 @@ def test_pipeline_updates_graph_with_facts_and_temporal_links():
         mem.graph_core = DummyGraphCore()
         mem.hooks = DummyHooks()
 
-        prev = DummyEpisode("ep_prev", "user:u1")
-        current = DummyEpisode("ep_current", "user:u1")
-        mem.episodic_store = DummyEpisodicStore(current=current, prev=prev)
         mem.pipeline.hooks = mem.hooks
 
         asyncio.run(

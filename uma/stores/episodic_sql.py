@@ -2,15 +2,7 @@
 EpisodicSQLStore — Episodic memory store for UMA (SQL + Vector index)
 
 This implementation persists Episode rows and indexes embeddings in a VectorIndex.
-This patch introduces ownership support (owner_type/owner_id) WITHOUT changing existing
-field names or removing any columns.
-
-Backward compatibility
-----------------------
-- Existing DBs without owner columns will be migrated via ALTER TABLE.
-- Existing Episode objects without owner_id will derive:
-    owner_type="user"
-    owner_id=episode.user_id
+This store is scoped by ownership only (owner_type/owner_id).
 """
 
 from __future__ import annotations
@@ -36,9 +28,9 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     Schema (episodes)
     -----------------
     id TEXT PRIMARY KEY
+    owner_type TEXT NOT NULL
+    owner_id TEXT NOT NULL
     user_id TEXT NOT NULL
-    owner_type TEXT NOT NULL  (NEW)
-    owner_id TEXT NOT NULL    (NEW)
     timestamp TEXT NOT NULL   (ISO8601)
     summary TEXT NOT NULL
     raw TEXT NULL
@@ -64,9 +56,9 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 """
                 CREATE TABLE IF NOT EXISTS episodes (
                     id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL,
                     owner_type TEXT NOT NULL,
                     owner_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
                     timestamp TEXT NOT NULL,
                     summary TEXT NOT NULL,
                     raw TEXT,
@@ -85,11 +77,11 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 """
                 CREATE TABLE IF NOT EXISTS episode_clusters (
                     id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL,
                     summary TEXT NOT NULL,
                     episode_ids TEXT NOT NULL,
                     owner_type TEXT NOT NULL,
                     owner_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
                     latest_timestamp TEXT NOT NULL
                 );
                 """
@@ -143,13 +135,12 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         except Exception:
             logger.exception("EpisodicSQLStore: failed to parse embedding for id=%s", row["id"])
 
-        # owner fields may be NULL for legacy rows; derive from user_id
-        owner_type = row["owner_type"] if "owner_type" in row.keys() and row["owner_type"] else "user"
-        owner_id = row["owner_id"] if "owner_id" in row.keys() and row["owner_id"] else row["user_id"]
+        owner_type = row["owner_type"]
+        owner_id = row["owner_id"]
+        user_id = row["user_id"] if "user_id" in row.keys() else owner_id
 
         return Episode(
             id=row["id"],
-            user_id=row["user_id"],
             timestamp=datetime.fromisoformat(row["timestamp"]),
             summary=row["summary"],
             raw=row["raw"],
@@ -158,6 +149,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             meta=json.loads(row["meta"]),
             owner_type=owner_type,
             owner_id=owner_id,
+            user_id=user_id,
         )
 
     # ------------------------------------------------------------------ #
@@ -168,19 +160,21 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         """
         Insert or update an episode record + semantic embedding.
 
-        Backward compatibility:
-        - If ep.owner_id is missing, derive owner_id from ep.user_id.
         """
         conn = self._conn()
         try:
             owner_type = getattr(ep, "owner_type", "user") or "user"
-            owner_id = getattr(ep, "owner_id", "") or ep.user_id
+            owner_id = getattr(ep, "owner_id", "")
+            if not owner_id:
+                raise ValueError("EpisodicSQLStore.add_episode: owner_id must be set")
+            if not getattr(ep, "user_id", None):
+                raise ValueError("EpisodicSQLStore.add_episode: user_id must be set")
 
             payload = {
                 "id": ep.id,
-                "user_id": ep.user_id,
                 "owner_type": owner_type,
                 "owner_id": owner_id,
+                "user_id": ep.user_id,
                 "timestamp": ep.timestamp.isoformat(),
                 "summary": ep.summary,
                 "raw": ep.raw,
@@ -193,15 +187,15 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 conn,
                 """
                 INSERT INTO episodes (
-                    id, user_id, owner_type, owner_id, timestamp, summary, raw, tags, embedding, meta
+                    id, owner_type, owner_id, user_id, timestamp, summary, raw, tags, embedding, meta
                 )
                 VALUES (
-                    :id, :user_id, :owner_type, :owner_id, :timestamp, :summary, :raw, :tags, :embedding, :meta
+                    :id, :owner_type, :owner_id, :user_id, :timestamp, :summary, :raw, :tags, :embedding, :meta
                 )
                 ON CONFLICT(id) DO UPDATE SET
-                    user_id=excluded.user_id,
                     owner_type=excluded.owner_type,
                     owner_id=excluded.owner_id,
+                    user_id=excluded.user_id,
                     timestamp=excluded.timestamp,
                     summary=excluded.summary,
                     raw=excluded.raw,
@@ -213,12 +207,12 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 log_context="add_episode",
             )
 
-            # Vector upsert (keep user_id, add owner fields)
+            # Vector upsert (owner-scoped)
             try:
                 self.vector_index.upsert(
                     ids=[ep.id],
                     vectors=[embedding],
-                    metadata=[{"user_id": ep.user_id, "owner_type": owner_type, "owner_id": owner_id}],
+                    metadata=[{"owner_type": owner_type, "owner_id": owner_id}],
                 )
             except Exception:
                 logger.exception("EpisodicSQLStore.add_episode: vector upsert failed for id=%s", ep.id)
@@ -290,40 +284,119 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     # Listing / Retention Helpers
     # ------------------------------------------------------------------ #
 
-    async def list_episodes(self, user_id: str) -> List[Episode]:
+    async def list_episodes(self, owner_type: str, owner_id: str) -> List[Episode]:
         conn = self._conn()
         try:
             rows = self._query_all(
                 conn,
-                "SELECT * FROM episodes WHERE user_id = ?",
-                params=[user_id],
+                "SELECT * FROM episodes WHERE owner_type = ? AND owner_id = ?",
+                params=[owner_type, owner_id],
                 log_context="list_episodes",
             )
             return [self._row_to_object(row) for row in rows]
         except Exception:
-            logger.exception("EpisodicSQLStore.list_episodes failed user_id=%s", user_id)
+            logger.exception(
+                "EpisodicSQLStore.list_episodes failed owner=%s:%s",
+                owner_type,
+                owner_id,
+            )
             raise
         finally:
             conn.close()
 
-    async def list_recent(self, user_id: str, n: int = 5) -> List[Episode]:
+    async def list_recent(self, owner_type: str, owner_id: str, n: int = 5) -> List[Episode]:
         conn = self._conn()
         try:
             rows = self._query_all(
                 conn,
                 """
                 SELECT * FROM episodes
-                WHERE user_id = ?
+                WHERE owner_type = ? AND owner_id = ?
                 ORDER BY timestamp DESC
                 LIMIT ?
                 """,
-                params=[user_id, n],
+                params=[owner_type, owner_id, n],
                 log_context="list_recent",
             )
             return [self._row_to_object(row) for row in rows]
         except Exception:
-            logger.exception("EpisodicSQLStore.list_recent failed user_id=%s", user_id)
+            logger.exception(
+                "EpisodicSQLStore.list_recent failed owner=%s:%s",
+                owner_type,
+                owner_id,
+            )
             raise
+        finally:
+            conn.close()
+
+    async def fetch_summaries(self, ids: List[str]) -> List[dict]:
+        """
+        Fetch episode summaries by IDs, preserving requested order.
+        """
+        if not ids:
+            return []
+
+        conn = self._conn()
+        try:
+            placeholders = ",".join("?" for _ in ids)
+            sql = f"SELECT id, user_id, timestamp, summary FROM episodes WHERE id IN ({placeholders})"
+            rows = self._query_all(conn, sql, params=ids, log_context="fetch_episode_summaries")
+            row_map = {r["id"]: r for r in rows}
+            ordered: List[dict] = []
+            for eid in ids:
+                row = row_map.get(eid)
+                if row is None:
+                    continue
+                ordered.append(
+                    {
+                        "id": row["id"],
+                        "user_id": row["user_id"],
+                        "timestamp": row["timestamp"],
+                        "summary": row["summary"],
+                    }
+                )
+            return ordered
+        except Exception:
+            logger.exception("EpisodicSQLStore.fetch_summaries failed.")
+            return []
+        finally:
+            conn.close()
+
+    async def fetch_transcripts(self, ids: List[str]) -> List[dict]:
+        """
+        Fetch episode transcripts (raw) by IDs, preserving requested order.
+        """
+        if not ids:
+            return []
+
+        conn = self._conn()
+        try:
+            placeholders = ",".join("?" for _ in ids)
+            sql = f"""
+                SELECT id, user_id, timestamp, summary, raw
+                FROM episodes
+                WHERE id IN ({placeholders})
+            """
+            rows = self._query_all(conn, sql, params=ids, log_context="fetch_episode_transcripts")
+            row_map = {r["id"]: r for r in rows}
+            ordered: List[dict] = []
+            for eid in ids:
+                row = row_map.get(eid)
+                if row is None:
+                    continue
+                ordered.append(
+                    {
+                        "id": row["id"],
+                        "user_id": row["user_id"],
+                        "timestamp": row["timestamp"],
+                        "summary": row["summary"],
+                        "raw": row.get("raw"),
+                    }
+                )
+            return ordered
+        except Exception:
+            logger.exception("EpisodicSQLStore.fetch_transcripts failed.")
+            return []
         finally:
             conn.close()
 
@@ -334,16 +407,16 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     async def search(
         self,
         query_embedding: List[float],
-        user_id: Optional[str] = None,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
         k: int = 20,
     ) -> List[Episode]:
         """
         Semantic episodic search.
 
-        We keep filtering by user_id to preserve existing behavior,
-        and also pass owner metadata when possible.
+        Filter by owner_type/owner_id when provided.
         """
-        filters = {"user_id": user_id} if user_id else None
+        filters = {"owner_type": owner_type, "owner_id": owner_id} if owner_type and owner_id else None
         try:
             return await self._semantic_search(
                 query_embedding=query_embedding,

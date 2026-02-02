@@ -175,8 +175,8 @@ class RetrievalService:
 
                     # Lexical fallback if chunk search returns nothing (or embed failed).
                     if not (raw.get("chunks") or []) and isinstance(query_text_or_embedding, str):
-                        store = getattr(self.memory, "chunk_store", None)
-                        if store is not None and hasattr(store, "search_text"):
+                        core = getattr(self.memory, "chunk_core", None)
+                        if core is not None:
                             try:
                                 chunks: List[Any] = []
                                 for owner_type, owner_id in self._iter_owner_filters(
@@ -184,7 +184,7 @@ class RetrievalService:
                                     agent_id=agent_id,
                                     project_id=project_id,
                                 ):
-                                    found = await store.search_text(
+                                    found = await core.search_text(
                                         query_text_or_embedding,
                                         owner_type=owner_type,
                                         owner_id=owner_id,

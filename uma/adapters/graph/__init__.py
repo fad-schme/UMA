@@ -7,7 +7,6 @@ Exports:
 - GraphAdapter      : Abstract interface for concrete backends
 """
 
-from .core import TemporalGraphCore
 from ...adapters.graph.base import GraphAdapter
 
-__all__ = ["TemporalGraphCore", "GraphAdapter"]
+__all__ = ["GraphAdapter"]

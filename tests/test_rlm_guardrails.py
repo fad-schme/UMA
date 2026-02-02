@@ -1,12 +1,20 @@
 import asyncio
 
 from uma.core.retrieval.rlm.controller import RLMController
-from uma.core.retrieval.rlm.environment import MemoryEnvironment
+class DummyEnv:
+    def __init__(self):
+        class _RLM:
+            max_env_calls = 1
+            max_items_per_type = 5
 
+        class _Retrieval:
+            rlm = _RLM()
 
-class DummyEnv(MemoryEnvironment):
-    async def get_working_memory(self, user_id, window=None):
-        return []
+        class _Memory:
+            retrieval_cfg = _Retrieval()
+            working_memory = None
+
+        self._memory = _Memory()
 
     async def get_query_embedding(self, query_text):
         return [0.1, 0.2, 0.3]
@@ -22,9 +30,6 @@ class DummyEnv(MemoryEnvironment):
             }
         ]
 
-    async def fetch_facts_by_ids(self, user_id, ids):
-        return [{"id": fid, "summary": "fact"} for fid in ids]
-
     async def fetch_more_facts(self, user_id, predicate, k, offset=0, owner_scope=None):
         return [
             {
@@ -39,12 +44,6 @@ class DummyEnv(MemoryEnvironment):
     async def search_episodic(self, user_id, query_embedding, k=10, time_range=None):
         return [{"id": "e1", "summary": "episode"}]
 
-    async def fetch_episode_summaries(self, user_id, ids):
-        return [{"id": i, "summary": f"summary-{i}"} for i in ids]
-
-    async def fetch_episode_transcripts(self, user_id, ids):
-        return [{"id": i, "summary": f"summary-{i}", "raw": "raw"} for i in ids]
-
     async def episodic_cluster_summaries(self, user_id, k=5, max_episodes=50, time_range=None):
         return [{"id": "cluster:1", "summary": "cluster summary", "episode_ids": ["e1", "e2"]}]
 
@@ -55,9 +54,6 @@ class DummyEnv(MemoryEnvironment):
     async def search_procedural(self, user_id, query_embedding, k=10, filters=None):
         return [{"id": "s1", "name": "skill"}]
 
-    async def fetch_skills_by_ids(self, user_id, ids):
-        return [{"id": sid, "name": "skill"} for sid in ids]
-
     # --- Graph ---
     async def graph_neighbors(self, user_id, node_id, predicate_scope=None, depth=1, k=10):
         return [{"labels": ["Entity"], "properties": {"name": "x"}}]
@@ -65,8 +61,8 @@ class DummyEnv(MemoryEnvironment):
     async def expand_graph(self, user_id, subject, predicate=None, hops=1, direction=None, k=10):
         return await self.graph_neighbors(user_id, subject, predicate_scope=[predicate] if predicate else None, depth=hops, k=k)
 
-    async def resolve_conflicts(self, user_id, fact_ids):
-        return await self.fetch_facts_by_ids(user_id, fact_ids)
+    async def search_chunks(self, user_id, query_embedding, k=10):
+        return []
 
 
 class DummyLLM:
@@ -81,15 +77,7 @@ class DummyLLM:
 
 
 def test_max_env_calls_and_truncation():
-    ctl = RLMController(
-        llm=DummyLLM(),
-        env=DummyEnv(),
-        max_steps=1,
-        max_actions_per_step=2,
-        max_env_calls=1,
-        deterministic_only=False,
-        min_semantic_facts=100,
-    )
+    ctl = RLMController(llm=DummyLLM(), env=DummyEnv())
 
     pack = asyncio.run(ctl.retrieve_context("u1", "query"))
     assert any("max_env_calls" in warning for warning in pack.warnings)

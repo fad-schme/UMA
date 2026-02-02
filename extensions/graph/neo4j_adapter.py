@@ -49,7 +49,7 @@ class Neo4jAdapter(GraphAdapter):
     Parameters
     ----------
     uri : str
-        Neo4j connection URI (e.g. 'bolt://localhost:7687').
+        Neo4j connection URI (e.g. 'neo4j://localhost:7687').
     user : str
         Username for Neo4j authentication.
     password : str
@@ -85,7 +85,8 @@ class Neo4jAdapter(GraphAdapter):
                 max_connection_pool_size=max_pool_size,
             )
             # Optionally test connectivity:
-            # self._driver.verify_connectivity()
+            self._driver.verify_connectivity()
+
             logger.info(
                 "Neo4jAdapter connected to %s with max_pool_size=%d",
                 uri,

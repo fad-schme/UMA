@@ -42,10 +42,6 @@ async def interactive_chat(
     memory = UMAMemory.from_yaml(config_path)
     memory.initialize()
     try:
-        if memory.rlm_controller is None:
-            logging.warning(
-                "RLM is disabled in config; enable retrieval.rlm.enabled for full UMA-RLM behavior."
-            )
         vector_backend = getattr(memory.raw_config.storage, "vector_backend", "")
         if vector_backend in ("faiss", "inmemory"):
             logging.info("Rebuilding vector indexes from SQL for user=%s", user_id)

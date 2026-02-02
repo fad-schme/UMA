@@ -2,26 +2,26 @@
 Temporal Graph Updater (Core)
 =============================
 
-This module defines how UMA projects episodic and semantic memory
-into the temporal knowledge graph.
+Projects episodic and semantic memory into the temporal knowledge graph.
 
-Design Principles
------------------
-- Backend-agnostic: talks only to GraphAdapter
-- Safe: never raises exceptions to callers
-- Deterministic: no retrieval or reasoning logic here
-- Identity-consistent: ALL User nodes use "user:<id>"
+DAT invariants enforced
+----------------------
+- Graph is DERIVED (never authoritative)
+- Fact → graph provenance is mandatory
+- Ownership is explicit on all nodes/edges used for traversal
+- Graph failures never crash UMA (best-effort)
 
-This class is effectively the *graph mapper* for UMA v1.
+Strict mode (UMA-RLM v1)
+------------------------
+- No legacy Cypher fallback for facts
+- Ownership is stamped on ALL traversable relationship types
 """
 
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any, List
 
-from ...adapters.graph.base import GraphAdapter
 from ..utils.identity import ensure_user_subject
 
 logger = logging.getLogger(__name__)
@@ -29,28 +29,36 @@ logger = logging.getLogger(__name__)
 
 class GraphUpdater:
     """
-    High-level temporal graph update logic.
+    High-level temporal graph mapper.
 
-    Projects:
-        - Episodes
-        - Facts
-        - Entities
-        - Temporal relationships
+    Responsibilities
+    ----------------
+    - Insert Episode nodes and link them to User (HAS_EPISODE)
+    - Insert Fact triplets with full provenance (via TemporalGraphCore.insert_fact_triplet)
+    - Link Episodes ↔ Facts (MENTIONS) WITH ownership
+    - Link Episode → Entity (predicate edges) WITH ownership
+    - Add temporal PRECEDES/FOLLOWS edges WITH ownership
 
-    into a graph structure using Cypher (via GraphAdapter).
+    Notes
+    -----
+    - This class is write-only.
+    - Reads are handled by TemporalGraphCore.neighbors/get_paths with strict ownership.
     """
 
-    def __init__(self, graph: GraphAdapter):
+    def __init__(self, graph_core: Any):
         """
-        Initialize the GraphUpdater.
-
         Parameters
         ----------
-        graph : GraphAdapter
-            Concrete backend adapter (Neo4jAdapter, MemgraphAdapter, etc.).
+        graph_core :
+            Instance of TemporalGraphCore.
+
+        Notes
+        -----
+        GraphUpdater depends on graph_core.insert_fact_triplet().
+        If that API is missing, graph ingestion is disabled.
         """
-        self.graph = graph
-        logger.info("GraphUpdater initialized.")
+        self.graph_core = graph_core
+        logger.info("GraphUpdater initialized (strict DAT-safe mode).")
 
     # ------------------------------------------------------------------
     # EPISODES
@@ -58,269 +66,195 @@ class GraphUpdater:
 
     def add_episode_node(self, episode: Any) -> None:
         """
-        Insert an Episode node and link it to its User.
+        Insert an Episode node and link it to its owner User.
 
-        Graph structure:
-
-            (u:User {id: "user:<id>"})
-                -[:HAS_EPISODE]-> (e:Episode {id: episode.id})
+        Graph shape:
+            (User)-[:HAS_EPISODE {owner_type, owner_id, timestamp}]->(Episode)
         """
-        if not hasattr(episode, "id") or not hasattr(episode, "timestamp"):
-            logger.error(
-                "GraphUpdater.add_episode_node: invalid episode object=%r",
-                episode,
-            )
-            return
-
         try:
-            subject = ensure_user_subject(getattr(episode, "user_id", ""))
+            if not hasattr(episode, "id") or not hasattr(episode, "timestamp"):
+                raise ValueError("Invalid episode object")
 
-            owner_type = getattr(episode, "owner_type", "user") or "user"
-            owner_id = getattr(episode, "owner_id", "") or getattr(episode, "user_id", "")
+            owner_type = str(getattr(episode, "owner_type", "user") or "user")
+            owner_id_raw = str(getattr(episode, "owner_id", "") or "")
+            owner_id = ensure_user_subject(owner_id_raw) if owner_type == "user" else owner_id_raw
 
-            self.graph.run_query(
+            self.graph_core.adapter.run_query(
                 """
-                MERGE (u:User {id: $subject})
-                MERGE (e:Episode {id: $id})
+                MERGE (u:User {id: $user_id})
+                MERGE (e:Episode {id: $episode_id})
                 SET e.summary = $summary,
                     e.timestamp = $timestamp,
                     e.owner_type = $owner_type,
                     e.owner_id = $owner_id
-                MERGE (u)-[:HAS_EPISODE]->(e)
-                """,
-                {
-                    "id": episode.id,
-                    "subject": subject,
-                    "summary": getattr(episode, "summary", None),
-                    "timestamp": (
-                        episode.timestamp.isoformat()
-                        if hasattr(episode, "timestamp")
-                        else None
-                    ),
-                    "owner_type": owner_type,
-                    "owner_id": owner_id,
-                },
-            )
-
-        except Exception:
-            logger.exception("GraphUpdater.add_episode_node failed.")
-
-    # ------------------------------------------------------------------
-    # FACTS (SEMANTIC)
-    # ------------------------------------------------------------------
-
-    def add_fact_node(self, fact: Any) -> None:
-        """
-        Insert a Fact node AND a predicate-scoped semantic edge.
-
-        Structure added:
-
-            (u:User {id: fact.subject})
-                -[:PREDICATE {confidence, updated_at}]-> (o:Entity {id: fact.object})
-
-        Also preserves a Fact node for auditing/debugging:
-
-            (f:Fact {id, subject, predicate, object, updated_at})
-        """
-        if (
-            not hasattr(fact, "id")
-            or not hasattr(fact, "subject")
-            or not hasattr(fact, "predicate")
-        ):
-            logger.error(
-                "GraphUpdater.add_fact_node: invalid fact object=%r",
-                fact,
-            )
-            return
-
-        try:
-            subject = ensure_user_subject(getattr(fact, "subject", ""))
-            raw_pred = str(getattr(fact, "predicate", "")).upper()
-            predicate = self._sanitize_predicate(raw_pred)
-            obj = str(getattr(fact, "object", ""))
-            confidence = float(getattr(fact, "confidence", 1.0))
-            updated_at = (
-                fact.updated_at.isoformat()
-                if hasattr(fact, "updated_at")
-                else None
-            )
-
-            # User anchor
-            self.graph.run_query(
-                "MERGE (u:User {id: $subject})",
-                {"subject": subject},
-            )
-
-            # Object entity
-            self.graph.run_query(
-                "MERGE (o:Entity {id: $object})",
-                {"object": obj},
-            )
-
-            # Predicate-scoped relationship
-            owner_type = getattr(fact, "owner_type", "user") or "user"
-            owner_id = getattr(fact, "owner_id", "") or subject
-
-            self.graph.run_query(
-                f"""
-                MATCH (u:User {{id: $subject}})
-                MATCH (o:Entity {{id: $object}})
-                MERGE (u)-[r:{predicate}]->(o)
-                SET r.confidence = $confidence,
-                    r.updated_at = $updated_at,
+                MERGE (u)-[r:HAS_EPISODE]->(e)
+                SET r.timestamp = $timestamp,
                     r.owner_type = $owner_type,
                     r.owner_id = $owner_id
                 """,
                 {
-                    "subject": subject,
-                    "object": obj,
-                    "confidence": confidence,
-                    "updated_at": updated_at,
-                    "owner_type": owner_type,
-                    "owner_id": owner_id,
-                },
-            )
-
-            # Fact node (audit trail)
-            self.graph.run_query(
-                """
-                MERGE (f:Fact {id: $id})
-                SET f.subject = $subject,
-                    f.predicate = $predicate,
-                    f.object = $object,
-                    f.updated_at = $updated_at,
-                    f.owner_type = $owner_type,
-                    f.owner_id = $owner_id
-                """,
-                {
-                    "id": fact.id,
-                    "subject": subject,
-                    "predicate": raw_pred,
-                    "object": obj,
-                    "updated_at": updated_at,
+                    "user_id": owner_id,
+                    "episode_id": str(episode.id),
+                    "summary": getattr(episode, "summary", None),
+                    "timestamp": episode.timestamp.isoformat(),
                     "owner_type": owner_type,
                     "owner_id": owner_id,
                 },
             )
 
         except Exception:
-            logger.exception("GraphUpdater.add_fact_node failed.")
+            logger.exception("GraphUpdater.add_episode_node failed (ignored).")
 
     # ------------------------------------------------------------------
-    # LINKS: EPISODE ↔ FACTS
+    # FACTS (SEMANTIC) — STRICT PROVENANCE
+    # ------------------------------------------------------------------
+
+    def add_fact(self, fact: Any) -> None:
+        """
+        Insert a semantic Fact into the graph with full provenance.
+
+        REQUIRED
+        --------
+        graph_core.insert_fact_triplet MUST exist.
+        """
+        try:
+            insert = getattr(self.graph_core, "insert_fact_triplet", None)
+            if not callable(insert):
+                logger.error("GraphUpdater.add_fact_node skipped: insert_fact_triplet missing.")
+                return
+
+            subj = ensure_user_subject(str(getattr(fact, "subject", "") or ""))
+            pred = str(getattr(fact, "predicate", "") or "")
+            obj = str(getattr(fact, "object", "") or "")
+
+            owner_type = str(getattr(fact, "owner_type", "user") or "user")
+            owner_id_raw = str(getattr(fact, "owner_id", "") or "")
+            owner_id = ensure_user_subject(owner_id_raw) if owner_type == "user" else owner_id_raw
+
+            meta = getattr(fact, "meta", {}) or {}
+            source_chunk_id = meta.get("source_chunk_id")
+
+            insert(
+                subject=subj,
+                predicate=pred,
+                object=obj,
+                confidence=float(getattr(fact, "confidence", 1.0) or 1.0),
+                fact_id=str(getattr(fact, "id", "")),
+                owner_type=owner_type,
+                owner_id=owner_id,
+                source_chunk_id=source_chunk_id,
+                created_at=getattr(fact, "created_at", None),
+                updated_at=getattr(fact, "updated_at", None),
+            )
+
+        except Exception:
+            logger.exception("GraphUpdater.add_fact_node failed (ignored).")
+
+    # ------------------------------------------------------------------
+    # LINKS: EPISODE ↔ FACTS (STAMP OWNERSHIP)
     # ------------------------------------------------------------------
 
     def link_episode_to_facts(self, episode: Any, facts: List[Any]) -> None:
         """
-        Connect an Episode to its extracted Facts.
+        Link an Episode to the Facts it mentions.
 
-        Adds:
-            (Episode)-[:MENTIONS]->(Fact)
+        Graph edges created:
+            (Episode)-[:MENTIONS {owner_type, owner_id}]->(Fact)
+            (Episode)-[:<PREDICATE> {owner_type, owner_id}]->(Entity)
 
-        Also adds:
-            (Episode)-[:PREDICATE]->(Entity)
-
-        where PREDICATE is fact.predicate.upper().
+        This is REQUIRED for owner-scoped graph traversal.
         """
-        if not isinstance(facts, list):
-            logger.error(
-                "GraphUpdater.link_episode_to_facts: facts must be a list, got=%r",
-                type(facts),
-            )
+        if not facts or not hasattr(episode, "id"):
             return
 
-        if not hasattr(episode, "id"):
-            logger.error(
-                "GraphUpdater.link_episode_to_facts: episode missing id=%r",
-                episode,
-            )
+        try:
+            owner_type = str(getattr(episode, "owner_type", "user") or "user")
+            owner_id_raw = str(getattr(episode, "owner_id", "") or "")
+            owner_id = ensure_user_subject(owner_id_raw) if owner_type == "user" else owner_id_raw
+        except Exception:
+            logger.exception("GraphUpdater.link_episode_to_facts: invalid episode ownership")
             return
 
         for fact in facts:
             try:
-                # Episode → Fact
-                self.graph.run_query(
+                # Episode → Fact (MENTIONS)
+                self.graph_core.run_query(
                     """
                     MATCH (e:Episode {id: $ep_id})
-                    MATCH (f:Fact {id: $f_id})
-                    MERGE (e)-[:MENTIONS]->(f)
+                    MATCH (f:Fact {id: $fact_id})
+                    MERGE (e)-[r:MENTIONS]->(f)
+                    SET r.owner_type = $owner_type,
+                        r.owner_id = $owner_id
                     """,
                     {
-                        "ep_id": episode.id,
-                        "f_id": getattr(fact, "id", None),
+                        "ep_id": str(episode.id),
+                        "fact_id": str(getattr(fact, "id", "")),
+                        "owner_type": owner_type,
+                        "owner_id": owner_id,
                     },
                 )
 
                 # Episode → Entity (predicate edge)
-                if hasattr(fact, "object") and hasattr(fact, "predicate"):
-                    raw_pred = str(getattr(fact, "predicate", "")).upper()
-                    predicate = self._sanitize_predicate(raw_pred)
-                    obj = str(getattr(fact, "object", ""))
+                raw_pred = str(getattr(fact, "predicate", "")).upper()
+                predicate = self.graph_core._sanitize_predicate(raw_pred)
+                obj = str(getattr(fact, "object", "") or "")
 
-                    self.graph.run_query(
-                        f"""
-                        MATCH (e:Episode {{id: $ep_id}})
-                        MATCH (o:Entity {{id: $object}})
-                        MERGE (e)-[:{predicate}]->(o)
-                        """,
-                        {
-                            "ep_id": episode.id,
-                            "object": obj,
-                        },
-                    )
+                self.graph_core.run_query(
+                    f"""
+                    MATCH (e:Episode {{id: $ep_id}})
+                    MERGE (o:Entity {{id: $object}})
+                    MERGE (e)-[r:{predicate}]->(o)
+                    SET r.owner_type = $owner_type,
+                        r.owner_id = $owner_id
+                    """,
+                    {
+                        "ep_id": str(episode.id),
+                        "object": obj,
+                        "owner_type": owner_type,
+                        "owner_id": owner_id,
+                    },
+                )
+
             except Exception:
-                logger.exception("GraphUpdater.link_episode_to_facts failed.")
+                logger.exception(
+                    "GraphUpdater.link_episode_to_facts failed "
+                    "(episode_id=%s, fact_id=%s)",
+                    getattr(episode, "id", None),
+                    getattr(fact, "id", None),
+                )
 
     # ------------------------------------------------------------------
-    # TEMPORAL LINKS
+    # TEMPORAL LINKS (STAMP OWNERSHIP)
     # ------------------------------------------------------------------
 
     def link_temporal(self, ep_prev: Any, ep_next: Any) -> None:
         """
-        Add PRECEDES/FOLLOWS relationships between episodes.
-
-        Graph pattern:
-
-            (a:Episode)-[:PRECEDES]->(b:Episode)
-            (b:Episode)-[:FOLLOWS]->(a:Episode)
+        Add PRECEDES / FOLLOWS relationships between episodes with ownership.
         """
-        if not hasattr(ep_prev, "id") or not hasattr(ep_next, "id"):
-            logger.error(
-                "GraphUpdater.link_temporal: invalid episode objects prev=%r next=%r",
-                ep_prev,
-                ep_next,
-            )
-            return
-
         try:
-            self.graph.run_query(
+            owner_type = str(getattr(ep_prev, "owner_type", "user") or "user")
+            owner_id_raw = str(getattr(ep_prev, "owner_id", "") or "")
+            owner_id = ensure_user_subject(owner_id_raw) if owner_type == "user" else owner_id_raw
+
+            self.graph_core.adapter.run_query(
                 """
                 MATCH (a:Episode {id: $a})
                 MATCH (b:Episode {id: $b})
-                MERGE (a)-[:PRECEDES]->(b)
-                MERGE (b)-[:FOLLOWS]->(a)
+                MERGE (a)-[p:PRECEDES]->(b)
+                SET p.owner_type = $owner_type,
+                    p.owner_id = $owner_id
+                MERGE (b)-[f:FOLLOWS]->(a)
+                SET f.owner_type = $owner_type,
+                    f.owner_id = $owner_id
                 """,
                 {
-                    "a": ep_prev.id,
-                    "b": ep_next.id,
+                    "a": str(ep_prev.id),
+                    "b": str(ep_next.id),
+                    "owner_type": owner_type,
+                    "owner_id": owner_id,
                 },
             )
+
         except Exception:
-            logger.exception("GraphUpdater.link_temporal failed.")
+            logger.exception("GraphUpdater.link_temporal failed (ignored).")
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    def _sanitize_predicate(self, predicate: str) -> str:
-        """
-        Ensure predicate is a valid Cypher relationship type:
-        - uppercase alphanumerics + underscore
-        - must start with a letter
-        """
-        cleaned = re.sub(r"[^A-Z0-9_]", "_", predicate or "").strip("_")
-        if not cleaned or not cleaned[0].isalpha():
-            cleaned = f"REL_{cleaned}" if cleaned else "RELATES_TO"
-        if cleaned != (predicate or ""):
-            logger.debug("Sanitized predicate %r -> %r", predicate, cleaned)
-        return cleaned

@@ -139,25 +139,30 @@ def run_health_checks(memory: Any) -> Dict[str, Any]:
     """
     checks: Dict[str, HealthCheck] = {}
 
+    epi_store = getattr(getattr(memory, "episodic_core", None), "store", None)
+    sem_core = getattr(memory, "semantic_core", None)
+    sem_store = getattr(getattr(sem_core, "ingestor", None), "semantic_store", None)
+    proc_store = getattr(getattr(memory, "procedural_core", None), "store", None)
+
     checks["db:episodic"] = _check_db(
-        "db:episodic", getattr(getattr(memory, "episodic_store", None), "_db_adapter", None)
+        "db:episodic", getattr(epi_store, "_db_adapter", None)
     )
     checks["db:semantic"] = _check_db(
-        "db:semantic", getattr(getattr(memory, "semantic_store", None), "_db_adapter", None)
+        "db:semantic", getattr(sem_store, "_db_adapter", None)
     )
     checks["db:procedural"] = _check_db(
-        "db:procedural", getattr(getattr(memory, "procedural_store", None), "_db_adapter", None)
+        "db:procedural", getattr(proc_store, "_db_adapter", None)
     )
 
     dim = int(getattr(getattr(memory, "embedding_cfg", None), "dimension", 0) or 0)
     checks["vector:episodic"] = _check_vector(
-        "vector:episodic", getattr(getattr(memory, "episodic_store", None), "vector_index", None), dim
+        "vector:episodic", getattr(epi_store, "vector_index", None), dim
     )
     checks["vector:semantic"] = _check_vector(
-        "vector:semantic", getattr(getattr(memory, "semantic_store", None), "vector_index", None), dim
+        "vector:semantic", getattr(sem_store, "vector_index", None), dim
     )
     checks["vector:procedural"] = _check_vector(
-        "vector:procedural", getattr(getattr(memory, "procedural_store", None), "vector_index", None), dim
+        "vector:procedural", getattr(proc_store, "vector_index", None), dim
     )
 
     graph_core = getattr(memory, "graph_core", None)

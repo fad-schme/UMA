@@ -54,18 +54,24 @@ class WorkingMemoryCore:
     def __init__(
         self,
         llm: LLMInterface,
-        max_tokens: int,
-        warning_ratio: float,
-        hard_limit_ratio: float,
-        chunk_size: int = 20,
-        keep_recent_messages: int = 6,
-        keep_recent_token_fraction: float = 0.10,
+        memory_client: Any,
     ) -> None:
-        if max_tokens <= 0:
+        wm_cfg = getattr(memory_client, "working_memory_cfg", None)
+        if wm_cfg is None:
+            raise ValueError("WorkingMemoryCore: working_memory_cfg missing from memory client")
+
+        max_tokens = getattr(wm_cfg, "max_tokens", None)
+        warning_ratio = getattr(wm_cfg, "warning_ratio", None)
+        hard_limit_ratio = getattr(wm_cfg, "hard_limit_ratio", None)
+        chunk_size = getattr(wm_cfg, "chunk_size", 20)
+        keep_recent_messages = getattr(wm_cfg, "keep_recent_messages", 6)
+        keep_recent_token_fraction = getattr(wm_cfg, "keep_recent_token_fraction", 0.10)
+
+        if max_tokens is None or max_tokens <= 0:
             raise ValueError("WorkingMemoryCore: max_tokens must be > 0")
-        if not (0.0 < warning_ratio < 1.0):
+        if warning_ratio is None or not (0.0 < warning_ratio < 1.0):
             raise ValueError("WorkingMemoryCore: warning_ratio must be in (0,1)")
-        if not (0.0 < hard_limit_ratio <= 1.5):
+        if hard_limit_ratio is None or not (0.0 < hard_limit_ratio <= 1.5):
             raise ValueError("WorkingMemoryCore: hard_limit_ratio must be in (0,1.5]")
         if not isinstance(chunk_size, int) or chunk_size <= 0:
             raise ValueError("WorkingMemoryCore: chunk_size must be a positive integer")

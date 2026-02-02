@@ -23,15 +23,11 @@ from typing import Callable, Any, Awaitable, Dict
 logger = logging.getLogger(__name__)
 
 
-_circuit_breaker: Dict[str, float] = {}
-
-
 def retryable(
     max_attempts: int = 5,
     initial_delay: float = 0.5,
     backoff_factor: float = 2.0,
     max_delay: float = 16.0,
-    cooldown_s: float = 60.0,
 ):
     """
     Decorator adding exponential backoff retry to async functions.
@@ -47,12 +43,6 @@ def retryable(
 
         async def wrapper(*args, **kwargs):
             name = getattr(func, "__name__", "unknown")
-            now = time.monotonic()
-            blocked_until = _circuit_breaker.get(name)
-            if blocked_until and now < blocked_until:
-                raise RuntimeError(
-                    f"{name}: circuit breaker open; retry after {blocked_until - now:.1f}s"
-                )
             delay = initial_delay
             attempt = 1
 
@@ -64,8 +54,6 @@ def retryable(
                         logger.exception(
                             "Retry failed after %d attempts: %s", attempt, func.__name__
                         )
-                        if cooldown_s and cooldown_s > 0:
-                            _circuit_breaker[name] = time.monotonic() + float(cooldown_s)
                         raise
 
                     logger.warning(
