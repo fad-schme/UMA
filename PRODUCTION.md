@@ -5,7 +5,7 @@ deployment. It is intentionally concise and actionable.
 
 ## Scope Summary
 UMA-RLM is a modular Python SDK for agent memory and context management. It
-combines episodic, semantic, procedural, and graph memories with an RLM-based
+combines episodic, facts, skills, and graph memories with an RLM-based
 retrieval controller that can recursively query the environment instead of
 packing long context into the prompt.
 It provides configuration hooks for storage and observability, but developers
@@ -35,7 +35,7 @@ response generation are managed by developers.
 ## Data Consistency & Recovery
 - Provide a maintenance job to rebuild vector indexes from SQL data using `UMAMemory.rebuild_vector_indexes(...)`.
 - Document recovery steps for partial index rebuilds (per user or per store).
-- `user_id` is required to rebuild episodic/semantic indexes; procedural rebuilds can run globally.
+- `user_id` is required to rebuild episodic/facts indexes; skills rebuilds can run globally.
 
 ## Observability
 - Structured logs (JSON) with request IDs and user/session identifiers.

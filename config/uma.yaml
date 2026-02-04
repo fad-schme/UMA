@@ -100,10 +100,6 @@ retrieval:
   # Recursive Language Model (RLM) retrieval
   rlm:
     test_mode: true
-    extract_snippets: true
-    max_eval_rounds: 2
-    max_eval_chunks: 12
-    max_snippet_chars: 320
 
     # Maximum recursive steps the controller can take
     max_steps: 2
@@ -114,17 +110,11 @@ retrieval:
     # Hard cap per memory type (safety)
     max_items_per_type: 30
 
-    # LLM budget for controller decisions
-    llm_max_tokens: 120
-
     # Total wall-clock timeout for RLM retrieval
     timeout_s: 45.0
 
     # Max environment calls per request
     max_env_calls: 8
-
-    # Max characters per returned text field in RLM results
-    max_return_chars: 800
 
     # Deterministic coverage heuristics (optional)
     # semantic_first: true

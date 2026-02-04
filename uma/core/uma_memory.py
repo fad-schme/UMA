@@ -8,8 +8,8 @@ This class owns and orchestrates all UMA memory subsystems:
 
     • Working Memory (short-term conversational state)
     • Episodic Memory (indexed event history)
-    • Semantic Memory (facts, preferences, domain knowledge)
-    • Procedural Memory (skills, routines)
+    • Fact Memory (facts, preferences, domain knowledge)
+    • Skill Memory (skills, routines)
     • Temporal Graph (optional knowledge graph)
     • RetrievalService (developer-facing recall API)
 
@@ -52,8 +52,8 @@ Typical developer workflow
         {
             "working_memory": [...],   # always included
             "episodic": [...],         # retrieval-matched episodes
-            "semantic": [...],         # relevant long-term facts
-            "procedural": [...],       # relevant skills
+            "facts": [...],            # relevant long-term facts
+            "skills": [...],           # relevant skills
             "graph": [...],            # relevant graph items
         }
 
@@ -261,16 +261,16 @@ class UMAMemory:
             logger.debug("UMAMemory.initialize(): already initialized — skipping.")
             return
 
-        self.warmup(profile=profile)
+        self._lazy_init(profile=profile)
 
         logger.info("UMA Memory Runtime initialized successfully (profile=%s).", profile)
 
-    def warmup(self, profile: str = "full") -> None:
+    def _lazy_init(self, profile: str = "full") -> None:
         """
-        Warm up UMA subsystems on-demand.
+        Lazily initialize UMA subsystems on-demand.
         """
         profile_norm = (profile or "full").strip().lower()
-        logger.info("UMAMemory.warmup(profile=%s)", profile_norm)
+        logger.info("UMAMemory._lazy_init(profile=%s)", profile_norm)
 
         if profile_norm == "minimal":
             self.initialized = True
@@ -282,6 +282,7 @@ class UMAMemory:
             ensure_stores(self)
             ensure_cores(self)
             ensure_retrieval(self)
+            ensure_graph(self)
             ensure_rlm(self)
 
         if profile_norm in {"ingestion", "full"}:
@@ -291,9 +292,6 @@ class UMAMemory:
             ensure_cores(self)
             ensure_features(self)
             ensure_pipeline(self)
-
-        if profile_norm == "full":
-            ensure_graph(self)
 
         self.initialized = True
 
@@ -621,8 +619,8 @@ class UMAMemory:
             {
                 "working_memory": [...],
                 "episodic": [...],
-                "semantic": [...],
-                "procedural": [...],
+            "facts": [...],
+            "skills": [...],
                 "graph": [...],
             }
         """
@@ -636,7 +634,7 @@ class UMAMemory:
 
         with timed("uma.get_user_context.latency"):
             if not self.initialized:
-                self.warmup(profile="retrieval")
+                self._lazy_init(profile="retrieval")
             # 1) Stored WM
             try:
                 wm_stored = (
@@ -676,14 +674,13 @@ class UMAMemory:
                     )
                     increment("uma.get_user_context.calls", tags={"path": "rlm"})
                     coverage = getattr(pack, "coverage", None)
-                    semantic = pack.facts or []
-                    from .retrieval.rlm.policy import compute_confidence
+                    from .retrieval.rlm.coverage import compute_confidence
                     return {
                         "working_memory": wm_stored,
                         "episodic": pack.episodes,
-                        "semantic": semantic,
+                        "facts": pack.facts or [],
                         "chunks": getattr(pack, "chunks", []),
-                        "procedural": pack.skills,
+                        "skills": pack.skills,
                         "graph": pack.graph,
                         "trace": pack.steps,
                         "confidence": compute_confidence(coverage) if coverage is not None else {},
@@ -717,15 +714,14 @@ class UMAMemory:
                 retrieved = {}
 
             increment("uma.get_user_context.calls", tags={"path": "classic"})
-        semantic = retrieved.get("facts", retrieved.get("semantic", [])) or []
         return {
             "working_memory": wm_stored,
             "episodic": retrieved.get("episodes", []) or [],
-            "semantic": semantic,
+            "facts": retrieved.get("facts", []) or [],
             "chunks": retrieved.get("chunks", []) or [],
-            "procedural": retrieved.get("skills", retrieved.get("procedural", [])) or [],
+            "skills": retrieved.get("skills", []) or [],
             "graph": retrieved.get("graph", []) or [],
-            "trace": [],
+            "trace": retrieved.get("trace", []) or [],
             "confidence": {},
         }
 
@@ -742,7 +738,7 @@ class UMAMemory:
         This is the primary ingestion API and wraps the internal pipeline.
         """
         if not self.initialized:
-            self.warmup(profile="ingestion")
+            self._lazy_init(profile="ingestion")
         if not getattr(self, "pipeline", None):
             raise RuntimeError("UMAMemory.process_turn: pipeline not initialized.")
 
@@ -757,24 +753,20 @@ class UMAMemory:
         self,
         file_path: str,
         *,
-        owner_scope: str,
-        user_id: str | None,
-        agent_id: str,
-        project_id: str | None,
+        owner_type: str,
+        owner_id: str,
         config: Optional[Any] = None,
     ) -> Any:
         """
         Ingest an unstructured document into UMA memory.
         """
         if not self.initialized:
-            self.warmup(profile="ingestion")
+            self._lazy_init(profile="ingestion")
         from .ingest.ingest_service import ingest_document as _ingest
         return await _ingest(
             file_path,
-            owner_scope=owner_scope,
-            user_id=user_id,
-            agent_id=agent_id,
-            project_id=project_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
             config=config,
             memory=self,
         )

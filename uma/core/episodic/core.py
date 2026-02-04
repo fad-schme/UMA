@@ -21,13 +21,14 @@ and EpisodeMapper. It handles:
 from __future__ import annotations
 
 import logging
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional
 
 from .indexer import EpisodeIndexer
 from .archive import EpisodicArchive
 from .mapper import EpisodeMapper
 from .policies import EpisodicRetentionPolicy
 from ...types_episode import Episode
+from ..utils.dedupe import dedupe_by_id
 
 logger = logging.getLogger(__name__)
 
@@ -260,129 +261,90 @@ class EpisodicCore:
     # RETRIEVAL API
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _iter_owner_filters(
-        *,
-        user_subject: str,
-        agent_id: Optional[str],
-        project_id: Optional[str],
-        owner_scope: Optional[str] = None,
-    ) -> List[Tuple[str, str]]:
-        scope = (owner_scope or "").lower()
-        if scope:
-            if scope == "user":
-                return [("user", user_subject)]
-            if scope == "agent" and agent_id:
-                return [("agent", agent_id)]
-            if scope == "project" and project_id:
-                return [("project", f"{user_subject}:{project_id}")]
-            return []
-
-        filters: List[Tuple[str, str]] = [("user", user_subject)]
-        if agent_id:
-            filters.append(("agent", agent_id))
-        if project_id:
-            filters.append(("project", f"{user_subject}:{project_id}"))
-        return filters
-
-    async def search_tiered(
+    async def search(
         self,
         user_id: str,
         query_embedding: List[float],
         *,
+        owner_type: str,
+        owner_id: str,
         k: int = 20,
         offset: int = 0,
-        agent_id: Optional[str] = None,
-        project_id: Optional[str] = None,
-        owner_scope: Optional[str] = None,
     ) -> List[Episode]:
         if self.store is None:
             return []
         try:
             user_subject = ensure_user_subject(user_id)
         except Exception:
-            logger.exception("EpisodicCore.search_tiered: invalid subject=%r", user_id)
+            logger.exception("EpisodicCore.search: invalid subject=%r", user_id)
             return []
 
         episodes: List[Episode] = []
-        for owner_type, owner_id in self._iter_owner_filters(
-            user_subject=user_subject,
-            agent_id=agent_id,
-            project_id=project_id,
-            owner_scope=owner_scope,
-        ):
+        try:
             try:
-                try:
-                    found = await self.store.search(
-                        query_embedding=query_embedding,
-                        owner_type=owner_type,
-                        owner_id=owner_id,
-                        k=int(k),
-                        offset=int(offset),
-                    )
-                except TypeError:
-                    found = await self.store.search(
-                        query_embedding=query_embedding,
-                        owner_type=owner_type,
-                        owner_id=owner_id,
-                        k=int(k),
-                    )
-                if found:
-                    episodes.extend(found)
-            except Exception:
-                logger.exception(
-                    "EpisodicCore.search_tiered failed owner=%s:%s",
-                    owner_type,
-                    owner_id,
+                found = await self.store.search(
+                    query_embedding=query_embedding,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    k=int(k),
+                    offset=int(offset),
                 )
-        return _dedupe_items(episodes)
+            except TypeError:
+                found = await self.store.search(
+                    query_embedding=query_embedding,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    k=int(k),
+                )
+            if found:
+                episodes.extend(found)
+        except Exception:
+            logger.exception(
+                "EpisodicCore.search failed owner=%s:%s",
+                owner_type,
+                owner_id,
+            )
+        return dedupe_by_id(episodes)
 
-    async def list_cluster_summaries_tiered(
+    async def list_cluster_summaries(
         self,
         user_id: str,
         *,
+        owner_type: str,
+        owner_id: str,
         k: int = 5,
         max_episodes: int = 50,
         time_range: Optional[dict] = None,
-        agent_id: Optional[str] = None,
-        project_id: Optional[str] = None,
-        owner_scope: Optional[str] = None,
     ) -> List[Any]:
         if self.store is None or not hasattr(self.store, "list_cluster_summaries"):
             logger.warning(
-                "EpisodicCore.list_cluster_summaries_tiered: store does not support clustering"
+                "EpisodicCore.list_cluster_summaries: store does not support clustering"
             )
             return []
         try:
             user_subject = ensure_user_subject(user_id)
         except Exception:
-            logger.exception("EpisodicCore.list_cluster_summaries_tiered: invalid subject=%r", user_id)
+            logger.exception("EpisodicCore.list_cluster_summaries: invalid subject=%r", user_id)
             return []
 
         clusters: List[Any] = []
-        for owner_type, owner_id in self._iter_owner_filters(
-            user_subject=user_subject,
-            agent_id=agent_id,
-            project_id=project_id,
-            owner_scope=owner_scope,
-        ):
-            try:
-                found = await self.store.list_cluster_summaries(
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    k=int(k),
-                    max_episodes=max_episodes,
-                    time_range=time_range,
-                )
-                if found:
-                    clusters.extend(found)
-            except Exception:
-                logger.exception(
-                    "EpisodicCore.list_cluster_summaries_tiered failed owner=%s:%s",
-                    owner_type,
-                    owner_id,
-                )
-        return _dedupe_items(clusters)
+        try:
+            found = await self.store.list_cluster_summaries(
+                owner_type=owner_type,
+                owner_id=owner_id,
+                k=int(k),
+                max_episodes=max_episodes,
+                time_range=time_range,
+            )
+            if found:
+                clusters.extend(found)
+        except Exception:
+            logger.exception(
+                "EpisodicCore.list_cluster_summaries failed owner=%s:%s",
+                owner_type,
+                owner_id,
+            )
+        return dedupe_by_id(clusters)
 
     async def search(
         self,
@@ -436,23 +398,3 @@ class EpisodicCore:
         except Exception:
             logger.exception("EpisodicCore.fetch_transcripts failed")
             return []
-
-
-def _dedupe_items(items: List[Any]) -> List[Any]:
-    if not items:
-        return []
-    seen = set()
-    out: List[Any] = []
-    for it in items:
-        key = None
-        if isinstance(it, dict):
-            key = it.get("id")
-        else:
-            key = getattr(it, "id", None)
-        if key is None:
-            key = id(it)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(it)
-    return out

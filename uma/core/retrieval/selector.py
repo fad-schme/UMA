@@ -29,6 +29,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
+from ..utils.dedupe import dedupe_by_id
+
 logger = logging.getLogger(__name__)
 
 
@@ -122,16 +124,7 @@ class MemorySelector:
             base = (sal + conf) / 2.0
 
             # --- Scope weighting via policy (if present) ---
-            scope = _get_owner_scope(f)
-            scope_weight = policy.scope_weight(scope) if policy else 1.0
-
-            # --- Explicit promotion boost (agent knowledge) ---
-            # This ensures that promoted agent facts surface naturally
-            # without dominating user/project memory.
-            if scope == "agent":
-                scope_weight *= 1.25  # conservative, deterministic boost
-
-            return base * scope_weight
+            return base
 
         ranked = sorted(items, key=score, reverse=True)
         return ranked[: self.max_facts]
@@ -147,9 +140,7 @@ class MemorySelector:
                 base = 1.0 / max(1, int(getattr(ch, "position", 1)))
             except Exception:
                 base = 0.0
-            if policy is None:
-                return base
-            return base * policy.scope_weight(_get_owner_scope(ch))
+            return base
 
         ranked = sorted(items, key=score, reverse=True)
         return ranked[: self.max_facts]
@@ -196,20 +187,10 @@ class MemorySelector:
 
     def _dedupe(self, items: List[Any]) -> List[Any]:
         """Deduplicate by `.id` if present, else by Python object id."""
-        seen: Set[Any] = set()
-        out: List[Any] = []
-        for it in items:
-            key = getattr(it, "id", None)
-            if key is None:
-                key = id(it)
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(it)
-        return out
+        return dedupe_by_id(items)
 
 
-def _get_owner_scope(item: Any) -> str:
+def _get_owner_type(item: Any) -> str:
     if isinstance(item, dict):
-        return (item.get("owner_type") or item.get("owner_scope") or "").lower()
-    return (getattr(item, "owner_type", None) or getattr(item, "owner_scope", None) or "").lower()
+        return (item.get("owner_type") or "").lower()
+    return (getattr(item, "owner_type", None) or "").lower()

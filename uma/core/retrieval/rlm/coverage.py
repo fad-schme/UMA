@@ -1,4 +1,4 @@
-# uma/core/retrieval/rlm/policy.py
+# uma/core/retrieval/rlm/coverage.py
 
 from __future__ import annotations
 
@@ -18,6 +18,10 @@ class CoverageReport:
     cluster_summaries: int
     episode_summaries: int
     graph_total: int
+    graph_entity_support: int
+    graph_entity_total: int
+    graph_predicate_support: int
+    graph_predicate_total: int
     contradiction_count: int
     contradictions: List[str]
     has_contradictions: bool
@@ -70,6 +74,8 @@ def assess_coverage(
         episode_summaries = 0
 
     graph_total = len(graph)
+    graph_entity_support, graph_entity_total = _graph_entity_support(facts, graph)
+    graph_predicate_support, graph_predicate_total = _graph_predicate_support(facts, graph)
     contradictions = detect_contradictions(episodes)
 
     novelty_last, novelty_sum, diminishing = compute_novelty_signals(
@@ -85,6 +91,10 @@ def assess_coverage(
         cluster_summaries,
         episode_summaries,
         graph_total,
+        graph_entity_support,
+        graph_entity_total,
+        graph_predicate_support,
+        graph_predicate_total,
         len(contradictions),
         contradictions,
         bool(contradictions),
@@ -128,6 +138,8 @@ def compute_confidence(coverage: CoverageReport) -> Dict[str, float]:
         score += 0.2
     if coverage.graph_total > 0:
         score += 0.1
+    if coverage.graph_entity_support > 0 or coverage.graph_predicate_support > 0:
+        score += 0.1
     if coverage.novelty_recent_sum > 0:
         score += 0.2
     if coverage.has_contradictions:
@@ -140,6 +152,8 @@ def compute_confidence(coverage: CoverageReport) -> Dict[str, float]:
         "semantic_enough": 1.0 if coverage.semantic_enough else 0.0,
         "clusters_present": 1.0 if coverage.cluster_summaries > 0 else 0.0,
         "graph_present": 1.0 if coverage.graph_total > 0 else 0.0,
+        "graph_entity_support": float(coverage.graph_entity_support),
+        "graph_predicate_support": float(coverage.graph_predicate_support),
         "novelty_recent": float(coverage.novelty_recent_sum),
         "contradictions": 1.0 if coverage.has_contradictions else 0.0,
     }
@@ -152,6 +166,87 @@ def _fact_salience(fact: Any) -> float:
         return float((fact.get("meta") or {}).get("salience", 0.0)) if isinstance(fact, dict) else 0.0
     except Exception:
         return 0.0
+
+
+def _fact_entities(facts: List[Any], limit: int = 12) -> List[str]:
+    entities: List[str] = []
+    seen = set()
+    for f in facts or []:
+        if len(entities) >= limit:
+            break
+        try:
+            if isinstance(f, dict):
+                subj = f.get("subject")
+                obj = f.get("object")
+            else:
+                subj = getattr(f, "subject", None)
+                obj = getattr(f, "object", None)
+            for val in (subj, obj):
+                if val is None:
+                    continue
+                s = str(val).strip().lower()
+                if s.startswith("user:"):
+                    s = s[5:]
+                if not s or s in seen:
+                    continue
+                seen.add(s)
+                entities.append(s)
+                if len(entities) >= limit:
+                    break
+        except Exception:
+            continue
+    return entities
+
+
+def _graph_entity_support(facts: List[Any], graph: List[Any]) -> Tuple[int, int]:
+    entities = _fact_entities(facts)
+    if not entities:
+        return 0, 0
+    graph_ids: set = set()
+    for node in graph or []:
+        try:
+            if isinstance(node, dict):
+                props = node.get("properties") or {}
+                for key in ("id", "name", "value", "text"):
+                    val = props.get(key)
+                    if val:
+                        graph_ids.add(str(val).strip().lower())
+                node_id = node.get("id")
+                if node_id:
+                    graph_ids.add(str(node_id).strip().lower())
+        except Exception:
+            continue
+    support = sum(1 for e in entities if e in graph_ids)
+    return support, len(entities)
+
+
+def _graph_predicate_support(facts: List[Any], graph: List[Any]) -> Tuple[int, int]:
+    predicates: List[str] = []
+    seen = set()
+    for f in facts or []:
+        try:
+            pred = f.get("predicate") if isinstance(f, dict) else getattr(f, "predicate", None)
+            if pred:
+                p = str(pred).strip().upper()
+                if p and p not in seen:
+                    seen.add(p)
+                    predicates.append(p)
+        except Exception:
+            continue
+    if not predicates:
+        return 0, 0
+    graph_preds: set = set()
+    for node in graph or []:
+        try:
+            if isinstance(node, dict):
+                for key in ("predicate", "rel_type", "type"):
+                    val = node.get(key)
+                    if val:
+                        graph_preds.add(str(val).strip().upper())
+        except Exception:
+            continue
+    support = sum(1 for p in predicates if p in graph_preds)
+    return support, len(predicates)
 
 
 def _is_cluster_summary(item: Any) -> bool:

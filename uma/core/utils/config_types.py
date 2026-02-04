@@ -89,7 +89,7 @@ class LLMsConfig:
                 agent=LLMConfig.from_dict(llms.get("agent", {})),
                 uma=LLMConfig.from_dict(llms.get("uma", {})),
             )
-        # Fallback to legacy single llm section for UMA.
+        # Fallback to single llm section for UMA.
         if "llm" in d and isinstance(d["llm"], dict):
             uma_cfg = LLMConfig.from_dict(d["llm"])
             return cls(agent=uma_cfg, uma=uma_cfg)
@@ -237,14 +237,8 @@ class RetrievalConfig:
                 max_steps=int(rlm_cfg.get("max_steps", 4)),
                 max_actions_per_step=int(rlm_cfg.get("max_actions_per_step", 2)),
                 max_items_per_type=int(rlm_cfg.get("max_items_per_type", 30)),
-                llm_max_tokens=int(rlm_cfg.get("llm_max_tokens", 300)),
                 timeout_s=float(rlm_cfg.get("timeout_s", 20.0)),
                 max_env_calls=int(rlm_cfg.get("max_env_calls", 12)),
-                max_return_chars=int(rlm_cfg.get("max_return_chars", 1200)),
-                extract_snippets=bool(rlm_cfg.get("extract_snippets", True)),
-                max_eval_rounds=int(rlm_cfg.get("max_eval_rounds", 2)),
-                max_eval_chunks=int(rlm_cfg.get("max_eval_chunks", 12)),
-                max_snippet_chars=int(rlm_cfg.get("max_snippet_chars", 320)),
                 semantic_first=bool(rlm_cfg.get("semantic_first", True)),
                 clusters_first=bool(rlm_cfg.get("clusters_first", True)),
                 salience_threshold=float(rlm_cfg.get("salience_threshold", 0.6)),
@@ -280,14 +274,8 @@ class RLMConfig:
     max_steps: int = 4
     max_actions_per_step: int = 2
     max_items_per_type: int = 30
-    llm_max_tokens: int = 300
     timeout_s: float = 20.0
     max_env_calls: int = 12
-    max_return_chars: int = 1200
-    extract_snippets: bool = True
-    max_eval_rounds: int = 2
-    max_eval_chunks: int = 12
-    max_snippet_chars: int = 320
     semantic_first: bool = True
     clusters_first: bool = True
     salience_threshold: float = 0.6

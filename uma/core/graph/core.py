@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional
 
 from ...adapters.graph.base import GraphAdapter
 from ..utils.identity import ensure_user_subject
@@ -59,79 +59,6 @@ class TemporalGraphCore:
     # PUBLIC API
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _iter_owner_filters(
-        *,
-        user_subject: str,
-        agent_id: Optional[str],
-        project_id: Optional[str],
-        owner_scope: Optional[str] = None,
-    ) -> List[Tuple[str, str]]:
-        scope = (owner_scope or "").lower()
-        if scope:
-            if scope == "user":
-                return [("user", user_subject)]
-            if scope == "agent" and agent_id:
-                return [("agent", agent_id)]
-            if scope == "project" and project_id:
-                return [("project", f"{user_subject}:{project_id}")]
-            return []
-
-        filters: List[Tuple[str, str]] = [("user", user_subject)]
-        if agent_id:
-            filters.append(("agent", agent_id))
-        if project_id:
-            filters.append(("project", f"{user_subject}:{project_id}"))
-        return filters
-
-    def neighbors_tiered(
-        self,
-        user_id: str,
-        node_id: str,
-        *,
-        predicate_scope: Optional[List[str]] = None,
-        depth: int = 1,
-        k: int = 10,
-        agent_id: Optional[str] = None,
-        project_id: Optional[str] = None,
-        owner_scope: Optional[str] = None,
-    ) -> List[dict]:
-        """
-        Tiered neighbor expansion across user/agent/project scopes.
-        """
-        try:
-            user_subject = ensure_user_subject(user_id)
-        except Exception:
-            logger.exception("TemporalGraphCore.neighbors_tiered: invalid subject=%r", user_id)
-            return []
-
-        results: List[dict] = []
-        for owner_type, owner_id in self._iter_owner_filters(
-            user_subject=user_subject,
-            agent_id=agent_id,
-            project_id=project_id,
-            owner_scope=owner_scope,
-        ):
-            try:
-                found = self.neighbors(
-                    user_id=user_subject,
-                    node_id=node_id,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    predicate_scope=predicate_scope,
-                    depth=depth,
-                    k=k,
-                )
-                if found:
-                    results.extend(found)
-            except Exception:
-                logger.exception(
-                    "TemporalGraphCore.neighbors_tiered failed owner=%s:%s",
-                    owner_type,
-                    owner_id,
-                )
-        return _dedupe_items(results)
-
     def add_episode(self, episode: Any) -> None:
         """Insert an Episode node and link it to its User."""
         try:
@@ -158,6 +85,7 @@ class TemporalGraphCore:
         source_chunk_id: str,
         created_at: str,
         updated_at: str,
+        meta_json: str | None = None,
     ) -> bool:
         """
         Persist a fact triplet (subject, predicate, object) into Neo4j with full provenance.
@@ -185,7 +113,8 @@ class TemporalGraphCore:
                 r.owner_id = $owner_id,
                 r.source_chunk_id = $source_chunk_id,
                 r.created_at = $created_at,
-                r.updated_at = $updated_at
+                r.updated_at = $updated_at,
+                r.meta_json = $meta_json
 
             MERGE (f:Fact {{id: $fact_id}})
               SET
@@ -196,7 +125,8 @@ class TemporalGraphCore:
                 f.owner_id = $owner_id,
                 f.source_chunk_id = $source_chunk_id,
                 f.created_at = $created_at,
-                f.updated_at = $updated_at
+                f.updated_at = $updated_at,
+                f.meta_json = $meta_json
 
             MERGE (f)-[:SUBJECT]->(subj)
             MERGE (f)-[:OBJECT]->(obj)
@@ -213,6 +143,7 @@ class TemporalGraphCore:
                 "source_chunk_id": source_chunk_id,
                 "created_at": created_at,
                 "updated_at": updated_at,
+                "meta_json": meta_json,
             }
 
             self.adapter.run_query(cypher, params=params)
@@ -345,23 +276,3 @@ class TemporalGraphCore:
 
     def run_query(self, cypher: str, params: dict):
         return self.adapter.run_query(cypher, params)
-
-
-def _dedupe_items(items: List[Any]) -> List[Any]:
-    if not items:
-        return []
-    seen = set()
-    out: List[Any] = []
-    for it in items:
-        key = None
-        if isinstance(it, dict):
-            key = it.get("id")
-        else:
-            key = getattr(it, "id", None)
-        if key is None:
-            key = id(it)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(it)
-    return out

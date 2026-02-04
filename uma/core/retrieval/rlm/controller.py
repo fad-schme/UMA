@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from .context_pack import ContextPack
 from .decisions import ControllerDecision, RetrievalAction
-from .policy import assess_coverage
+from .coverage import assess_coverage
 from ..policy import RetrievalPolicy, should_stop
 from ...utils.identity import ensure_user_subject
 
@@ -61,7 +61,6 @@ class RLMController:
         self.max_actions_per_step = int(getattr(rlm_cfg, "max_actions_per_step", 2))
         self.max_env_calls = int(getattr(rlm_cfg, "max_env_calls", 12))
         self.max_items_per_type = int(getattr(rlm_cfg, "max_items_per_type", 30))
-        self.llm_max_tokens = int(getattr(rlm_cfg, "llm_max_tokens", 300))
 
         self.salience_threshold = float(getattr(rlm_cfg, "salience_threshold", 0.6))
         self.min_semantic_facts = max(1, int(getattr(rlm_cfg, "min_semantic_facts", 4)))
@@ -79,11 +78,6 @@ class RLMController:
 
         self.max_state_chars = max(200, int(getattr(rlm_cfg, "max_state_chars", 1200)))
         self.test_mode = bool(getattr(rlm_cfg, "test_mode", False))
-        self.extract_snippets = bool(getattr(rlm_cfg, "extract_snippets", True))
-        self.max_return_chars = int(getattr(rlm_cfg, "max_return_chars", 1200))
-        self.max_eval_rounds = int(getattr(rlm_cfg, "max_eval_rounds", 2))
-        self.max_eval_chunks = int(getattr(rlm_cfg, "max_eval_chunks", 12))
-        self.max_snippet_chars = int(getattr(rlm_cfg, "max_snippet_chars", 320))
         self.semantic_first = bool(getattr(rlm_cfg, "semantic_first", True))
         self.clusters_first = bool(getattr(rlm_cfg, "clusters_first", True))
 
@@ -115,7 +109,16 @@ class RLMController:
             any(k in query_text.lower() for k in ["remember", "recall", "previous", "earlier", "last time"]),
         )
 
-        pack = ContextPack(user_id=user_subject, query_text=query_text, owner_type="user")
+        agent_id = getattr(self.env, "_agent_id", None)
+        project_id = getattr(self.env, "_project_id", None)
+        pack = ContextPack(
+            user_id=user_subject,
+            query_text=query_text,
+            owner_type="user",
+            owner_id=user_subject,
+            agent_id=agent_id,
+            project_id=project_id,
+        )
 
         pack.working_memory = []
         if hasattr(self.env, "_memory"):
@@ -125,7 +128,22 @@ class RLMController:
         query_embedding = await self.env.get_query_embedding(query_text)
 
         # Pass trace_id to baseline retrieval
-        await self._baseline_retrieval(pack, query_embedding, trace_id=trace_id)
+        if policy.recall_score >= 0.75:
+            owner_type = "user"
+            owner_id = user_subject
+        else:
+            owner_type = "agent"
+            agent_id = getattr(self.env, "_agent_id", None)
+            if not agent_id:
+                raise ValueError("RLMController.retrieve_context: agent_id is required for agent scope.")
+            owner_id = agent_id
+        await self._baseline_retrieval(
+            pack,
+            query_embedding,
+            trace_id=trace_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+        )
         pack.record_seen()
         logger.debug(
             "RLMController: baseline counts facts=%d chunks=%d episodes=%d graph=%d",
@@ -141,7 +159,19 @@ class RLMController:
 
         coverage = self._assess_coverage(pack)
         pack.coverage = coverage
-        pack.steps.append({"step": 0, "coverage": coverage.to_dict()})
+        pack.steps.append(
+            {
+                "step": 0,
+                "phase": "baseline",
+                "event": "coverage",
+                "counts": {
+                    "facts": len(pack.facts),
+                    "episodes": len(pack.episodes),
+                    "graph": len(pack.graph),
+                },
+                "coverage": coverage.to_dict(),
+            }
+        )
 
         stop, reason = should_stop(
             recall_score=policy.recall_score,
@@ -190,7 +220,19 @@ class RLMController:
 
             coverage = self._assess_coverage(pack)
             pack.coverage = coverage
-            pack.steps.append({"step": step, "coverage": coverage.to_dict()})
+            pack.steps.append(
+                {
+                    "step": step,
+                    "phase": "loop",
+                    "event": "coverage",
+                    "counts": {
+                        "facts": len(pack.facts),
+                        "episodes": len(pack.episodes),
+                        "graph": len(pack.graph),
+                    },
+                    "coverage": coverage.to_dict(),
+                }
+            )
             logger.debug(
                 "RLMController: step=%d coverage=%s",
                 step,
@@ -298,7 +340,6 @@ class RLMController:
             )
 
         await self._prune_facts_with_llm(pack)
-        self._apply_scope_bias(pack, policy)
         logger.info(
             "RLMController.retrieve_context: done facts=%d episodes=%d graph=%d warnings=%s",
             len(pack.facts),
@@ -323,7 +364,14 @@ class RLMController:
     # BASELINE RETRIEVAL
     # ------------------------------------------------------------------
 
-    async def _baseline_retrieval(self, pack: ContextPack, query_embedding: List[float], trace_id: str = None) -> None:
+    async def _baseline_retrieval(
+        self,
+        pack: ContextPack,
+        query_embedding: List[float],
+        trace_id: str = None,
+        owner_type: str = "agent",
+        owner_id: Optional[str] = None,
+    ) -> None:
         if query_embedding:
             try:
                 results = await self.env.search_semantic(
@@ -331,13 +379,16 @@ class RLMController:
                     query_embedding,
                     k=self.max_items_per_type,
                     query_text=pack.query_text,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
                 )
             except TypeError:
-                # Backward compatibility: older envs may not accept query_text
                 results = await self.env.search_semantic(
                     pack.user_id,
                     query_embedding,
                     k=self.max_items_per_type,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
                 )
             pack.facts = _merge_unique(
                 pack.facts,
@@ -351,6 +402,9 @@ class RLMController:
                         pack.user_id,
                         query_embedding,
                         k=self.max_items_per_type,
+                        owner_type=owner_type,
+                        owner_id=owner_id,
+                        query_text=pack.query_text,
                     )
                     pack.chunks = _merge_unique(
                         getattr(pack, "chunks", []),
@@ -366,6 +420,8 @@ class RLMController:
                 pack.user_id,
                 query_embedding,
                 k=self.max_items_per_type,
+                owner_type=owner_type,
+                owner_id=owner_id,
             )
             pack.skills = _merge_unique(pack.skills, skills, self.max_items_per_type)
         except Exception:
@@ -375,6 +431,8 @@ class RLMController:
             pack.episodes,
             await self.env.episodic_cluster_summaries(
                 pack.user_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
                 k=self.cluster_k,
                 max_episodes=self.max_items_per_type,
             ),
@@ -389,6 +447,8 @@ class RLMController:
                 predicate_scope=self._next_predicate_scope(pack),
                 depth=1,
                 k=self.max_items_per_type,
+                owner_type=owner_type,
+                owner_id=owner_id,
             ),
             self.max_items_per_type,
         )
@@ -504,6 +564,8 @@ class RLMController:
                 k=k,
                 filters=action.filters,
                 query_text=query_text,
+                owner_type=action.owner_type or "agent",
+                owner_id=getattr(self.env, "_agent_id", None),
             )
             logger.debug("RLMController: search_semantic returned %d", len(results or []))
             return results
@@ -514,6 +576,8 @@ class RLMController:
                 query_embedding=query_embedding,
                 k=k,
                 time_range=action.time_range,
+                owner_type=action.owner_type or "agent",
+                owner_id=getattr(self.env, "_agent_id", None),
             )
             logger.debug("RLMController: search_episodic returned %d", len(results or []))
             return results
@@ -523,6 +587,8 @@ class RLMController:
                 user_id=user_subject,
                 query_embedding=query_embedding,
                 k=k,
+                owner_type=action.owner_type or "agent",
+                owner_id=getattr(self.env, "_agent_id", None),
             )
             logger.debug("RLMController: search_procedural returned %d", len(results or []))
             return results
@@ -543,7 +609,8 @@ class RLMController:
                 predicate=action.predicate,
                 k=k,
                 offset=offset,
-                owner_scope=action.owner_scope,
+                owner_type=action.owner_type or "agent",
+                owner_id=getattr(self.env, "_agent_id", None),
             )
             logger.debug("RLMController: fetch_more_facts returned %d", len(results or []))
             return results
@@ -561,6 +628,8 @@ class RLMController:
                 user_id=user_subject,
                 k=k,
                 max_episodes=self.max_items_per_type,
+                owner_type=action.owner_type or "agent",
+                owner_id=getattr(self.env, "_agent_id", None),
             )
             logger.debug("RLMController: episodic_clusters returned %d", len(results or []))
             return results
@@ -572,6 +641,8 @@ class RLMController:
                 max_episodes=self.max_items_per_type,
                 time_range=action.time_range,
                 min_salience=action.min_salience,
+                owner_type=action.owner_type or "agent",
+                owner_id=getattr(self.env, "_agent_id", None),
             )
             logger.debug("RLMController: fetch_episode_clusters returned %d", len(results or []))
             return results
@@ -583,6 +654,8 @@ class RLMController:
                 predicate_scope=action.predicate_scope,
                 depth=int(action.depth or 1),
                 k=k,
+                owner_type=action.owner_type or "agent",
+                owner_id=getattr(self.env, "_agent_id", None),
             )
             logger.debug("RLMController: graph_neighbors returned %d", len(results or []))
             return results
@@ -631,42 +704,6 @@ class RLMController:
         if not weights:
             return {}
         return {str(k).upper(): float(v) for k, v in weights.items() if isinstance(v, (int, float))}
-
-    def _apply_scope_bias(self, pack: ContextPack, policy: RetrievalPolicy) -> None:
-        """
-        Apply recall/scope bias to retrieved items to prefer user memory for recall intent.
-        """
-        if not policy:
-            return
-
-        def _score_fact(f: Any) -> float:
-            base = 0.0
-            if isinstance(f, dict):
-                sal = (f.get("meta") or {}).get("salience")
-                conf = f.get("confidence")
-            else:
-                sal = getattr(f, "salience", None)
-                conf = getattr(f, "confidence", None)
-            try:
-                base = (float(sal or 0.0) + float(conf or 0.5)) / 2.0
-            except Exception:
-                base = 0.0
-            return base * policy.scope_weight(_get_owner_scope(f))
-
-        def _score_chunk(c: Any) -> float:
-            try:
-                pos = getattr(c, "position", None)
-                if pos is None and isinstance(c, dict):
-                    pos = c.get("position")
-                base = 1.0 / max(1, int(pos or 1))
-            except Exception:
-                base = 0.0
-            return base * policy.scope_weight(_get_owner_scope(c))
-
-        if pack.facts:
-            pack.facts = sorted(pack.facts, key=_score_fact, reverse=True)
-        if getattr(pack, "chunks", None):
-            pack.chunks = sorted(pack.chunks, key=_score_chunk, reverse=True)
 
     def _truncate_items(self, items: List[Any]) -> List[Any]:
         if not items:
@@ -824,11 +861,11 @@ def _merge_unique(existing: List[Any], research: List[Any], limit: int) -> List[
     return out
 
 
-def _get_owner_scope(item: Any) -> str:
+def _get_owner_type(item: Any) -> str:
     if isinstance(item, dict):
-        return (item.get("owner_type") or item.get("owner_scope") or "").lower()
-    return (getattr(item, "owner_type", None) or getattr(item, "owner_scope", None) or "").lower()
+        return (item.get("owner_type") or "").lower()
+    return (getattr(item, "owner_type", None) or "").lower()
 
 
 def _is_user_owned(item: Any) -> bool:
-    return _get_owner_scope(item) == "user"
+    return _get_owner_type(item) == "user"

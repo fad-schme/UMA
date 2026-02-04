@@ -10,20 +10,20 @@ Responsibilities
 ----------------
 - Validate input: user_id, memory_type, query required.
 - Convert query -> embedding (text or numeric vector).
-- Call MultiStoreRetriever for raw results.
+- Retrieve raw results from core subsystems.
 - Call MemorySelector for ranking + truncation.
 - Return only the requested slice (list) or the "all" dict.
 
 Design principle
 ----------------
-No store-specific behavior here (belongs to MultiStoreRetriever).
+No store-specific behavior here (belongs to core subsystems).
 No ranking here (belongs to MemorySelector).
 """
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Optional, Union
 
-from .retrieval import MultiStoreRetriever
 from .selector import MemorySelector
 from .policy import RetrievalPolicy
 from ...adapters.observability.context import get_request_id, request_context
@@ -97,12 +97,6 @@ class RetrievalService:
         max_skills = int(getattr(retr_cfg, "max_skills"))
         max_graph_items = int(getattr(retr_cfg, "max_graph_items"))
 
-        self.retriever = MultiStoreRetriever(
-            max_episodes=max_episodes,
-            max_facts=max_facts,
-            max_skills=max_skills,
-            max_graph_items=max_graph_items,
-        )
         self.selector = MemorySelector(
             max_episodes=max_episodes,
             max_facts=max_facts,
@@ -117,6 +111,106 @@ class RetrievalService:
             max_skills,
             max_graph_items,
         )
+
+    async def _retrieve_raw(
+        self,
+        *,
+        user_subject: str,
+        query_embedding: List[float],
+        owner_type: str,
+        owner_id: str,
+    ) -> Dict[str, List[Any]]:
+        """
+        Perform raw retrieval from core subsystems.
+        """
+        tasks = {}
+
+        episodic_core = getattr(self.memory, "episodic_core", None)
+        if episodic_core is not None:
+            tasks["episodes"] = asyncio.create_task(
+                episodic_core.search(
+                    user_id=user_subject,
+                    query_embedding=query_embedding,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    k=self.selector.max_episodes,
+                )
+            )
+
+        semantic_core = getattr(self.memory, "semantic_core", None)
+        if semantic_core is not None:
+            tasks["facts"] = asyncio.create_task(
+                semantic_core.search(
+                    subject=user_subject,
+                    query_embedding=query_embedding,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    k=self.selector.max_facts,
+                    offset=0,
+                    filters=None,
+                    query_text=None,
+                    allowed_topics=None,
+                )
+            )
+
+        chunk_core = getattr(self.memory, "chunk_core", None)
+        if chunk_core is not None:
+            tasks["chunks"] = asyncio.create_task(
+                chunk_core.search(
+                    user_id=user_subject,
+                    query_embedding=query_embedding,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    k=self.selector.max_facts,
+                    doc_id=None,
+                )
+            )
+
+        procedural_core = getattr(self.memory, "procedural_core", None)
+        if procedural_core is not None:
+            tasks["skills"] = asyncio.create_task(
+                procedural_core.search(
+                    user_id=user_subject,
+                    query_embedding=query_embedding,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    k=self.selector.max_skills,
+                )
+            )
+
+        graph_core = getattr(self.memory, "graph_core", None)
+        graph_res: List[Any] = []
+        if graph_core is not None:
+            try:
+                graph_res = graph_core.neighbors(
+                    user_id=user_subject,
+                    node_id=user_subject,
+                    depth=2,
+                    k=self.selector.max_graph_items,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                )
+            except Exception:
+                logger.exception("RetrievalService: graph retrieval failed.")
+                graph_res = []
+
+        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+        raw: Dict[str, List[Any]] = {
+            "episodes": [],
+            "facts": [],
+            "chunks": [],
+            "skills": [],
+            "graph": graph_res,
+        }
+
+        for key, result in zip(tasks.keys(), results):
+            if isinstance(result, Exception):
+                logger.exception("RetrievalService: task '%s' failed.", key)
+                raw[key] = []
+            else:
+                raw[key] = result if isinstance(result, list) else []
+
+        return raw
 
     async def retrieve(
         self,
@@ -155,18 +249,32 @@ class RetrievalService:
                         return self._get_working_memory(user_subject)
 
                     raw: Dict[str, List[Any]]
+                    trace: List[Dict[str, Any]] = []
                     embedding: List[float]
+                    policy = (
+                        RetrievalPolicy(query_text_or_embedding)
+                        if isinstance(query_text_or_embedding, str)
+                        else None
+                    )
+                    if policy and policy.recall_score >= 0.75:
+                        owner_type = "user"
+                        owner_id = user_subject
+                    else:
+                        owner_type = "agent"
+                        if not agent_id:
+                            raise ValueError("RetrievalService.retrieve: agent_id is required for agent scope.")
+                        owner_id = agent_id
                     try:
                         embedding = await self._ensure_embedding(query_text_or_embedding)
-                        raw = await self.retriever.retrieve(
-                            memory=self.memory,
+                        raw = await self._retrieve_raw(
+                            user_subject=user_subject,
                             query_embedding=[float(x) for x in embedding],
-                            user_id=user_subject,
-                            agent_id=agent_id,
-                            project_id=project_id,
+                            owner_type=owner_type,
+                            owner_id=owner_id,
                         )
                     except Exception:
                         logger.exception("RetrievalService: embedding failed.")
+                        trace.append({"phase": "baseline", "event": "embedding_failed"})
                         strict = bool(getattr(self.memory, "retrieval_cfg", None) and self.memory.retrieval_cfg.strict)
                         if strict:
                             raise
@@ -179,20 +287,23 @@ class RetrievalService:
                         if core is not None:
                             try:
                                 chunks: List[Any] = []
-                                for owner_type, owner_id in self._iter_owner_filters(
-                                    user_subject=user_subject,
-                                    agent_id=agent_id,
-                                    project_id=project_id,
-                                ):
-                                    found = await core.search_text(
-                                        query_text_or_embedding,
-                                        owner_type=owner_type,
-                                        owner_id=owner_id,
-                                        k=self.selector.max_facts,
-                                    )
-                                    if found:
-                                        chunks.extend(found)
+                                found = await core.search_text(
+                                    query_text_or_embedding,
+                                    owner_type=owner_type,
+                                    owner_id=owner_id,
+                                    k=self.selector.max_facts,
+                                )
+                                if found:
+                                    chunks.extend(found)
                                 raw["chunks"] = chunks
+                                trace.append(
+                                    {
+                                        "phase": "baseline",
+                                        "event": "chunks_lexical_fallback",
+                                        "reason": "chunks_empty",
+                                    }
+                                )
+                                logger.info("RetrievalService: chunks lexical fallback (chunks_empty).")
                             except Exception:
                                 logger.exception("RetrievalService: chunk lexical fallback failed.")
                                 strict = bool(getattr(self.memory, "retrieval_cfg", None) and self.memory.retrieval_cfg.strict)
@@ -200,7 +311,6 @@ class RetrievalService:
                                     raise
 
                     # selector expects keys: episodes/facts/chunks/skills/graph (+ optional WM)
-                    policy = RetrievalPolicy(query_text_or_embedding) if isinstance(query_text_or_embedding, str) else None
                     selected = self.selector.select(raw, policy=policy)
 
                     # Extra defensive truncation guard:
@@ -214,6 +324,20 @@ class RetrievalService:
                         chunks = self._filter_chunks_by_query(chunks, query_text_or_embedding)
                     skills = (selected.get("skills") or [])[: self.selector.max_skills]
                     graph = (selected.get("graph") or [])[: self.selector.max_graph_items]
+
+                    trace.append(
+                        {
+                            "phase": "baseline",
+                            "event": "baseline_complete",
+                            "counts": {
+                                "episodes": len(episodes),
+                                "facts": len(facts),
+                                "chunks": len(chunks),
+                                "skills": len(skills),
+                                "graph": len(graph),
+                            },
+                        }
+                    )
 
                     if memory_type_norm == "episodic":
                         return episodes
@@ -232,6 +356,7 @@ class RetrievalService:
                             "chunks": chunks,
                             "skills": skills,
                             "graph": graph,
+                            "trace": trace,
                         }
 
                     raise ValueError(f"RetrievalService.retrieve: unsupported memory_type={memory_type_norm!r}")
@@ -269,20 +394,6 @@ class RetrievalService:
         except Exception:
             logger.exception("RetrievalService._get_working_memory failed.")
             return []
-
-    @staticmethod
-    def _iter_owner_filters(
-        *,
-        user_subject: str,
-        agent_id: Optional[str],
-        project_id: Optional[str],
-    ) -> List[tuple[str, str]]:
-        filters: List[tuple[str, str]] = [("user", user_subject)]
-        if agent_id:
-            filters.append(("agent", agent_id))
-        if project_id:
-            filters.append(("project", f"{user_subject}:{project_id}"))
-        return filters
 
     @staticmethod
     def _filter_chunks_by_query(chunks: List[Any], query_text: str) -> List[Any]:

@@ -27,13 +27,12 @@ class ContextPack:
     - Track per-step novelty
     - Track predicate offsets for semantic expansion
     """
-# Todo  
-# here is ownership (owner_type, owner_id) info
-# check if the context pack is for a user or system
-
     user_id: str
     query_text: str
     owner_type: Optional[str] = None
+    owner_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    project_id: Optional[str] = None
     
 
     # Memory layers
@@ -109,7 +108,7 @@ class ContextPack:
     def compute_novelty(self, items: List[Any], store: str) -> int:
         if not items:
             return 0
-        store = store.lower()
+        store = self._normalize_store(store)
         new_ids = _collect_ids(items)
         if not new_ids:
             return 0
@@ -117,6 +116,7 @@ class ContextPack:
         return sum(1 for i in new_ids if i not in seen)
 
     def apply_novelty(self, items: List[Any], store: str) -> Dict[str, int]:
+        store = self._normalize_store(store)
         novelty = self.compute_novelty(items, store)
         ids = _collect_ids(items)
         self._seen_set(store).update(ids)
@@ -145,6 +145,13 @@ class ContextPack:
         if store not in mapping:
             raise KeyError(f"Unknown store: {store}")
         return mapping[store]
+
+    @staticmethod
+    def _normalize_store(store: str) -> str:
+        store = (store or "").strip().lower()
+        if store not in {"facts", "chunks", "episodes", "skills", "graph"}:
+            raise KeyError(f"Unknown store: {store}")
+        return store
 
 
 def _collect_ids(items: List[Any]) -> Set[str]:

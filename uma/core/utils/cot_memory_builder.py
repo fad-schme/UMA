@@ -68,7 +68,7 @@ class CoTMemoryBuilder:
         # -------------------------------
         # Known Facts (Semantic Memory)
         # -------------------------------
-        for fact in ctx.get("semantic", []):
+        for fact in ctx.get("facts", []):
             try:
                 subj = _get_attr_or_key(fact, "subject")
                 pred = _get_attr_or_key(fact, "predicate")
@@ -90,7 +90,7 @@ class CoTMemoryBuilder:
         # -------------------------------
         # Available Skills (Procedural Memory)
         # -------------------------------
-        for skill in ctx.get("procedural", []):
+        for skill in ctx.get("skills", []):
             try:
                 name = _get_attr_or_key(skill, "name")
                 plan = _get_attr_or_key(skill, "plan", {})

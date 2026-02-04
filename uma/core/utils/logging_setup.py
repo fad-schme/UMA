@@ -34,6 +34,8 @@ DATE = datetime.now().strftime("%Y-%m-%d")
 DEFAULT_LOG_FILENAME = f"uma_{DATE}.log"
 LOG_PATH = os.environ.get("UMA_LOG_PATH", DEFAULT_LOG_FILENAME)
 LOG_TO_FILE = os.environ.get("UMA_LOG_TO_FILE", "1").lower() not in ("0", "false", "no")
+LOG_LEVEL = os.environ.get("UMA_LOG_LEVEL", "DEBUG").upper()
+ROOT_LOG_LEVEL = os.environ.get("UMA_ROOT_LOG_LEVEL", LOG_LEVEL).upper()
 
 
 def _configure_uma_logger() -> logging.Logger:
@@ -47,7 +49,7 @@ def _configure_uma_logger() -> logging.Logger:
     while not interfering with root logging configuration.
     """
     logger = logging.getLogger("uma")
-    logger.setLevel(logging.INFO)
+    logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
 
     # Avoid adding handlers multiple times if this module is imported more than once.
     if logger.handlers:
@@ -89,7 +91,7 @@ def _configure_uma_logger() -> logging.Logger:
     elif LOG_PATH == "stderr":
         stream = __import__("sys").stderr
     console_handler = logging.StreamHandler(stream)
-    console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
     console_handler.setFormatter(formatter)
 
     logger.addFilter(_ContextFilter())
@@ -101,7 +103,7 @@ def _configure_uma_logger() -> logging.Logger:
     # Ensure non-"uma" loggers (e.g., extensions/*) are captured.
     root_logger = logging.getLogger()
     if not root_logger.handlers:
-        root_logger.setLevel(logging.INFO)
+        root_logger.setLevel(getattr(logging, ROOT_LOG_LEVEL, logging.INFO))
         root_logger.addFilter(_ContextFilter())
         if file_handler is not None:
             root_logger.addHandler(file_handler)

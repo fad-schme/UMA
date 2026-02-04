@@ -28,10 +28,11 @@ Coding Agent Instructions
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from ...types_fact import Fact
 from ..utils.identity import ensure_user_subject
+from ..utils.dedupe import dedupe_by_id
 from ..utils.user_query_helper import extract_query_terms, expand_query_terms, build_fact_embedding_text
 from .ingestor import SemanticIngestor
 
@@ -128,41 +129,15 @@ class SemanticCore:
     # RETRIEVAL API
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _iter_owner_filters(
-        *,
-        user_subject: str,
-        agent_id: Optional[str],
-        project_id: Optional[str],
-        owner_scope: Optional[str] = None,
-    ) -> List[Tuple[str, str]]:
-        scope = (owner_scope or "").lower()
-        if scope:
-            if scope == "user":
-                return [("user", user_subject)]
-            if scope == "agent" and agent_id:
-                return [("agent", agent_id)]
-            if scope == "project" and project_id:
-                return [("project", f"{user_subject}:{project_id}")]
-            return []
-
-        filters: List[Tuple[str, str]] = [("user", user_subject)]
-        if agent_id:
-            filters.append(("agent", agent_id))
-        if project_id:
-            filters.append(("project", f"{user_subject}:{project_id}"))
-        return filters
-
-    async def search_tiered(
+    async def search(
         self,
         subject: str,
         query_embedding: List[float],
         *,
+        owner_type: str,
+        owner_id: str,
         k: int = 10,
         offset: int = 0,
-        agent_id: Optional[str] = None,
-        project_id: Optional[str] = None,
-        owner_scope: Optional[str] = None,
         filters: Optional[Dict[str, Any]] = None,
         query_text: Optional[str] = None,
         allowed_topics: Optional[List[str]] = None,
@@ -173,7 +148,7 @@ class SemanticCore:
         try:
             subj = ensure_user_subject(subject)
         except Exception:
-            logger.exception("SemanticCore.search_tiered: invalid subject=%r", subject)
+            logger.exception("SemanticCore.search: invalid subject=%r", subject)
             return []
 
         requested_topic = filters.get("topic") if isinstance(filters, dict) else None
@@ -182,38 +157,32 @@ class SemanticCore:
             requested_predicate = str(requested_predicate).upper()
 
         facts: List[Any] = []
-        for owner_type, owner_id in self._iter_owner_filters(
-            user_subject=subj,
-            agent_id=agent_id,
-            project_id=project_id,
-            owner_scope=owner_scope,
-        ):
+        try:
             try:
-                try:
-                    found = await store.search(
-                        query_embedding=query_embedding,
-                        subject=subj,
-                        owner_type=owner_type,
-                        owner_id=owner_id,
-                        k=int(k),
-                        offset=int(offset),
-                    )
-                except TypeError:
-                    found = await store.search(
-                        query_embedding=query_embedding,
-                        subject=subj,
-                        owner_type=owner_type,
-                        owner_id=owner_id,
-                        k=int(k),
-                    )
-                if found:
-                    facts.extend(found)
-            except Exception:
-                logger.exception(
-                    "SemanticCore.search_tiered failed owner=%s:%s",
-                    owner_type,
-                    owner_id,
+                found = await store.search(
+                    query_embedding=query_embedding,
+                    subject=subj,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    k=int(k),
+                    offset=int(offset),
                 )
+            except TypeError:
+                found = await store.search(
+                    query_embedding=query_embedding,
+                    subject=subj,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    k=int(k),
+                )
+            if found:
+                facts.extend(found)
+        except Exception:
+            logger.exception(
+                "SemanticCore.search failed owner=%s:%s",
+                owner_type,
+                owner_id,
+            )
 
         # Optional topic filtering (soft)
         if requested_topic:
@@ -248,56 +217,49 @@ class SemanticCore:
                 if filtered:
                     facts = filtered
                     logger.debug(
-                        "SemanticCore.search_tiered: lexical filter kept %d/%d",
+                        "SemanticCore.search: lexical filter kept %d/%d",
                         len(facts),
                         original_count,
                     )
                 else:
                     try:
                         fallback: List[Any] = []
-                        for owner_type, owner_id in self._iter_owner_filters(
-                            user_subject=subj,
-                            agent_id=agent_id,
-                            project_id=project_id,
-                            owner_scope=owner_scope,
-                        ):
-                            try:
-                                found = await store.search_text(
-                                    query_text,
-                                    subject=subj,
-                                    limit=int(k),
-                                    owner_type=owner_type,
-                                    owner_id=owner_id,
-                                )
-                                if found:
-                                    fallback.extend(found)
-                            except Exception:
-                                logger.exception(
-                                    "SemanticCore.search_tiered: lexical fallback owner=%s:%s failed",
-                                    owner_type,
-                                    owner_id,
-                                )
+                        try:
+                            found = await store.search_text(
+                                query_text,
+                                subject=subj,
+                                limit=int(k),
+                                owner_type=owner_type,
+                                owner_id=owner_id,
+                            )
+                            if found:
+                                fallback.extend(found)
+                        except Exception:
+                            logger.exception(
+                                "SemanticCore.search: lexical fallback owner=%s:%s failed",
+                                owner_type,
+                                owner_id,
+                            )
                         if fallback:
                             facts = fallback
                             logger.debug(
-                                "SemanticCore.search_tiered: lexical fallback returned %d",
+                                "SemanticCore.search: lexical fallback returned %d",
                                 len(facts),
                             )
                     except Exception:
-                        logger.exception("SemanticCore.search_tiered: lexical fallback failed")
+                        logger.exception("SemanticCore.search: lexical fallback failed")
 
-        return _dedupe_facts(facts)
+        return dedupe_by_id(facts)
 
-    async def fetch_more_facts_tiered(
+    async def fetch_more_facts(
         self,
         subject: str,
         predicate: str,
         *,
+        owner_type: str,
+        owner_id: str,
         k: int,
         offset: int = 0,
-        agent_id: Optional[str] = None,
-        project_id: Optional[str] = None,
-        owner_scope: Optional[str] = None,
     ) -> List[Fact]:
         store = getattr(self.ingestor, "semantic_store", None)
         if store is None:
@@ -305,57 +267,51 @@ class SemanticCore:
         try:
             subj = ensure_user_subject(subject)
         except Exception:
-            logger.exception("SemanticCore.fetch_more_facts_tiered: invalid subject=%r", subject)
+            logger.exception("SemanticCore.fetch_more_facts: invalid subject=%r", subject)
             return []
 
         predicate_u = (predicate or "").upper()
         facts: List[Any] = []
-        for owner_type, owner_id in self._iter_owner_filters(
-            user_subject=subj,
-            agent_id=agent_id,
-            project_id=project_id,
-            owner_scope=owner_scope,
-        ):
+        try:
+            # First, try store.search with offset (works for stores that support offset)
             try:
-                # First, try store.search with offset (works for stores that support offset)
+                found = await store.search(
+                    query_embedding=[],
+                    subject=subj,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    k=int(k),
+                    offset=int(offset),
+                )
+            except Exception:
+                found = []
+
+            if not found and hasattr(store, "fetch_by_predicate"):
                 try:
-                    found = await store.search(
-                        query_embedding=[],
+                    found = await store.fetch_by_predicate(
                         subject=subj,
+                        predicate=predicate,
+                        limit=int(k),
+                        offset=int(offset),
                         owner_type=owner_type,
                         owner_id=owner_id,
-                        k=int(k),
-                        offset=int(offset),
                     )
                 except Exception:
+                    logger.exception(
+                        "SemanticCore.fetch_more_facts: predicate fetch failed owner=%s:%s",
+                        owner_type,
+                        owner_id,
+                    )
                     found = []
 
-                if not found and hasattr(store, "fetch_by_predicate"):
-                    try:
-                        found = await store.fetch_by_predicate(
-                            subject=subj,
-                            predicate=predicate,
-                            limit=int(k),
-                            offset=int(offset),
-                            owner_type=owner_type,
-                            owner_id=owner_id,
-                        )
-                    except Exception:
-                        logger.exception(
-                            "SemanticCore.fetch_more_facts_tiered: predicate fetch failed owner=%s:%s",
-                            owner_type,
-                            owner_id,
-                        )
-                        found = []
-
-                if found:
-                    facts.extend(found)
-            except Exception:
-                logger.exception(
-                    "SemanticCore.fetch_more_facts_tiered failed owner=%s:%s",
-                    owner_type,
-                    owner_id,
-                )
+            if found:
+                facts.extend(found)
+        except Exception:
+            logger.exception(
+                "SemanticCore.fetch_more_facts failed owner=%s:%s",
+                owner_type,
+                owner_id,
+            )
 
         filtered = []
         for f in facts or []:
@@ -364,47 +320,7 @@ class SemanticCore:
             )
             if pred_val and str(pred_val).upper() == predicate_u:
                 filtered.append(f)
-        return _dedupe_facts(filtered)
-
-    async def search(
-        self,
-        subject: str,
-        query_embedding: List[float],
-        *,
-        owner_type: Optional[str] = None,
-        owner_id: Optional[str] = None,
-        k: int = 10,
-        offset: int = 0,
-    ) -> List[Fact]:
-        store = getattr(self.ingestor, "semantic_store", None)
-        if store is None:
-            return []
-        try:
-            subj = ensure_user_subject(subject)
-        except Exception:
-            logger.exception("SemanticCore.search: invalid subject=%r", subject)
-            return []
-        try:
-            try:
-                return await store.search(
-                    query_embedding=query_embedding,
-                    subject=subj,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    k=int(k),
-                    offset=int(offset),
-                )
-            except TypeError:
-                return await store.search(
-                    query_embedding=query_embedding,
-                    subject=subj,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    k=int(k),
-                )
-        except Exception:
-            logger.exception("SemanticCore.search failed")
-            return []
+        return dedupe_by_id(filtered)
 
     async def search_text(
         self,
@@ -597,23 +513,3 @@ def _fact_topics(fact: Any) -> List[str]:
     if topic:
         return [str(topic)]
     return []
-
-
-def _dedupe_facts(items: List[Any]) -> List[Any]:
-    if not items:
-        return []
-    seen = set()
-    out: List[Any] = []
-    for it in items:
-        key = None
-        if isinstance(it, dict):
-            key = it.get("id")
-        else:
-            key = getattr(it, "id", None)
-        if key is None:
-            key = id(it)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(it)
-    return out

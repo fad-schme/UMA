@@ -67,7 +67,7 @@ class RetrievalAction(BaseModel):
 
     # Semantic refinement (NEW)
     predicate: Optional[str] = None
-    owner_scope: Optional[Literal["user", "project", "agent"]] = None
+    owner_type: Optional[Literal["user", "project", "agent"]] = None
 
     # Episodic
     time_range: Optional[Dict[str, Any]] = None
@@ -169,8 +169,8 @@ class RetrievalAction(BaseModel):
                 raise ValueError("fetch_more_facts requires a non-empty predicate")
             if self.ids or self.node_id or self.time_range:
                 raise ValueError("fetch_more_facts does not accept ids, node_id, or time_range")
-            if self.owner_scope and self.owner_scope not in {"user", "project", "agent"}:
-                raise ValueError("owner_scope must be one of: user, project, agent")
+            if self.owner_type and self.owner_type not in {"user", "project", "agent"}:
+                raise ValueError("owner_type must be one of: user, project, agent")
             return self
         
         if a == "expand_graph":

@@ -5,7 +5,7 @@ for skill-based procedural memory in UMA.
 This implementation is fully aligned with:
     • UMAMemory initialization
     • RetrievalService v3 (memory_type="procedural")
-    • MultiStoreRetriever v2 (parallel store retrieval)
+    • RetrievalService (parallel store retrieval)
     • BaseVectorSQLStore (vector-ranking, SQL CRUD helpers)
     • ProceduralFeature (developer-facing API)
     • SkillIndexer (skill construction + embedding)

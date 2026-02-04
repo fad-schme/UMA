@@ -155,7 +155,7 @@ class Consolidator:
     async def _fetch_recent_episodes(self, user_id: str) -> List[Episode]:
         """
         Fetch recent episodes deterministically using timestamp ordering.
-        Replaces any legacy embedding-based episode search.
+        Replaces embedding-based episode search.
         """
         try:
             if self.episodic_core is None:

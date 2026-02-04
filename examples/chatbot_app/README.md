@@ -9,7 +9,7 @@ Usage:
 3. Run:
 
 ```bash
-python examples/chatbot_app/main.py --config config/uma.yaml --user user:local
+python examples/chatbot_app/main.py --config config/uma.yaml --user user:local --agent agent-default
 ```
 
 Commands inside the REPL:

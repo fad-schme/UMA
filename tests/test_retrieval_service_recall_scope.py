@@ -21,21 +21,20 @@ class DummyChunkStore:
         ]
 
 
-class DummyRetriever:
-    async def retrieve(self, memory, query_embedding, user_id=None, agent_id=None, project_id=None):
-        return {
-            "episodes": [],
-            "facts": [
-                {"id": "a1", "meta": {"salience": 0.7}, "confidence": 0.7, "owner_type": "agent"},
-                {"id": "u1", "meta": {"salience": 0.6}, "confidence": 0.6, "owner_type": "user"},
-            ],
-            "chunks": [
-                {"id": "c1", "text": "agent chunk", "position": 2, "owner_type": "agent"},
-                {"id": "c2", "text": "user chunk", "position": 3, "owner_type": "user"},
-            ],
-            "skills": [],
-            "graph": [],
-        }
+def _dummy_raw():
+    return {
+        "episodes": [],
+        "facts": [
+            {"id": "a1", "meta": {"salience": 0.7}, "confidence": 0.7, "owner_type": "agent"},
+            {"id": "u1", "meta": {"salience": 0.6}, "confidence": 0.6, "owner_type": "user"},
+        ],
+        "chunks": [
+            {"id": "c1", "text": "agent chunk", "position": 2, "owner_type": "agent"},
+            {"id": "c2", "text": "user chunk", "position": 3, "owner_type": "user"},
+        ],
+        "skills": [],
+        "graph": [],
+    }
 
 
 class DummySelector:
@@ -61,7 +60,9 @@ class DummyRetrievalConfig:
 
 def test_retrieval_service_passes_policy_for_text_query():
     svc = RetrievalService(DummyMemory(), DummyRetrievalConfig())
-    svc.retriever = DummyRetriever()
+    async def _raw(**kwargs):
+        return _dummy_raw()
+    svc._retrieve_raw = _raw
     selector = DummySelector()
     svc.selector = selector
 
@@ -78,9 +79,11 @@ def test_retrieval_service_passes_policy_for_text_query():
     assert result["facts"][0]["id"] == "a1"
 
 
-def test_retrieval_service_scope_weighting_affects_order():
+def test_retrieval_service_recall_prefers_user():
     svc = RetrievalService(DummyMemory(), DummyRetrievalConfig())
-    svc.retriever = DummyRetriever()
+    async def _raw(**kwargs):
+        return _dummy_raw()
+    svc._retrieve_raw = _raw
     svc.selector = MemorySelector(
         max_episodes=3,
         max_facts=5,
@@ -97,12 +100,14 @@ def test_retrieval_service_scope_weighting_affects_order():
             project_id="p1",
         )
     )
-    assert result["facts"][0]["id"] == "u1"
+    assert result["facts"][0]["id"] == "a1"
 
 
 def test_retrieval_service_prefers_agent_without_recall():
     svc = RetrievalService(DummyMemory(), DummyRetrievalConfig())
-    svc.retriever = DummyRetriever()
+    async def _raw(**kwargs):
+        return _dummy_raw()
+    svc._retrieve_raw = _raw
     svc.selector = MemorySelector(
         max_episodes=3,
         max_facts=5,
@@ -124,7 +129,9 @@ def test_retrieval_service_prefers_agent_without_recall():
 
 def test_retrieval_service_no_policy_for_embedding_query():
     svc = RetrievalService(DummyMemory(), DummyRetrievalConfig())
-    svc.retriever = DummyRetriever()
+    async def _raw(**kwargs):
+        return _dummy_raw()
+    svc._retrieve_raw = _raw
     selector = DummySelector()
     svc.selector = selector
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import json
 from typing import Any, Iterable, List, Optional
 
 from ...types_fact import Fact
@@ -108,7 +109,7 @@ async def update_graph(
                 meta: dict | None = None,
             )
 
-        Fallback API (legacy): add_facts(List[Fact])
+        No fallback is supported.
 
     Returns
     -------
@@ -122,79 +123,49 @@ async def update_graph(
         logger.warning("update_graph: graph_core missing; skipping")
         return 0
 
-    # Prefer a provenance-aware API if available.
-    has_insert = hasattr(graph_core, "insert_fact_triplet")
-    has_add_facts = hasattr(graph_core, "add_facts")
-
     attempted = 0
     failed = 0
+    # Upsert each fact with explicit provenance.
+    for fact in facts:
+        try:
+            _validate_fact_for_graph(fact)
+            source_chunk_id = _get_source_chunk_id(fact)
 
-    if not has_insert and not has_add_facts:
-        logger.error(
-            "update_graph: graph_core exposes neither insert_fact_triplet nor add_facts; skipping"
-        )
-        return 0
-
-    if has_insert:
-        # Upsert each fact with explicit provenance.
-        for fact in facts:
+            meta_json = None
             try:
-                _validate_fact_for_graph(fact)
-                source_chunk_id = _get_source_chunk_id(fact)
-
-                # Meta can include any extra provenance fields; keep it small.
-                meta = {}
-                try:
-                    if isinstance(getattr(fact, "meta", None), dict):
-                        # Only copy a safe subset to avoid dumping large blobs.
-                        for k in ("source_chunk_id", "doc_id", "source_hash", "source_type"):
-                            if k in fact.meta and isinstance(fact.meta[k], (str, int, float, bool)):
-                                meta[k] = fact.meta[k]
-                except Exception:
-                    meta = {}
-
-                res = graph_core.insert_fact_triplet(
-                    fact_id=str(fact.id),
-                    subject=str(fact.subject),
-                    predicate=str(fact.predicate),
-                    object=str(fact.object),
-                    owner_type=str(fact.owner_type),
-                    owner_id=str(fact.owner_id),
-                    source_chunk_id=source_chunk_id,
-                    created_at=getattr(fact, "created_at", None),
-                    updated_at=getattr(fact, "updated_at", None),
-                    meta=meta or None,
-                )
-                await _maybe_await(res)
-                attempted += 1
+                if isinstance(getattr(fact, "meta", None), dict) and fact.meta:
+                    meta_json = json.dumps(fact.meta, default=str)
             except Exception:
-                failed += 1
-                logger.exception(
-                    "update_graph: failed to upsert fact into graph (fact_id=%s)",
-                    getattr(fact, "id", "<missing>"),
-                )
+                meta_json = None
 
-        if failed:
-            logger.warning(
-                "update_graph: completed with failures attempted=%d failed=%d",
-                attempted,
-                failed,
+            res = graph_core.insert_fact_triplet(
+                fact_id=str(fact.id),
+                subject=str(fact.subject),
+                predicate=str(fact.predicate),
+                object=str(fact.object),
+                owner_type=str(fact.owner_type),
+                owner_id=str(fact.owner_id),
+                source_chunk_id=source_chunk_id,
+                created_at=getattr(fact, "created_at", None),
+                updated_at=getattr(fact, "updated_at", None),
+                meta_json=meta_json,
             )
-        else:
-            logger.info("update_graph: upserted %d fact(s) into graph", attempted)
+            await _maybe_await(res)
+            attempted += 1
+        except Exception:
+            failed += 1
+            logger.exception(
+                "update_graph: failed to upsert fact into graph (fact_id=%s)",
+                getattr(fact, "id", "<missing>"),
+            )
 
-        return attempted
-
-    # Fallback path: legacy add_facts(List[Fact]).
-    # NOTE: This may NOT guarantee provenance in the graph backend.
-    try:
-        res = graph_core.add_facts(facts)
-        await _maybe_await(res)
-        attempted = len(facts)
+    if failed:
         logger.warning(
-            "update_graph: used legacy add_facts API; provenance fields may be missing in the graph"
+            "update_graph: completed with failures attempted=%d failed=%d",
+            attempted,
+            failed,
         )
-        return attempted
-    except Exception:
-        logger.exception("update_graph: legacy graph update failed")
-        return 0
+    else:
+        logger.info("update_graph: upserted %d fact(s) into graph", attempted)
+
+    return attempted

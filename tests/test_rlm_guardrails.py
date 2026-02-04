@@ -15,12 +15,22 @@ class DummyEnv:
             working_memory = None
 
         self._memory = _Memory()
+        self._agent_id = "agent-1"
 
     async def get_query_embedding(self, query_text):
         return [0.1, 0.2, 0.3]
 
     # --- Semantic ---
-    async def search_semantic(self, user_id, query_embedding, k=10, filters=None, query_text=None):
+    async def search_semantic(
+        self,
+        user_id,
+        query_embedding,
+        k=10,
+        filters=None,
+        query_text=None,
+        owner_type="agent",
+        owner_id=None,
+    ):
         # Return a dict with a large string field to exercise truncation/guardrails
         return [
             {
@@ -30,7 +40,15 @@ class DummyEnv:
             }
         ]
 
-    async def fetch_more_facts(self, user_id, predicate, k, offset=0, owner_scope=None):
+    async def fetch_more_facts(
+        self,
+        user_id,
+        predicate,
+        k,
+        offset=0,
+        owner_type="agent",
+        owner_id=None,
+    ):
         return [
             {
                 "id": f"f{offset + i}",
@@ -41,27 +59,36 @@ class DummyEnv:
         ]
 
     # --- Episodic ---
-    async def search_episodic(self, user_id, query_embedding, k=10, time_range=None):
+    async def search_episodic(self, user_id, query_embedding, k=10, time_range=None, owner_type="agent", owner_id=None):
         return [{"id": "e1", "summary": "episode"}]
 
-    async def episodic_cluster_summaries(self, user_id, k=5, max_episodes=50, time_range=None):
+    async def episodic_cluster_summaries(self, user_id, k=5, max_episodes=50, time_range=None, owner_type="agent", owner_id=None):
         return [{"id": "cluster:1", "summary": "cluster summary", "episode_ids": ["e1", "e2"]}]
 
-    async def fetch_episode_clusters(self, user_id, k=5, max_episodes=50, time_range=None, min_salience=None):
+    async def fetch_episode_clusters(
+        self,
+        user_id,
+        k=5,
+        max_episodes=50,
+        time_range=None,
+        min_salience=None,
+        owner_type="agent",
+        owner_id=None,
+    ):
         return await self.episodic_cluster_summaries(user_id, k=k, max_episodes=max_episodes, time_range=time_range)
 
     # --- Procedural ---
-    async def search_procedural(self, user_id, query_embedding, k=10, filters=None):
+    async def search_procedural(self, user_id, query_embedding, k=10, filters=None, owner_type="agent", owner_id=None):
         return [{"id": "s1", "name": "skill"}]
 
     # --- Graph ---
-    async def graph_neighbors(self, user_id, node_id, predicate_scope=None, depth=1, k=10):
+    async def graph_neighbors(self, user_id, node_id, predicate_scope=None, depth=1, k=10, owner_type="agent", owner_id=None):
         return [{"labels": ["Entity"], "properties": {"name": "x"}}]
 
     async def expand_graph(self, user_id, subject, predicate=None, hops=1, direction=None, k=10):
         return await self.graph_neighbors(user_id, subject, predicate_scope=[predicate] if predicate else None, depth=hops, k=k)
 
-    async def search_chunks(self, user_id, query_embedding, k=10):
+    async def search_chunks(self, user_id, query_embedding, k=10, owner_type="agent", owner_id=None):
         return []
 
 

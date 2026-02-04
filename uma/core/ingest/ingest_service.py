@@ -18,38 +18,26 @@ from .consolidation_trigger import maybe_trigger_consolidation
 from ...types_fact import Fact
 from ...types_chunk import Chunk
 from ...stores.document_sql import DocumentRecord
+from ..utils.identity import ensure_user_subject
 
 logger = logging.getLogger(__name__)
 
 
-def _validate_owner(owner_type: str, owner_id: str) -> None:
+def _validate_owner(owner_type: str, owner_id: str) -> tuple[str, str]:
     if owner_type not in ("user", "project", "agent"):
         raise ValueError(f"Invalid owner_type={owner_type!r}")
     if not owner_id or not isinstance(owner_id, str):
         raise ValueError("owner_id must be a non-empty string")
-
-
-def _derive_owner(owner_scope: str, user_id: str | None, agent_id: str, project_id: str | None) -> tuple[str, str]:
-    scope = (owner_scope or "").strip().lower()
-    if scope == "agent":
-        return "agent", agent_id
-    if scope == "project":
-        if not user_id or not project_id:
-            raise ValueError("owner_scope=project requires user_id and project_id")
-        return "project", f"user:{user_id}:{project_id}"
-    # default: user
-    if not user_id:
-        raise ValueError("owner_scope=user requires user_id")
-    return "user", f"user:{user_id}"
+    if owner_type == "user":
+        return "user", ensure_user_subject(owner_id)
+    return owner_type, owner_id
 
 
 async def ingest_document(
     pdf_path: str,
     *,
-    owner_scope: str,
-    user_id: str | None,
-    agent_id: str,
-    project_id: str | None,
+    owner_type: str,
+    owner_id: str,
     config: IngestConfig | None = None,
     memory: Any | None = None,
     embedder: Any | None = None,
@@ -79,8 +67,7 @@ async def ingest_document(
         document_store = document_store or getattr(memory, "document_store", None)
         graph_core = graph_core or getattr(memory, "graph_core", None)
 
-    owner_type, owner_id = _derive_owner(owner_scope, user_id, agent_id, project_id)
-    _validate_owner(owner_type, owner_id)
+    owner_type, owner_id = _validate_owner(owner_type, owner_id)
 
     if not pdf_path or not isinstance(pdf_path, str):
         raise ValueError("ingest_document: pdf_path must be a non-empty string")
@@ -115,10 +102,6 @@ async def ingest_document(
         sections,
         chunk_size_tokens=config.chunk_size_tokens,
         overlap_tokens=config.overlap_tokens,
-        owner_type=owner_type,
-        owner_id=owner_id,
-        source_hash=parsed.source_hash,
-        source_type="pdf",
     )
     if not chunks:
         warnings.append("no chunks created")
@@ -254,13 +237,17 @@ async def ingest_document(
         summary_text=summary_text,
         owner_type=owner_type,
         owner_id=owner_id,
-        user_id=user_id,
+        user_id=owner_id if owner_type == "user" else None,
         embedder=embedder,
         episodic_core=episodic_core,
     )
 
     # 9) Optional consolidation trigger
-    await maybe_trigger_consolidation(memory=memory, user_id=user_id, enabled=False)
+    await maybe_trigger_consolidation(
+        memory=memory,
+        user_id=owner_id if owner_type == "user" else None,
+        enabled=False,
+    )
 
     return IngestReport(
         doc_id=parsed.doc_id,

@@ -8,7 +8,6 @@ from typing import Optional
 from uma.core.uma_memory import UMAMemory
 from uma.adapters.llm.base import LLMInterface
 from uma.core.ingest.parser import FileContentParser
-from uma.core.utils.context_pack_builder import ContextPackBuilder#
 logger = logging.getLogger(__name__)
 
 
@@ -33,6 +32,7 @@ async def agent_generate(messages: list, llm: Optional[LLMInterface] = None) -> 
 async def interactive_chat(
     config_path: str = "config/uma.yaml",
     user_id: str = "user:local",
+    agent_id: str = "agent-default",
     system_prompt: Optional[str] = None,
     auto_load_material: bool = False,
 ):
@@ -40,7 +40,8 @@ async def interactive_chat(
 
     # Initialize UMA memory runtime
     memory = UMAMemory.from_yaml(config_path)
-    memory.initialize()
+    memory.agent_id = agent_id
+    memory._lazy_init()
     try:
         vector_backend = getattr(memory.raw_config.storage, "vector_backend", "")
         if vector_backend in ("faiss", "inmemory"):
@@ -74,10 +75,8 @@ async def interactive_chat(
                         print(f"Ingesting {fn} ...")
                         await memory.ingest_document(
                             path,
-                            owner_scope="agent",
-                            user_id=user_id,
-                            agent_id="agent-default",
-                            project_id=None,
+                            owner_type="agent",
+                            owner_id=agent_id,
                         )
                         count += 1
                     except Exception:
@@ -126,15 +125,14 @@ async def interactive_chat(
                     user_content = f"{user_message}\n\nRelevant memory:\n{snippet}"
                     context_messages = [{"role": "user", "content": user_content}]
 
-                print("\n\n**** context:", context_messages)
-                print("***** context/\n\n")
-                
+                    print("**************************** Context snippet:")
+                    print(snippet)
+                    print("**************************** End of snippet")
 
                 reply = await agent_generate(
                     messages=[{"role": "system", "content": system_prompt}] + context_messages,
                     llm=getattr(memory, "agent_llm", None) or memory.llm,
                 )
-                print("Assistant-1>", reply)
                 if not isinstance(reply, str) or not reply.strip():
                     reply = "I don't have enough information to answer that yet."
 
@@ -162,6 +160,7 @@ def main():
     parser = argparse.ArgumentParser(description="Example UMA-RLM interactive chatbot")
     parser.add_argument("--config", default="config/uma.yaml")
     parser.add_argument("--user", default="user:local")
+    parser.add_argument("--agent", default="agent-default")
     parser.add_argument("--system-prompt", default=None)
     parser.add_argument(
         "--clear-all",
@@ -185,6 +184,7 @@ def main():
             interactive_chat(
                 config_path=args.config,
                 user_id=args.user,
+                agent_id=args.agent,
                 system_prompt=args.system_prompt,
                 auto_load_material=True,
             )
@@ -195,6 +195,7 @@ def main():
         interactive_chat(
             config_path=args.config,
             user_id=args.user,
+            agent_id=args.agent,
             system_prompt=args.system_prompt,
             auto_load_material=False,
         )

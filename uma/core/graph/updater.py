@@ -13,7 +13,7 @@ DAT invariants enforced
 
 Strict mode (UMA-RLM v1)
 ------------------------
-- No legacy Cypher fallback for facts
+- No Cypher fallback for facts
 - Ownership is stamped on ALL traversable relationship types
 """
 
@@ -257,4 +257,3 @@ class GraphUpdater:
 
         except Exception:
             logger.exception("GraphUpdater.link_temporal failed (ignored).")
-

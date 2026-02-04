@@ -47,7 +47,7 @@ Every persisted object must have a stable ID:
 Object	ID Requirement
 Document	deterministic or content-hash based
 Chunk	stable across re-ingestion
-Fact	stable per semantic triple + scope
+Fact	stable per fact triple + scope
 Episode	unique, time-based
 Graph edge	derived from fact ID
 
@@ -188,7 +188,7 @@ Predicates must be:
 ⸻
 
 F-3. Deduplication Responsibility
-	•	Fact deduplication is the responsibility of the Semantic SQL Store
+	•	Fact deduplication is the responsibility of the Fact SQL Store
 	•	Ingestion may emit duplicates; store must reconcile
 
 ⸻
@@ -202,7 +202,7 @@ Episodes represent:
 	•	summaries
 	•	temporal groupings
 
-They must never duplicate full semantic facts.
+They must never duplicate full facts.
 
 ⸻
 

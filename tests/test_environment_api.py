@@ -29,32 +29,24 @@ class DummySemanticCore:
     def __init__(self):
         self.calls = []
 
-    async def search(self, subject, query_embedding, owner_type=None, owner_id=None, k=10, offset=0):
+    async def search_store(self, subject, query_embedding, owner_type=None, owner_id=None, k=10, offset=0):
         self.calls.append((owner_type, owner_id))
         label = owner_type or "user"
         return [DummyFact(f"f_{label}", subject or "user:1", "likes", label, owner_type=owner_type or "user", owner_id=owner_id or "user:1")]
 
-    async def search_tiered(
+    async def search(
         self,
         subject,
         query_embedding,
+        owner_type,
+        owner_id,
         k=10,
         offset=0,
-        agent_id=None,
-        project_id=None,
-        owner_scope=None,
         filters=None,
         query_text=None,
         allowed_topics=None,
     ):
-        results = []
-        for owner_type, owner_id in (
-            ("user", subject),
-            ("agent", "agent-1"),
-            ("project", f"{subject}:proj-1"),
-        ):
-            results.extend(await self.search(subject, query_embedding, owner_type, owner_id, k=k, offset=offset))
-        return results
+        return await self.search_store(subject, query_embedding, owner_type, owner_id, k=k, offset=offset)
 
     async def fetch_by_ids(self, ids):
         return [DummyFact(fid, "user:1", "likes", "tea") for fid in ids]
@@ -105,13 +97,21 @@ class DummyEpisodicCore:
 
         self.last_time_range = None
 
-    async def search(self, owner_type, owner_id, query_embedding, k=10, offset=0):
+    async def search_store(self, owner_type, owner_id, query_embedding, k=10, offset=0):
         return await self._store.search(query_embedding, owner_type=owner_type, owner_id=owner_id, k=k, offset=offset)
 
-    async def search_tiered(self, user_id, query_embedding, k=10, offset=0, agent_id=None, project_id=None, owner_scope=None):
-        return await self.search("user", user_id, query_embedding, k=k, offset=offset)
+    async def search(
+        self,
+        user_id,
+        query_embedding,
+        owner_type,
+        owner_id,
+        k=10,
+        offset=0,
+    ):
+        return await self.search_store(owner_type, owner_id, query_embedding, k=k, offset=offset)
 
-    async def list_cluster_summaries(self, owner_type, owner_id, k=5, max_episodes=None, time_range=None):
+    async def list_cluster_summaries_store(self, owner_type, owner_id, k=5, max_episodes=None, time_range=None):
         self.last_time_range = time_range
         return await self._store.list_cluster_summaries(
             owner_type=owner_type,
@@ -121,35 +121,29 @@ class DummyEpisodicCore:
             time_range=time_range,
         )
 
-    async def list_cluster_summaries_tiered(self, user_id, k=5, max_episodes=None, time_range=None, agent_id=None, project_id=None, owner_scope=None):
-        return await self.list_cluster_summaries("user", user_id, k=k, max_episodes=max_episodes, time_range=time_range)
+    async def list_cluster_summaries(
+        self,
+        user_id,
+        owner_type,
+        owner_id,
+        k=5,
+        max_episodes=None,
+        time_range=None,
+    ):
+        return await self.list_cluster_summaries_store(owner_type, owner_id, k=k, max_episodes=max_episodes, time_range=time_range)
 
 
 class DummyGraphCore:
-    def neighbors_tiered(
-        self,
-        user_id,
-        node_id,
-        predicate_scope=None,
-        depth=1,
-        k=10,
-        agent_id=None,
-        project_id=None,
-        owner_scope=None,
-    ):
-        return [{"labels": ["Entity"], "properties": {"name": "x"}}]
-
     async def neighbors(
         self,
         user_id,
         node_id,
-        owner_type,
-        owner_id,
         predicate_scope=None,
         depth=1,
         k=10,
+        owner_type=None,
+        owner_id=None,
     ):
-        # Validate that strict ownership arguments are being passed
         assert owner_type in {"user", "agent", "project"}
         assert isinstance(owner_id, str) and owner_id
         return [{"labels": ["Entity"], "properties": {"name": "x"}}]
@@ -169,7 +163,6 @@ class DummyMemory:
         self.graph_core = DummyGraphCore()
         self.embedder = DummyEmbedder()
         self.agent_id = "agent-1"
-        self.project_id = "proj-1"
 
 
 class DummyEmbedder:
@@ -184,12 +177,8 @@ def test_environment_semantic_and_episodic_search():
     facts = asyncio_run(env.search_semantic("u1", [0.1, 0.2], k=1, filters={"subject": "user:1"}))
     assert facts and facts[0].predicate == "likes"
     owner_types = {getattr(f, "owner_type", None) for f in facts}
-    assert owner_types == {"user", "agent", "project"}
-    assert set(memory.semantic_core.calls) == {
-        ("user", "user:u1"),
-        ("agent", "agent-1"),
-        ("project", "user:u1:proj-1"),
-    }
+    assert owner_types == {"agent"}
+    assert set(memory.semantic_core.calls) == {("agent", "agent-1")}
 
     start = datetime.utcnow() - timedelta(days=1)
     eps = asyncio_run(env.search_episodic("u1", [0.1, 0.2], k=10, time_range={"start": start}))

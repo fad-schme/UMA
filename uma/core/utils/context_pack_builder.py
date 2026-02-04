@@ -50,8 +50,8 @@ class ContextPackBuilder:
                 {
                     "working_memory": [...],
                     "episodic": [...],
-                    "semantic": [...],
-                    "procedural": [...],
+                    "facts": [...],
+                    "skills": [...],
                     "graph": [...],
                 }
 
@@ -64,9 +64,9 @@ class ContextPackBuilder:
             "query": query,
             "working_memory": [],
             "episodic": [],
-            "semantic": [],
+            "facts": [],
             "chunks": [],
-            "procedural": [],
+            "skills": [],
             "graph": [],
             "trace": [],
             "confidence": {},
@@ -119,11 +119,11 @@ class ContextPackBuilder:
                 logger.exception("Failed to pack episodic memory entry.")
 
         # -------------------------------
-        # Semantic Facts
+        # Facts
         # -------------------------------
-        for fact in ctx.get("semantic", []):
+        for fact in ctx.get("facts", []):
             try:
-                pack["semantic"].append(
+                pack["facts"].append(
                     {
                         "subject": _get_attr_or_key(fact, "subject", "unknown"),
                         "predicate": _get_attr_or_key(fact, "predicate", "related_to"),
@@ -154,11 +154,11 @@ class ContextPackBuilder:
                 logger.exception("Failed to pack chunk.")
 
         # -------------------------------
-        # Procedural Skills
+        # Skills
         # -------------------------------
-        for skill in ctx.get("procedural", []):
+        for skill in ctx.get("skills", []):
             try:
-                pack["procedural"].append(
+                pack["skills"].append(
                     {
                         "name": _get_attr_or_key(skill, "name", "Unnamed Skill"),
                         "description": _get_attr_or_key(skill, "description"),
@@ -230,24 +230,24 @@ class ContextPackBuilder:
                 if summary:
                     lines.append(f"- {summary}")
 
-        semantic = pack.get("semantic", [])
+        facts = pack.get("facts", [])
         allowed_topics = cfg.allowed_topics or []
         if allowed_topics:
             filtered = [
                 fact
-                for fact in semantic
+                for fact in facts
                 if any(
                     t in allowed_topics
-                    for t in _semantic_topics(fact)
+                    for t in _fact_topics(fact)
                 )
             ]
             if filtered:
-                semantic = filtered
-        semantic = _filter_semantic_by_query(semantic, query_text)
-        if semantic:
+                facts = filtered
+        facts = _filter_facts_by_query(facts, query_text)
+        if facts:
             deduped = []
             seen = set()
-            for fact in semantic:
+            for fact in facts:
                 obj = fact.get("object")
                 text = ""
                 if isinstance(obj, dict):
@@ -257,10 +257,10 @@ class ContextPackBuilder:
                     continue
                 seen.add(key)
                 deduped.append(fact)
-            semantic = deduped
-        if semantic:
-            lines.append("\nSemantic facts:")
-            for fact in semantic[: cfg.max_semantic]:
+            facts = deduped
+        if facts:
+            lines.append("\nFacts:")
+            for fact in facts[: cfg.max_semantic]:
                 subject = fact.get("subject", "unknown")
                 predicate = fact.get("predicate", "related_to")
                 obj = fact.get("object")
@@ -291,10 +291,10 @@ class ContextPackBuilder:
                 if snippet:
                     lines.append(f"- {snippet}")
 
-        procedural = pack.get("procedural", [])
-        if procedural:
-            lines.append("\nProcedural skills:")
-            for skill in procedural[: cfg.max_procedural]:
+        skills = pack.get("skills", [])
+        if skills:
+            lines.append("\nSkills:")
+            for skill in skills[: cfg.max_procedural]:
                 name = skill.get("name") or "Unnamed"
                 desc = (skill.get("description") or "").strip()
                 if desc:
@@ -311,9 +311,9 @@ class ContextPackBuilder:
         return "\n".join(lines).strip()
 
 
-def _filter_semantic_by_query(semantic: List[Dict[str, Any]], query_text: str) -> List[Dict[str, Any]]:
-    if not semantic or not query_text:
-        return semantic
+def _filter_facts_by_query(facts: List[Dict[str, Any]], query_text: str) -> List[Dict[str, Any]]:
+    if not facts or not query_text:
+        return facts
     if expand_query_terms:
         terms = expand_query_terms(query_text)
     elif extract_query_terms:
@@ -321,9 +321,9 @@ def _filter_semantic_by_query(semantic: List[Dict[str, Any]], query_text: str) -
     else:
         terms = []
     if not terms:
-        return semantic
+        return facts
     scored: List[tuple[int, Dict[str, Any]]] = []
-    for fact in semantic:
+    for fact in facts:
         obj = fact.get("object")
         haystack = ""
         if isinstance(obj, dict):
@@ -337,7 +337,7 @@ def _filter_semantic_by_query(semantic: List[Dict[str, Any]], query_text: str) -
         if score:
             scored.append((score, fact))
     if not scored:
-        return semantic
+        return facts
     scored.sort(key=lambda item: item[0], reverse=True)
     return [fact for _, fact in scored]
 
@@ -390,7 +390,7 @@ def _get_attr_or_key(obj: Any, key: str, default: Any = None) -> Any:
     return getattr(obj, key, default)
 
 
-def _semantic_topics(fact: Dict[str, Any]) -> List[str]:
+def _fact_topics(fact: Dict[str, Any]) -> List[str]:
     meta = fact.get("meta") or {}
     if not isinstance(meta, dict):
         return []

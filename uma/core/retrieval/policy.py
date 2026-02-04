@@ -32,16 +32,6 @@ RECALL_KEYWORDS: Set[str] = {
 }
 
 # ----------------------------------------------------------
-# Tunable constants (can be moved to config later)
-# ----------------------------------------------------------
-# How much to boost user scope in scope_weight (multiplier range)
-_USER_BOOST_BASE = 1.0
-_USER_BOOST_SCALE = 1.5
-
-# How much to favor agent memory when no recall intent
-_AGENT_BASE = 1.5
-_AGENT_PENALTY_SCALE = 0.5
-
 # RLM stopping thresholds
 DEFAULT_MAX_RLM_CALLS = 6
 DEFAULT_TOKEN_BUDGET = 5000  # tokens (soft)
@@ -73,34 +63,6 @@ class RetrievalPolicy:
         1.0 → strong recall intent
         """
         return self._recall_score
-
-    def scope_weight(self, owner_scope: str) -> float:
-        """
-        Weight multiplier based on memory ownership and recall intent.
-
-        Rules
-        -----
-        - User-owned memory is boosted as recall intent increases.
-        - Agent-owned memory is slightly de-emphasized as recall intent increases.
-        - Unknown scopes default to neutral weight.
-
-        Returns
-        -------
-        float
-            Weight multiplier (>= 0.5, <= 2.5).
-        """
-        scope = (owner_scope or "").lower()
-
-        if scope == "user":
-            # Strongly boost user memory for recall queries
-            return _USER_BOOST_BASE + _USER_BOOST_SCALE * self._recall_score
-
-        if scope == "agent":
-            # Slightly prefer agent memory for non-recall queries
-            return max(0.5, _AGENT_BASE - _AGENT_PENALTY_SCALE * self._recall_score)
-
-        # Neutral for other scopes (project, shared, unknown)
-        return 1.0
 
     def _compute_recall_score(self, query_text: str) -> float:
         """

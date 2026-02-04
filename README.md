@@ -2,16 +2,16 @@
 
 Universal Memory Architecture
 UMA-RLM is a production-first memory runtime for developers building AI agents.
-It combines working, episodic, semantic, procedural, and temporal graph memory into a single SDK, and implements the concept of RLM (Recursive Language Model): an inference-time strategy that lets an LLM handle inputs far beyond its context window by treating the long prompt as an external environment. Instead of stuffing the entire prompt into tokens, the model “loads” it into an environment and then programmatically inspects, decomposes, and recursively calls itself on relevant snippets.
+It combines working, episodic, facts, skills, and temporal graph memory into a single SDK, and implements the concept of RLM (Recursive Language Model): an inference-time strategy that lets an LLM handle inputs far beyond its context window by treating the long prompt as an external environment. Instead of stuffing the entire prompt into tokens, the model “loads” it into an environment and then programmatically inspects, decomposes, and recursively calls itself on relevant snippets.
 UMA-RLM only retrieves context from its stores; the developer owns all agent behavior, reasoning, and response generation.
 
 ## Why UMA-RLM
 
 - RLM retrieval you can ship: bounded, read-only, deterministic recursion with strict JSON decisions and time/call budgets.
 - Memory as environment: the model "peeks" into memory via safe, snippet-first APIs instead of dumping long context into prompts.
-- Predicate-scoped graph navigation: expand memory through semantic edges to keep recall precise and controllable.
+- Predicate-scoped graph navigation: expand memory through fact edges to keep recall precise and controllable.
 - Episodic clusters as chapters: precomputed cluster summaries give quick orientation before diving into raw episodes.
-- Salience-aware facts: semantic memory acts as a truth layer with conflict resolution and confidence scores.
+- Salience-aware facts: fact memory acts as a truth layer with conflict resolution and confidence scores.
 - Pluggable backends: SQLite/Postgres (via extensions), FAISS/Pinecone/Weaviate (via extensions), Neo4j/Memgraph (via extensions), OpenAI/Ollama (via extensions).
 - SDK-first: UMA manages memory only; your agent owns reasoning, tools, and final responses.
 
@@ -55,13 +55,13 @@ RLMController iteratively queries memory with bounded recursion:
 - Stops deterministically with budgets (steps, actions, env calls, timeout)
 
 ### 2) Snippet-First Memory Environment
-- Read-only access to semantic, episodic, procedural, and graph stores
+- Read-only access to facts, episodic, skills, and graph stores
 - Small snippets by default (summaries and facts)
 - Explicit expansion when raw transcripts are needed
 
 ### 3) Temporal Graph Memory
 - Predicate-scoped edges for precise traversal
-- Episodic and semantic nodes stay connected over time
+- Episodic and fact nodes stay connected over time
 - Safe graph neighbor queries with depth and limit controls
 
 ### 4) Consolidation and Salience
@@ -186,7 +186,7 @@ UMA logs to both stdout/stderr and a file by default. Configure with:
 
 ### Custom LLM / Embedding Providers
 You can configure **Agent‑LLM** and **UMA‑LLM** separately. If you only
-set a single `llm` section, UMA will use it for both (legacy mode).
+set a single `llm` section, UMA will use it for both.
 
 ```yaml
 llms:
@@ -243,7 +243,7 @@ Consolidation is an optional feature that runs an asynchronous "sleep cycle" for
 2) Clusters similar episodes
 3) Summarizes clusters (LLM)
 4) Extracts salient facts (LLM)
-5) Upserts facts into semantic memory
+5) Upserts facts into fact memory
 6) Prunes low-value episodes
 
 This does not run automatically. You enable the feature in config, then call it from your own
@@ -269,7 +269,7 @@ else:
 
 #### Procedural feature usage
 Procedural memory is an optional feature that lets you store and retrieve skills using
-semantic search plus rule-based matching. It exposes async methods that return FeatureResult.
+vector search plus rule-based matching. It exposes async methods that return FeatureResult.
 
 ```yaml
 features:

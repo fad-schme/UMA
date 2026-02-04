@@ -260,15 +260,8 @@ class UMAConfig(dict):
             _pos_int("max_steps")
             _pos_int("max_actions_per_step")
             _pos_int("max_items_per_type")
-            _pos_int("llm_max_tokens")
             _pos_int("max_env_calls")
-            _pos_int("max_return_chars")
-            _pos_int("max_eval_rounds")
-            _pos_int("max_eval_chunks")
-            _pos_int("max_snippet_chars")
             _pos_float("timeout_s")
-            if "extract_snippets" in rlm and not isinstance(rlm["extract_snippets"], bool):
-                raise ValueError("'retrieval.rlm.extract_snippets' must be boolean")
 
         # -----------------------
         # CONSOLIDATION

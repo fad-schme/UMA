@@ -3,14 +3,56 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from ...utils.identity import ensure_user_subject
+from ...utils.user_query_helper import extract_query_terms, expand_query_terms
 
 logger = logging.getLogger(__name__)
 
 NumericVector = List[Union[int, float]]
+
+
+async def _maybe_await(result: Any) -> Any:
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+def _extract_terms(query_text: str) -> List[str]:
+    terms = expand_query_terms(query_text) or extract_query_terms(query_text)
+    cleaned: List[str] = []
+    for t in terms or []:
+        if not isinstance(t, str):
+            continue
+        t = t.strip().lower()
+        if not t or " " in t:
+            continue
+        if len(t) < 3:
+            continue
+        cleaned.append(t)
+    if cleaned:
+        return cleaned
+    # Fallback: naive tokenization
+    return [t.lower() for t in extract_query_terms(query_text) if isinstance(t, str) and t.strip()]
+
+
+def _filter_chunks_by_terms(chunks: List[Any], terms: List[str]) -> List[Any]:
+    filtered: List[Any] = []
+    for ch in chunks:
+        text = ""
+        if isinstance(ch, dict):
+            text = str(ch.get("text") or "")
+        else:
+            text = str(getattr(ch, "text", "") or "")
+        if not text:
+            continue
+        lower = text.lower()
+        if any(t in lower for t in terms):
+            filtered.append(ch)
+    return filtered
 
 
 class UMAMemoryEnvironment:
@@ -53,20 +95,6 @@ class UMAMemoryEnvironment:
             logger.warning("UMAMemoryEnvironment: procedural_core missing")
         if self._graph_core is None:
             logger.warning("UMAMemoryEnvironment: graph_core missing")
-
-    @staticmethod
-    def _iter_owner_filters(
-        *,
-        user_subject: str,
-        agent_id: Optional[str],
-        project_id: Optional[str],
-    ) -> List[tuple[str, str]]:
-        filters: List[tuple[str, str]] = [("user", user_subject)]
-        if agent_id:
-            filters.append(("agent", agent_id))
-        if project_id:
-            filters.append(("project", f"{user_subject}:{project_id}"))
-        return filters
 
     # ------------------------------------------------------------------
     # Internal helpers (bounds, sanitation)
@@ -163,36 +191,6 @@ class UMAMemoryEnvironment:
     def _max_predicate_scope() -> int:
         return 20
 
-    async def _tiered_collect(
-        self,
-        *,
-        user_subject: str,
-        fetch_fn,
-    ) -> List[Any]:
-        """
-        Collect results across user/agent/project scopes with dedupe.
-
-        fetch_fn is called as: fetch_fn(owner_type, owner_id) -> List[Any] | Awaitable[List[Any]]
-        """
-        results: List[Any] = []
-        for owner_type, owner_id in self._iter_owner_filters(
-            user_subject=user_subject,
-            agent_id=self._agent_id,
-            project_id=self._project_id,
-        ):
-            try:
-                found = fetch_fn(owner_type, owner_id)
-                if asyncio.iscoroutine(found):
-                    found = await found
-                if found:
-                    results.extend(found)
-            except Exception:
-                logger.exception(
-                    "Environment._tiered_collect: owner=%s:%s failed",
-                    owner_type,
-                    owner_id,
-                )
-        return _dedupe_items(results)
 
     # ------------------------------------------------------------------
     # Semantic
@@ -220,6 +218,8 @@ class UMAMemoryEnvironment:
         k: int = 10,
         filters: Optional[Dict[str, Any]] = None,
         query_text: Optional[str] = None,
+        owner_type: str = "agent",
+        owner_id: Optional[str] = None,
     ) -> List[Any]:
         """
         Vector search over semantic facts.
@@ -260,14 +260,19 @@ class UMAMemoryEnvironment:
             else:
                 allowed_topics = None
 
-            facts = await self._semantic_core.search_tiered(
+            if owner_type == "agent":
+                resolved_owner_id = owner_id or self._agent_id
+                if not resolved_owner_id:
+                    return []
+            else:
+                resolved_owner_id = owner_id or user_subject
+            facts = await self._semantic_core.search(
                 subject=subject,
                 query_embedding=list(query_embedding),
+                owner_type=owner_type,
+                owner_id=resolved_owner_id,
                 k=int(k),
                 offset=int(offset),
-                agent_id=self._agent_id,
-                project_id=self._project_id,
-                owner_scope=None,
                 filters=filters,
                 query_text=query_text,
                 allowed_topics=allowed_topics,
@@ -284,6 +289,9 @@ class UMAMemoryEnvironment:
         user_id: str,
         query_embedding: NumericVector,
         k: int = 10,
+        owner_type: str = "agent",
+        owner_id: Optional[str] = None,
+        query_text: Optional[str] = None,
     ) -> List[Any]:
         """
         Vector search over document chunks.
@@ -294,14 +302,49 @@ class UMAMemoryEnvironment:
         try:
             user_subject = ensure_user_subject(user_id)
 
-            chunks = await self._chunk_core.search_tiered(
+            if owner_type == "agent":
+                resolved_owner_id = owner_id or self._agent_id
+                if not resolved_owner_id:
+                    return []
+            else:
+                resolved_owner_id = owner_id or user_subject
+            chunks = await self._chunk_core.search(
                 user_id=user_subject,
                 query_embedding=list(query_embedding),
+                owner_type=owner_type,
+                owner_id=resolved_owner_id,
                 k=int(k),
-                agent_id=self._agent_id,
-                project_id=self._project_id,
-                owner_scope=None,
             )
+            logger.debug(
+                "Environment.search_chunks: vector returned=%d owner_type=%s owner_id=%s",
+                len(chunks or []),
+                owner_type,
+                resolved_owner_id,
+            )
+            if query_text and chunks:
+                terms = _extract_terms(query_text)
+                if terms:
+                    logger.debug(
+                        "Environment.search_chunks: filtering with terms=%s",
+                        terms,
+                    )
+                    chunks = _filter_chunks_by_terms(chunks, terms)
+                    logger.debug(
+                        "Environment.search_chunks: filtered count=%d",
+                        len(chunks or []),
+                    )
+            if (not chunks) and query_text:
+                logger.debug("Environment.search_chunks: lexical fallback triggered")
+                chunks = await self._chunk_core.search_text(
+                    query_text=query_text,
+                    owner_type=owner_type,
+                    owner_id=resolved_owner_id,
+                    k=int(k),
+                )
+                logger.debug(
+                    "Environment.search_chunks: lexical returned=%d",
+                    len(chunks or []),
+                )
             logger.debug("Environment.search_chunks: returned %d", len(chunks))
             return chunks
         except Exception:
@@ -313,6 +356,8 @@ class UMAMemoryEnvironment:
         user_id: str,
         query_embedding: NumericVector,
         k: int = 10,
+        owner_type: str = "agent",
+        owner_id: Optional[str] = None,
     ) -> List[Any]:
         """
         Vector search over procedural skills.
@@ -323,13 +368,18 @@ class UMAMemoryEnvironment:
         try:
             user_subject = ensure_user_subject(user_id)
 
-            skills = await self._procedural_core.search_tiered(
+            if owner_type == "agent":
+                resolved_owner_id = owner_id or self._agent_id
+                if not resolved_owner_id:
+                    return []
+            else:
+                resolved_owner_id = owner_id or user_subject
+            skills = await self._procedural_core.search(
                 user_id=user_subject,
                 query_embedding=list(query_embedding),
+                owner_type=owner_type,
+                owner_id=resolved_owner_id,
                 k=int(k),
-                agent_id=self._agent_id,
-                project_id=self._project_id,
-                owner_scope=None,
             )
             logger.debug("Environment.search_procedural: returned %d", len(skills))
             return skills
@@ -363,7 +413,8 @@ class UMAMemoryEnvironment:
         predicate: str,
         k: int,
         offset: int = 0,
-        owner_scope: Optional[str] = None,
+        owner_type: str = "agent",
+        owner_id: Optional[str] = None,
     ) -> List[Any]:
         if self._semantic_core is None:
             return []
@@ -372,14 +423,19 @@ class UMAMemoryEnvironment:
             k = self._validate_k("Environment.fetch_more_facts", k)
             offset = self._safe_offset(offset)
 
-            return await self._semantic_core.fetch_more_facts_tiered(
+            if owner_type == "agent":
+                resolved_owner_id = owner_id or self._agent_id
+                if not resolved_owner_id:
+                    return []
+            else:
+                resolved_owner_id = owner_id or user_subject
+            return await self._semantic_core.fetch_more_facts(
                 subject=user_subject,
                 predicate=predicate,
+                owner_type=owner_type,
+                owner_id=resolved_owner_id,
                 k=int(k),
                 offset=int(offset),
-                agent_id=self._agent_id,
-                project_id=self._project_id,
-                owner_scope=owner_scope,
             )
         except Exception:
             logger.exception("Environment.fetch_more_facts failed")
@@ -395,6 +451,8 @@ class UMAMemoryEnvironment:
         query_embedding: NumericVector,
         k: int = 10,
         time_range: Optional[Dict[str, Any]] = None,
+        owner_type: str = "agent",
+        owner_id: Optional[str] = None,
     ) -> List[Any]:
         """
         Vector search over episodic summaries.
@@ -412,14 +470,19 @@ class UMAMemoryEnvironment:
         try:
             user_subject = ensure_user_subject(user_id)
 
-            episodes = await self._episodic_core.search_tiered(
+            if owner_type == "agent":
+                resolved_owner_id = owner_id or self._agent_id
+                if not resolved_owner_id:
+                    return []
+            else:
+                resolved_owner_id = owner_id or user_subject
+            episodes = await self._episodic_core.search(
                 user_id=user_subject,
                 query_embedding=list(query_embedding),
+                owner_type=owner_type,
+                owner_id=resolved_owner_id,
                 k=int(k),
                 offset=int(offset),
-                agent_id=self._agent_id,
-                project_id=self._project_id,
-                owner_scope=None,
             )
 
             episodes = self._filter_time_range(episodes or [], time_range)
@@ -435,6 +498,8 @@ class UMAMemoryEnvironment:
         k: int = 5,
         max_episodes: int = 50,
         time_range: Optional[Dict[str, Any]] = None,
+        owner_type: str = "agent",
+        owner_id: Optional[str] = None,
     ) -> List[Any]:
         """
         Retrieve episodic clusters via EpisodicCore (NOT the SQL store).
@@ -451,14 +516,19 @@ class UMAMemoryEnvironment:
         k = self._validate_k("Environment.episodic_cluster_summaries", k)
 
         try:
-            clusters = await episodic_core.list_cluster_summaries_tiered(
+            if owner_type == "agent":
+                resolved_owner_id = owner_id or self._agent_id
+                if not resolved_owner_id:
+                    return []
+            else:
+                resolved_owner_id = owner_id or user_id
+            clusters = await episodic_core.list_cluster_summaries(
                 user_id=user_id,
+                owner_type=owner_type,
+                owner_id=resolved_owner_id,
                 k=int(k),
                 max_episodes=int(max_episodes),
                 time_range=time_range,
-                agent_id=self._agent_id,
-                project_id=self._project_id,
-                owner_scope=None,
             )
             logger.debug("Environment.episodic_cluster_summaries: returned %d", len(clusters))
             return clusters
@@ -473,6 +543,8 @@ class UMAMemoryEnvironment:
         max_episodes: int = 50,
         time_range: Optional[Dict[str, Any]] = None,
         min_salience: Optional[float] = None,
+        owner_type: str = "agent",
+        owner_id: Optional[str] = None,
     ) -> List[Any]:
         """
         Fetch episodic clusters with optional salience filtering.
@@ -487,6 +559,8 @@ class UMAMemoryEnvironment:
             k=k,
             max_episodes=max_episodes,
             time_range=sanitized_time_range,
+            owner_type=owner_type,
+            owner_id=owner_id,
         )
         if min_salience is None:
             logger.debug("Environment.fetch_episode_clusters: returned %d", len(clusters))
@@ -512,6 +586,8 @@ class UMAMemoryEnvironment:
         predicate_scope: Optional[List[str]] = None,
         depth: int = 1,
         k: int = 10,
+        owner_type: str = "agent",
+        owner_id: Optional[str] = None,
     ) -> List[Any]:
         """
         Safe bounded graph expansion (DAT-safe).
@@ -532,15 +608,22 @@ class UMAMemoryEnvironment:
             if not node_id:
                 return []
 
-            results = self._graph_core.neighbors_tiered(
+            if owner_type == "agent":
+                resolved_owner_id = owner_id or self._agent_id
+                if not resolved_owner_id:
+                    return []
+            else:
+                resolved_owner_id = owner_id or user_subject
+            results = await _maybe_await(
+                self._graph_core.neighbors(
                 user_id=user_subject,
                 node_id=node_id,
                 predicate_scope=predicate_scope,
                 depth=depth_i,
                 k=k,
-                agent_id=self._agent_id,
-                project_id=self._project_id,
-                owner_scope=None,
+                owner_type=owner_type,
+                owner_id=resolved_owner_id,
+                )
             )
             logger.debug("Environment.graph_neighbors: returned %d", len(results or []))
             return results or []
@@ -624,23 +707,3 @@ class UMAMemoryEnvironment:
             except Exception:
                 continue
         return None
-
-
-def _dedupe_items(items: List[Any]) -> List[Any]:
-    if not items:
-        return []
-    seen = set()
-    out: List[Any] = []
-    for it in items:
-        key = None
-        if isinstance(it, dict):
-            key = it.get("id")
-        else:
-            key = getattr(it, "id", None)
-        if key is None:
-            key = id(it)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(it)
-    return out
