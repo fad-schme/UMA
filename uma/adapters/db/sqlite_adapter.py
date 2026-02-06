@@ -99,7 +99,7 @@ class SQLiteAdapter(DBAdapter):
                 "Ensure the path is writable and the parent exists."
               ) from exc
 
-      logger.info("SQLiteAdapter initialized with db_path=%s uri=%s", db_path, self.uri)
+      logger.debug("SQLiteAdapter initialized with db_path=%s uri=%s", db_path, self.uri)
 
     def get_connection(self) -> DBConnection:
         """

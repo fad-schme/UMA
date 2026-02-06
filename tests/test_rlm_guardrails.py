@@ -16,29 +16,36 @@ class DummyEnv:
 
         self._memory = _Memory()
         self._agent_id = "agent-1"
+        self._semantic_core = self._SemanticCore()
+        self._chunk_core = self._ChunkCore()
+        self._episodic_core = self._EpisodicCore()
+        self._procedural_core = self._ProceduralCore()
 
     async def get_query_embedding(self, query_text):
         return [0.1, 0.2, 0.3]
 
     # --- Semantic ---
-    async def search_semantic(
-        self,
-        user_id,
-        query_embedding,
-        k=10,
-        filters=None,
-        query_text=None,
-        owner_type="agent",
-        owner_id=None,
-    ):
-        # Return a dict with a large string field to exercise truncation/guardrails
-        return [
-            {
-                "id": "f1",
-                "predicate": "likes",
-                "summary": "x" * 200,
-            }
-        ]
+    class _SemanticCore:
+        async def search(
+            self,
+            subject,
+            query_embedding,
+            owner_type,
+            owner_id,
+            k=10,
+            offset=0,
+            filters=None,
+            query_text=None,
+            allowed_topics=None,
+        ):
+            # Return a dict with a large string field to exercise truncation/guardrails
+            return [
+                {
+                    "id": "f1",
+                    "predicate": "likes",
+                    "summary": "x" * 200,
+                }
+            ]
 
     async def fetch_more_facts(
         self,
@@ -59,8 +66,9 @@ class DummyEnv:
         ]
 
     # --- Episodic ---
-    async def search_episodic(self, user_id, query_embedding, k=10, time_range=None, owner_type="agent", owner_id=None):
-        return [{"id": "e1", "summary": "episode"}]
+    class _EpisodicCore:
+        async def search(self, user_id, query_embedding, owner_type, owner_id, k=10, offset=0, **kwargs):
+            return [{"id": "e1", "summary": "episode"}]
 
     async def episodic_cluster_summaries(self, user_id, k=5, max_episodes=50, time_range=None, owner_type="agent", owner_id=None):
         return [{"id": "cluster:1", "summary": "cluster summary", "episode_ids": ["e1", "e2"]}]
@@ -78,8 +86,9 @@ class DummyEnv:
         return await self.episodic_cluster_summaries(user_id, k=k, max_episodes=max_episodes, time_range=time_range)
 
     # --- Procedural ---
-    async def search_procedural(self, user_id, query_embedding, k=10, filters=None, owner_type="agent", owner_id=None):
-        return [{"id": "s1", "name": "skill"}]
+    class _ProceduralCore:
+        async def search(self, user_id, query_embedding, owner_type, owner_id, k=10, **kwargs):
+            return [{"id": "s1", "name": "skill"}]
 
     # --- Graph ---
     async def graph_neighbors(self, user_id, node_id, predicate_scope=None, depth=1, k=10, owner_type="agent", owner_id=None):
@@ -88,8 +97,9 @@ class DummyEnv:
     async def expand_graph(self, user_id, subject, predicate=None, hops=1, direction=None, k=10):
         return await self.graph_neighbors(user_id, subject, predicate_scope=[predicate] if predicate else None, depth=hops, k=k)
 
-    async def search_chunks(self, user_id, query_embedding, k=10, owner_type="agent", owner_id=None):
-        return []
+    class _ChunkCore:
+        async def search_chunks(self, **kwargs):
+            return []
 
 
 class DummyLLM:

@@ -41,6 +41,7 @@ ActionType = Literal[
     "fetch_episode_clusters",
     "search_procedural",
     "fetch_facts",
+    "fetch_chunks",
     "graph_neighbors",
     "expand_graph",
     "stop",
@@ -159,6 +160,14 @@ class RetrievalAction(BaseModel):
                 raise ValueError("fetch_facts requires ids")
             if self.k or self.filters or self.node_id:
                 raise ValueError("fetch_facts does not accept k, filters, or node_id")
+            return self
+
+        # --- FETCH CHUNKS ---
+        if a == "fetch_chunks":
+            if not self.ids:
+                raise ValueError("fetch_chunks requires ids")
+            if self.k or self.filters or self.node_id or self.time_range:
+                raise ValueError("fetch_chunks does not accept k, filters, node_id, or time_range")
             return self
         
         # --- FETCH MORE FACTS (predicate-scoped semantic expansion) ---

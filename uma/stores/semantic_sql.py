@@ -45,7 +45,6 @@ except Exception:  # pragma: no cover
     expand_query_terms = None
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
-from ..adapters.vector.faiss_adapter import FaissIndex
 from ..core.utils.conflict import FactResolver, LatestWinsFactResolver
 from ..core.utils.store_metadata import ensure_store_metadata
 from ..types_fact import Fact
@@ -79,8 +78,8 @@ class SemanticSQLStore(BaseVectorSQLStore):
             Database backend adapter.
         vector_index : VectorIndex
             Pluggable vector backend for semantic search.
-        index : FaissIndex
-            Underlying FAISS index for compatibility/logging.
+        index : VectorIndex
+            Vector index backend (FAISS/Qdrant/etc).
         fact_resolver : Optional[FactResolver]
             Conflict resolution strategy. Defaults to LatestWinsFactResolver.
         """
@@ -89,7 +88,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
         self.fact_resolver = fact_resolver or LatestWinsFactResolver()
         self._init_db()
 
-        logger.info(
+        logger.debug(
             "SemanticSQLStore initialized with resolver=%s, vector_dim=%d",
             type(self.fact_resolver).__name__,
             getattr(vector_index, "dim", getattr(vector_index, "dimension", -1)),
@@ -232,11 +231,51 @@ class SemanticSQLStore(BaseVectorSQLStore):
 
         conn = self._conn()
         try:
+            owner_type_in = getattr(fact, "owner_type", "user") or "user"
+            owner_id_in = getattr(fact, "owner_id", "") or ""
+            if not owner_id_in:
+                raise ValueError("SemanticSQLStore.upsert_fact: owner_id must be set")
+
+            # Idempotency guard: avoid duplicating facts on retries when turn_id is present.
+            try:
+                meta_in = getattr(fact, "meta", None) or {}
+                turn_id = meta_in.get("turn_id")
+                if turn_id:
+                    dup = self._query_one(
+                        conn,
+                        """
+                        SELECT id FROM facts
+                        WHERE owner_type = ? AND owner_id = ?
+                          AND subject = ? AND predicate = ?
+                          AND object = ?
+                          AND json_extract(meta, '$.turn_id') = ?
+                        LIMIT 1
+                        """,
+                        params=[
+                            owner_type_in,
+                            owner_id_in,
+                            fact.subject,
+                            fact.predicate,
+                            json.dumps(fact.object),
+                            str(turn_id),
+                        ],
+                        log_context="semantic_idempotency",
+                    )
+                    if dup:
+                        logger.info(
+                            "SemanticSQLStore.upsert_fact: skipping duplicate (turn_id=%s) id=%s",
+                            turn_id,
+                            dup["id"] if hasattr(dup, "__getitem__") else None,
+                        )
+                        return
+            except Exception:
+                logger.exception("SemanticSQLStore.upsert_fact: idempotency guard failed; continuing.")
+
             # Fetch competitors
             rows = self._query_all(
                 conn,
-                "SELECT * FROM facts WHERE subject=? AND predicate=?",
-                params=[fact.subject, fact.predicate],
+                "SELECT * FROM facts WHERE owner_type=? AND owner_id=? AND subject=? AND predicate=?",
+                params=[owner_type_in, owner_id_in, fact.subject, fact.predicate],
                 log_context="fetch_conflicts",
             )
             existing = [self._row_to_object(r) for r in rows]
@@ -247,8 +286,8 @@ class SemanticSQLStore(BaseVectorSQLStore):
                 "id": canonical.id,
                 "subject": canonical.subject,
                 "predicate": canonical.predicate,
-                "owner_type": canonical.owner_type,
-                "owner_id": canonical.owner_id,
+                "owner_type": canonical.owner_type or owner_type_in,
+                "owner_id": canonical.owner_id or owner_id_in,
                 "object": json.dumps(canonical.object),
                 "created_at": canonical.created_at.isoformat(),
                 "updated_at": canonical.updated_at.isoformat(),
@@ -371,6 +410,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
                 k=k,
                 filters=filters,
                 log_context="semantic_search",
+                id_prefix="fact_",
             )
         except Exception:
             logger.exception("SemanticSQLStore.search failed.")
@@ -457,6 +497,8 @@ class SemanticSQLStore(BaseVectorSQLStore):
                 params.extend([owner_type, owner_id])
 
             sql = f"SELECT * FROM facts WHERE {' AND '.join(where_clauses)} ORDER BY updated_at DESC"
+            # Tie-break by id to ensure deterministic paging.
+            sql = sql.replace("ORDER BY updated_at DESC", "ORDER BY updated_at DESC, id ASC")
             if limit:
                 sql += f" LIMIT {int(limit)}"
 
@@ -465,6 +507,31 @@ class SemanticSQLStore(BaseVectorSQLStore):
 
         except Exception:
             logger.exception("SemanticSQLStore.list_facts_for_subject failed.")
+            raise
+        finally:
+            conn.close()
+
+    async def list_facts_for_owner(
+        self,
+        *,
+        owner_type: str,
+        owner_id: str,
+        limit: Optional[int] = None,
+    ) -> List[Fact]:
+        """
+        Return all facts for a given owner scope, ordered by updated_at DESC.
+        """
+        if not owner_type or not owner_id:
+            return []
+        conn = self._conn()
+        try:
+            sql = "SELECT * FROM facts WHERE owner_type=? AND owner_id=? ORDER BY updated_at DESC, id ASC"
+            if limit:
+                sql += f" LIMIT {int(limit)}"
+            rows = self._query_all(conn, sql, params=[owner_type, owner_id], log_context="list_facts_owner")
+            return [self._row_to_object(r) for r in rows]
+        except Exception:
+            logger.exception("SemanticSQLStore.list_facts_for_owner failed.")
             raise
         finally:
             conn.close()

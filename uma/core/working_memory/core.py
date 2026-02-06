@@ -21,7 +21,7 @@ WorkingMemoryCore does NOT:
 - build prompts
 - generate assistant replies
 
-Long-term memory retrieval is handled by UMAMemory.get_user_context(...)
+Long-term memory retrieval is handled by UMAMemory.get_structured_context(...)
 via either:
 - RLMController (preferred), or
 - RetrievalService (classic fallback).

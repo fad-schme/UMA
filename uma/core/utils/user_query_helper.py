@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from uma.core.utils.accessors import get_attr_or_key
+
 
 _STOPWORDS = {
     "what",
@@ -86,10 +88,7 @@ def build_fact_embedding_text(fact: object) -> str:
     """
     try:
         meta = None
-        if isinstance(fact, dict):
-            meta = fact.get("meta")
-        else:
-            meta = getattr(fact, "meta", None)
+        meta = get_attr_or_key(fact, "meta")
         if isinstance(meta, dict):
             for key in ("excerpt", "text", "description"):
                 val = meta.get(key)
@@ -99,7 +98,7 @@ def build_fact_embedding_text(fact: object) -> str:
         pass
 
     try:
-        obj = fact.get("object") if isinstance(fact, dict) else getattr(fact, "object", None)
+        obj = get_attr_or_key(fact, "object") if isinstance(fact, dict) else getattr(fact, "object", None)
         if isinstance(obj, dict):
             for key in ("text", "content"):
                 val = obj.get(key)
@@ -111,9 +110,9 @@ def build_fact_embedding_text(fact: object) -> str:
         pass
 
     try:
-        subject = fact.get("subject") if isinstance(fact, dict) else getattr(fact, "subject", "")
-        predicate = fact.get("predicate") if isinstance(fact, dict) else getattr(fact, "predicate", "")
-        obj = fact.get("object") if isinstance(fact, dict) else getattr(fact, "object", "")
+        subject = get_attr_or_key(fact, "subject")
+        predicate = get_attr_or_key(fact, "predicate")
+        obj = get_attr_or_key(fact, "object")
         return f"{subject} {predicate} {obj}".strip()
     except Exception:
         return ""

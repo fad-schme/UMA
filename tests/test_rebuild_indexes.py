@@ -38,10 +38,12 @@ async def test_rebuild_vector_indexes(tmp_path):
         },
         "embedding": {
             "provider": "tests.test_rebuild_indexes:fake_embed",
+            "model": "x",
             "dimension": 3,
         },
         "llm": {
             "provider": "tests.test_rebuild_indexes:fake_llm",
+            "model": "x",
         },
         "retrieval": {
             "max_episodes": 5,

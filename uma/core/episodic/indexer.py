@@ -49,7 +49,7 @@ class EpisodeIndexer:
     def __init__(self, llm: Any, embedder: Any):
         self.llm = llm
         self.embedder = embedder
-        logger.info("EpisodeIndexer initialized.")
+        logger.debug("EpisodeIndexer initialized.")
 
     # ------------------------------------------------------------------
     # PUBLIC API
@@ -100,6 +100,16 @@ class EpisodeIndexer:
                 summary = "Conversation summary unavailable."
 
             # Build episode model
+            turn_id = None
+            try:
+                for ent in reversed(wm_entries or []):
+                    md = ent.get("metadata") if isinstance(ent, dict) else getattr(ent, "metadata", None)
+                    if isinstance(md, dict) and md.get("turn_id"):
+                        turn_id = str(md["turn_id"])
+                        break
+            except Exception:
+                turn_id = None
+
             ep = Episode(
                 id=str(uuid.uuid4()),
                 timestamp=datetime.utcnow(),
@@ -107,16 +117,24 @@ class EpisodeIndexer:
                 user_id=owner_id,
                 raw=transcript,
                 tags=[],
-                meta={},
+                meta={"turn_id": turn_id} if turn_id else {},
                 owner_type=owner_type,
                 owner_id=owner_id,
             )
 
             # Embed summary
+            expected_dim = getattr(self.embedder, "dimension", None)
+            if not isinstance(expected_dim, int) or expected_dim <= 0:
+                raise ValueError("EpisodeIndexer: embedder.dimension must be a positive integer")
             emb = await self.embedder.embed([summary])
             if not emb or not isinstance(emb, list) or not emb[0]:
                 raise ValueError("EpisodeIndexer: embedder returned empty embedding.")
             embedding = emb[0]
+            if not isinstance(embedding, list) or len(embedding) != expected_dim:
+                got_dim = len(embedding) if isinstance(embedding, list) else None
+                raise ValueError(
+                    f"EpisodeIndexer: invalid embedding dim (expected={expected_dim} got={got_dim})"
+                )
 
             return ep, embedding
 

@@ -37,17 +37,17 @@ class SemanticIngestor:
         self.embedder = embedder
         self.semantic_store = semantic_store
         self.threshold = float(salience_threshold)
-        logger.info("SemanticIngestor initialized (threshold=%.2f).", self.threshold)
+        logger.debug("SemanticIngestor initialized (threshold=%.2f).", self.threshold)
 
-    async def extract(self, subject: str, text: str) -> List[Fact]:
+    async def extract(self, subject: str, text: str, *, extra_meta: dict | None = None) -> List[Fact]:
         try:
-            return await self.extractor.extract_from_text(subject, text)
+            return await self.extractor.extract_from_text(subject, text, extra_meta=extra_meta)
         except Exception:
             logger.exception("SemanticIngestor.extract failed.")
             return []
 
-    async def ingest(self, subject: str, text: str) -> List[Fact]:
-        candidates = await self.extract(subject, text)
+    async def ingest(self, subject: str, text: str, *, extra_meta: dict | None = None) -> List[Fact]:
+        candidates = await self.extract(subject, text, extra_meta=extra_meta)
         if not candidates:
             return []
 
@@ -76,6 +76,11 @@ class SemanticIngestor:
         persisted: List[Fact] = []
         for fact, vec in zip(selected, vectors):
             try:
+                # Enforce owner scoping at write-time so stores can safely filter by owner_id.
+                if not getattr(fact, "owner_type", None):
+                    fact.owner_type = "user"
+                if not getattr(fact, "owner_id", None):
+                    fact.owner_id = subject
                 await self.semantic_store.upsert_fact(fact, vec)
                 persisted.append(fact)
             except Exception:

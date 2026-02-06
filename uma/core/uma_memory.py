@@ -42,7 +42,7 @@ Typical developer workflow
 
 3. When constructing a prompt for the agent, fetch UMA context:
 
-    ctx = await memory.get_user_context(
+    ctx = await memory.get_structured_context(
         user_id=user_id,
         query_text="the user's current question or task"
     )
@@ -79,7 +79,7 @@ Internal retrieval components
     • Are not part of the public API
     • Never mutate memory
     • Never perform agent reasoning
-    • Are used only by `get_user_context()`
+    • Are used only by `get_structured_context()`
 
 Design Philosophy
 -----------------
@@ -151,7 +151,7 @@ class UMAMemory:
         await memory.process_turn(user_id=user_id, user_msg=user_msg, assistant_reply=assistant_reply)
 
         # when building prompts:
-        ctx = await memory.get_user_context(user_id, query_text)
+        ctx = await memory.get_structured_context(user_id, query_text)
 
     All other subsystems remain internal.
 
@@ -240,7 +240,7 @@ class UMAMemory:
         self.procedural_core: Optional[ProceduralCore] = None
         self.chunk_core: Optional[ChunkCore] = None
 
-        logger.info("UMAMemory instance created with unified storage config.")
+        logger.debug("UMAMemory instance created with unified storage config.")
 
     # ----------------------------------------------------------------------
     # Initialization Entry Point
@@ -258,19 +258,29 @@ class UMAMemory:
         - full      : all subsystems
         """
         if self.initialized:
+            profile_norm = (profile or "full").strip().lower()
+            # Allow "upgrade" when a later call needs missing subsystems.
+            if profile_norm in {"retrieval", "full"} and not getattr(self, "retrieval_service", None):
+                logger.debug("UMAMemory.initialize(): upgrading to retrieval profile.")
+                self._lazy_init(profile="retrieval")
+                return
+            if profile_norm in {"ingestion", "full"} and not getattr(self, "pipeline", None):
+                logger.debug("UMAMemory.initialize(): upgrading to ingestion profile.")
+                self._lazy_init(profile="ingestion")
+                return
             logger.debug("UMAMemory.initialize(): already initialized — skipping.")
             return
 
         self._lazy_init(profile=profile)
 
-        logger.info("UMA Memory Runtime initialized successfully (profile=%s).", profile)
+        logger.debug("UMA Memory Runtime initialized successfully (profile=%s).", profile)
 
     def _lazy_init(self, profile: str = "full") -> None:
         """
         Lazily initialize UMA subsystems on-demand.
         """
         profile_norm = (profile or "full").strip().lower()
-        logger.info("UMAMemory._lazy_init(profile=%s)", profile_norm)
+        logger.debug("UMAMemory._lazy_init(profile=%s)", profile_norm)
 
         if profile_norm == "minimal":
             self.initialized = True
@@ -344,7 +354,7 @@ class UMAMemory:
                 llm=self.llm,
                 memory_client=self,
             )
-            logger.info("WorkingMemoryCore initialized.")
+            logger.debug("WorkingMemoryCore initialized.")
         except Exception:
             logger.exception("UMAMemory: failed to initialize WorkingMemoryCore.")
             raise
@@ -365,7 +375,7 @@ class UMAMemory:
                 episode_indexer=indexer,
                 retention_policy=retention,
             )
-            logger.info("EpisodicCore initialized.")
+            logger.debug("EpisodicCore initialized.")
         except Exception:
             logger.exception("UMAMemory: failed to initialize EpisodicCore.")
             raise
@@ -390,15 +400,15 @@ class UMAMemory:
         # ---------------------- Procedural Core -------------------------
         try:
             self.procedural_core = ProceduralCore(self._stores["procedural"])
-            logger.info("ProceduralCore initialized.")
+            logger.debug("ProceduralCore initialized.")
         except Exception:
             logger.exception("UMAMemory: failed to initialize ProceduralCore.")
             raise
 
         # ---------------------- Chunk Core ------------------------------
         try:
-            self.chunk_core = ChunkCore(self._stores["chunk"])
-            logger.info("ChunkCore initialized.")
+            self.chunk_core = ChunkCore(self._stores["chunk"], memory=self)
+            logger.debug("ChunkCore initialized.")
         except Exception:
             logger.exception("UMAMemory: failed to initialize ChunkCore.")
             raise
@@ -597,7 +607,7 @@ class UMAMemory:
     # ----------------------------------------------------------------------
     # PUBLIC DEVELOPER API — Unified User Context (WM + LT Retrieval)
     # ----------------------------------------------------------------------
-    async def get_user_context(self, user_id: str, query_text: str) -> Dict[str, list]:
+    async def get_structured_context(self, user_id: str, query_text: str) -> Dict[str, list]:
         """
         Return a unified, developer-facing context pack for retrieval-augmented agents.
 
@@ -627,12 +637,12 @@ class UMAMemory:
         from ..adapters.observability.metrics import increment, timed
 
         if not user_id or not isinstance(user_id, str):
-            raise ValueError("UMAMemory.get_user_context: user_id must be a non-empty string.")
+            raise ValueError("UMAMemory.get_structured_context: user_id must be a non-empty string.")
         if not query_text or not isinstance(query_text, str):
-            raise ValueError("UMAMemory.get_user_context: query_text must be a non-empty string.")
+            raise ValueError("UMAMemory.get_structured_context: query_text must be a non-empty string.")
         user_subject = ensure_user_subject(user_id)
 
-        with timed("uma.get_user_context.latency"):
+        with timed("uma.get_structured_context.latency"):
             if not self.initialized:
                 self._lazy_init(profile="retrieval")
             # 1) Stored WM
@@ -644,16 +654,16 @@ class UMAMemory:
                 )
             except Exception:
                 logger.exception(
-                    "UMAMemory.get_user_context: failed to load WM user=%s",
+                    "UMAMemory.get_structured_context: failed to load WM user=%s",
                     user_subject,
                 )
                 wm_stored = []
 
             # If retrieval isn't wired, return WM only
             if not getattr(self, "retrieval_service", None):
-                increment("uma.get_user_context.calls", tags={"path": "wm_only"})
+                increment("uma.get_structured_context.calls", tags={"path": "wm_only"})
                 logger.warning(
-                    "UMAMemory.get_user_context: retrieval_service not initialized; WM-only user=%s",
+                    "UMAMemory.get_structured_context: retrieval_service not initialized; WM-only user=%s",
                     user_id,
                 )
                 return {
@@ -672,7 +682,7 @@ class UMAMemory:
                         user_id=user_subject,
                         query_text=query_text,
                     )
-                    increment("uma.get_user_context.calls", tags={"path": "rlm"})
+                    increment("uma.get_structured_context.calls", tags={"path": "rlm"})
                     coverage = getattr(pack, "coverage", None)
                     from .retrieval.rlm.coverage import compute_confidence
                     return {
@@ -687,13 +697,13 @@ class UMAMemory:
                     }
                 except Exception:
                     logger.exception(
-                        "UMAMemory.get_user_context: RLM failed",
+                        "UMAMemory.get_structured_context: RLM failed",
                         extra={"user": user_subject},
                     )
                     if bool(getattr(self, "retrieval_cfg", None) and self.retrieval_cfg.strict):
                         raise
                     logger.warning(
-                        "UMAMemory.get_user_context: falling back to classic user=%s",
+                        "UMAMemory.get_structured_context: falling back to classic user=%s",
                         user_subject,
                     )
 
@@ -708,12 +718,12 @@ class UMAMemory:
                 )
             except Exception:
                 logger.exception(
-                    "UMAMemory.get_user_context: classic retrieval failed user=%s",
+                    "UMAMemory.get_structured_context: classic retrieval failed user=%s",
                     user_subject,
                 )
                 retrieved = {}
 
-            increment("uma.get_user_context.calls", tags={"path": "classic"})
+            increment("uma.get_structured_context.calls", tags={"path": "classic"})
         return {
             "working_memory": wm_stored,
             "episodic": retrieved.get("episodes", []) or [],
@@ -780,7 +790,7 @@ class UMAMemory:
         Build a RAG-ready structured context pack using UMA memory.
 
         Convenience wrapper around:
-            - UMAMemory.get_user_context()
+            - UMAMemory.get_structured_context()
             - ContextPackBuilder.build()
 
         Related:
@@ -789,7 +799,7 @@ class UMAMemory:
         """
         from .utils.context_pack_builder import ContextPackBuilder
 
-        ctx = await self.get_user_context(user_id, query_text)
+        ctx = await self.get_structured_context(user_id, query_text)
         return ContextPackBuilder.build(query_text, ctx)
 
     async def build_context_snippet(self, pack: dict) -> str:
@@ -800,6 +810,10 @@ class UMAMemory:
         """
         from .utils.context_pack_builder import ContextPackBuilder
         ctx_cfg = getattr(self.retrieval_cfg, "context", None)
+        if getattr(ctx_cfg, "snippet_refiner_enabled", False):
+            return await ContextPackBuilder.render_snippet_async(
+                pack, ctx_cfg, llm=getattr(self, "llm", None)
+            )
         return ContextPackBuilder.render_snippet(pack, ctx_cfg)
 
     async def render_snippet(self, pack: dict) -> str:
@@ -812,8 +826,28 @@ class UMAMemory:
         """
         Convenience helper: build a context pack and render a snippet in one call.
         """
-        pack = await self.build_context_pack(user_id, query_text)
-        return await self.build_context_snippet(pack)
+        return await self.get_rendered_context(user_id, query_text)
+
+    async def get_rendered_context(self, user_id: str, query_text: str) -> str:
+        """
+        Render a production-ready snippet directly from RLM retrieval.
+        This path is shared by the app and gold tests to avoid divergence.
+        """
+        from .utils.context_pack_builder import ContextPackBuilder
+        if not getattr(self, "rlm_controller", None):
+            # Fall back to structured context if RLM isn't available.
+            pack = await self.build_context_pack(user_id, query_text)
+            return await self.build_context_snippet(pack)
+        pack = await self.rlm_controller.retrieve_context(
+            user_id=ensure_user_subject(user_id),
+            query_text=query_text,
+        )
+        ctx_cfg = getattr(self.retrieval_cfg, "context", None)
+        return await ContextPackBuilder.render_snippet_async(
+            pack, ctx_cfg, llm=getattr(self, "llm", None)
+        )
+
+    # Backward-compatible alias (deprecated)
 
     async def build_prompt_messages(
         self,
@@ -831,7 +865,12 @@ class UMAMemory:
 
         pack = await self.build_context_pack(user_id=user_id, query_text=query_text)
         ctx_cfg = getattr(self.retrieval_cfg, "context", None)
-        snippet = ContextPackBuilder.render_snippet(pack, ctx_cfg)
+        if getattr(ctx_cfg, "snippet_refiner_enabled", False):
+            snippet = await ContextPackBuilder.render_snippet_async(
+                pack, ctx_cfg, llm=getattr(self, "llm", None)
+            )
+        else:
+            snippet = ContextPackBuilder.render_snippet(pack, ctx_cfg)
         if snippet:
             user_content = f"{query_text}\n\nRelevant memory:\n{snippet}"
         else:
@@ -871,7 +910,7 @@ class UMAMemory:
         """
         from .utils.cot_memory_builder import CoTMemoryBuilder
 
-        ctx = await self.get_user_context(user_id, query_text)
+        ctx = await self.get_structured_context(user_id, query_text)
         return CoTMemoryBuilder.build(ctx)
     
     

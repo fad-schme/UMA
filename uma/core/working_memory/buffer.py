@@ -90,7 +90,7 @@ class WorkingMemoryBuffer:
         """
         self._max_tokens = max_tokens
         self._store: Dict[str, List[WorkingMemoryMessage]] = {}
-        logger.info("Initialized WorkingMemoryBuffer with max_tokens=%d", max_tokens)
+        logger.debug("Initialized WorkingMemoryBuffer with max_tokens=%d", max_tokens)
 
     @property
     def max_tokens(self) -> int:

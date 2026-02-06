@@ -19,12 +19,26 @@ logger = logging.getLogger(__name__)
 async def _embed_in_batches(embedder: Any, texts: List[str], batch_size: int) -> List[List[float]]:
     if not texts:
         return []
+    expected_dim = getattr(embedder, "dimension", None)
+    if not isinstance(expected_dim, int) or expected_dim <= 0:
+        raise ValueError("_embed_in_batches: embedder.dimension must be a positive integer")
     if batch_size <= 0:
-        return await embedder.embed(texts)
+        vectors = await embedder.embed(texts)
+        if not isinstance(vectors, list) or len(vectors) != len(texts):
+            raise ValueError("_embed_in_batches: embedder returned invalid shape")
+        for v in vectors:
+            if not isinstance(v, list) or len(v) != expected_dim:
+                raise ValueError("_embed_in_batches: invalid embedding dim")
+        return vectors
     vectors: List[List[float]] = []
     for i in range(0, len(texts), batch_size):
         batch = texts[i : i + batch_size]
         batch_vectors = await embedder.embed(batch)
+        if not isinstance(batch_vectors, list) or len(batch_vectors) != len(batch):
+            raise ValueError("_embed_in_batches: embedder returned invalid batch shape")
+        for v in batch_vectors:
+            if not isinstance(v, list) or len(v) != expected_dim:
+                raise ValueError("_embed_in_batches: invalid embedding dim")
         vectors.extend(batch_vectors)
     return vectors
 
@@ -55,7 +69,30 @@ async def rebuild_vector_indexes(
     }
 
     embedder = getattr(memory, "embedder", None)
-    dim = int(getattr(getattr(memory, "embedding_cfg", None), "dimension", 0) or 0)
+    embedding_cfg = getattr(memory, "embedding_cfg", None)
+    if embedding_cfg is None:
+        raise ValueError("rebuild_vector_indexes: memory.embedding_cfg is required")
+    if not getattr(embedding_cfg, "model", None):
+        raise ValueError("rebuild_vector_indexes: embedding_cfg.model is required")
+    dim = int(getattr(embedding_cfg, "dimension", 0) or 0)
+    if dim <= 0:
+        raise ValueError("rebuild_vector_indexes: embedding_cfg.dimension must be a positive integer")
+
+    llm_cfg = getattr(memory, "llm_cfg", None)
+    if llm_cfg is None:
+        raise ValueError("rebuild_vector_indexes: memory.llm_cfg is required")
+    if not getattr(llm_cfg, "provider", None):
+        raise ValueError("rebuild_vector_indexes: llm_cfg.provider is required")
+    if not getattr(llm_cfg, "model", None):
+        raise ValueError("rebuild_vector_indexes: llm_cfg.model is required")
+
+    agent_llm_cfg = getattr(memory, "agent_llm_cfg", None)
+    if agent_llm_cfg is None:
+        raise ValueError("rebuild_vector_indexes: memory.agent_llm_cfg is required")
+    if not getattr(agent_llm_cfg, "provider", None):
+        raise ValueError("rebuild_vector_indexes: agent_llm_cfg.provider is required")
+    if not getattr(agent_llm_cfg, "model", None):
+        raise ValueError("rebuild_vector_indexes: agent_llm_cfg.model is required")
     if embedder is None:
         return {
             "status": "error",

@@ -42,7 +42,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     def __init__(self, db_adapter: DBAdapter, vector_index: VectorIndex) -> None:
         super().__init__(db_adapter=db_adapter, vector_index=vector_index)
         self._init_db()
-        logger.info("EpisodicSQLStore initialized with DB=%s", type(db_adapter).__name__)
+        logger.debug("EpisodicSQLStore initialized with DB=%s", type(db_adapter).__name__)
 
     # ------------------------------------------------------------------ #
     # SQL Schema
@@ -169,6 +169,34 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 raise ValueError("EpisodicSQLStore.add_episode: owner_id must be set")
             if not getattr(ep, "user_id", None):
                 raise ValueError("EpisodicSQLStore.add_episode: user_id must be set")
+
+            # Idempotency guard: if turn_id is present, avoid duplicating episodes on retries.
+            try:
+                meta = getattr(ep, "meta", None) or {}
+                turn_id = meta.get("turn_id")
+                if turn_id:
+                    existing = self._query_one(
+                        conn,
+                        """
+                        SELECT id FROM episodes
+                        WHERE owner_type = ? AND owner_id = ?
+                          AND json_extract(meta, '$.turn_id') = ?
+                        ORDER BY timestamp DESC
+                        LIMIT 1
+                        """,
+                        params=[owner_type, owner_id, str(turn_id)],
+                        log_context="add_episode_idempotency",
+                    )
+                    if existing:
+                        logger.info(
+                            "EpisodicSQLStore.add_episode: skipping duplicate (turn_id=%s) existing_id=%s",
+                            turn_id,
+                            (existing["id"] if hasattr(existing, "__getitem__") else None),
+                        )
+                        return
+            except Exception:
+                # Never break ingestion due to idempotency guard issues.
+                logger.exception("EpisodicSQLStore.add_episode: idempotency guard failed; continuing.")
 
             payload = {
                 "id": ep.id,
@@ -329,18 +357,33 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         finally:
             conn.close()
 
-    async def fetch_summaries(self, ids: List[str]) -> List[dict]:
+    async def fetch_summaries(
+        self,
+        ids: List[str],
+        *,
+        owner_type: str,
+        owner_id: str,
+    ) -> List[dict]:
         """
-        Fetch episode summaries by IDs, preserving requested order.
+        Fetch episode summaries by IDs (owner-scoped), preserving requested order.
         """
         if not ids:
             return []
+        if not owner_type or not owner_id:
+            raise ValueError("EpisodicSQLStore.fetch_summaries requires owner_type and owner_id")
 
         conn = self._conn()
         try:
             placeholders = ",".join("?" for _ in ids)
-            sql = f"SELECT id, user_id, timestamp, summary FROM episodes WHERE id IN ({placeholders})"
-            rows = self._query_all(conn, sql, params=ids, log_context="fetch_episode_summaries")
+            sql = f"""
+                SELECT id, user_id, timestamp, summary
+                FROM episodes
+                WHERE id IN ({placeholders})
+                  AND owner_type = ?
+                  AND owner_id = ?
+            """
+            params = list(ids) + [owner_type, owner_id]
+            rows = self._query_all(conn, sql, params=params, log_context="fetch_episode_summaries")
             row_map = {r["id"]: r for r in rows}
             ordered: List[dict] = []
             for eid in ids:
@@ -362,12 +405,20 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         finally:
             conn.close()
 
-    async def fetch_transcripts(self, ids: List[str]) -> List[dict]:
+    async def fetch_transcripts(
+        self,
+        ids: List[str],
+        *,
+        owner_type: str,
+        owner_id: str,
+    ) -> List[dict]:
         """
-        Fetch episode transcripts (raw) by IDs, preserving requested order.
+        Fetch episode transcripts (raw) by IDs (owner-scoped), preserving requested order.
         """
         if not ids:
             return []
+        if not owner_type or not owner_id:
+            raise ValueError("EpisodicSQLStore.fetch_transcripts requires owner_type and owner_id")
 
         conn = self._conn()
         try:
@@ -376,8 +427,11 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 SELECT id, user_id, timestamp, summary, raw
                 FROM episodes
                 WHERE id IN ({placeholders})
+                  AND owner_type = ?
+                  AND owner_id = ?
             """
-            rows = self._query_all(conn, sql, params=ids, log_context="fetch_episode_transcripts")
+            params = list(ids) + [owner_type, owner_id]
+            rows = self._query_all(conn, sql, params=params, log_context="fetch_episode_transcripts")
             row_map = {r["id"]: r for r in rows}
             ordered: List[dict] = []
             for eid in ids:
@@ -390,7 +444,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                         "user_id": row["user_id"],
                         "timestamp": row["timestamp"],
                         "summary": row["summary"],
-                        "raw": row.get("raw"),
+                        "raw": (row["raw"] if ("raw" in (row.keys() if hasattr(row, "keys") else [])) else None),
                     }
                 )
             return ordered
@@ -423,6 +477,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 k=k,
                 filters=filters,
                 log_context="episodic_search",
+                id_prefix="episode_",
             )
         except Exception:
             logger.exception("EpisodicSQLStore.search failed.")

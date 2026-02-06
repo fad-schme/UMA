@@ -58,7 +58,7 @@ class GraphUpdater:
         If that API is missing, graph ingestion is disabled.
         """
         self.graph_core = graph_core
-        logger.info("GraphUpdater initialized (strict DAT-safe mode).")
+        logger.debug("GraphUpdater initialized (strict DAT-safe mode).")
 
     # ------------------------------------------------------------------
     # EPISODES

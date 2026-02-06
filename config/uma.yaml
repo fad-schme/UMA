@@ -24,6 +24,7 @@ storage:
 
   graph_config:
     # Neo4j (custom adapter)
+    #uri: "neo4j://127.0.0.1:7687" 
     uri: "neo4j://192.168.178.101:7687" 
     user: "neo4j"
     password: "umaisthebest"
@@ -55,11 +56,19 @@ embedding:
   dimension: 768 # all-minilm 384 768
   config:
    host: "http://192.168.178.101:11434"
-   # host: "http://localhost:11434"
+    #host: "http://localhost:11434"
 
 # ------------------------------
 # LLMs (Agent + UMA internal)
 # ------------------------------
+# Key Details on Qwen2.5-3B Context:
+# Context Length: 32,768 tokens.
+# Generation Length: Capable of generating up to 8,192 tokens.
+# Performance: Optimized for long text, coding, and structured data.
+#------------------
+# Key Details on gpt-oss Context:
+# Context Length: 128k tokens.
+# Generation Length: Capable of generating up to 8,192 tokens.
 llms:
   agent:
     provider: "ollama"
@@ -67,13 +76,14 @@ llms:
     config:
       timeout: 60
       host: "http://192.168.178.101:11434"
+      #host: "http://localhost:11434"
   uma:
     provider: "ollama"
     model: "qwen2.5:3b"
     config:
       timeout: 60
       host: "http://192.168.178.101:11434"
-
+      #host: "http://localhost:11434"
 # ------------------------------
 # Retrieval
 # ------------------------------
@@ -82,13 +92,18 @@ retrieval:
   max_facts: 5
   max_skills: 3
   max_graph_items: 3
+  max_evidence_chunks: 10
+  fts5_enabled: true
   strict: true
 
   context:
     max_working_messages: 2
     max_episodic: 2
     max_semantic: 4
-    max_chunks: 5
+    max_chunks: 2
+    snippet_max_chars: 240
+    snippet_refiner_enabled: true
+    snippet_refiner_top_k: 6
     max_procedural: 2
     max_graph: 2
     include_working_memory: true
@@ -134,6 +149,9 @@ retrieval:
 # ------------------------------
 semantic:
   salience_threshold: 0.45
+  doc_min_fact_words: 15
+  doc_summary_enabled: true
+  doc_summary_max_facts: 5
 
 # ------------------------------
 # Consolidation Engine

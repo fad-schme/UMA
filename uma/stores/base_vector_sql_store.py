@@ -100,6 +100,8 @@ class BaseVectorSQLStore(BaseSQLStore):
         k: int,
         filters: Optional[Dict[str, Any]] = None,
         log_context: str = "",
+        *,
+        id_prefix: Optional[str] = None,
     ) -> List[str]:
         """
         Run a vector search and return a ranked list of IDs.
@@ -160,7 +162,8 @@ class BaseVectorSQLStore(BaseSQLStore):
             try:
                 sid, _ = pair
                 if isinstance(sid, str):
-                    valid_ids.append(sid)
+                    if id_prefix is None or sid.startswith(id_prefix):
+                        valid_ids.append(sid)
                 else:
                     logger.warning(
                         "%s Invalid vector search result element=%r%s",
@@ -232,6 +235,8 @@ class BaseVectorSQLStore(BaseSQLStore):
         k: int = 10,
         filters: Optional[Dict[str, Any]] = None,
         log_context: str = "",
+        *,
+        id_prefix: Optional[str] = None,
     ) -> List[Any]:
         """
         Semantic search pipeline:
@@ -260,6 +265,7 @@ class BaseVectorSQLStore(BaseSQLStore):
             k=k,
             filters=filters,
             log_context=log_context,
+            id_prefix=id_prefix,
         )
 
         if not ids:
@@ -270,4 +276,48 @@ class BaseVectorSQLStore(BaseSQLStore):
             log_context=log_context,
             owner_type=filters.get("owner_type") if filters else None,
             owner_id=filters.get("owner_id") if filters else None,
+        )
+
+    # ------------------------------------------------------------------ #
+    # Optional "IDs first" public helpers (for hybrid retrieval)
+    # ------------------------------------------------------------------ #
+
+    async def search_ids(
+        self,
+        query_embedding: List[float],
+        *,
+        k: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+        log_context: str = "",
+        id_prefix: Optional[str] = None,
+    ) -> List[str]:
+        """
+        Return ranked IDs for a vector query (no SQL fetch).
+
+        This is an optional optimization to enable "IDs+scores first" retrieval.
+        """
+        return await self._vector_search_ids(
+            query_embedding=query_embedding,
+            k=k,
+            filters=filters,
+            log_context=log_context,
+            id_prefix=id_prefix,
+        )
+
+    async def fetch_by_ids(
+        self,
+        ids: List[str],
+        *,
+        log_context: str = "",
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+    ) -> List[Any]:
+        """
+        Fetch rows by IDs in ranked order (SQL authoritative payload).
+        """
+        return await self._fetch_ranked_rows_by_ids(
+            ids=ids,
+            log_context=log_context,
+            owner_type=owner_type,
+            owner_id=owner_id,
         )

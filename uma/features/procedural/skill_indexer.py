@@ -45,7 +45,7 @@ class SkillIndexer:
     def __init__(self, llm: LLMInterface, embedder: EmbeddingInterface) -> None:
         self.llm = llm
         self.embedder = embedder
-        logger.info("SkillIndexer initialized (llm=%s, embedder=%s).",
+        logger.debug("SkillIndexer initialized (llm=%s, embedder=%s).",
                     type(llm).__name__, type(embedder).__name__)
 
     # ------------------------------------------------------------------
@@ -107,10 +107,17 @@ class SkillIndexer:
         )
 
         try:
+            expected_dim = getattr(self.embedder, "dimension", None)
+            if not isinstance(expected_dim, int) or expected_dim <= 0:
+                raise RuntimeError("SkillIndexer: embedder.dimension must be a positive integer.")
             vectors = await self.embedder.embed([embed_text])
             if not vectors:
                 raise RuntimeError("SkillIndexer: embedder returned empty list.")
             emb = vectors[0]
+            if not isinstance(emb, list) or len(emb) != expected_dim:
+                raise RuntimeError(
+                    f"SkillIndexer: invalid embedding dim (expected={expected_dim} got={len(emb) if isinstance(emb, list) else None})."
+                )
         except Exception:
             logger.exception("SkillIndexer: embedding generation failed.")
             raise

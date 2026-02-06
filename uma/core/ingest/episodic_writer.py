@@ -37,10 +37,18 @@ async def write_document_episode(
         return None
 
     try:
+        expected_dim = getattr(embedder, "dimension", None)
+        if not isinstance(expected_dim, int) or expected_dim <= 0:
+            raise ValueError("write_document_episode: embedder.dimension must be a positive integer")
         vectors = await embedder.embed([summary_text])
         if not vectors or not vectors[0]:
             raise ValueError("empty embedding")
-        embedding = [float(x) for x in vectors[0]]
+        vec0 = vectors[0]
+        if not isinstance(vec0, list) or len(vec0) != expected_dim:
+            raise ValueError(
+                f"write_document_episode: invalid embedding dim (expected={expected_dim} got={len(vec0) if isinstance(vec0, list) else None})"
+            )
+        embedding = [float(x) for x in vec0]
     except Exception:
         logger.exception("write_document_episode: embedding failed")
         return None

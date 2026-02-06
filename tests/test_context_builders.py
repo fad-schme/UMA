@@ -24,6 +24,24 @@ def test_context_pack_builder_accepts_dicts_and_objects():
     assert pack["episodic"][0]["summary"] == "summary"
     assert pack["facts"][0]["predicate"] == "likes"
     assert pack["skills"][0]["name"] == "skill"
+    assert "id" in pack["facts"][0]
+    assert "id" in pack["skills"][0]
+
+
+def test_context_pack_builder_dedupes_by_id():
+    ctx = {
+        "episodic": [{"id": "e1", "summary": "a"}, {"id": "e1", "summary": "b"}],
+        "facts": [{"id": "f1", "subject": "s", "predicate": "p", "object": "o"}, {"id": "f1", "subject": "s2", "predicate": "p2", "object": "o2"}],
+        "chunks": [{"id": "c1", "doc_id": "d", "text": "x"}, {"id": "c1", "doc_id": "d", "text": "y"}],
+        "skills": [{"id": "k1", "name": "s1"}, {"id": "k1", "name": "s2"}],
+        "graph": [{"id": "g1", "node": "x"}, {"id": "g1", "node": "y"}],
+    }
+    pack = ContextPackBuilder.build("q", ctx)
+    assert len(pack["episodic"]) == 1
+    assert len(pack["facts"]) == 1
+    assert len(pack["chunks"]) == 1
+    assert len(pack["skills"]) == 1
+    assert len(pack["graph"]) == 1
 
 
 def test_cot_memory_builder_accepts_dicts_and_objects():

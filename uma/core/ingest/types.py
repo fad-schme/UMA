@@ -52,8 +52,8 @@ class IngestReport:
 
 @dataclass(frozen=True)
 class IngestConfig:
-    chunk_size_tokens: int = 500
-    overlap_tokens: int = 80
+    chunk_size_tokens: int = 600
+    overlap_tokens: int = 150
     embed_batch_size: int = 16
     embed_max_retries: int = 3
     embed_initial_delay_s: float = 0.5
@@ -61,3 +61,6 @@ class IngestConfig:
     embed_max_delay_s: float = 8.0
     extract_max_chunks: Optional[int] = None
     allow_empty_pages: bool = False
+    doc_min_fact_words: int = 15
+    doc_summary_enabled: bool = True
+    doc_summary_max_facts: int = 5

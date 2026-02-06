@@ -59,7 +59,7 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         """
         super().__init__(db_adapter=db_adapter, vector_index=vector_index)
         self._init_db()
-        logger.info("ProceduralSQLStore initialized with DB=%s", type(db_adapter).__name__)
+        logger.debug("ProceduralSQLStore initialized with DB=%s", type(db_adapter).__name__)
 
     # ------------------------------------------------------------------ #
     # SQL Schema
@@ -390,6 +390,7 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                 k=k,
                 filters=({"owner_type": owner_type, "owner_id": owner_id} if owner_type and owner_id else None),
                 log_context="procedural_search",
+                id_prefix="skill_",
             )
         except Exception:
             logger.exception("ProceduralSQLStore.search failed.")

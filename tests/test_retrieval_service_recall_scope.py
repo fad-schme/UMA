@@ -4,6 +4,7 @@ from uma.core.retrieval.selector import MemorySelector
 
 
 class DummyEmbedder:
+    dimension = 3
     async def embed(self, texts):
         return [[0.1, 0.2, 0.3] for _ in texts]
 
@@ -11,26 +12,56 @@ class DummyEmbedder:
 class DummyMemory:
     def __init__(self):
         self.embedder = DummyEmbedder()
+        self.chunk_core = DummyChunkCore()
         self.chunk_store = DummyChunkStore()
+        self.retrieval_cfg = DummyRetrievalConfig()
 
 
 class DummyChunkStore:
     async def search_text(self, query_text, *, owner_type=None, owner_id=None, k=10):
         return [
-            {"id": "c_text", "text": "remember last time", "position": 1, "owner_type": owner_type}
+            {"id": "c_text", "text": "remember last time", "position": 1, "owner_type": owner_type, "owner_id": owner_id}
         ]
+
+
+class DummyChunkCore:
+    class _Store:
+        async def _fetch_ranked_rows_by_ids(self, ids, log_context="", owner_type=None, owner_id=None):
+            # Return objects in the same order as ids.
+            out = []
+            for cid in ids:
+                out.append({"id": cid, "text": f"chunk {cid}", "position": 99, "owner_type": owner_type, "owner_id": owner_id})
+            return out
+
+    def __init__(self):
+        self.store = self._Store()
+
+    async def search_chunks(self, **kwargs):
+        owner_type = kwargs.get("owner_type")
+        owner_id = kwargs.get("owner_id")
+        return [
+            {"id": "c_text", "text": "remember last time", "position": 1, "owner_type": owner_type, "owner_id": owner_id}
+        ]
+
+    async def _fetch_ranked_by_ids(self, ids, log_context="", owner_type=None, owner_id=None):
+        return await self.store._fetch_ranked_rows_by_ids(
+            ids,
+            log_context=log_context,
+            owner_type=owner_type,
+            owner_id=owner_id,
+        )
 
 
 def _dummy_raw():
     return {
         "episodes": [],
         "facts": [
-            {"id": "a1", "meta": {"salience": 0.7}, "confidence": 0.7, "owner_type": "agent"},
-            {"id": "u1", "meta": {"salience": 0.6}, "confidence": 0.6, "owner_type": "user"},
+            {"id": "a1", "meta": {"salience": 0.7}, "confidence": 0.7, "owner_type": "agent", "owner_id": "a1", "source_ids": ["c_ev"]},
+            {"id": "u1", "meta": {"salience": 0.6}, "confidence": 0.6, "owner_type": "user", "owner_id": "user:u1"},
         ],
         "chunks": [
-            {"id": "c1", "text": "agent chunk", "position": 2, "owner_type": "agent"},
-            {"id": "c2", "text": "user chunk", "position": 3, "owner_type": "user"},
+            {"id": "c1", "text": "agent chunk", "position": 2, "owner_type": "agent", "owner_id": "a1"},
+            {"id": "c2", "text": "user chunk", "position": 3, "owner_type": "user", "owner_id": "user:u1"},
         ],
         "skills": [],
         "graph": [],
@@ -56,6 +87,9 @@ class DummyRetrievalConfig:
     max_facts = 5
     max_skills = 2
     max_graph_items = 2
+    lexical_chunks_k = 10
+    max_evidence_chunks = 3
+    strict = True
 
 
 def test_retrieval_service_passes_policy_for_text_query():
@@ -77,6 +111,7 @@ def test_retrieval_service_passes_policy_for_text_query():
     )
     assert isinstance(selector.captured_policy, RetrievalPolicy)
     assert result["facts"][0]["id"] == "a1"
+    assert any(c["id"] == "c_ev" for c in result["chunks"])
 
 
 def test_retrieval_service_recall_prefers_user():

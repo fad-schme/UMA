@@ -221,6 +221,9 @@ class RetrievalConfig:
     max_graph_items: int
     context: "RetrievalContextConfig"
     strict: bool = True
+    lexical_chunks_k: int = 15
+    max_evidence_chunks: int = 6
+    fts5_enabled: bool = True
 
     # NEW
     rlm: Optional[RLMConfig] = None
@@ -228,6 +231,13 @@ class RetrievalConfig:
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "RetrievalConfig":
         strict_mode = bool(d.get("strict", True))
+        lexical_chunks_k = int(d.get("lexical_chunks_k", 15))
+        if lexical_chunks_k < 0:
+            raise ValueError("'retrieval.lexical_chunks_k' must be a non-negative integer")
+        max_evidence_chunks = int(d.get("max_evidence_chunks", 6))
+        if max_evidence_chunks < 0:
+            raise ValueError("'retrieval.max_evidence_chunks' must be a non-negative integer")
+        fts5_enabled = bool(d.get("fts5_enabled", True))
         rlm_cfg = d.get("rlm")
         rlm_obj: Optional[RLMConfig] = None
         if isinstance(rlm_cfg, dict):
@@ -247,11 +257,16 @@ class RetrievalConfig:
                 min_cluster_summaries=int(rlm_cfg.get("min_cluster_summaries", 1)),
                 cluster_k=int(rlm_cfg.get("cluster_k", 3)),
                 graph_predicate_limit=int(rlm_cfg.get("graph_predicate_limit", 2)),
+                novelty_window=int(rlm_cfg.get("novelty_window", 2)),
+                min_recent_novelty=int(rlm_cfg.get("min_recent_novelty", 1)),
                 predicate_weights=(
                     rlm_cfg.get("predicate_weights")
                     if isinstance(rlm_cfg.get("predicate_weights"), dict)
                     else None
                 ),
+                max_new_facts_per_step=int(rlm_cfg.get("max_new_facts_per_step", 12)),
+                max_new_chunks_per_step=int(rlm_cfg.get("max_new_chunks_per_step", 8)),
+                max_graph_expansions_per_step=int(rlm_cfg.get("max_graph_expansions_per_step", 1)),
             )
         else:
             rlm_obj = RLMConfig(enabled=True)
@@ -261,6 +276,9 @@ class RetrievalConfig:
             max_facts=int(d["max_facts"]),
             max_skills=int(d["max_skills"]),
             max_graph_items=int(d["max_graph_items"]),
+            lexical_chunks_k=lexical_chunks_k,
+            max_evidence_chunks=max_evidence_chunks,
+            fts5_enabled=fts5_enabled,
             context=RetrievalContextConfig.from_dict(d.get("context") or {}),
             strict=strict_mode,
             rlm=rlm_obj,
@@ -285,6 +303,12 @@ class RLMConfig:
     cluster_k: int = 3
     graph_predicate_limit: int = 2
     predicate_weights: Optional[Dict[str, float]] = None
+    novelty_window: int = 2
+    min_recent_novelty: int = 1
+
+    max_new_facts_per_step: int = 12
+    max_new_chunks_per_step: int = 8
+    max_graph_expansions_per_step: int = 1
 
 
 @dataclass
@@ -300,6 +324,9 @@ class RetrievalContextConfig:
     include_graph: bool = True
     include_procedural: bool = True
     allowed_topics: Optional[List[str]] = None
+    snippet_max_chars: int = 240
+    snippet_refiner_enabled: bool = False
+    snippet_refiner_top_k: int = 8
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "RetrievalContextConfig":
@@ -315,6 +342,9 @@ class RetrievalContextConfig:
             include_graph=bool(d.get("include_graph", True)),
             include_procedural=bool(d.get("include_procedural", True)),
             allowed_topics=d.get("allowed_topics"),
+            snippet_max_chars=int(d.get("snippet_max_chars", 240)),
+            snippet_refiner_enabled=bool(d.get("snippet_refiner_enabled", False)),
+            snippet_refiner_top_k=int(d.get("snippet_refiner_top_k", 8)),
         )
 
 # ---------------------------------------------------------------------------

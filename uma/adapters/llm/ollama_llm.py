@@ -78,7 +78,7 @@ class OllamaLLM(LLMInterface):
         self.chat_url = f"{self.base_url}{chat_endpoint}"
         self.timeout = timeout
 
-        logger.info("OllamaLLM initialized (model=%s, host=%s)", model, self.base_url)
+        logger.debug("OllamaLLM initialized (model=%s, host=%s)", model, self.base_url)
 
     @retryable()
     async def generate(

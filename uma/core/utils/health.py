@@ -154,7 +154,30 @@ def run_health_checks(memory: Any) -> Dict[str, Any]:
         "db:procedural", getattr(proc_store, "_db_adapter", None)
     )
 
-    dim = int(getattr(getattr(memory, "embedding_cfg", None), "dimension", 0) or 0)
+    embedding_cfg = getattr(memory, "embedding_cfg", None)
+    if embedding_cfg is None:
+        raise ValueError("health_check: memory.embedding_cfg is required")
+    if not getattr(embedding_cfg, "model", None):
+        raise ValueError("health_check: embedding_cfg.model is required")
+    dim = int(getattr(embedding_cfg, "dimension", 0) or 0)
+    if dim <= 0:
+        raise ValueError("health_check: embedding_cfg.dimension must be a positive integer")
+
+    llm_cfg = getattr(memory, "llm_cfg", None)
+    if llm_cfg is None:
+        raise ValueError("health_check: memory.llm_cfg is required")
+    if not getattr(llm_cfg, "provider", None):
+        raise ValueError("health_check: llm_cfg.provider is required")
+    if not getattr(llm_cfg, "model", None):
+        raise ValueError("health_check: llm_cfg.model is required")
+
+    agent_llm_cfg = getattr(memory, "agent_llm_cfg", None)
+    if agent_llm_cfg is None:
+        raise ValueError("health_check: memory.agent_llm_cfg is required")
+    if not getattr(agent_llm_cfg, "provider", None):
+        raise ValueError("health_check: agent_llm_cfg.provider is required")
+    if not getattr(agent_llm_cfg, "model", None):
+        raise ValueError("health_check: agent_llm_cfg.model is required")
     checks["vector:episodic"] = _check_vector(
         "vector:episodic", getattr(epi_store, "vector_index", None), dim
     )

@@ -59,7 +59,7 @@ Design principles
 
 Integration points
 ------------------
-- UMAMemory.get_user_context(user_id, query_text) may use:
+- UMAMemory.get_structured_context(user_id, query_text) may use:
       controller = RLMController(...)
       pack = await controller.retrieve_context(user_id, query_text)
 

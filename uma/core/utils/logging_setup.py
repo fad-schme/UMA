@@ -113,7 +113,7 @@ def _configure_uma_logger() -> logging.Logger:
     logging.getLogger("asyncio").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
-    logger.info("UMA logging initialized. Log file: %s", LOG_PATH)
+    logger.debug("UMA logging initialized. Log file: %s", LOG_PATH)
     return logger
 
 

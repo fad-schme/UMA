@@ -226,6 +226,14 @@ class UMAConfig(dict):
             self._require_positive_int("retrieval", key)
         if "strict" in self.retrieval and not isinstance(self.retrieval.get("strict"), bool):
             raise ValueError("'retrieval.strict' must be boolean")
+        if "lexical_chunks_k" in self.retrieval:
+            val = self.retrieval.get("lexical_chunks_k")
+            if not isinstance(val, int) or val < 0:
+                raise ValueError("'retrieval.lexical_chunks_k' must be a non-negative integer")
+        if "max_evidence_chunks" in self.retrieval:
+            val = self.retrieval.get("max_evidence_chunks")
+            if not isinstance(val, int) or val < 0:
+                raise ValueError("'retrieval.max_evidence_chunks' must be a non-negative integer")
         context_cfg = self.retrieval.get("context")
         if context_cfg is not None:
             if not isinstance(context_cfg, dict):

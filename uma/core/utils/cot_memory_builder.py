@@ -23,6 +23,8 @@ from __future__ import annotations
 from typing import Any, Dict, List
 import logging
 
+from uma.core.utils.accessors import get_attr_or_key
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,7 +42,7 @@ class CoTMemoryBuilder:
         Parameters
         ----------
         ctx : dict
-            Context object from UMAMemory.get_user_context().
+            Context object from UMAMemory.get_structured_context().
 
         Returns
         -------
@@ -70,9 +72,9 @@ class CoTMemoryBuilder:
         # -------------------------------
         for fact in ctx.get("facts", []):
             try:
-                subj = _get_attr_or_key(fact, "subject")
-                pred = _get_attr_or_key(fact, "predicate")
-                obj = _get_attr_or_key(fact, "object")
+                subj = get_attr_or_key(fact, "subject")
+                pred = get_attr_or_key(fact, "predicate")
+                obj = get_attr_or_key(fact, "object")
                 cot["known_facts"].append(f"{subj} {pred} {obj}")
             except Exception:
                 logger.exception("Failed to convert fact for CoT memory.")
@@ -82,7 +84,7 @@ class CoTMemoryBuilder:
         # -------------------------------
         for ep in ctx.get("episodic", []):
             try:
-                summary = _get_attr_or_key(ep, "summary") or repr(ep)
+                summary = get_attr_or_key(ep, "summary") or repr(ep)
                 cot["relevant_events"].append(summary)
             except Exception:
                 logger.exception("Failed to convert episode for CoT memory.")
@@ -92,8 +94,8 @@ class CoTMemoryBuilder:
         # -------------------------------
         for skill in ctx.get("skills", []):
             try:
-                name = _get_attr_or_key(skill, "name")
-                plan = _get_attr_or_key(skill, "plan", {})
+                name = get_attr_or_key(skill, "name")
+                plan = get_attr_or_key(skill, "plan", {})
                 steps = plan.get("steps") if isinstance(plan, dict) else None
 
                 cot["available_skills"].append(
@@ -134,10 +136,3 @@ class CoTMemoryBuilder:
 
         logger.info("CoTMemoryBuilder: Built structured CoT memory section.")
         return cot
-
-
-def _get_attr_or_key(obj: Any, key: str, default: Any = None) -> Any:
-    """Normalize object/dict access for RLM snippets and domain models."""
-    if isinstance(obj, dict):
-        return obj.get(key, default)
-    return getattr(obj, key, default)

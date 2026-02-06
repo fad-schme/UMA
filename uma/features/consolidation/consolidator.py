@@ -225,6 +225,9 @@ class Consolidator:
             texts = [f"{f.subject} {f.predicate} {f.object}" for f in batch]
 
             try:
+                expected_dim = getattr(self.embedder, "dimension", None)
+                if not isinstance(expected_dim, int) or expected_dim <= 0:
+                    raise ValueError("Consolidator._persist_facts: embedder.dimension must be a positive integer")
                 vectors = await self.embedder.embed(texts)
             except Exception:
                 logger.exception(
@@ -234,9 +237,22 @@ class Consolidator:
                 )
                 continue
 
+            if not isinstance(vectors, list) or len(vectors) != len(batch):
+                logger.error(
+                    "Consolidator._persist_facts: invalid embedding shape (expected=%d got=%r)",
+                    len(batch),
+                    type(vectors),
+                )
+                continue
+
             # ---- 3. Upsert each fact ----
             for fact, emb in zip(batch, vectors):
                 try:
+                    if not isinstance(emb, list) or len(emb) != expected_dim:
+                        raise ValueError(
+                            f"Consolidator._persist_facts: invalid embedding dim for fact_id={fact.id} "
+                            f"(expected={expected_dim} got={len(emb) if isinstance(emb, list) else None})"
+                        )
                     if self.semantic_core is not None:
                         await self.semantic_core.upsert_fact(fact, emb)
                     logger.debug(

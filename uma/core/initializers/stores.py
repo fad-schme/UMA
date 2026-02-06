@@ -10,7 +10,6 @@ from typing import Any
 
 from ..utils.config_types import parse_plugin_spec
 from ...adapters.db.sqlite_adapter import SQLiteAdapter
-from ...adapters.vector.faiss_adapter import FaissIndex
 from ...stores.episodic_sql import EpisodicSQLStore
 from ...stores.semantic_sql import SemanticSQLStore
 from ...stores.procedural_sql import ProceduralSQLStore
@@ -112,6 +111,7 @@ def initialize_stores(memory: "Any") -> dict:
 
     if vector_backend == "faiss":
         from uma.adapters.vector.inmemory import InMemoryVectorIndex
+        from uma.adapters.vector.faiss_adapter import FaissIndex
 
         def vector_init(d: int):
             try:

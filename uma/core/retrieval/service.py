@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from .selector import MemorySelector
 from .policy import RetrievalPolicy
+from ..utils.dedupe import dedupe_by_id
 from ...adapters.observability.context import get_request_id, request_context
 from ...adapters.observability.metrics import increment, timed
 from ..utils.identity import ensure_user_subject
@@ -78,10 +79,10 @@ class RetrievalService:
     RetrievalService is not usually called directly by developers.
 
     Instead, developers use:
-        ctx = await memory.get_user_context(user_id, query)
+        ctx = await memory.get_structured_context(user_id, query)
 
     Internally:
-        • `get_user_context()` delegates to RLMController if enabled
+        • `get_structured_context()` delegates to RLMController if enabled
         • otherwise falls back to RetrievalService
 
     This separation ensures:
@@ -139,9 +140,13 @@ class RetrievalService:
 
         semantic_core = getattr(self.memory, "semantic_core", None)
         if semantic_core is not None:
+            # Subject filtering is optional:
+            # - user scope: keep subject=user
+            # - agent KB: subject=None for corpus-wide search within owner scope
+            subject = user_subject if owner_type == "user" else None
             tasks["facts"] = asyncio.create_task(
                 semantic_core.search(
-                    subject=user_subject,
+                    subject=subject,
                     query_embedding=query_embedding,
                     owner_type=owner_type,
                     owner_id=owner_id,
@@ -154,23 +159,13 @@ class RetrievalService:
             )
 
         chunk_core = getattr(self.memory, "chunk_core", None)
-        if chunk_core is not None:
-            tasks["chunks"] = asyncio.create_task(
-                chunk_core.search(
-                    user_id=user_subject,
-                    query_embedding=query_embedding,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    k=self.selector.max_facts,
-                    doc_id=None,
-                )
-            )
+        # Chunk retrieval is centralized in ChunkCore.search_chunks.
 
         procedural_core = getattr(self.memory, "procedural_core", None)
         if procedural_core is not None:
             tasks["skills"] = asyncio.create_task(
                 procedural_core.search(
-                    user_id=user_subject,
+                    user_id=None,
                     query_embedding=query_embedding,
                     owner_type=owner_type,
                     owner_id=owner_id,
@@ -178,21 +173,8 @@ class RetrievalService:
                 )
             )
 
-        graph_core = getattr(self.memory, "graph_core", None)
+        # Graph is a navigation layer; do not fetch it eagerly here.
         graph_res: List[Any] = []
-        if graph_core is not None:
-            try:
-                graph_res = graph_core.neighbors(
-                    user_id=user_subject,
-                    node_id=user_subject,
-                    depth=2,
-                    k=self.selector.max_graph_items,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                )
-            except Exception:
-                logger.exception("RetrievalService: graph retrieval failed.")
-                graph_res = []
 
         results = await asyncio.gather(*tasks.values(), return_exceptions=True)
         raw: Dict[str, List[Any]] = {
@@ -264,6 +246,13 @@ class RetrievalService:
                         if not agent_id:
                             raise ValueError("RetrievalService.retrieve: agent_id is required for agent scope.")
                         owner_id = agent_id
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            "RetrievalService.retrieve: scope owner_type=%s owner_id=%s user=%s",
+                            owner_type,
+                            owner_id,
+                            user_subject,
+                        )
                     try:
                         embedding = await self._ensure_embedding(query_text_or_embedding)
                         raw = await self._retrieve_raw(
@@ -281,36 +270,64 @@ class RetrievalService:
                         # If embeddings fail (e.g., Ollama down), fall back to lexical chunks only.
                         raw = {"episodes": [], "facts": [], "chunks": [], "skills": [], "graph": []}
 
-                    # Lexical fallback if chunk search returns nothing (or embed failed).
-                    if not (raw.get("chunks") or []) and isinstance(query_text_or_embedding, str):
-                        core = getattr(self.memory, "chunk_core", None)
-                        if core is not None:
-                            try:
-                                chunks: List[Any] = []
-                                found = await core.search_text(
-                                    query_text_or_embedding,
+                    # Chunk retrieval: centralized in ChunkCore.search_chunks.
+
+                    # selector expects keys: episodes/facts/chunks/skills/graph (+ optional WM)
+                    def _drop_invalid(items: List[Any], *, kind: str) -> List[Any]:
+                        out: List[Any] = []
+                        logged = False
+                        for it in items or []:
+                            it_id = it.get("id") if isinstance(it, dict) else getattr(it, "id", None)
+                            it_owner_type = it.get("owner_type") if isinstance(it, dict) else getattr(it, "owner_type", None)
+                            it_owner_id = it.get("owner_id") if isinstance(it, dict) else getattr(it, "owner_id", None)
+                            if not it_id or not it_owner_type or it_owner_id is None:
+                                if not logged:
+                                    logger.warning(
+                                        "RetrievalService: dropping invalid %s item missing id/owner fields: %r",
+                                        kind,
+                                        it,
+                                    )
+                                    logged = True
+                                continue
+                            out.append(it)
+                        return out
+
+                    raw["episodes"] = _drop_invalid(raw.get("episodes") or [], kind="episode")
+                    raw["facts"] = _drop_invalid(raw.get("facts") or [], kind="fact")
+                    raw["chunks"] = _drop_invalid(raw.get("chunks") or [], kind="chunk")
+                    raw["skills"] = _drop_invalid(raw.get("skills") or [], kind="skill")
+                    raw["graph"] = raw.get("graph") or []
+
+                    # Fill chunks via centralized search before selection.
+                    core = getattr(self.memory, "chunk_core", None)
+                    if core is not None:
+                        try:
+                            lexical_k = int(getattr(getattr(self.memory, "retrieval_cfg", None), "lexical_chunks_k", 15))
+                            if hasattr(core, "search_chunks"):
+                                raw["chunks"] = await core.search_chunks(
+                                    query_embedding=[float(x) for x in embedding],
+                                    owner_type=owner_type,
+                                    owner_id=owner_id,
+                                    k=self.selector.max_facts,
+                                    query_text=query_text_or_embedding if isinstance(query_text_or_embedding, str) else None,
+                                    lexical_k=lexical_k,
+                                    filter_terms=isinstance(query_text_or_embedding, str) and bool(query_text_or_embedding.strip()),
+                                )
+                            else:
+                                raw["chunks"] = await core.search(
+                                    user_id=user_subject,
+                                    query_embedding=[float(x) for x in embedding],
                                     owner_type=owner_type,
                                     owner_id=owner_id,
                                     k=self.selector.max_facts,
                                 )
-                                if found:
-                                    chunks.extend(found)
-                                raw["chunks"] = chunks
-                                trace.append(
-                                    {
-                                        "phase": "baseline",
-                                        "event": "chunks_lexical_fallback",
-                                        "reason": "chunks_empty",
-                                    }
-                                )
-                                logger.info("RetrievalService: chunks lexical fallback (chunks_empty).")
-                            except Exception:
-                                logger.exception("RetrievalService: chunk lexical fallback failed.")
-                                strict = bool(getattr(self.memory, "retrieval_cfg", None) and self.memory.retrieval_cfg.strict)
-                                if strict:
-                                    raise
+                        except Exception:
+                            logger.exception("RetrievalService: chunk search failed.")
+                            strict = bool(getattr(getattr(self.memory, "retrieval_cfg", None), "strict", True))
+                            if strict:
+                                raise
+                            raw["chunks"] = []
 
-                    # selector expects keys: episodes/facts/chunks/skills/graph (+ optional WM)
                     selected = self.selector.select(raw, policy=policy)
 
                     # Extra defensive truncation guard:
@@ -319,11 +336,81 @@ class RetrievalService:
                     episodes = (selected.get("episodes") or [])[: self.selector.max_episodes]
                     facts = (selected.get("facts") or [])[: self.selector.max_facts]
                     chunks = (selected.get("chunks") or [])[: self.selector.max_facts]
+
+                    # Evidence expansion: fetch cited chunks for selected facts (bounded).
+                    if facts and isinstance(query_text_or_embedding, str) and query_text_or_embedding.strip():
+                        core = getattr(self.memory, "chunk_core", None)
+                        if core is not None:
+                            try:
+                                cited_ids: List[str] = []
+                                for f in facts:
+                                    src = f.get("source_ids") if isinstance(f, dict) else getattr(f, "source_ids", None)
+                                    if isinstance(src, list):
+                                        for sid in src:
+                                            if sid:
+                                                cited_ids.append(str(sid))
+                                max_ev = int(getattr(getattr(self.memory, "retrieval_cfg", None), "max_evidence_chunks", 6))
+                                max_ev = max(0, max_ev)
+                                cited_ids = list(dict.fromkeys(cited_ids))[: max_ev]
+                                if cited_ids:
+                                    cited_chunks = await core._fetch_ranked_by_ids(
+                                        ids=cited_ids,
+                                        owner_type=owner_type,
+                                        owner_id=owner_id,
+                                        log_context="chunks_evidence_expand",
+                                    )
+                                    chunks = dedupe_by_id(list(cited_chunks or []) + list(chunks or []))
+                                    chunks = chunks[: self.selector.max_facts]
+                                    trace.append(
+                                        {
+                                            "phase": "baseline",
+                                            "event": "chunks_evidence_expand",
+                                            "count": len(cited_chunks or []),
+                                        }
+                                    )
+                            except Exception:
+                                logger.exception("RetrievalService: evidence expansion failed.")
+                                strict = bool(getattr(self.memory, "retrieval_cfg", None) and self.memory.retrieval_cfg.strict)
+                                if strict:
+                                    raise
                     # Strict keyword gate for traditional RAG: only keep chunks that match query terms.
+                    # Evidence-expanded chunks may not contain the literal query tokens, so keep cited evidence.
                     if isinstance(query_text_or_embedding, str) and query_text_or_embedding.strip():
-                        chunks = self._filter_chunks_by_query(chunks, query_text_or_embedding)
+                        cited_set = set(cited_ids) if "cited_ids" in locals() else set()
+                        filtered = self._filter_chunks_by_query(chunks, query_text_or_embedding)
+                        # Re-add cited evidence that may not match lexically.
+                        if cited_set:
+                            filtered_ids = set()
+                            for c in filtered or []:
+                                cid = c.get("id") if isinstance(c, dict) else getattr(c, "id", None)
+                                if cid:
+                                    filtered_ids.add(str(cid))
+                            for c in chunks:
+                                cid = c.get("id") if isinstance(c, dict) else getattr(c, "id", None)
+                                if cid and str(cid) in cited_set and str(cid) not in filtered_ids:
+                                    filtered.append(c)
+                        chunks = filtered
                     skills = (selected.get("skills") or [])[: self.selector.max_skills]
                     graph = (selected.get("graph") or [])[: self.selector.max_graph_items]
+
+                    # Graph last-mile navigation: only fetch after other layers are available.
+                    graph_core = getattr(self.memory, "graph_core", None)
+                    if graph_core is not None and self.selector.max_graph_items > 0:
+                        try:
+                            # Gate: only pull graph if we have some signal to expand around.
+                            should_fetch = bool(facts or chunks or episodes)
+                            if should_fetch:
+                                graph = graph_core.neighbors(
+                                    user_id=user_subject,
+                                    node_id=user_subject,
+                                    depth=2,
+                                    k=self.selector.max_graph_items,
+                                    owner_type=owner_type,
+                                    owner_id=owner_id,
+                                ) or []
+                        except Exception:
+                            logger.exception("RetrievalService: graph retrieval failed.")
+                            graph = []
 
                     trace.append(
                         {
@@ -373,11 +460,17 @@ class RetrievalService:
         # text query
         if isinstance(query, str) and query.strip():
             try:
+                expected_dim = getattr(self.memory.embedder, "dimension", None)
+                if not isinstance(expected_dim, int) or expected_dim <= 0:
+                    raise ValueError("Embedder.dimension must be a positive integer.")
                 # IMPORTANT: embedders expect List[str] -> List[List[float]]
                 vectors = await self.memory.embedder.embed([query])
                 if not vectors or not isinstance(vectors, list) or not vectors[0]:
                     raise ValueError("Embedder returned empty embedding.")
-                return [float(x) for x in vectors[0]]
+                vec0 = vectors[0]
+                if not isinstance(vec0, list) or len(vec0) != expected_dim:
+                    raise ValueError(f"Embedder returned invalid dim (expected={expected_dim} got={len(vec0) if isinstance(vec0, list) else None}).")
+                return [float(x) for x in vec0]
             except Exception as exc:
                 logger.exception("RetrievalService._ensure_embedding: embed failed.")
                 raise ValueError("Failed to embed query text.") from exc

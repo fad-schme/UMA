@@ -39,7 +39,7 @@ class ConsolidationSummarizer:
     def __init__(self, llm: LLMInterface, max_tokens: int = 256):
         self.llm = llm
         self.max_tokens = max_tokens
-        logger.info("ConsolidationSummarizer initialized (max_tokens=%d).", max_tokens)
+        logger.debug("ConsolidationSummarizer initialized (max_tokens=%d).", max_tokens)
 
     # ------------------------------------------------------------------
     # PUBLIC API

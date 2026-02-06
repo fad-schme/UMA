@@ -28,6 +28,7 @@ Coding Agent Instructions
 from __future__ import annotations
 
 import logging
+import hashlib
 from typing import Any, Dict, Optional, List
 from .promotion import PromotionPolicy
 from ...adapters.observability.context import request_context
@@ -46,6 +47,33 @@ def _get_fact_embedding(fact: Any) -> Optional[List[float]]:
     return None
 
 
+def _compute_turn_id(
+    *,
+    user_id: str,
+    user_msg: str,
+    assistant_reply: str,
+    request_id: Optional[str] = None,
+) -> str:
+    """
+    Deterministic idempotency key for a turn.
+
+    Notes
+    -----
+    - Uses user_id + user_msg + assistant_reply.
+    - Optionally includes request_id when present (to separate identical turns from distinct requests).
+    """
+    h = hashlib.sha256()
+    h.update((user_id or "").encode("utf-8"))
+    h.update(b"\n")
+    h.update((user_msg or "").encode("utf-8"))
+    h.update(b"\n")
+    h.update((assistant_reply or "").encode("utf-8"))
+    if request_id:
+        h.update(b"\n")
+        h.update(str(request_id).encode("utf-8"))
+    return f"turn_{h.hexdigest()[:24]}"
+
+
 
 class MemoryPipeline:
     """
@@ -58,7 +86,7 @@ class MemoryPipeline:
         - graph_core (optional)
         - hooks
 
-    Developers use UMAMemory.get_user_context() or
+    Developers use UMAMemory.get_structured_context() or
     retrieval_service.retrieve() outside this pipeline.
     """
 
@@ -106,20 +134,36 @@ class MemoryPipeline:
             with timed("pipeline.process_turn.latency_s"):
                 increment("pipeline.process_turn.count")
 
+                request_id = (extra_meta or {}).get("request_id") if isinstance(extra_meta, dict) else None
+                turn_id = _compute_turn_id(
+                    user_id=user_id,
+                    user_msg=user_msg,
+                    assistant_reply=assistant_reply,
+                    request_id=str(request_id) if request_id else None,
+                )
+
                 # 1) Hooks
                 await self._run_before_turn_hooks(user_id, user_msg)
 
                 # 2) Working memory update
-                self._update_working_memory(user_id, user_msg, assistant_reply)
+                self._update_working_memory(user_id, user_msg, assistant_reply, turn_id=turn_id)
 
                 # 3) WM compaction
                 await self._maybe_compact_working_memory(user_id)
 
                 # 4) Episodic storage
-                episode = await self._store_episode(user_id, user_msg, assistant_reply)
+                episode = await self._store_episode(user_id, user_msg, assistant_reply, turn_id=turn_id)
 
                 # 5) Semantic ingestion
-                facts = await self._semantic_ingest(user_id, assistant_reply)
+                facts = await self._semantic_ingest(user_id, assistant_reply, turn_id=turn_id)
+                if episode is not None and facts:
+                    for f in facts:
+                        try:
+                            meta = getattr(f, "meta", None) or {}
+                            meta.setdefault("source_episode_id", getattr(episode, "id", None))
+                            f.meta = meta
+                        except Exception:
+                            continue
 
                 # 5b) Optional promotion of eligible facts to agent KB
                 await self._maybe_promote_facts(user_id=user_id, facts=facts)
@@ -273,6 +317,8 @@ class MemoryPipeline:
         user_id: str,
         user_msg: str,
         assistant_reply: str,
+        *,
+        turn_id: str,
     ) -> None:
         wm = getattr(self.mem, "working_memory", None)
         if wm is None:
@@ -284,14 +330,14 @@ class MemoryPipeline:
                 user_id=user_id,
                 role="user",
                 content=user_msg,
-                metadata={"source": "user"},
+                metadata={"source": "user", "turn_id": turn_id},
             )
             if assistant_reply and assistant_reply.strip():
                 wm.append(
                     user_id=user_id,
                     role="assistant",
                     content=assistant_reply,
-                    metadata={"source": "assistant"},
+                    metadata={"source": "assistant", "turn_id": turn_id},
                 )
         except Exception:
             logger.exception("Failed to append messages to WorkingMemory; continuing.")
@@ -314,6 +360,8 @@ class MemoryPipeline:
         user_id: str,
         user_msg: str,
         assistant_reply: str,
+        *,
+        turn_id: str,
     ) -> Any:
         epi = getattr(self.mem, "episodic_core", None)
         wm = getattr(self.mem, "working_memory", None)
@@ -344,7 +392,7 @@ class MemoryPipeline:
     # SEMANTIC INGESTION
     # ------------------------------------------------------------------
 
-    async def _semantic_ingest(self, user_id: str, reply: str) -> Any:
+    async def _semantic_ingest(self, user_id: str, reply: str, *, turn_id: str) -> Any:
         sem = getattr(self.mem, "semantic_core", None)
         if sem is None:
             logger.warning("SemanticCore not initialized; skipping fact ingestion.")
@@ -359,7 +407,7 @@ class MemoryPipeline:
             return []
 
         try:
-            return await sem.ingest(subject=subject, text=reply)
+            return await sem.ingest(subject=subject, text=reply, extra_meta={"turn_id": turn_id})
         except Exception:
             logger.exception("SemanticCore.ingest failed; continuing.")
             return []

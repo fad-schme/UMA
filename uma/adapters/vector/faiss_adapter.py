@@ -53,7 +53,7 @@ class FaissIndex(VectorIndex):
         self._rev_map: Dict[int, str] = {}
         self._next_id = 1
         self._meta: Dict[str, Dict] = {}
-        logger.info("Initialized FaissIndex with dimension=%d", dim)
+        logger.debug("Initialized FaissIndex with dimension=%d", dim)
 
     def _get_or_create_id(self, sid: str) -> int:
         existing = self._id_map.get(sid)

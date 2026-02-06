@@ -17,7 +17,6 @@ import logging
 from typing import Any, List, Optional
 
 from ...types_skill import Skill
-from ..utils.identity import ensure_user_subject
 from ..utils.dedupe import dedupe_by_id
 
 logger = logging.getLogger(__name__)
@@ -30,7 +29,7 @@ class ProceduralCore:
 
     def __init__(self, procedural_store: Any) -> None:
         self.store = procedural_store
-        logger.info("ProceduralCore initialized.")
+        logger.debug("ProceduralCore initialized.")
 
     # ------------------------------------------------------------------
     # PUBLIC API — ingest / CRUD
@@ -105,12 +104,6 @@ class ProceduralCore:
     ) -> List[Skill]:
         if self.store is None:
             return []
-        try:
-            user_subject = ensure_user_subject(user_id)
-        except Exception:
-            logger.exception("ProceduralCore.search: invalid subject=%r", user_id)
-            return []
-
         skills: List[Skill] = []
         try:
             found = await self.store.search(

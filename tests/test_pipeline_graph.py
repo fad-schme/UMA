@@ -62,7 +62,7 @@ class DummyEpisodicCore:
 
 
 class DummySemanticCore:
-    async def ingest(self, subject, text):
+    async def ingest(self, subject, text, *, extra_meta=None):
         return [DummyFact("f1", subject, "likes", "sushi")]
 
 
@@ -101,10 +101,12 @@ def test_pipeline_updates_graph_with_facts_and_temporal_links():
             },
             "embedding": {
                 "provider": "tests.test_rebuild_indexes:fake_embed",
+                "model": "x",
                 "dimension": 3,
             },
             "llm": {
                 "provider": "tests.test_rebuild_indexes:fake_llm",
+                "model": "x",
             },
             "retrieval": {
                 "max_episodes": 5,

@@ -2,22 +2,32 @@ from uma.core.retrieval.rlm.controller import RLMController
 
 
 class DummyEnv:
-    async def search_semantic(self, user_id, query_embedding, k=10, filters=None, query_text=None):
-        return []
+    def __init__(self):
+        self._semantic_core = self._SemanticCore()
+        self._chunk_core = self._ChunkCore()
+        self._episodic_core = self._EpisodicCore()
+        self._procedural_core = self._ProceduralCore()
 
-    async def search_chunks(self, user_id, query_embedding, k=10):
-        return []
+    class _SemanticCore:
+        async def search(self, subject, query_embedding, owner_type, owner_id, k=10, offset=0, filters=None, query_text=None, allowed_topics=None):
+            return []
 
-    async def search_episodic(self, user_id, query_embedding, k=10, time_range=None):
-        return []
+    class _ChunkCore:
+        async def search_chunks(self, **kwargs):
+            return []
+
+    class _EpisodicCore:
+        async def search(self, user_id, query_embedding, owner_type, owner_id, k=10, offset=0, **kwargs):
+            return []
+
+    class _ProceduralCore:
+        async def search(self, user_id, query_embedding, owner_type, owner_id, k=10, **kwargs):
+            return []
 
     async def episodic_cluster_summaries(self, user_id, k=5, max_episodes=50, time_range=None):
         return []
 
     async def fetch_episode_clusters(self, user_id, k=5, max_episodes=50, time_range=None, min_salience=None):
-        return []
-
-    async def search_procedural(self, user_id, query_embedding, k=10, filters=None):
         return []
 
     async def graph_neighbors(self, user_id, node_id, predicate_scope=None, depth=1, k=10):

@@ -23,6 +23,9 @@ Coding Agent Instructions
 -------------------------
 - Keep this interface simple and stable.
 - This is the ONLY class MemoryPipeline should call for semantic ingestion.
+Note for maintainers:
+- Semantic retrieval should go through `search`.
+- Lexical search is internal-only via `_search_text`.
 """
 
 from __future__ import annotations
@@ -66,13 +69,13 @@ class SemanticCore:
             semantic_store=semantic_store,
             salience_threshold=salience_threshold,
         )
-        logger.info("SemanticCore initialized.")
+        logger.debug("SemanticCore initialized.")
 
     # ------------------------------------------------------------------
     # PUBLIC API
     # ------------------------------------------------------------------
 
-    async def extract(self, subject: str, text: str) -> List[Fact]:
+    async def extract(self, subject: str, text: str, *, extra_meta: dict | None = None) -> List[Fact]:
         """
         Extract semantic facts (not persisted).
 
@@ -94,9 +97,9 @@ class SemanticCore:
             logger.exception("SemanticCore.extract: invalid subject=%r", subject)
             return []
 
-        return await self.ingestor.extract(subj, text)
+        return await self.ingestor.extract(subj, text, extra_meta=extra_meta)
 
-    async def ingest(self, subject: str, text: str) -> List[Fact]:
+    async def ingest(self, subject: str, text: str, *, extra_meta: dict | None = None) -> List[Fact]:
         """
         Extract + ingest facts into the semantic store.
 
@@ -118,7 +121,16 @@ class SemanticCore:
             logger.exception("SemanticCore.ingest: invalid subject=%r", subject)
             return []
 
-        facts = await self.ingestor.ingest(subj, text)
+        facts = await self.ingestor.ingest(subj, text, extra_meta=extra_meta)
+
+        # Enforce ownership scoping for persisted facts.
+        # Facts extracted from user-scoped turns should be user-owned under the canonical subject.
+        for f in facts or []:
+            try:
+                f.owner_type = "user"
+                f.owner_id = subj
+            except Exception:
+                continue
 
         # EXPLICIT DEDUP (DAT v1 requirement)
         facts = self._dedup_facts(facts)
@@ -131,7 +143,7 @@ class SemanticCore:
 
     async def search(
         self,
-        subject: str,
+        subject: Optional[str],
         query_embedding: List[float],
         *,
         owner_type: str,
@@ -142,14 +154,20 @@ class SemanticCore:
         query_text: Optional[str] = None,
         allowed_topics: Optional[List[str]] = None,
     ) -> List[Fact]:
+        """
+        Unified semantic retrieval entry point.
+        Performs vector search, optional topic/predicate filtering, and lexical fallback.
+        """
         store = getattr(self.ingestor, "semantic_store", None)
         if store is None:
             return []
-        try:
-            subj = ensure_user_subject(subject)
-        except Exception:
-            logger.exception("SemanticCore.search: invalid subject=%r", subject)
-            return []
+        subj: Optional[str] = None
+        if subject:
+            try:
+                subj = ensure_user_subject(subject)
+            except Exception:
+                logger.exception("SemanticCore.search: invalid subject=%r", subject)
+                return []
 
         requested_topic = filters.get("topic") if isinstance(filters, dict) else None
         requested_predicate = filters.get("predicate") if isinstance(filters, dict) else None
@@ -159,22 +177,26 @@ class SemanticCore:
         facts: List[Any] = []
         try:
             try:
-                found = await store.search(
+                search_kwargs = dict(
                     query_embedding=query_embedding,
-                    subject=subj,
                     owner_type=owner_type,
                     owner_id=owner_id,
                     k=int(k),
                     offset=int(offset),
                 )
+                if subj is not None:
+                    search_kwargs["subject"] = subj
+                found = await store.search(**search_kwargs)
             except TypeError:
-                found = await store.search(
+                search_kwargs = dict(
                     query_embedding=query_embedding,
-                    subject=subj,
                     owner_type=owner_type,
                     owner_id=owner_id,
                     k=int(k),
                 )
+                if subj is not None:
+                    search_kwargs["subject"] = subj
+                found = await store.search(**search_kwargs)
             if found:
                 facts.extend(found)
         except Exception:
@@ -225,13 +247,19 @@ class SemanticCore:
                     try:
                         fallback: List[Any] = []
                         try:
-                            found = await store.search_text(
-                                query_text,
-                                subject=subj,
-                                limit=int(k),
-                                owner_type=owner_type,
-                                owner_id=owner_id,
-                            )
+                            if subj is not None:
+                                found = await self._search_text(
+                                    subj,
+                                    query_text,
+                                    limit=int(k),
+                                    owner_type=owner_type,
+                                    owner_id=owner_id,
+                                )
+                            else:
+                                logger.warning(
+                                    "SemanticCore.search: no subject; skipping lexical fallback"
+                                )
+                                found = []
                             if found:
                                 fallback.extend(found)
                         except Exception:
@@ -253,7 +281,7 @@ class SemanticCore:
 
     async def fetch_more_facts(
         self,
-        subject: str,
+        subject: Optional[str],
         predicate: str,
         *,
         owner_type: str,
@@ -261,57 +289,44 @@ class SemanticCore:
         k: int,
         offset: int = 0,
     ) -> List[Fact]:
+        """
+        Fetch additional facts for a subject/predicate using deterministic paging.
+        """
         store = getattr(self.ingestor, "semantic_store", None)
         if store is None:
             return []
-        try:
-            subj = ensure_user_subject(subject)
-        except Exception:
-            logger.exception("SemanticCore.fetch_more_facts: invalid subject=%r", subject)
-            return []
+        subj: Optional[str] = None
+        if subject:
+            try:
+                subj = ensure_user_subject(subject)
+            except Exception:
+                logger.exception("SemanticCore.fetch_more_facts: invalid subject=%r", subject)
+                return []
 
         predicate_u = (predicate or "").upper()
-        facts: List[Any] = []
         try:
-            # First, try store.search with offset (works for stores that support offset)
-            try:
-                found = await store.search(
-                    query_embedding=[],
-                    subject=subj,
+            # Deterministic paging MUST be SQL-backed with stable ORDER BY before applying offset.
+            if hasattr(store, "list_facts_for_subject") and subj is not None:
+                facts = await store.list_facts_for_subject(
+                    subj,
+                    limit=None,
                     owner_type=owner_type,
                     owner_id=owner_id,
-                    k=int(k),
-                    offset=int(offset),
                 )
-            except Exception:
-                found = []
-
-            if not found and hasattr(store, "fetch_by_predicate"):
-                try:
-                    found = await store.fetch_by_predicate(
-                        subject=subj,
-                        predicate=predicate,
-                        limit=int(k),
-                        offset=int(offset),
-                        owner_type=owner_type,
-                        owner_id=owner_id,
-                    )
-                except Exception:
-                    logger.exception(
-                        "SemanticCore.fetch_more_facts: predicate fetch failed owner=%s:%s",
-                        owner_type,
-                        owner_id,
-                    )
-                    found = []
-
-            if found:
-                facts.extend(found)
+            elif hasattr(store, "list_facts_for_owner"):
+                facts = await store.list_facts_for_owner(
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                )
+            else:
+                facts = []
         except Exception:
             logger.exception(
-                "SemanticCore.fetch_more_facts failed owner=%s:%s",
+                "SemanticCore.fetch_more_facts: list_facts_for_subject failed owner=%s:%s",
                 owner_type,
                 owner_id,
             )
+            facts = []
 
         filtered = []
         for f in facts or []:
@@ -320,9 +335,13 @@ class SemanticCore:
             )
             if pred_val and str(pred_val).upper() == predicate_u:
                 filtered.append(f)
-        return dedupe_by_id(filtered)
+        # Stable ordering comes from the store (updated_at desc). Apply offset/limit after filtering.
+        offset_i = max(0, int(offset))
+        k_i = max(0, int(k))
+        windowed = filtered[offset_i : offset_i + k_i] if k_i else filtered[offset_i:]
+        return dedupe_by_id(windowed)
 
-    async def search_text(
+    async def _search_text(
         self,
         subject: str,
         query_text: str,
@@ -331,6 +350,10 @@ class SemanticCore:
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
     ) -> List[Fact]:
+        """
+        Internal lexical-only fact search (store-level LIKE query).
+        Used by `search` for fallback only.
+        """
         store = getattr(self.ingestor, "semantic_store", None)
         if store is None or not hasattr(store, "search_text"):
             return []
@@ -358,6 +381,9 @@ class SemanticCore:
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
     ) -> List[Fact]:
+        """
+        Fetch facts by ID (authoritative payload) from the store.
+        """
         store = getattr(self.ingestor, "semantic_store", None)
         if store is None:
             return []
@@ -381,6 +407,9 @@ class SemanticCore:
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
     ) -> List[Fact]:
+        """
+        Fetch facts for a subject filtered by predicate (store-backed).
+        """
         store = getattr(self.ingestor, "semantic_store", None)
         if store is None or not hasattr(store, "fetch_by_predicate"):
             return []
@@ -403,10 +432,18 @@ class SemanticCore:
             return []
 
     async def upsert_fact(self, fact: Fact, embedding: List[float]) -> bool:
+        """
+        Persist a single fact + embedding (direct upsert path).
+        """
         store = getattr(self.ingestor, "semantic_store", None)
         if store is None:
             return False
         try:
+            # Enforce owner scoping for direct upserts as well.
+            if not getattr(fact, "owner_type", None):
+                fact.owner_type = "user"
+            if not getattr(fact, "owner_id", None):
+                fact.owner_id = getattr(fact, "subject", "") or ""
             await store.upsert_fact(fact, embedding)
             return True
         except Exception:
@@ -414,6 +451,9 @@ class SemanticCore:
             return False
 
     def vector_index(self) -> Any:
+        """
+        Expose the backing vector index (if present) for diagnostics.
+        """
         store = getattr(self.ingestor, "semantic_store", None)
         return getattr(store, "vector_index", None) if store is not None else None
 
@@ -425,6 +465,9 @@ class SemanticCore:
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
     ) -> List[Fact]:
+        """
+        List all facts for a subject with optional owner scoping.
+        """
         store = getattr(self.ingestor, "semantic_store", None)
         if store is None or not hasattr(store, "list_facts_for_subject"):
             return []
@@ -451,6 +494,9 @@ class SemanticCore:
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
     ) -> bool:
+        """
+        Delete a fact by ID from the store.
+        """
         store = getattr(self.ingestor, "semantic_store", None)
         if store is None or not hasattr(store, "delete_fact"):
             return False

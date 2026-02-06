@@ -7,6 +7,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+from ...utils.accessors import get_attr_or_key
+
 logger = logging.getLogger(__name__)
 
 
@@ -163,7 +165,8 @@ def compute_confidence(coverage: CoverageReport) -> Dict[str, float]:
 
 def _fact_salience(fact: Any) -> float:
     try:
-        return float((fact.get("meta") or {}).get("salience", 0.0)) if isinstance(fact, dict) else 0.0
+        meta = get_attr_or_key(fact, "meta") or {}
+        return float(meta.get("salience", 0.0)) if isinstance(meta, dict) else 0.0
     except Exception:
         return 0.0
 

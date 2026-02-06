@@ -28,13 +28,13 @@ class EpisodeMapper:
     """
 
     def __init__(self):
-        logger.info("EpisodeMapper initialized.")
+        logger.debug("EpisodeMapper initialized.")
 
     # ------------------------------------------------------------------
     # PUBLIC API
     # ------------------------------------------------------------------
 
-    def map_entries(self, entries: List[Any]) -> List[Dict[str, str]]:
+    def map_entries(self, entries: List[Any]) -> List[Dict[str, Any]]:
         """
         Convert WMEntry objects into dicts expected by EpisodeIndexer.
         """
@@ -45,6 +45,7 @@ class EpisodeMapper:
                     {
                         "role": getattr(ent, "role"),
                         "content": getattr(ent, "content"),
+                        "metadata": getattr(ent, "metadata", None),
                     }
                 )
             except Exception:

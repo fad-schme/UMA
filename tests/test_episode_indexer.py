@@ -11,6 +11,7 @@ class DummyLLM:
 class DummyEmbedder:
     def __init__(self):
         self.last_texts = None
+        self.dimension = 3
 
     async def embed(self, texts):
         # Expect list of strings

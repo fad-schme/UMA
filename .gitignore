@@ -42,3 +42,4 @@ data/
 *.zip
 *.tar.gz
 tmp.txt
+tools/

@@ -28,7 +28,7 @@ class EpisodicArchive:
 
     def __init__(self, episodic_store: Any):
         self.store = episodic_store
-        logger.info("EpisodicArchive initialized.")
+        logger.debug("EpisodicArchive initialized.")
 
     # ------------------------------------------------------------------
     # PUBLIC API

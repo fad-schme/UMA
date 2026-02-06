@@ -2,7 +2,7 @@
 context_pack_builder.py
 =======================
 
-Transforms UMA memory (from UMAMemory.get_user_context) into a
+Transforms UMA memory (from UMAMemory.get_structured_context) into a
 RAG-ready structured context pack.
 
 This module does NOT generate prompts. It produces structured, 
@@ -15,9 +15,19 @@ machine-readable artifacts for:
 
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
+import json
+import re
 import logging
 
+from uma.core.utils.dedupe import dedupe_by_id
+from uma.core.utils.accessors import get_attr_or_key
+
 logger = logging.getLogger(__name__)
+
+# --------------------------------
+# SnippetRefiner import
+# --------------------------------
+from uma.core.retrieval.rlm.snippet_refiner import SnippetRefiner
 
 try:
     from .config_types import RetrievalContextConfig
@@ -26,6 +36,24 @@ except Exception:  # pragma: no cover
     RetrievalContextConfig = None
     extract_query_terms = None
     expand_query_terms = None
+
+# Fallback to avoid runtime errors if config_types import fails.
+if RetrievalContextConfig is None:  # pragma: no cover
+    class RetrievalContextConfig:  # type: ignore[no-redef]
+        max_working_messages: int = 4
+        max_episodic: int = 3
+        max_semantic: int = 5
+        max_chunks: int = 5
+        max_procedural: int = 3
+        max_graph: int = 3
+        include_working_memory: bool = True
+        include_episodic: bool = True
+        include_graph: bool = True
+        include_procedural: bool = True
+        allowed_topics: Optional[List[str]] = None
+        snippet_max_chars: int = 240
+        snippet_refiner_enabled: bool = False
+        snippet_refiner_top_k: int = 8
 
 class ContextPackBuilder:
     """
@@ -45,7 +73,7 @@ class ContextPackBuilder:
             The natural-language query used to retrieve memory.
         
         ctx : dict
-            Full memory context from UMAMemory.get_user_context(), e.g.:
+            Full memory context from UMAMemory.get_structured_context(), e.g.:
 
                 {
                     "working_memory": [...],
@@ -108,11 +136,11 @@ class ContextPackBuilder:
             try:
                 pack["episodic"].append(
                     {
-                        "id": _get_attr_or_key(ep, "id"),
-                        "timestamp": _get_attr_or_key(ep, "timestamp"),
-                        "summary": _get_attr_or_key(ep, "summary") or repr(ep),
-                        "tags": _get_attr_or_key(ep, "tags", []),
-                        "meta": _get_attr_or_key(ep, "meta", {}),
+                        "id": get_attr_or_key(ep, "id"),
+                        "timestamp": get_attr_or_key(ep, "timestamp"),
+                        "summary": get_attr_or_key(ep, "summary") or repr(ep),
+                        "tags": get_attr_or_key(ep, "tags", []),
+                        "meta": get_attr_or_key(ep, "meta", {}),
                     }
                 )
             except Exception:
@@ -123,13 +151,16 @@ class ContextPackBuilder:
         # -------------------------------
         for fact in ctx.get("facts", []):
             try:
+                meta = get_attr_or_key(fact, "meta", {})
                 pack["facts"].append(
                     {
-                        "subject": _get_attr_or_key(fact, "subject", "unknown"),
-                        "predicate": _get_attr_or_key(fact, "predicate", "related_to"),
-                        "object": _get_attr_or_key(fact, "object"),
-                        "confidence": _get_attr_or_key(fact, "confidence", 0.0),
-                        "meta": _get_attr_or_key(fact, "meta", {}),
+                        "id": get_attr_or_key(fact, "id"),
+                        "subject": get_attr_or_key(fact, "subject", "unknown"),
+                        "predicate": get_attr_or_key(fact, "predicate", "related_to"),
+                        "object": get_attr_or_key(fact, "object"),
+                        "confidence": get_attr_or_key(fact, "confidence", 0.0),
+                        "meta": meta,
+                        "fact_text": meta.get("fact_text") if isinstance(meta, dict) else None,
                     }
                 )
             except Exception:
@@ -142,12 +173,12 @@ class ContextPackBuilder:
             try:
                 pack["chunks"].append(
                     {
-                        "id": _get_attr_or_key(chunk, "id"),
-                        "doc_id": _get_attr_or_key(chunk, "doc_id"),
-                        "text": _get_attr_or_key(chunk, "text", ""),
-                        "page_range": _get_attr_or_key(chunk, "page_range"),
-                        "position": _get_attr_or_key(chunk, "position", 0),
-                        "meta": _get_attr_or_key(chunk, "meta", {}),
+                        "id": get_attr_or_key(chunk, "id"),
+                        "doc_id": get_attr_or_key(chunk, "doc_id"),
+                        "text": get_attr_or_key(chunk, "text", ""),
+                        "page_range": get_attr_or_key(chunk, "page_range"),
+                        "position": get_attr_or_key(chunk, "position", 0),
+                        "meta": get_attr_or_key(chunk, "meta", {}),
                     }
                 )
             except Exception:
@@ -160,10 +191,11 @@ class ContextPackBuilder:
             try:
                 pack["skills"].append(
                     {
-                        "name": _get_attr_or_key(skill, "name", "Unnamed Skill"),
-                        "description": _get_attr_or_key(skill, "description"),
-                        "plan": _get_attr_or_key(skill, "plan", {}),
-                        "tools": _get_attr_or_key(skill, "tools", []),
+                        "id": get_attr_or_key(skill, "id"),
+                        "name": get_attr_or_key(skill, "name", "Unnamed Skill"),
+                        "description": get_attr_or_key(skill, "description"),
+                        "plan": get_attr_or_key(skill, "plan", {}),
+                        "tools": get_attr_or_key(skill, "tools", []),
                     }
                 )
             except Exception:
@@ -194,6 +226,13 @@ class ContextPackBuilder:
                 pack["confidence"] = conf
         except Exception:
             logger.exception("Failed to pack confidence metadata.")
+
+        # Pack-level hygiene: prevent duplicates wasting budgets downstream.
+        pack["episodic"] = dedupe_by_id(pack.get("episodic", []))
+        pack["facts"] = dedupe_by_id(pack.get("facts", []))
+        pack["chunks"] = dedupe_by_id(pack.get("chunks", []))
+        pack["skills"] = dedupe_by_id(pack.get("skills", []))
+        pack["graph"] = dedupe_by_id(pack.get("graph", []))
 
         logger.info("ContextPackBuilder: Built RAG-ready context pack.")
         return pack
@@ -248,7 +287,7 @@ class ContextPackBuilder:
             deduped = []
             seen = set()
             for fact in facts:
-                obj = fact.get("object")
+                obj = get_attr_or_key(fact, "object")
                 text = ""
                 if isinstance(obj, dict):
                     text = (obj.get("text") or "").strip()
@@ -261,9 +300,10 @@ class ContextPackBuilder:
         if facts:
             lines.append("\nFacts:")
             for fact in facts[: cfg.max_semantic]:
-                subject = fact.get("subject", "unknown")
-                predicate = fact.get("predicate", "related_to")
-                obj = fact.get("object")
+                subject = get_attr_or_key(fact, "subject", "unknown")
+                predicate = get_attr_or_key(fact, "predicate", "related_to")
+                obj = get_attr_or_key(fact, "object")
+                fact_text = (get_attr_or_key(fact, "fact_text") or "").strip()
                 if isinstance(obj, dict):
                     title = obj.get("title") or obj.get("text") or str(obj)
                     raw_text = (obj.get("text") or "").strip()
@@ -272,24 +312,186 @@ class ContextPackBuilder:
                     if snippet:
                         lines.append(f"  excerpt: {snippet}")
                 else:
-                    lines.append(f"- {subject} {predicate} {obj}")
+                    if fact_text:
+                        lines.append(f"- {fact_text}")
+                    else:
+                        lines.append(f"- {subject} {predicate} {obj}")
 
         # -------------------------------
         # Chunks (render snippets)
         # -------------------------------
-        chunks = pack.get("chunks", [])
-        if chunks:
+        chunk_snippets = _collect_chunk_snippets(pack, cfg, query_text, facts)
+        if chunk_snippets:
             lines.append("\nDocument chunks:")
-            seen_chunk_text = set()
-            for ch in chunks[: cfg.max_chunks]:
-                text = (ch.get("text") or "").strip()
-                key = " ".join(text.split()).lower()
-                if not text or key in seen_chunk_text:
+            for snip in chunk_snippets[: cfg.max_chunks]:
+                lines.append(f"- {snip}")
+
+        skills = pack.get("skills", [])
+        if skills:
+            lines.append("\nSkills:")
+            for skill in skills[: cfg.max_procedural]:
+                name = skill.get("name") or "Unnamed"
+                desc = (skill.get("description") or "").strip()
+                if desc:
+                    lines.append(f"- {name}: {desc}")
+                else:
+                    lines.append(f"- {name}")
+
+        graph = pack.get("graph", [])
+        if graph:
+            lines.append("\nGraph:")
+            for node in graph[: cfg.max_graph]:
+                lines.append(f"- {node}")
+
+        return "\n".join(lines).strip()
+
+    @staticmethod
+    async def render_snippet_async(
+        pack: Dict[str, Any],
+        context_cfg: Optional["RetrievalContextConfig"] = None,
+        llm: Any = None,
+    ) -> str:
+        """
+        Async variant that can optionally refine snippets with an LLM.
+        """
+        # --------------------------------------------------
+        # Normalize pack to dict if a ContextPack object was passed
+        # RLMController returns a ContextPack instance, while this
+        # builder operates on dict-like structures.
+        # --------------------------------------------------
+        orig_pack = pack
+        if not isinstance(pack, dict):
+            try:
+                pack = pack.__dict__
+            except Exception:
+                logger.exception(
+                    "ContextPackBuilder.render_snippet_async: failed to normalize pack object"
+                )
+                return ""
+
+        lines: List[str] = []
+        cfg = context_cfg or RetrievalContextConfig()
+        query_text = (pack.get("query") or "").lower()
+
+        wm = pack.get("working_memory", [])
+        lines.append("Working memory:")
+        if wm:
+            for msg in wm[-cfg.max_working_messages:]:
+                role = msg.get("role")
+                text = (msg.get("text") or "").strip()
+                if text:
+                    lines.append(f"- {role}: {text}")
+        else:
+            lines.append("- (empty)")
+
+        episodic = pack.get("episodic", [])
+        if episodic:
+            lines.append("\nEpisodic:")
+            for ep in episodic[: cfg.max_episodic]:
+                summary = (ep.get("summary") or "").strip()
+                if summary:
+                    lines.append(f"- {summary}")
+
+        facts = pack.get("facts", [])
+        allowed_topics = cfg.allowed_topics or []
+        if allowed_topics:
+            filtered = [
+                fact
+                for fact in facts
+                if any(t in allowed_topics for t in _fact_topics(fact))
+            ]
+            if filtered:
+                facts = filtered
+        facts = _filter_facts_by_query(facts, query_text)
+        if facts:
+            deduped = []
+            seen = set()
+            for fact in facts:
+                obj = get_attr_or_key(fact, "object")
+                text = ""
+                if isinstance(obj, dict):
+                    text = (obj.get("text") or "").strip()
+                key = text or str(obj)
+                if key in seen:
                     continue
-                seen_chunk_text.add(key)
-                snippet = _extract_relevant_excerpt(text, query_text, max_chars=320)
-                if snippet:
-                    lines.append(f"- {snippet}")
+                seen.add(key)
+                deduped.append(fact)
+            facts = deduped
+        if facts:
+            lines.append("\nFacts:")
+            for fact in facts[: cfg.max_semantic]:
+                subject = get_attr_or_key(fact, "subject", "unknown")
+                predicate = get_attr_or_key(fact, "predicate", "related_to")
+                obj = get_attr_or_key(fact, "object")
+                fact_text = (get_attr_or_key(fact, "fact_text") or "").strip()
+
+                if isinstance(obj, dict):
+                    title = obj.get("title") or obj.get("text") or str(obj)
+                    raw_text = (obj.get("text") or "").strip()
+                    snippet = _extract_relevant_excerpt(raw_text, query_text, max_chars=320)
+                    lines.append(f"- {subject} {predicate} {title}")
+                    if snippet:
+                        lines.append(f"  excerpt: {snippet}")
+                else:
+                    if fact_text:
+                        lines.append(f"- {fact_text}")
+                    else:
+                        lines.append(f"- {subject} {predicate} {obj}")
+
+        # -------------------------------
+        # Final evidence snippets (via SnippetRefiner)
+        # -------------------------------
+        final_snippets = []
+        refiner_failed = False
+        if cfg.snippet_refiner_enabled:
+            try:
+                refiner = SnippetRefiner(llm=llm, cfg=cfg)
+                final_snippets = await refiner.refine(
+                    query_text=query_text,
+                    facts=facts,
+                    chunks=pack.get("chunks", []),
+                )
+            except Exception:
+                logger.exception("ContextPackBuilder: SnippetRefiner failed")
+                refiner_failed = True
+                final_snippets = []
+
+            if final_snippets:
+                lines.append("\nDocument snippets:")
+                for snip in final_snippets:
+                    text = (snip.get("text") or "").strip()
+                    if text:
+                        lines.append(f"- {text}")
+
+        if not final_snippets:
+            # Fallback (legacy behavior): render raw chunk snippets
+            chunk_snippets = _collect_chunk_snippets(pack, cfg, query_text, facts)
+            if chunk_snippets:
+                lines.append("\nDocument chunks:")
+                for snip in chunk_snippets[: cfg.max_chunks]:
+                    lines.append(f"- {snip}")
+            final_snippets = [{"text": s} for s in chunk_snippets]
+            if cfg.snippet_refiner_enabled and refiner_failed:
+                logger.warning("ContextPackBuilder: SnippetRefiner failed; using fallback snippets")
+            if not final_snippets and pack.get("chunks"):
+                raw_snippets = _collect_raw_chunk_texts(pack.get("chunks", []), cfg.max_chunks)
+                final_snippets = [{"text": s} for s in raw_snippets]
+                if raw_snippets:
+                    logger.warning(
+                        "ContextPackBuilder: fallback produced no snippets; using raw chunk texts (%d)",
+                        len(raw_snippets),
+                    )
+
+        # Attach final_snippets to pack for downstream use (gold runner expects this field)
+        try:
+            if isinstance(pack, dict):
+                pack["final_snippets"] = final_snippets
+            else:
+                setattr(pack, "final_snippets", final_snippets)
+            if orig_pack is not pack and not isinstance(orig_pack, dict):
+                setattr(orig_pack, "final_snippets", final_snippets)
+        except Exception:
+            logger.exception("ContextPackBuilder: Failed to attach final_snippets to pack")
 
         skills = pack.get("skills", [])
         if skills:
@@ -324,7 +526,7 @@ def _filter_facts_by_query(facts: List[Dict[str, Any]], query_text: str) -> List
         return facts
     scored: List[tuple[int, Dict[str, Any]]] = []
     for fact in facts:
-        obj = fact.get("object")
+        obj = get_attr_or_key(fact, "object")
         haystack = ""
         if isinstance(obj, dict):
             haystack = " ".join(
@@ -332,7 +534,7 @@ def _filter_facts_by_query(facts: List[Dict[str, Any]], query_text: str) -> List
             )
         else:
             haystack = str(obj or "")
-        haystack = f"{fact.get('subject','')} {fact.get('predicate','')} {haystack}".lower()
+        haystack = f"{get_attr_or_key(fact,'subject','')} {get_attr_or_key(fact,'predicate','')} {haystack}".lower()
         score = sum(1 for t in terms if t in haystack)
         if score:
             scored.append((score, fact))
@@ -342,56 +544,346 @@ def _filter_facts_by_query(facts: List[Dict[str, Any]], query_text: str) -> List
     return [fact for _, fact in scored]
 
 
-def _extract_relevant_excerpt(text: str, query_text: str, max_chars: int = 320) -> str:
+def _extract_relevant_excerpt(text: str, query_text: str, max_chars: int = 240) -> str:
     if not text:
         return ""
     cleaned = " ".join(text.split())
-    if not query_text or not extract_query_terms:
-        return cleaned[:max_chars]
-    if expand_query_terms:
-        terms = expand_query_terms(query_text)
-    else:
-        terms = extract_query_terms(query_text)
-    if not terms:
+    # Sentence-aware clipping to avoid fragments.
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", cleaned) if s and s.strip()]
+    if not sentences:
         return cleaned[:max_chars]
 
-    lowered = cleaned.lower()
-    # Find first occurrence of any term
-    positions = [lowered.find(t.lower()) for t in terms if t]
-    positions = [p for p in positions if p >= 0]
-    if not positions:
-        return cleaned[:max_chars]
+    terms = []
+    if query_text and extract_query_terms:
+        if expand_query_terms:
+            terms = expand_query_terms(query_text) or []
+        else:
+            terms = extract_query_terms(query_text) or []
+    terms = [t for t in terms if t]
 
-    idx = min(positions)
-    # Try sentence window around match
-    before = lowered.rfind(". ", 0, idx)
-    after = lowered.find(". ", idx)
-    if before == -1:
-        before = 0
-    else:
-        before = before + 2
-    if after == -1:
-        after = len(cleaned)
-    else:
-        after = after + 1
-    snippet = cleaned[before:after].strip()
-    if len(snippet) <= max_chars:
-        return snippet
-    # Fallback to centered window
-    start = max(0, idx - max_chars // 3)
-    end = min(len(cleaned), start + max_chars)
-    return cleaned[start:end].strip()
+    if terms:
+        scored = []
+        for i, s in enumerate(sentences):
+            if _starts_like_fragment(s):
+                continue
+            s_lower = s.lower()
+            score = sum(1 for t in terms if t.lower() in s_lower)
+            if score:
+                scored.append((score, i))
+        scored.sort(reverse=True)
+        if scored:
+            _, idx = scored[0]
+            start = max(0, idx - 1)
+            end = min(len(sentences), idx + 2)
+            excerpt = " ".join(sentences[start:end]).strip()
+            return _trim_to_sentence_boundary(excerpt, max_chars=max_chars)
+
+    # Fallback: first complete sentences
+    # Fallback: first complete sentences that don't look like fragments.
+    kept = [s for s in sentences if not _starts_like_fragment(s)]
+    excerpt = " ".join((kept or sentences)[:3]).strip()
+    return _trim_to_sentence_boundary(excerpt, max_chars=max_chars)
 
 
-def _get_attr_or_key(obj: Any, key: str, default: Any = None) -> Any:
-    """Normalize object/dict access for RLM snippets and domain models."""
-    if isinstance(obj, dict):
-        return obj.get(key, default)
-    return getattr(obj, key, default)
+def _trim_to_sentence_boundary(text: str, *, max_chars: int) -> str:
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text.strip()
+    cut = text[:max_chars]
+    m = re.search(r"[.!?](?!.*[.!?])", cut)
+    if m:
+        return cut[: m.end()].strip()
+    return cut.strip()
+
+
+def _snippet_quality_ok(snippet: str, terms: List[str], *, require_terms: bool) -> bool:
+    s = (snippet or "").strip()
+    if not s:
+        return False
+    if _starts_like_fragment(s):
+        return False
+    if len(s) < 40:
+        return False
+    words = [w for w in s.split() if w]
+    if len(words) < 12:
+        return False
+    # Starts mid-word or punctuation-heavy start/end
+    if re.match(r"^[^\w]", s) or re.match(r".*[^\w]$", s):
+        return False
+    # Reject common sentence fragments (lowercase starts with no clear sentence start).
+    if re.match(r"^(and|or|but|so|because|that|which|with)\b", s.lower()):
+        return False
+    # Mostly punctuation
+    letters = sum(1 for c in s if c.isalnum())
+    if letters < max(10, len(s) // 5):
+        return False
+    # Require a verb-like token to avoid fragments.
+    if not re.search(r"\b(is|are|was|were|be|been|being|has|have|had|do|does|did|can|could|should|would|will|may|might|must|include|includes|including|uses|use|ensure|ensures|required|requires|allow|allows|prevent|prevents|provide|provides|protect|protects)\b", s.lower()):
+        return False
+    if require_terms and terms:
+        s_lower = s.lower()
+        if not any(t.lower() in s_lower for t in terms if t):
+            return False
+    return True
+
+
+def _starts_like_fragment(text: str) -> bool:
+    s = (text or "").strip()
+    if not s:
+        return True
+    # Allow quotes, parentheses, or brackets at the start.
+    s = re.sub(r"^[\"'“”‘’\\(\\[\\{\\s]+", "", s)
+    if not s:
+        return True
+    # Allow common lowercase starters like e.g. / i.e.
+    lowered = s.lower()
+    if lowered.startswith(("e.g.", "i.e.", "etc.")):
+        return False
+    # If the first alpha character is lowercase, treat as fragment.
+    m = re.search(r"[A-Za-z]", s)
+    if not m:
+        return True
+    return s[m.start()].islower()
+
+
+def _collect_chunk_snippets(
+    pack: Dict[str, Any],
+    cfg: "RetrievalContextConfig",
+    query_text: str,
+    facts: List[Dict[str, Any]],
+) -> List[str]:
+    chunks = pack.get("chunks", []) or []
+    if not chunks:
+        return []
+
+    chunks = _group_adjacent_chunks(chunks)
+    preferred_ids: List[str] = []
+    for fact in (facts or []):
+        src_ids = get_attr_or_key(fact, "source_ids")
+        if isinstance(src_ids, list):
+            for sid in src_ids:
+                if sid:
+                    preferred_ids.append(str(sid))
+    preferred_ids = list(dict.fromkeys(preferred_ids))
+
+    chunk_by_id = {}
+    for ch in chunks:
+        cid = ch.get("id") if isinstance(ch, dict) else None
+        if cid:
+            chunk_by_id[str(cid)] = ch
+    ordered_chunks: List[dict] = []
+    for cid in preferred_ids:
+        ch = chunk_by_id.get(cid)
+        if ch is not None:
+            ordered_chunks.append(ch)
+    # If we have fact-linked chunks, use only those; otherwise fall back.
+    if not ordered_chunks:
+        ordered_chunks = list(chunks)
+
+    terms = []
+    if query_text:
+        if expand_query_terms:
+            terms = expand_query_terms(query_text) or []
+        elif extract_query_terms:
+            terms = extract_query_terms(query_text) or []
+    terms = [t for t in terms if t]
+
+    seen_chunk_text = set()
+    snippets: List[str] = []
+    seen_snippets: set[str] = set()
+    added = 0
+    for ch in ordered_chunks[: cfg.max_chunks]:
+        text = (ch.get("text") or "").strip()
+        key = " ".join(text.split()).lower()
+        if not text or key in seen_chunk_text:
+            continue
+        seen_chunk_text.add(key)
+        snippet = _extract_relevant_excerpt(text, query_text, max_chars=cfg.snippet_max_chars)
+        if not snippet:
+            continue
+        require_terms = bool(terms) and added > 0
+        if not _snippet_quality_ok(snippet, terms, require_terms=require_terms):
+            continue
+        norm = " ".join(snippet.split()).lower()
+        if norm in seen_snippets:
+            continue
+        seen_snippets.add(norm)
+        snippets.append(snippet)
+        added += 1
+
+    if not snippets:
+        for ch in ordered_chunks[: cfg.max_chunks]:
+            text = (ch.get("text") or "").strip()
+            key = " ".join(text.split()).lower()
+            if not text or key in seen_chunk_text:
+                continue
+            seen_chunk_text.add(key)
+            snippet = _extract_relevant_excerpt(text, query_text, max_chars=cfg.snippet_max_chars)
+            if not snippet:
+                continue
+            if _snippet_quality_ok(snippet, terms, require_terms=False):
+                norm = " ".join(snippet.split()).lower()
+                if norm in seen_snippets:
+                    continue
+                seen_snippets.add(norm)
+                snippets.append(snippet)
+                break
+
+    return snippets
+
+
+def _collect_raw_chunk_texts(chunks: List[Any], limit: int) -> List[str]:
+    if not chunks:
+        return []
+    seen: set[str] = set()
+    out: List[str] = []
+    for ch in chunks:
+        text = get_attr_or_key(ch, "text") or get_attr_or_key(ch, "chunk") or get_attr_or_key(ch, "content")
+        if not text:
+            continue
+        s = " ".join(str(text).split())
+        key = s.lower()
+        if not s or key in seen:
+            continue
+        seen.add(key)
+        out.append(s)
+        if limit and len(out) >= limit:
+            break
+    return out
+
+
+def _try_parse_json(raw: str) -> Optional[Dict[str, Any]]:
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        obj = json.loads(raw)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        pass
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not m:
+        return None
+    try:
+        obj = json.loads(m.group(0))
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
+
+
+def _try_parse_json_list(raw: str) -> Optional[List[Any]]:
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        obj = json.loads(raw)
+        return obj if isinstance(obj, list) else None
+    except Exception:
+        pass
+    m = re.search(r"\[.*\]", raw, re.DOTALL)
+    if not m:
+        return None
+    try:
+        obj = json.loads(m.group(0))
+        return obj if isinstance(obj, list) else None
+    except Exception:
+        return None
+
+
+def _normalize_chunk(chunk: Any) -> Dict[str, Any]:
+    if isinstance(chunk, dict):
+        return chunk
+    text = get_attr_or_key(chunk, "text")
+    if not text:
+        text = get_attr_or_key(chunk, "chunk") or get_attr_or_key(chunk, "content")
+    return {
+        "id": get_attr_or_key(chunk, "id"),
+        "doc_id": get_attr_or_key(chunk, "doc_id"),
+        "position": get_attr_or_key(chunk, "position", 0),
+        "page_range": get_attr_or_key(chunk, "page_range"),
+        "text": text or "",
+        "meta": get_attr_or_key(chunk, "meta", {}),
+    }
+
+
+def _group_adjacent_chunks(chunks: List[Any]) -> List[Dict[str, Any]]:
+    if not chunks:
+        return []
+    normalized = [_normalize_chunk(c) for c in chunks]
+    # Sort by doc_id then position to enable adjacency grouping.
+    def _pos(ch: Dict[str, Any]) -> int:
+        try:
+            return int(ch.get("position") or 0)
+        except Exception:
+            return 0
+
+    sorted_chunks = sorted(
+        normalized,
+        key=lambda c: (str(c.get("doc_id") or ""), _pos(c)),
+    )
+    grouped: List[Dict[str, Any]] = []
+    current: Dict[str, Any] | None = None
+    current_ids: List[str] = []
+    current_positions: List[int] = []
+
+    for ch in sorted_chunks:
+        doc_id = ch.get("doc_id")
+        pos = _pos(ch)
+        section_id = None
+        meta = ch.get("meta") or {}
+        if isinstance(meta, dict):
+            section_id = meta.get("section_id")
+
+        if current is None:
+            current = dict(ch)
+            current_ids = [str(ch.get("id"))] if ch.get("id") else []
+            current_positions = [pos]
+            current["meta"] = dict(meta) if isinstance(meta, dict) else {}
+            current["meta"]["merged_ids"] = list(current_ids)
+            current["meta"]["merged_positions"] = list(current_positions)
+            current["meta"]["section_id"] = section_id or current["meta"].get("section_id")
+            continue
+
+        same_doc = current.get("doc_id") == doc_id
+        prev_pos = current_positions[-1] if current_positions else None
+        adjacent = prev_pos is not None and pos == prev_pos + 1
+        current_section = (current.get("meta") or {}).get("section_id")
+        same_section = bool(section_id) and section_id == current_section
+
+        if same_doc and (adjacent or same_section):
+            # Merge
+            cur_text = (current.get("text") or "").strip()
+            new_text = (ch.get("text") or "").strip()
+            if new_text:
+                current["text"] = f"{cur_text} {new_text}".strip() if cur_text else new_text
+            current_ids.append(str(ch.get("id")) if ch.get("id") else "")
+            current_positions.append(pos)
+            meta_cur = current.get("meta") or {}
+            if isinstance(meta_cur, dict):
+                meta_cur["merged_ids"] = [i for i in current_ids if i]
+                meta_cur["merged_positions"] = list(current_positions)
+                current["meta"] = meta_cur
+            continue
+
+        grouped.append(current)
+        current = dict(ch)
+        current_ids = [str(ch.get("id"))] if ch.get("id") else []
+        current_positions = [pos]
+        meta = ch.get("meta") or {}
+        current["meta"] = dict(meta) if isinstance(meta, dict) else {}
+        current["meta"]["merged_ids"] = list(current_ids)
+        current["meta"]["merged_positions"] = list(current_positions)
+        current["meta"]["section_id"] = section_id or current["meta"].get("section_id")
+
+    if current is not None:
+        grouped.append(current)
+
+    return grouped
 
 
 def _fact_topics(fact: Dict[str, Any]) -> List[str]:
-    meta = fact.get("meta") or {}
+    meta = get_attr_or_key(fact, "meta") or {}
     if not isinstance(meta, dict):
         return []
     topics = meta.get("topics")

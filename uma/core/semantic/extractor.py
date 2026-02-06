@@ -78,9 +78,9 @@ class FactExtractor:
     def __init__(self, llm: LLMInterface, scorer: SalienceScorer) -> None:
         self.llm = llm
         self.scorer = scorer
-        logger.info("FactExtractor initialized.")
+        logger.debug("FactExtractor initialized.")
 
-    async def extract_from_text(self, subject: str, text: str) -> List[Fact]:
+    async def extract_from_text(self, subject: str, text: str, *, extra_meta: dict | None = None) -> List[Fact]:
         if not isinstance(subject, str) or not subject.strip():
             logger.warning("FactExtractor: invalid subject=%r", subject)
             return []
@@ -126,6 +126,9 @@ class FactExtractor:
 
         now = datetime.now(timezone.utc)
         out: List[Fact] = []
+        turn_id = None
+        if isinstance(extra_meta, dict) and extra_meta.get("turn_id"):
+            turn_id = str(extra_meta["turn_id"])
 
         for f in facts_payload:
             if not isinstance(f, dict):
@@ -162,6 +165,8 @@ class FactExtractor:
                 meta={},
             )
             fact.meta["salience"] = self.scorer.score(fact)
+            if turn_id:
+                fact.meta["turn_id"] = turn_id
             out.append(fact)
 
         logger.info("FactExtractor: extracted %d facts for subject=%s", len(out), subject)

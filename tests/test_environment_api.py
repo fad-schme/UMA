@@ -51,11 +51,6 @@ class DummySemanticCore:
     async def fetch_by_ids(self, ids):
         return [DummyFact(fid, "user:1", "likes", "tea") for fid in ids]
 
-    async def search_text(self, subject, query_text, limit=5, owner_type=None, owner_id=None):
-        self.calls.append((owner_type, owner_id))
-        label = owner_type or "user"
-        return [DummyFact(f"f_text_{label}", subject or "user:1", "document", label, owner_type=owner_type or "user", owner_id=owner_id or "user:1")]
-
 
 class DummyEpisodicStore:
     def __init__(self):
@@ -174,14 +169,19 @@ def test_environment_semantic_and_episodic_search():
     memory = DummyMemory()
     env = UMAMemoryEnvironment(memory)
 
-    facts = asyncio_run(env.search_semantic("u1", [0.1, 0.2], k=1, filters={"subject": "user:1"}))
-    assert facts and facts[0].predicate == "likes"
-    owner_types = {getattr(f, "owner_type", None) for f in facts}
-    assert owner_types == {"agent"}
-    assert set(memory.semantic_core.calls) == {("agent", "agent-1")}
-
     start = datetime.utcnow() - timedelta(days=1)
-    eps = asyncio_run(env.search_episodic("u1", [0.1, 0.2], k=10, time_range={"start": start}))
+    eps = asyncio_run(
+        memory.episodic_core.search(
+            user_id="u1",
+            query_embedding=[0.1, 0.2],
+            owner_type="agent",
+            owner_id=env._agent_id,
+            k=10,
+            offset=0,
+        )
+    )
+    # Apply the same time filter logic as the environment helper would.
+    eps = env._filter_time_range(eps or [], {"start": start})
     assert len(eps) == 1
     assert eps[0].id == "e2"
 

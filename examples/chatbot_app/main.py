@@ -41,13 +41,17 @@ async def interactive_chat(
     # Initialize UMA memory runtime
     memory = UMAMemory.from_yaml(config_path)
     memory.agent_id = agent_id
-    memory._lazy_init()
+    # Ensure retrieval stack (including RLM) is wired before queries.
+    memory.initialize(profile="retrieval")
+    # Ensure ingestion pipeline is available for process_turn() calls.
+    memory.initialize(profile="ingestion")
+    
     try:
         vector_backend = getattr(memory.raw_config.storage, "vector_backend", "")
         if vector_backend in ("faiss", "inmemory"):
-            logging.info("Rebuilding vector indexes from SQL for user=%s", user_id)
+            logging.info("Rebuilding vector indexes from SQL")
             try:
-                await memory.rebuild_vector_indexes(user_id=user_id)
+                await memory.rebuild_vector_indexes()
             except Exception:
                 logging.exception("Vector index rebuild failed; continuing with empty index.")
 
@@ -112,7 +116,7 @@ async def interactive_chat(
             try:
                 user_message = user
                 # One-liner to get a rendered snippet
-                snippet = await memory.build_context_snippet_for_query(
+                snippet = await memory.get_rendered_context(
                     user_id=user_id, query_text=user_message
                 )
                 if not snippet:

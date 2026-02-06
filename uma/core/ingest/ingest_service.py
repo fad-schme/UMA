@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import hashlib
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 from uuid import uuid4
@@ -10,7 +11,7 @@ from .parser import parse_file
 from .normalizer import normalize_document
 from .chunker import chunk_sections
 from .embedder import embed_chunks
-from .semantic_extractor import extract_facts
+from .semantic_extractor import extract_facts, extract_summary_facts
 from .graph_updater import update_graph
 from .episodic_writer import write_document_episode
 from .consolidation_trigger import maybe_trigger_consolidation
@@ -22,6 +23,11 @@ from ..utils.identity import ensure_user_subject
 
 logger = logging.getLogger(__name__)
 
+_INGEST_PIPELINE_VERSION = "doc_ingest_v1"
+_EXTRACTOR_VERSION = "doc_fact_extract_v1"
+_SPLITTER_VERSION = "doc_normalize_v1"
+_CHUNKER_VERSION = "doc_chunk_v2"
+
 
 def _validate_owner(owner_type: str, owner_id: str) -> tuple[str, str]:
     if owner_type not in ("user", "project", "agent"):
@@ -31,6 +37,47 @@ def _validate_owner(owner_type: str, owner_id: str) -> tuple[str, str]:
     if owner_type == "user":
         return "user", ensure_user_subject(owner_id)
     return owner_type, owner_id
+
+
+def _merge_manifest_meta(
+    *,
+    existing: dict | None,
+    ingest_signature: dict,
+    source_path: str,
+    now: datetime,
+    reingest_reason: str | None = None,
+) -> dict:
+    meta = dict(existing or {})
+    meta.setdefault("created_by", _INGEST_PIPELINE_VERSION)
+    meta.setdefault("first_seen_at", now.isoformat())
+
+    meta["last_seen_at"] = now.isoformat()
+    meta["source_path"] = source_path
+
+    prior_sig = meta.get("ingest_signature")
+    if prior_sig and prior_sig != ingest_signature:
+        meta["prior_ingest_signature"] = prior_sig
+
+    meta["ingest_signature"] = ingest_signature
+
+    if reingest_reason:
+        meta["reingest_reason"] = reingest_reason
+
+    # Keep a short capped history for auditability / migrations.
+    history = meta.get("ingest_history")
+    if not isinstance(history, list):
+        history = []
+
+    entry = {
+        "at": now.isoformat(),
+        "signature": ingest_signature,
+    }
+    if reingest_reason:
+        entry["reason"] = reingest_reason
+    history.append(entry)
+    meta["ingest_history"] = history[-5:]
+
+    return meta
 
 
 async def ingest_document(
@@ -56,6 +103,29 @@ async def ingest_document(
     warnings: List[str] = []
     if config is None:
         config = IngestConfig()
+        if memory is not None:
+            semantic_cfg = None
+            try:
+                semantic_cfg = getattr(memory, "raw_config", None)
+                semantic_cfg = semantic_cfg.get("semantic") if semantic_cfg else None
+            except Exception:
+                semantic_cfg = None
+            if isinstance(semantic_cfg, dict):
+                if "doc_min_fact_words" in semantic_cfg:
+                    config = IngestConfig(
+                        chunk_size_tokens=config.chunk_size_tokens,
+                        overlap_tokens=config.overlap_tokens,
+                        embed_batch_size=config.embed_batch_size,
+                        embed_max_retries=config.embed_max_retries,
+                        embed_initial_delay_s=config.embed_initial_delay_s,
+                        embed_backoff_factor=config.embed_backoff_factor,
+                        embed_max_delay_s=config.embed_max_delay_s,
+                        extract_max_chunks=config.extract_max_chunks,
+                        allow_empty_pages=config.allow_empty_pages,
+                        doc_min_fact_words=int(semantic_cfg.get("doc_min_fact_words", config.doc_min_fact_words)),
+                        doc_summary_enabled=bool(semantic_cfg.get("doc_summary_enabled", config.doc_summary_enabled)),
+                        doc_summary_max_facts=int(semantic_cfg.get("doc_summary_max_facts", config.doc_summary_max_facts)),
+                    )
 
     # If memory is provided, resolve dependencies from it.
     if memory is not None:
@@ -92,6 +162,107 @@ async def ingest_document(
         else:
             raise ValueError("ingest_document: document has no extractable pages")
 
+    # --------------------------------------------------------------
+    # 1b) Manifest gate: idempotent ingest by (owner_type, owner_id, source_hash)
+    # --------------------------------------------------------------
+    embedding_cfg = getattr(memory, "embedding_cfg", None) if memory is not None else None
+    if memory is not None:
+        if embedding_cfg is None:
+            raise ValueError("ingest_document: memory.embedding_cfg is required when memory is provided")
+        if not getattr(embedding_cfg, "model", None):
+            raise ValueError("ingest_document: embedding_cfg.model is required for idempotent ingest signatures")
+
+    ingest_signature = {
+        "pipeline_version": _INGEST_PIPELINE_VERSION,
+        "splitter_version": _SPLITTER_VERSION,
+        "chunker_version": _CHUNKER_VERSION,
+        "extractor_version": _EXTRACTOR_VERSION,
+        "chunk_size_tokens": config.chunk_size_tokens,
+        "overlap_tokens": config.overlap_tokens,
+        "embedding_model": embedding_cfg.model if embedding_cfg is not None else None,
+        "embedding_dim": getattr(embedder, "dimension", None),
+    }
+
+    existing_manifest = None
+    try:
+        if hasattr(document_store, "get_by_owner_and_hash"):
+            existing_manifest = await document_store.get_by_owner_and_hash(
+                owner_type=owner_type,
+                owner_id=owner_id,
+                source_hash=parsed.source_hash,
+            )
+    except Exception:
+        existing_manifest = None
+        logger.exception("ingest_document: manifest lookup failed; continuing with ingest")
+
+    if existing_manifest is not None:
+        existing_sig = (getattr(existing_manifest, "meta", None) or {}).get("ingest_signature") or {}
+        if existing_sig == ingest_signature:
+            # Relink/refresh only: update manifest timestamps/path/meta, but do not regenerate artifacts.
+            try:
+                now_refresh = datetime.now(timezone.utc)
+                refreshed_meta = _merge_manifest_meta(
+                    existing=getattr(existing_manifest, "meta", None) or {},
+                    ingest_signature=ingest_signature,
+                    source_path=parsed.source_path,
+                    now=now_refresh,
+                )
+                await document_store.upsert_document(
+                    DocumentRecord(
+                        doc_id=existing_manifest.doc_id,
+                        source_path=parsed.source_path,
+                        source_hash=parsed.source_hash,
+                        ingested_at=now_refresh,
+                        owner_type=owner_type,
+                        owner_id=owner_id,
+                        meta=refreshed_meta,
+                    )
+                )
+            except Exception:
+                logger.exception("ingest_document: failed to refresh existing manifest doc_id=%s", existing_manifest.doc_id)
+                warnings.append(f"failed to refresh existing manifest {existing_manifest.doc_id}")
+
+            warnings.append(f"skipped ingest (idempotent): owner={owner_type}:{owner_id} hash={parsed.source_hash}")
+            return IngestReport(
+                doc_id=existing_manifest.doc_id,
+                chunks_created=0,
+                facts_created=0,
+                graph_edges_created=0,
+                warnings=warnings,
+            )
+        else:
+            # Manifest exists but signature differs; refresh manifest to reflect the new ingest signature
+            # and proceed with re-processing to regenerate derived artifacts.
+            try:
+                now_refresh = datetime.now(timezone.utc)
+                refreshed_meta = _merge_manifest_meta(
+                    existing=getattr(existing_manifest, "meta", None) or {},
+                    ingest_signature=ingest_signature,
+                    source_path=parsed.source_path,
+                    now=now_refresh,
+                    reingest_reason="signature_changed",
+                )
+                await document_store.upsert_document(
+                    DocumentRecord(
+                        doc_id=existing_manifest.doc_id,
+                        source_path=parsed.source_path,
+                        source_hash=parsed.source_hash,
+                        ingested_at=now_refresh,
+                        owner_type=owner_type,
+                        owner_id=owner_id,
+                        meta=refreshed_meta,
+                    )
+                )
+                warnings.append(
+                    f"re-ingesting existing manifest doc_id={existing_manifest.doc_id} (signature changed)"
+                )
+            except Exception:
+                logger.exception(
+                    "ingest_document: failed to refresh manifest for re-ingest doc_id=%s",
+                    existing_manifest.doc_id,
+                )
+                warnings.append(f"failed to refresh manifest for re-ingest {existing_manifest.doc_id}")
+
     # 2) Normalize
     sections = normalize_document(parsed)
     if not sections:
@@ -108,6 +279,14 @@ async def ingest_document(
 
     # 3b) Document manifest (authoritative)
     try:
+        now_manifest = datetime.now(timezone.utc)
+        existing_meta = (getattr(existing_manifest, "meta", None) or {}) if existing_manifest is not None else {}
+        merged_meta = _merge_manifest_meta(
+            existing=existing_meta,
+            ingest_signature=ingest_signature,
+            source_path=parsed.source_path,
+            now=now_manifest,
+        )
         await document_store.upsert_document(
             DocumentRecord(
                 doc_id=parsed.doc_id,
@@ -116,7 +295,7 @@ async def ingest_document(
                 ingested_at=parsed.extracted_at,
                 owner_type=owner_type,
                 owner_id=owner_id,
-                meta={},
+                meta=merged_meta,
             )
         )
     except Exception:
@@ -129,6 +308,7 @@ async def ingest_document(
     now = datetime.now(timezone.utc)
     chunk_rows: Dict[str, Chunk] = {}
     for chunk in chunks:
+        text_hash = hashlib.sha256((chunk.text or "").encode("utf-8")).hexdigest()
         row = Chunk(
             id=chunk.chunk_id,
             doc_id=chunk.doc_id,
@@ -143,6 +323,10 @@ async def ingest_document(
             owner_id=owner_id,
             meta={
                 "source_type": "pdf",
+                "text_hash": text_hash,
+                "chunk_size_tokens": config.chunk_size_tokens,
+                "overlap_tokens": config.overlap_tokens,
+                "chunker_version": _CHUNKER_VERSION,
             },
         )
         chunk_rows[chunk.chunk_id] = row
@@ -175,7 +359,30 @@ async def ingest_document(
     extract_chunks = chunks
     if config.extract_max_chunks is not None:
         extract_chunks = chunks[: int(config.extract_max_chunks)]
-    extracted = await extract_facts(extract_chunks, llm=llm)
+    extracted = await extract_facts(
+        extract_chunks,
+        llm=llm,
+        min_fact_words=config.doc_min_fact_words,
+    )
+
+    # 5b) Document-level summary facts (optional)
+    if config.doc_summary_enabled:
+        try:
+            full_text = "\n".join([str(s.text) for s in sections if getattr(s, "text", None)])
+        except Exception:
+            full_text = ""
+        if full_text.strip():
+            try:
+                summary_facts = await extract_summary_facts(
+                    full_text,
+                    llm=llm,
+                    max_facts=config.doc_summary_max_facts,
+                    min_fact_words=config.doc_min_fact_words,
+                    doc_id=parsed.doc_id,
+                )
+                extracted.extend(summary_facts)
+            except Exception:
+                logger.exception("ingest_document: summary fact extraction failed")
 
     # 6) Store extracted facts as semantic facts
     extracted_fact_records: List[Fact] = []
@@ -189,10 +396,21 @@ async def ingest_document(
             updated_at=now,
             source_ids=[ef.source_chunk_id],
             confidence=ef.confidence,
-            meta={"source_chunk_id": ef.source_chunk_id},
             salience=ef.salience,
             owner_type=owner_type,
             owner_id=owner_id,
+            meta={
+                "source_type": "pdf",
+                "source_chunk_id": ef.source_chunk_id,
+                "doc_id": parsed.doc_id,
+                "source_path": parsed.source_path,
+                "source_hash": parsed.source_hash,
+                "ingest_pipeline_version": _INGEST_PIPELINE_VERSION,
+                "extractor_version": _EXTRACTOR_VERSION,
+                "chunker_version": _CHUNKER_VERSION,
+                "fact_text": ef.object,
+                "fact_type": "summary" if ef.predicate == "SUMMARY" else "claim",
+            },
         )
         extracted_fact_records.append(fact)
 
@@ -215,8 +433,17 @@ async def ingest_document(
             logger.exception("ingest_document: fact embedding failed")
             warnings.append("failed to embed extracted facts")
 
+        expected_dim = getattr(embedder, "dimension", None)
+        if not isinstance(expected_dim, int) or expected_dim <= 0:
+            raise ValueError("ingest_document: embedder.dimension must be a positive integer")
+
         if vectors and isinstance(vectors, list) and len(vectors) == len(extracted_fact_records):
             for fact, vec in zip(extracted_fact_records, vectors):
+                if not isinstance(vec, list) or len(vec) != expected_dim:
+                    raise ValueError(
+                        f"ingest_document: invalid fact embedding dim for fact_id={fact.id} "
+                        f"(expected={expected_dim} got={len(vec) if isinstance(vec, list) else None})"
+                    )
                 try:
                     await semantic_core.upsert_fact(fact, vec)
                     facts_created += 1

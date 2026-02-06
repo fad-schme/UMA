@@ -85,6 +85,8 @@ def initialize_embedder(memory: Any) -> None:
     Initialize the embedding model based on typed config.
     """
     embedding_cfg: EmbeddingConfig = memory.embedding_cfg
+    if not isinstance(embedding_cfg.dimension, int) or embedding_cfg.dimension <= 0:
+        raise ValueError("embedding.dimension must be a positive integer")
     embed_factory = get_embedder_factory(embedding_cfg.provider)
     if embed_factory:
         memory.embedder = embed_factory(embedding_cfg)
@@ -116,6 +118,15 @@ def initialize_embedder(memory: Any) -> None:
         else:
             raise TypeError(f"Unsupported embedder provider type: {type(embed_cls)}")
         logger.info("Loaded custom embedder adapter (%s)", embedding_cfg.provider)
+
+    # Enforce the global invariant: every embedder must expose a valid dimension and match config.
+    embedder_dim = getattr(memory.embedder, "dimension", None)
+    if not isinstance(embedder_dim, int) or embedder_dim <= 0:
+        raise ValueError(f"Embedder returned invalid dimension={embedder_dim!r}")
+    if embedder_dim != embedding_cfg.dimension:
+        raise ValueError(
+            f"Embedder dimension mismatch: embedder={embedder_dim} config={embedding_cfg.dimension}"
+        )
 
     # Best-effort preflight if the embedder supports it.
     try:

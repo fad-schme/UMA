@@ -23,7 +23,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
     def __init__(self, db_adapter: DBAdapter, vector_index: VectorIndex) -> None:
         super().__init__(db_adapter=db_adapter, vector_index=vector_index)
         self._init_db()
-        logger.info("ChunkSQLStore initialized.")
+        logger.debug("ChunkSQLStore initialized.")
 
     # ------------------------------------------------------------------ #
     # SQL Schema
@@ -53,6 +53,33 @@ class ChunkSQLStore(BaseVectorSQLStore):
                 CREATE INDEX IF NOT EXISTS idx_chunks_owner ON chunks(owner_type, owner_id);
                 """
             )
+            # Optional SQLite FTS5 index for lexical retrieval.
+            # If the runtime doesn't support FTS5, we continue without it.
+            try:
+                conn.executescript(
+                    """
+                    CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts
+                    USING fts5(text, content='chunks', content_rowid='rowid');
+
+                    CREATE TRIGGER IF NOT EXISTS chunks_ai
+                    AFTER INSERT ON chunks BEGIN
+                        INSERT INTO chunks_fts(rowid, text) VALUES (new.rowid, new.text);
+                    END;
+
+                    CREATE TRIGGER IF NOT EXISTS chunks_ad
+                    AFTER DELETE ON chunks BEGIN
+                        INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', old.rowid, old.text);
+                    END;
+
+                    CREATE TRIGGER IF NOT EXISTS chunks_au
+                    AFTER UPDATE ON chunks BEGIN
+                        INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', old.rowid, old.text);
+                        INSERT INTO chunks_fts(rowid, text) VALUES (new.rowid, new.text);
+                    END;
+                    """
+                )
+            except Exception:
+                logger.warning("ChunkSQLStore: FTS5 unavailable; lexical search falls back to LIKE.")
             ensure_store_metadata(self, conn, store_name="chunks")
             conn.commit()
         except Exception:
@@ -212,6 +239,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
             k=k,
             filters=filters or None,
             log_context="chunk_search",
+            id_prefix="chunk_",
         )
 
     async def search_text(
@@ -281,6 +309,71 @@ class ChunkSQLStore(BaseVectorSQLStore):
             return [self._row_to_object(r) for r in rows]
         except Exception:
             logger.exception("ChunkSQLStore.search_text failed.")
+            return []
+        finally:
+            conn.close()
+
+    async def search_fts5(
+        self,
+        query_text: str,
+        *,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+        k: int = 10,
+        required_terms: Optional[List[str]] = None,
+        optional_terms: Optional[List[str]] = None,
+        bm25_weight: float = 1.0,
+    ) -> List[Chunk]:
+        """
+        SQLite FTS5 lexical search with bm25 ranking.
+
+        - required_terms are enforced strictly (AND).
+        - optional_terms are included softly (OR), improving recall.
+        """
+        if not query_text or not isinstance(query_text, str):
+            return []
+
+        terms: List[str] = []
+        if required_terms:
+            terms.extend([t for t in required_terms if isinstance(t, str) and t.strip()])
+        if not terms:
+            terms = [query_text.strip()]
+
+        soft_terms = [t for t in (optional_terms or []) if isinstance(t, str) and t.strip()]
+
+        # Build FTS query: required terms AND (optional terms OR ...)
+        required_clause = " AND ".join(f'"{t}"' for t in terms)
+        if soft_terms:
+            optional_clause = " OR ".join(f'"{t}"' for t in soft_terms)
+            fts_query = f"({required_clause}) AND ({optional_clause})"
+        else:
+            fts_query = required_clause
+
+        where = ["chunks_fts MATCH :q"]
+        params: dict[str, Any] = {"q": fts_query, "limit": int(k), "w": float(bm25_weight)}
+        if owner_type:
+            where.append("c.owner_type = :owner_type")
+            params["owner_type"] = owner_type
+        if owner_id:
+            where.append("c.owner_id = :owner_id")
+            params["owner_id"] = owner_id
+
+        where_sql = " AND ".join(where)
+        sql = f"""
+            SELECT c.*
+            FROM chunks_fts
+            JOIN chunks c ON c.rowid = chunks_fts.rowid
+            WHERE {where_sql}
+            ORDER BY bm25(chunks_fts, :w) ASC
+            LIMIT :limit
+        """
+
+        conn = self._conn()
+        try:
+            rows = self._query_all(conn, sql, params=params, log_context="chunk_search_fts5")
+            return [self._row_to_object(r) for r in rows]
+        except Exception:
+            logger.exception("ChunkSQLStore.search_fts5 failed.")
             return []
         finally:
             conn.close()

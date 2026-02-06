@@ -16,6 +16,10 @@ and EpisodeMapper. It handles:
     user_message
     assistant_reply
     working_memory_context (WMEntry objects)
+
+Note for maintainers:
+- Episodic retrieval should go through `search`.
+- Clustering access is centralized in `list_cluster_summaries`.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ from .mapper import EpisodeMapper
 from .policies import EpisodicRetentionPolicy
 from ...types_episode import Episode
 from ..utils.dedupe import dedupe_by_id
+from ..utils.identity import ensure_user_subject
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +49,9 @@ class EpisodicCore:
         episode_indexer: EpisodeIndexer,
         retention_policy: Optional[EpisodicRetentionPolicy] = None,
     ) -> None:
+        """
+        Initialize the episodic core with a store, indexer, and retention policy.
+        """
 
         self.store = episodic_store
         self.indexer = episode_indexer
@@ -51,7 +59,7 @@ class EpisodicCore:
         self.archive = EpisodicArchive(episodic_store)
         self.policy = retention_policy or EpisodicRetentionPolicy()
 
-        logger.info("EpisodicCore initialized (policy=%s)", type(self.policy).__name__)
+        logger.debug("EpisodicCore initialized (policy=%s)", type(self.policy).__name__)
 
     # ------------------------------------------------------------------
     # PUBLIC API — used by MemoryPipeline
@@ -66,19 +74,8 @@ class EpisodicCore:
         working_memory_context: List[Any],
     ) -> Optional[Episode]:
         """
-        Build and store an Episode from the conversation turn.
-
-        Parameters
-        ----------
-        owner_type : str
-        owner_id : str
-        user_message : str
-        assistant_reply : str
-        working_memory_context : List[WorkingMemoryMessage]
-
-        Returns
-        -------
-        Episode or None
+        Build and persist an Episode from a conversation turn.
+        This is the main ingestion entry point used by the memory pipeline.
         """
 
         try:
@@ -126,7 +123,7 @@ class EpisodicCore:
 
     async def add_episode(self, episode: Episode, embedding: List[float]) -> bool:
         """
-        Persist a pre-built Episode + embedding.
+        Persist a pre-built Episode + embedding (bypasses indexing pipeline).
         """
         if self.store is None:
             return False
@@ -143,7 +140,7 @@ class EpisodicCore:
 
     async def cleanup(self, owner_type: str, owner_id: str) -> None:
         """
-        Apply retention policy and prune old episodes.
+        Apply retention policy and prune old episodes for the owner scope.
         """
         try:
             episodes = await self.store.list_episodes(owner_type, owner_id)
@@ -168,7 +165,7 @@ class EpisodicCore:
     
     async def list_recent(self, owner_type: str, owner_id: str, n: int = 5):
         """
-        Return the N most recent episodes for an owner.
+        Return the N most recent episodes for an owner scope.
         """
         try:
             return await self.store.list_recent(owner_type, owner_id, n)
@@ -177,6 +174,9 @@ class EpisodicCore:
             return []
 
     async def delete_episode(self, episode_id: str) -> bool:
+        """
+        Delete a single episode by ID.
+        """
         if self.store is None or not episode_id:
             return False
         try:
@@ -187,6 +187,9 @@ class EpisodicCore:
             return False
 
     async def list_episodes(self, owner_type: str, owner_id: str) -> List[Episode]:
+        """
+        Return all episodes for the given owner scope.
+        """
         if self.store is None:
             return []
         try:
@@ -202,6 +205,9 @@ class EpisodicCore:
         summary: str,
         latest_timestamp: str,
     ) -> bool:
+        """
+        Upsert a cluster summary record into the episodic store.
+        """
         if self.store is None or not hasattr(self.store, "upsert_cluster_summary"):
             return False
         try:
@@ -217,45 +223,11 @@ class EpisodicCore:
             return False
 
     def vector_index(self) -> Any:
+        """
+        Expose the backing vector index (if present) for diagnostics.
+        """
         return getattr(self.store, "vector_index", None) if self.store is not None else None
         
-
-    async def list_cluster_summaries(
-        self,
-        owner_type: str,
-        owner_id: str,
-        k: int = 5,
-        max_episodes: int = 50,
-        time_range: Optional[dict] = None,
-    ):
-        """
-        Return episodic cluster summaries for a user.
-
-        NOTE:
-        - Clustering logic is owned by the EpisodicSQLStore.
-        - EpisodicCore acts as the public façade for higher layers (pipeline / RLM).
-        """
-        try:
-            if not hasattr(self.store, "list_cluster_summaries"):
-                logger.warning(
-                    "EpisodicCore.list_cluster_summaries: store does not support clustering"
-                )
-                return []
-
-            return await self.store.list_cluster_summaries(
-                owner_type=owner_type,
-                owner_id=owner_id,
-                k=int(k),
-                max_episodes=max_episodes,
-                time_range=time_range,
-            )
-        except Exception:
-            logger.exception(
-                "EpisodicCore.list_cluster_summaries failed for owner=%s:%s",
-                owner_type,
-                owner_id,
-            )
-            return []
 
     # ------------------------------------------------------------------
     # RETRIEVAL API
@@ -271,10 +243,14 @@ class EpisodicCore:
         k: int = 20,
         offset: int = 0,
     ) -> List[Episode]:
+        """
+        Vector search over episodic summaries for the given owner scope.
+        Applies subject validation and deduplicates results.
+        """
         if self.store is None:
             return []
         try:
-            user_subject = ensure_user_subject(user_id)
+            ensure_user_subject(user_id)
         except Exception:
             logger.exception("EpisodicCore.search: invalid subject=%r", user_id)
             return []
@@ -316,13 +292,17 @@ class EpisodicCore:
         max_episodes: int = 50,
         time_range: Optional[dict] = None,
     ) -> List[Any]:
+        """
+        Return episodic cluster summaries for a user and owner scope.
+        Clustering logic is store-owned; core provides a safe façade.
+        """
         if self.store is None or not hasattr(self.store, "list_cluster_summaries"):
             logger.warning(
                 "EpisodicCore.list_cluster_summaries: store does not support clustering"
             )
             return []
         try:
-            user_subject = ensure_user_subject(user_id)
+            ensure_user_subject(user_id)
         except Exception:
             logger.exception("EpisodicCore.list_cluster_summaries: invalid subject=%r", user_id)
             return []
@@ -345,56 +325,28 @@ class EpisodicCore:
                 owner_id,
             )
         return dedupe_by_id(clusters)
+    
 
-    async def search(
-        self,
-        owner_type: str,
-        owner_id: str,
-        query_embedding: List[float],
-        *,
-        k: int = 20,
-        offset: int = 0,
-    ) -> List[Episode]:
-        if self.store is None:
-            return []
-        try:
-            try:
-                return await self.store.search(
-                    query_embedding=query_embedding,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    k=int(k),
-                    offset=int(offset),
-                )
-            except TypeError:
-                return await self.store.search(
-                    query_embedding=query_embedding,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    k=int(k),
-                )
-        except Exception:
-            logger.exception(
-                "EpisodicCore.search failed owner=%s:%s",
-                owner_type,
-                owner_id,
-            )
-            return []
-
-    async def fetch_summaries(self, ids: List[str]) -> List[dict]:
+    async def fetch_summaries(self, ids: List[str], *, owner_type: str, owner_id: str) -> List[dict]:
+        """
+        Fetch summary payloads for a list of episodic IDs.
+        """
         if self.store is None or not hasattr(self.store, "fetch_summaries"):
             return []
         try:
-            return await self.store.fetch_summaries(ids)
+            return await self.store.fetch_summaries(ids, owner_type=owner_type, owner_id=owner_id)
         except Exception:
             logger.exception("EpisodicCore.fetch_summaries failed")
             return []
 
-    async def fetch_transcripts(self, ids: List[str]) -> List[dict]:
+    async def fetch_transcripts(self, ids: List[str], *, owner_type: str, owner_id: str) -> List[dict]:
+        """
+        Fetch transcript payloads for a list of episodic IDs.
+        """
         if self.store is None or not hasattr(self.store, "fetch_transcripts"):
             return []
         try:
-            return await self.store.fetch_transcripts(ids)
+            return await self.store.fetch_transcripts(ids, owner_type=owner_type, owner_id=owner_id)
         except Exception:
             logger.exception("EpisodicCore.fetch_transcripts failed")
             return []

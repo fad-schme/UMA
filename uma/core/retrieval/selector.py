@@ -140,6 +140,13 @@ class MemorySelector:
                 base = 1.0 / max(1, int(getattr(ch, "position", 1)))
             except Exception:
                 base = 0.0
+            # If chunk was lexically confirmed, add a small deterministic boost.
+            try:
+                meta = ch.get("meta") if isinstance(ch, dict) else getattr(ch, "meta", None)
+                if isinstance(meta, dict):
+                    base += float(meta.get("lexical_score", 0.0) or 0.0)
+            except Exception:
+                pass
             return base
 
         ranked = sorted(items, key=score, reverse=True)

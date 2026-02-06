@@ -8,7 +8,6 @@ import logging
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from ...utils.identity import ensure_user_subject
-from ...utils.user_query_helper import extract_query_terms, expand_query_terms
 
 logger = logging.getLogger(__name__)
 
@@ -21,38 +20,6 @@ async def _maybe_await(result: Any) -> Any:
     return result
 
 
-def _extract_terms(query_text: str) -> List[str]:
-    terms = expand_query_terms(query_text) or extract_query_terms(query_text)
-    cleaned: List[str] = []
-    for t in terms or []:
-        if not isinstance(t, str):
-            continue
-        t = t.strip().lower()
-        if not t or " " in t:
-            continue
-        if len(t) < 3:
-            continue
-        cleaned.append(t)
-    if cleaned:
-        return cleaned
-    # Fallback: naive tokenization
-    return [t.lower() for t in extract_query_terms(query_text) if isinstance(t, str) and t.strip()]
-
-
-def _filter_chunks_by_terms(chunks: List[Any], terms: List[str]) -> List[Any]:
-    filtered: List[Any] = []
-    for ch in chunks:
-        text = ""
-        if isinstance(ch, dict):
-            text = str(ch.get("text") or "")
-        else:
-            text = str(getattr(ch, "text", "") or "")
-        if not text:
-            continue
-        lower = text.lower()
-        if any(t in lower for t in terms):
-            filtered.append(ch)
-    return filtered
 
 
 class UMAMemoryEnvironment:
@@ -203,188 +170,54 @@ class UMAMemoryEnvironment:
         if not isinstance(query_text, str) or not query_text.strip():
             raise ValueError("Environment.get_query_embedding: query_text must be non-empty")
         try:
+            expected_dim = getattr(self._embedder, "dimension", None)
+            if not isinstance(expected_dim, int) or expected_dim <= 0:
+                raise ValueError("Environment.get_query_embedding: embedder.dimension must be a positive integer")
             vectors = await self._embedder.embed([query_text])
             if not vectors or not isinstance(vectors, list) or not vectors[0]:
                 raise ValueError("Embedder returned empty embedding.")
-            return [float(x) for x in vectors[0]]
+            vec0 = vectors[0]
+            if not isinstance(vec0, list) or len(vec0) != expected_dim:
+                raise ValueError(f"Embedder returned invalid dim (expected={expected_dim} got={len(vec0) if isinstance(vec0, list) else None}).")
+            return [float(x) for x in vec0]
         except Exception as exc:
             logger.exception("Environment.get_query_embedding failed")
             raise ValueError("Failed to embed query text.") from exc
 
-    async def search_semantic(
+    async def fetch_chunks(
         self,
         user_id: str,
-        query_embedding: NumericVector,
-        k: int = 10,
-        filters: Optional[Dict[str, Any]] = None,
-        query_text: Optional[str] = None,
+        *,
+        ids: List[str],
         owner_type: str = "agent",
         owner_id: Optional[str] = None,
     ) -> List[Any]:
         """
-        Vector search over semantic facts.
-
-        filters (optional):
-        - topic: str
-        - subject: str (must equal ensure_user_subject(user_id) or ignored)
-        - offset: int
-        """
-        if self._semantic_core is None:
-            return []
-
-        k = self._validate_k("Environment.search_semantic", k)
-        offset = self._safe_offset(filters.get("offset") if isinstance(filters, dict) else None)
-
-        try:
-            user_subject = ensure_user_subject(user_id)
-
-            # Hard enforce subject scoping:
-            # - if filters include subject, it must match the user's subject (or be ignored).
-            subject = user_subject
-
-            if isinstance(filters, dict) and "subject" in filters:
-                provided = filters.get("subject")
-                # Strict: do not allow cross-user subjects.
-                try:
-                    provided = ensure_user_subject(str(filters.get("subject")))
-                    if provided == user_subject:
-                        subject = provided
-                except Exception:
-                    pass
-
-            retrieval_cfg = getattr(self._memory, "retrieval_cfg", None)
-            ctx_cfg = getattr(retrieval_cfg, "context", None) if retrieval_cfg else None
-            allowed_topics = getattr(ctx_cfg, "allowed_topics", None) if ctx_cfg else None
-            if isinstance(allowed_topics, list):
-                allowed_topics = [t for t in allowed_topics if isinstance(t, str) and t.strip()]
-            else:
-                allowed_topics = None
-
-            if owner_type == "agent":
-                resolved_owner_id = owner_id or self._agent_id
-                if not resolved_owner_id:
-                    return []
-            else:
-                resolved_owner_id = owner_id or user_subject
-            facts = await self._semantic_core.search(
-                subject=subject,
-                query_embedding=list(query_embedding),
-                owner_type=owner_type,
-                owner_id=resolved_owner_id,
-                k=int(k),
-                offset=int(offset),
-                filters=filters,
-                query_text=query_text,
-                allowed_topics=allowed_topics,
-            )
-
-            logger.debug("Environment.search_semantic: returned %d", len(facts))
-            return facts
-        except Exception:
-            logger.exception("Environment.search_semantic failed")
-            return []
-
-    async def search_chunks(
-        self,
-        user_id: str,
-        query_embedding: NumericVector,
-        k: int = 10,
-        owner_type: str = "agent",
-        owner_id: Optional[str] = None,
-        query_text: Optional[str] = None,
-    ) -> List[Any]:
-        """
-        Vector search over document chunks.
+        Fetch chunks by IDs (bounded, owner-scoped).
         """
         if self._chunk_core is None:
             return []
-        k = self._validate_k("Environment.search_chunks", k)
+        if not isinstance(ids, list) or not ids:
+            return []
+        if len(ids) > 50:
+            ids = ids[:50]
         try:
             user_subject = ensure_user_subject(user_id)
-
             if owner_type == "agent":
                 resolved_owner_id = owner_id or self._agent_id
                 if not resolved_owner_id:
                     return []
             else:
                 resolved_owner_id = owner_id or user_subject
-            chunks = await self._chunk_core.search(
-                user_id=user_subject,
-                query_embedding=list(query_embedding),
+
+            return await self._chunk_core._fetch_by_ids(
+                ids=[str(x) for x in ids if x],
                 owner_type=owner_type,
                 owner_id=resolved_owner_id,
-                k=int(k),
+                log_context="Environment.fetch_chunks",
             )
-            logger.debug(
-                "Environment.search_chunks: vector returned=%d owner_type=%s owner_id=%s",
-                len(chunks or []),
-                owner_type,
-                resolved_owner_id,
-            )
-            if query_text and chunks:
-                terms = _extract_terms(query_text)
-                if terms:
-                    logger.debug(
-                        "Environment.search_chunks: filtering with terms=%s",
-                        terms,
-                    )
-                    chunks = _filter_chunks_by_terms(chunks, terms)
-                    logger.debug(
-                        "Environment.search_chunks: filtered count=%d",
-                        len(chunks or []),
-                    )
-            if (not chunks) and query_text:
-                logger.debug("Environment.search_chunks: lexical fallback triggered")
-                chunks = await self._chunk_core.search_text(
-                    query_text=query_text,
-                    owner_type=owner_type,
-                    owner_id=resolved_owner_id,
-                    k=int(k),
-                )
-                logger.debug(
-                    "Environment.search_chunks: lexical returned=%d",
-                    len(chunks or []),
-                )
-            logger.debug("Environment.search_chunks: returned %d", len(chunks))
-            return chunks
         except Exception:
-            logger.exception("Environment.search_chunks failed")
-            return []
-
-    async def search_procedural(
-        self,
-        user_id: str,
-        query_embedding: NumericVector,
-        k: int = 10,
-        owner_type: str = "agent",
-        owner_id: Optional[str] = None,
-    ) -> List[Any]:
-        """
-        Vector search over procedural skills.
-        """
-        if self._procedural_core is None:
-            return []
-        k = self._validate_k("Environment.search_procedural", k)
-        try:
-            user_subject = ensure_user_subject(user_id)
-
-            if owner_type == "agent":
-                resolved_owner_id = owner_id or self._agent_id
-                if not resolved_owner_id:
-                    return []
-            else:
-                resolved_owner_id = owner_id or user_subject
-            skills = await self._procedural_core.search(
-                user_id=user_subject,
-                query_embedding=list(query_embedding),
-                owner_type=owner_type,
-                owner_id=resolved_owner_id,
-                k=int(k),
-            )
-            logger.debug("Environment.search_procedural: returned %d", len(skills))
-            return skills
-        except Exception:
-            logger.exception("Environment.search_procedural failed")
+            logger.exception("Environment.fetch_chunks failed")
             return []
 
     async def fetch_facts_by_ids(self, user_id: str, ids: List[str]) -> List[Any]:
@@ -427,10 +260,19 @@ class UMAMemoryEnvironment:
                 resolved_owner_id = owner_id or self._agent_id
                 if not resolved_owner_id:
                     return []
-            else:
+            elif owner_type == "user":
                 resolved_owner_id = owner_id or user_subject
+            elif owner_type == "project":
+                resolved_owner_id = owner_id or self._project_id
+                if not resolved_owner_id:
+                    return []
+            else:
+                logger.warning("Environment.fetch_more_facts: invalid owner_type=%r", owner_type)
+                return []
+
+            subject: Optional[str] = user_subject if owner_type == "user" else None
             return await self._semantic_core.fetch_more_facts(
-                subject=user_subject,
+                subject=subject,
                 predicate=predicate,
                 owner_type=owner_type,
                 owner_id=resolved_owner_id,
@@ -444,53 +286,6 @@ class UMAMemoryEnvironment:
     # ------------------------------------------------------------------
     # Episodic
     # ------------------------------------------------------------------
-
-    async def search_episodic(
-        self,
-        user_id: str,
-        query_embedding: NumericVector,
-        k: int = 10,
-        time_range: Optional[Dict[str, Any]] = None,
-        owner_type: str = "agent",
-        owner_id: Optional[str] = None,
-    ) -> List[Any]:
-        """
-        Vector search over episodic summaries.
-
-        time_range (optional):
-        - start: comparable timestamp (store-defined)
-        - end: comparable timestamp (store-defined)
-        - offset: int
-        """
-        if self._episodic_core is None:
-            return []
-        k = self._validate_k("Environment.search_episodic", k)
-        offset = self._safe_offset(time_range.get("offset") if isinstance(time_range, dict) else None)
-
-        try:
-            user_subject = ensure_user_subject(user_id)
-
-            if owner_type == "agent":
-                resolved_owner_id = owner_id or self._agent_id
-                if not resolved_owner_id:
-                    return []
-            else:
-                resolved_owner_id = owner_id or user_subject
-            episodes = await self._episodic_core.search(
-                user_id=user_subject,
-                query_embedding=list(query_embedding),
-                owner_type=owner_type,
-                owner_id=resolved_owner_id,
-                k=int(k),
-                offset=int(offset),
-            )
-
-            episodes = self._filter_time_range(episodes or [], time_range)
-            logger.debug("Environment.search_episodic: returned %d", len(episodes))
-            return episodes
-        except Exception:
-            logger.exception("Environment.search_episodic failed")
-            return []
 
     async def episodic_cluster_summaries(
         self,

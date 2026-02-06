@@ -72,7 +72,7 @@ class ProceduralFeature(UMAFeature):
         self.matcher = matcher or SkillMatcher()
         self.max_k = max_k
 
-        logger.info("ProceduralFeature initialized with core=%s embedder=%s",
+        logger.debug("ProceduralFeature initialized with core=%s embedder=%s",
                     type(procedural_core).__name__, type(embedder).__name__)
 
     # ------------------------------------------------------------------
