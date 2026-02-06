@@ -192,7 +192,7 @@ class TemporalGraphCore:
         node_id : str
             Starting node id.
         owner_type : str
-            One of {'user','agent','project'}.
+            One of {'user','agent'}.
         owner_id : str
             Canonical owner identifier (e.g. 'user:u1').
         predicate_scope : Optional[List[str]]

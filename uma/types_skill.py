@@ -5,7 +5,6 @@ Skills are procedural units (how-to, playbooks, instructions).
 This version adds ownership so skills can live in:
 - agent KB (global skills)
 - user KB (personal procedures)
-- project KB (project playbooks)
 
 Coding agent instructions
 -------------------------
@@ -20,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from .types_scope import OwnerType
+from .types_owner import OwnerType
 
 
 @dataclass
@@ -58,7 +57,7 @@ class Skill:
         if not self.description or not isinstance(self.description, str):
             raise ValueError("Skill.description must be a non-empty string")
 
-        if self.owner_type not in ("agent", "user", "project"):
+        if self.owner_type not in ("agent", "user"):
             raise ValueError(f"Invalid owner_type: {self.owner_type!r}")
         if self.owner_id is not None and not isinstance(self.owner_id, str):
             raise ValueError("Skill.owner_id must be a string")

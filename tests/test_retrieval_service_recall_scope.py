@@ -106,7 +106,6 @@ def test_retrieval_service_passes_policy_for_text_query():
             memory_type="all",
             query_text_or_embedding="remember last time",
             agent_id="a1",
-            project_id="p1",
         )
     )
     assert isinstance(selector.captured_policy, RetrievalPolicy)
@@ -132,7 +131,6 @@ def test_retrieval_service_recall_prefers_user():
             memory_type="all",
             query_text_or_embedding="remember last time",
             agent_id="a1",
-            project_id="p1",
         )
     )
     assert result["facts"][0]["id"] == "a1"
@@ -156,7 +154,6 @@ def test_retrieval_service_prefers_agent_without_recall():
             memory_type="all",
             query_text_or_embedding="how to configure X",
             agent_id="a1",
-            project_id="p1",
         )
     )
     assert result["facts"][0]["id"] == "a1"
@@ -176,7 +173,6 @@ def test_retrieval_service_no_policy_for_embedding_query():
             memory_type="all",
             query_text_or_embedding=[0.1, 0.2, 0.3],
             agent_id="a1",
-            project_id="p1",
         )
     )
     assert selector.captured_policy is None

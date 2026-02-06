@@ -30,7 +30,7 @@ _CHUNKER_VERSION = "doc_chunk_v2"
 
 
 def _validate_owner(owner_type: str, owner_id: str) -> tuple[str, str]:
-    if owner_type not in ("user", "project", "agent"):
+    if owner_type not in ("user", "agent"):
         raise ValueError(f"Invalid owner_type={owner_type!r}")
     if not owner_id or not isinstance(owner_id, str):
         raise ValueError("owner_id must be a non-empty string")

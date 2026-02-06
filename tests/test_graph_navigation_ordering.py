@@ -48,9 +48,7 @@ def test_graph_not_fetched_when_no_signal():
             memory_type="all",
             query_text_or_embedding="q",
             agent_id="a1",
-            project_id="p1",
         )
     )
 
     assert mem.graph_core.called == 0
-

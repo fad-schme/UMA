@@ -5,7 +5,7 @@ This module defines the `Fact` dataclass, which is the canonical representation
 of semantic knowledge in UMA.
 
 This version includes ownership:
-- owner_type: "agent" | "user" | "project"
+- owner_type: "agent" | "user"
 - owner_id: string identifier of the owner
 
 Coding agent instructions
@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from .types_scope import OwnerType
+from .types_owner import OwnerType
 
 
 @dataclass
@@ -69,7 +69,7 @@ class Fact:
         if not self.predicate or not isinstance(self.predicate, str):
             raise ValueError("Fact.predicate must be a non-empty string")
 
-        if self.owner_type not in ("agent", "user", "project"):
+        if self.owner_type not in ("agent", "user"):
             raise ValueError(f"Invalid owner_type: {self.owner_type!r}")
         if self.owner_id is not None and not isinstance(self.owner_id, str):
             raise ValueError("Fact.owner_id must be a string")

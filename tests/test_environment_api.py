@@ -139,7 +139,7 @@ class DummyGraphCore:
         owner_type=None,
         owner_id=None,
     ):
-        assert owner_type in {"user", "agent", "project"}
+        assert owner_type in {"user", "agent"}
         assert isinstance(owner_id, str) and owner_id
         return [{"labels": ["Entity"], "properties": {"name": "x"}}]
 

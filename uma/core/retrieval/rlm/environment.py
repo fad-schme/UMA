@@ -36,7 +36,6 @@ class UMAMemoryEnvironment:
     def __init__(self, memory: Any) -> None:
         self._memory = memory
         self._agent_id = getattr(memory, "agent_id", None)
-        self._project_id = getattr(memory, "project_id", None)
 
         self._wm = getattr(memory, "working_memory", None)
         self._semantic_core = getattr(memory, "semantic_core", None)
@@ -262,10 +261,6 @@ class UMAMemoryEnvironment:
                     return []
             elif owner_type == "user":
                 resolved_owner_id = owner_id or user_subject
-            elif owner_type == "project":
-                resolved_owner_id = owner_id or self._project_id
-                if not resolved_owner_id:
-                    return []
             else:
                 logger.warning("Environment.fetch_more_facts: invalid owner_type=%r", owner_type)
                 return []

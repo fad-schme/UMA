@@ -201,7 +201,6 @@ class RetrievalService:
         query_text_or_embedding: Any,
         *,
         agent_id: Optional[str] = None,
-        project_id: Optional[str] = None,
     ) -> Any:
         """
         Retrieve memory.

@@ -212,7 +212,6 @@ class UMAMemory:
         self.consolidation_cfg = self.cfg.consolidation
         self.semantic_salience_threshold = self.cfg.semantic_salience_threshold
         self.agent_id = None
-        self.project_id = None
 
         # Internal store registry (core-only access; no direct store usage outside cores)
         self._stores: Dict[str, Any] = {}
@@ -714,7 +713,6 @@ class UMAMemory:
                     memory_type="all",
                     query_text_or_embedding=query_text,
                     agent_id=getattr(self, "agent_id", None),
-                    project_id=getattr(self, "project_id", None),
                 )
             except Exception:
                 logger.exception(

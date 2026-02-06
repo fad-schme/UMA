@@ -6,7 +6,6 @@ from uma.core.retrieval.rlm.controller import RLMController
 class NoQueryTextEnv:
     def __init__(self, retrieval_cfg):
         self._agent_id = "agent:1"
-        self._project_id = None
         self._memory = type("M", (), {"retrieval_cfg": retrieval_cfg, "working_memory": None})()
         self._chunk_core = self._ChunkCore()
         self._procedural_core = self._ProceduralCore()

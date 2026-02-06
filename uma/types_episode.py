@@ -8,7 +8,6 @@ Notes
 -----
 Episodes are scoped by ownership:
 - owner_type="user"/owner_id="user:<user_id>" for user-level logs
-- owner_type="project"/owner_id="user:<user_id>:<project_id>" for project episodes
 - owner_type="agent"/owner_id=agent_id for agent-global episodes (rare but possible)
 
 Coding agent instructions:
@@ -24,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from .types_scope import OwnerType
+from .types_owner import OwnerType
 
 
 @dataclass
@@ -91,7 +90,7 @@ class Episode:
         if not self.user_id or not isinstance(self.user_id, str):
             raise ValueError("Episode.user_id must be a non-empty string")
 
-        if self.owner_type not in ("agent", "user", "project"):
+        if self.owner_type not in ("agent", "user"):
             raise ValueError(f"Invalid owner_type: {self.owner_type!r}")
 
         if not isinstance(self.owner_id, str) or not self.owner_id.strip():

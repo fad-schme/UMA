@@ -115,14 +115,12 @@ class RLMController:
         )
 
         agent_id = getattr(self.env, "_agent_id", None)
-        project_id = getattr(self.env, "_project_id", None)
         pack = ContextPack(
             user_id=user_subject,
             query_text=query_text,
             owner_type=None,
             owner_id=None,
             agent_id=agent_id,
-            project_id=project_id,
         )
 
         pack.working_memory = []
@@ -615,7 +613,7 @@ class RLMController:
                 else:
                     subject = normalized
             else:
-                if raw_subject.startswith(("entity:", "doc:", "agent:", "project:")):
+                if raw_subject.startswith(("entity:", "doc:", "agent:")):
                     subject = raw_subject
                 else:
                     logger.debug(
@@ -640,11 +638,6 @@ class RLMController:
                 return []
         elif owner_type == "user":
             resolved_owner_id = owner_id or user_subject
-        elif owner_type == "project":
-            resolved_owner_id = owner_id or getattr(self.env, "_project_id", None)
-            if not resolved_owner_id:
-                logger.warning("RLMController._search_semantic_core: missing project_id for project scope")
-                return []
         else:
             logger.warning("RLMController._search_semantic_core: invalid owner_type=%r", owner_type)
             return []

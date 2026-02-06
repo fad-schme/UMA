@@ -32,7 +32,6 @@ class ContextPack:
     owner_type: Optional[str] = None
     owner_id: Optional[str] = None
     agent_id: Optional[str] = None
-    project_id: Optional[str] = None
     
 
     # Memory layers

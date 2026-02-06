@@ -67,7 +67,7 @@ def _normalize_subject(subject: str, *, doc_id: str | None = None) -> str:
     subj = (subject or "").strip()
     if not subj:
         return "entity:unknown"
-    if subj.startswith(("doc:", "entity:", "user:", "project:", "agent:")):
+    if subj.startswith(("doc:", "entity:", "user:", "agent:")):
         return subj
     return f"entity:{subj}"
 

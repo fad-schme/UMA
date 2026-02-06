@@ -61,6 +61,5 @@ def test_classic_retrieval_passes_owner_scope():
             memory_type="all",
             query_text_or_embedding="remember last time",
             agent_id="a1",
-            project_id="p1",
         )
     )

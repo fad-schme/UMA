@@ -1,5 +1,5 @@
 """
-PromotionPolicy v1 — User/Project → Agent Knowledge Promotion
+PromotionPolicy v1 — User → Agent Knowledge Promotion
 
 This module defines a conservative, rule-based promotion policy
 for elevating semantic facts into the agent's global knowledge base.
@@ -19,6 +19,8 @@ from __future__ import annotations
 import logging
 from typing import Iterable, Set
 
+from ..utils.accessors import get_attr_or_key
+
 from ...types_fact import Fact
 
 logger = logging.getLogger(__name__)
@@ -29,7 +31,7 @@ class PromotionPolicy:
     Rule-based promotion policy (v1).
 
     A fact is eligible for promotion if:
-      - it is user/project scoped
+      - it is user scoped
       - it has sufficient salience
       - it has sufficient confidence
       - its predicate is not ephemeral
@@ -75,6 +77,15 @@ class PromotionPolicy:
             self.min_salience,
             self.min_confidence,
         )
+        self.min_object_chars = 12
+        self.max_object_chars = 800
+        self.require_source_chunk = True
+        self.allowed_source_types = {"pdf", "doc", "docx", "text", "wiki", "kb"}
+        self.blocked_source_types = {"chat", "wm", "working_memory"}
+        self.blocked_subject_prefixes = ("user:", "session:", "email:", "phone:")
+        self.blocked_object_patterns = {
+            "password", "ssn", "social security", "credit card", "api key", "secret",
+        }
 
     # ------------------------------------------------------------------ #
     # Eligibility
@@ -93,8 +104,8 @@ class PromotionPolicy:
         if fact.owner_type == "agent":
             return False
 
-        # Must be user or project scoped
-        if fact.owner_type not in ("user", "project"):
+        # Must be user scoped
+        if fact.owner_type not in ("user",):
             return False
 
         # Salience threshold
@@ -107,6 +118,38 @@ class PromotionPolicy:
 
         # Predicate must not be ephemeral
         if fact.predicate.lower() in self.blocked_predicates:
+            return False
+
+        # Validate object length bounds to avoid promoting trivial or huge blobs
+        try:
+            obj_text = str(get_attr_or_key(fact, "object") or "").strip()
+        except Exception:
+            return False
+        if not obj_text or len(obj_text) < self.min_object_chars or len(obj_text) > self.max_object_chars:
+            return False
+
+        # Enforce source provenance if required
+        meta = get_attr_or_key(fact, "meta") or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        src_type = str(meta.get("source_type") or "").strip().lower()
+        if self.require_source_chunk:
+            src_chunk = meta.get("source_chunk_id") or (fact.source_ids[0] if fact.source_ids else None)
+            if not src_chunk:
+                return False
+        if src_type and src_type in self.blocked_source_types:
+            return False
+        if self.allowed_source_types and src_type and src_type not in self.allowed_source_types:
+            return False
+
+        # Block user-identifying or personal subjects from promotion
+        subj = str(get_attr_or_key(fact, "subject") or "").strip().lower()
+        if subj.startswith(self.blocked_subject_prefixes):
+            return False
+
+        # Block likely sensitive content
+        lowered = obj_text.lower()
+        if any(p in lowered for p in self.blocked_object_patterns):
             return False
 
         # Object must be serializable / stable
@@ -169,12 +212,12 @@ class PromotionPolicy:
 
         This ensures DAT consistency:
         - Agent-level facts must have corresponding agent-scoped graph edges
-        - Original user/project facts remain untouched
+        - Original user facts remain untouched
 
         Parameters
         ----------
         fact : Fact
-            Original fact (user/project scoped).
+            Original fact (user scoped).
         graph_core : TemporalGraphCore
             Graph core used to write agent-scoped edges.
         """

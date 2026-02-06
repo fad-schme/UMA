@@ -6,7 +6,6 @@ from uma.core.retrieval.rlm.controller import RLMController
 class LaneEnv:
     def __init__(self, retrieval_cfg):
         self._agent_id = "agent-default"
-        self._project_id = None
         self._memory = type("M", (), {"retrieval_cfg": retrieval_cfg, "working_memory": None})()
         self.last = {}
         self._semantic_core = self._SemanticCore(self)

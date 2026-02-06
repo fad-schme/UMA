@@ -2,7 +2,7 @@
 Temporal Graph Updater (Core)
 =============================
 
-Projects episodic and semantic memory into the temporal knowledge graph.
+Maps episodic and semantic memory into the temporal knowledge graph.
 
 DAT invariants enforced
 ----------------------

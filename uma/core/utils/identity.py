@@ -15,7 +15,7 @@ This is used across:
 Rationale
 ---------
 Using a typed prefix avoids collisions and enables safe multi-tenant joins
-(e.g., "user:123" vs "org:123" vs "project:123") in future extensions.
+(e.g., "user:123" vs "org:123") in future extensions.
 """
 
 from __future__ import annotations
