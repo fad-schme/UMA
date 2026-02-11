@@ -800,12 +800,11 @@ class UMAMemory:
 
         Related:
             - build_context_snippet(pack): render a snippet from an existing pack
-            - build_context_snippet_for_query(user_id, query_text): one-liner
+            - get_rendered_context(user_id, query_text): one-liner
         """
-        from .utils.context_pack_builder import ContextPackBuilder
+        from .utils.context_pack_builder import build_context_pack
 
-        ctx = await self.get_structured_context(user_id, query_text)
-        return ContextPackBuilder.build(query_text, ctx)
+        return await build_context_pack(self, user_id=user_id, query_text=query_text)
 
     async def build_context_snippet(self, pack: dict) -> str:
         """
@@ -813,13 +812,9 @@ class UMAMemory:
 
         This is a presentation helper; use build_context_pack() for the data product.
         """
-        from .utils.context_pack_builder import ContextPackBuilder
-        ctx_cfg = getattr(self.retrieval_cfg, "context", None)
-        if getattr(ctx_cfg, "snippet_refiner_enabled", False):
-            return await ContextPackBuilder.render_snippet_async(
-                pack, ctx_cfg, llm=getattr(self, "llm", None)
-            )
-        return ContextPackBuilder.render_snippet(pack, ctx_cfg)
+        from .utils.context_pack_builder import build_context_snippet
+
+        return await build_context_snippet(self, pack=pack)
 
     async def render_snippet(self, pack: dict) -> str:
         """
@@ -827,30 +822,14 @@ class UMAMemory:
         """
         return await self.build_context_snippet(pack)
 
-    async def build_context_snippet_for_query(self, user_id: str, query_text: str) -> str:
-        """
-        Convenience helper: build a context pack and render a snippet in one call.
-        """
-        return await self.get_rendered_context(user_id, query_text)
-
     async def get_rendered_context(self, user_id: str, query_text: str) -> str:
         """
         Render a production-ready snippet directly from RLM retrieval.
         This path is shared by the app and gold tests to avoid divergence.
         """
-        from .utils.context_pack_builder import ContextPackBuilder
-        if not getattr(self, "_rlm_controller", None):
-            # Fall back to structured context if RLM isn't available.
-            pack = await self.build_context_pack(user_id, query_text)
-            return await self.build_context_snippet(pack)
-        pack = await self._rlm_controller.retrieve_context(
-            user_id=ensure_user_subject(user_id),
-            query_text=query_text,
-        )
-        ctx_cfg = getattr(self.retrieval_cfg, "context", None)
-        return await ContextPackBuilder.render_snippet_async(
-            pack, ctx_cfg, llm=getattr(self, "llm", None)
-        )
+        from .utils.context_pack_builder import get_rendered_context
+
+        return await get_rendered_context(self, user_id=user_id, query_text=query_text)
 
     # Backward-compatible alias (deprecated)
 
@@ -866,22 +845,9 @@ class UMAMemory:
         This wraps retrieval + context formatting so developers do not
         manually collect memory slices. It does not inject a system prompt.
         """
-        from .utils.context_pack_builder import ContextPackBuilder
+        from .utils.context_pack_builder import build_prompt_messages
 
-        pack = await self.build_context_pack(user_id=user_id, query_text=query_text)
-        ctx_cfg = getattr(self.retrieval_cfg, "context", None)
-        if getattr(ctx_cfg, "snippet_refiner_enabled", False):
-            snippet = await ContextPackBuilder.render_snippet_async(
-                pack, ctx_cfg, llm=getattr(self, "llm", None)
-            )
-        else:
-            snippet = ContextPackBuilder.render_snippet(pack, ctx_cfg)
-        if snippet:
-            user_content = f"{query_text}\n\nRelevant memory:\n{snippet}"
-        else:
-            user_content = query_text
-
-        return [{"role": "user", "content": user_content}]
+        return await build_prompt_messages(self, user_id=user_id, query_text=query_text)
 
     # ----------------------------------------------------------------------
     # OPTIONAL UTILITIES — Structured CoT Memory Builder
@@ -913,10 +879,9 @@ class UMAMemory:
                 "planning_scaffold": [...],
             }
         """
-        from .utils.cot_memory_builder import CoTMemoryBuilder
+        from .utils.cot_memory_builder import build_cot_memory
 
-        ctx = await self.get_structured_context(user_id, query_text)
-        return CoTMemoryBuilder.build(ctx)
+        return await build_cot_memory(self, user_id=user_id, query_text=query_text)
     
     
     # ----------------------------------------------------------------------

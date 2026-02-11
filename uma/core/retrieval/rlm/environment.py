@@ -497,3 +497,161 @@ class UMAMemoryEnvironment:
             except Exception:
                 continue
         return None
+
+    async def execute_action(
+        self,
+        *,
+        user_subject: str,
+        action: Any,
+        query_embedding: NumericVector,
+        query_text: Optional[str],
+        owner_type: str,
+        owner_id: Optional[str],
+        default_k: int,
+        trace_id: Optional[str] = None,
+    ) -> List[Any]:
+        """
+        Execute a single RetrievalAction via the environment.
+
+        This keeps the controller thin while maintaining the architectural rule:
+        - chunk logic lives in ChunkCore
+        - semantic logic lives in SemanticCore
+        - episodic logic lives in EpisodicCore
+        - environment handles scoping/bounds and calls cores
+        """
+        try:
+            k = int(getattr(action, "k", None) or default_k)
+        except Exception:
+            k = int(default_k)
+
+        lane_owner_type = getattr(action, "owner_type", None) or owner_type
+        lane_owner_id = owner_id
+        if lane_owner_type == "agent":
+            lane_owner_id = self._agent_id if lane_owner_id is None else lane_owner_id
+
+        a = getattr(action, "action", None)
+
+        if a == "search_semantic":
+            if self._semantic_core is None:
+                return []
+            filters = getattr(action, "filters", None)
+            subject: Optional[str] = user_subject if lane_owner_type == "user" else None
+            return await self._semantic_core.search(
+                subject=subject,
+                query_embedding=[float(x) for x in query_embedding],
+                owner_type=lane_owner_type,
+                owner_id=lane_owner_id,
+                k=k,
+                offset=0,
+                filters=filters,
+                query_text=query_text,
+                allowed_topics=None,
+            )
+
+        if a == "fetch_more_facts":
+            offset = 0
+            filters = getattr(action, "filters", None)
+            if isinstance(filters, dict):
+                try:
+                    offset = int(filters.get("offset", 0) or 0)
+                except Exception:
+                    offset = 0
+            return await self.fetch_more_facts(
+                user_id=user_subject,
+                predicate=getattr(action, "predicate", None),
+                k=k,
+                offset=offset,
+                owner_type=lane_owner_type,
+                owner_id=lane_owner_id,
+            )
+
+        if a == "fetch_facts":
+            return await self.fetch_facts_by_ids(
+                user_id=user_subject,
+                ids=getattr(action, "ids", None) or [],
+            )
+
+        if a == "fetch_chunks":
+            return await self.fetch_chunks(
+                user_id=user_subject,
+                ids=getattr(action, "ids", None) or [],
+                owner_type=lane_owner_type,
+                owner_id=lane_owner_id,
+            )
+
+        if a == "search_chunks":
+            chunk_core = getattr(self._memory, "chunk_core", None)
+            if chunk_core is None:
+                return []
+            return await chunk_core.search_chunks_for_rlm(
+                query_embedding=[float(x) for x in query_embedding],
+                owner_type=lane_owner_type,
+                owner_id=lane_owner_id,
+                k=k,
+                query_text=query_text,
+            )
+
+        if a == "search_episodic":
+            if self._episodic_core is None:
+                return []
+            return await self._episodic_core.search(
+                user_id=user_subject,
+                query_embedding=[float(x) for x in query_embedding],
+                owner_type=lane_owner_type,
+                owner_id=lane_owner_id,
+                k=k,
+            )
+
+        if a == "episodic_clusters":
+            return await self.episodic_cluster_summaries(
+                user_id=user_subject,
+                k=k,
+                max_episodes=int(default_k),
+                owner_type=lane_owner_type,
+                owner_id=lane_owner_id,
+            )
+
+        if a == "fetch_episode_clusters":
+            return await self.fetch_episode_clusters(
+                user_id=user_subject,
+                k=k,
+                max_episodes=int(default_k),
+                time_range=getattr(action, "time_range", None),
+                min_salience=getattr(action, "min_salience", None),
+                owner_type=lane_owner_type,
+                owner_id=lane_owner_id,
+            )
+
+        if a == "graph_neighbors":
+            return await self.graph_neighbors(
+                user_id=user_subject,
+                node_id=getattr(action, "node_id", None),
+                predicate_scope=getattr(action, "predicate_scope", None),
+                depth=int(getattr(action, "depth", 1) or 1),
+                k=k,
+                owner_type=lane_owner_type,
+                owner_id=lane_owner_id,
+            )
+
+        if a == "expand_graph":
+            return await self.expand_graph(
+                user_id=user_subject,
+                subject=getattr(action, "subject", None),
+                predicate=getattr(action, "predicate", None),
+                hops=int(getattr(action, "hops", 1) or 1),
+                direction=getattr(action, "direction", None),
+                k=k,
+            )
+
+        if a == "search_procedural":
+            if self._procedural_core is None:
+                return []
+            return await self._procedural_core.search(
+                user_id=None,
+                query_embedding=[float(x) for x in query_embedding],
+                owner_type=lane_owner_type,
+                owner_id=lane_owner_id,
+                k=k,
+            )
+
+        return []

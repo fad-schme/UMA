@@ -13,6 +13,7 @@ from .extractor import FactExtractor
 from .scorer import SalienceScorer
 from .ingestor import SemanticIngestor
 from .core import SemanticCore
+from .query_pruner import prune_facts_for_query  # noqa: F401
 
 __all__ = [
     "FactExtractor",

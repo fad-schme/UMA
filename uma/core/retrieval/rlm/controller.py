@@ -11,10 +11,14 @@ from typing import Any, Dict, List, Optional
 
 from .context_pack import ContextPack
 from .decisions import ControllerDecision, RetrievalAction
+from . import decisions
 from .coverage import assess_coverage, compute_confidence
 from ..policy import RetrievalPolicy, should_stop
 from ...utils.identity import ensure_user_subject
 from ...utils.accessors import get_attr_or_key
+from ...chunk.core import merge_chunks_with_precedence, partition_chunks_by_route
+from ...semantic.query_pruner import prune_facts_for_query
+from .evidence import expand_evidence_chunks_from_facts
 
 try:
     from ...utils.user_query_helper import extract_keywords_and_phrases
@@ -168,10 +172,15 @@ class RLMController:
             len(pack.episodes),
             len(pack.graph),
         )
-        logger.debug(
-            "RLMController: step=0 facts preview=%s",
-            [self._describe_fact(f)[:180] for f in pack.facts[:5]],
-        )
+        try:
+            from ...semantic.query_pruner import describe_fact as _describe_fact
+        except Exception:
+            _describe_fact = None
+        if _describe_fact:
+            logger.debug(
+                "RLMController: step=0 facts preview=%s",
+                [_describe_fact(f)[:180] for f in pack.facts[:5]],
+            )
 
         coverage = self._assess_coverage(pack)
         pack.coverage = coverage
@@ -297,7 +306,23 @@ class RLMController:
                 )
                 break
 
-            decision = self._deterministic_decision(pack, coverage)
+            decision = decisions.deterministic_decision(
+                pack,
+                coverage,
+                cfg={
+                    "max_items_per_type": self.max_items_per_type,
+                    "cluster_k": self.cluster_k,
+                    "salience_threshold": self.salience_threshold,
+                    "graph_predicate_limit": self.graph_predicate_limit,
+                    "chunk_fallback_enabled": self.chunk_fallback_enabled,
+                    "chunk_fallback_k_multiplier": self.chunk_fallback_k_multiplier,
+                    "next_predicate_scope": lambda p, limit: decisions.next_predicate_scope(
+                        facts=getattr(p, "facts", []) or [],
+                        predicate_weights=getattr(self, "predicate_weights", None),
+                        graph_predicate_limit=getattr(self, "graph_predicate_limit", 2),
+                    ),
+                },
+            )
             if not decision or not decision.actions:
                 logger.info("RLMController: no actions at step=%d; stopping", step)
                 break
@@ -411,11 +436,16 @@ class RLMController:
 
             if hard_budget_hit:
                 break
-            logger.debug(
-                "RLMController: step=%d facts preview=%s",
-                step,
-                [self._describe_fact(f)[:180] for f in pack.facts[:5]],
-            )
+            try:
+                from ...semantic.query_pruner import describe_fact as _describe_fact
+            except Exception:
+                _describe_fact = None
+            if _describe_fact:
+                logger.debug(
+                    "RLMController: step=%d facts preview=%s",
+                    step,
+                    [_describe_fact(f)[:180] for f in pack.facts[:5]],
+                )
 
         # Facts are already pruned post-baseline; prune again to account for any
         # new facts added during the loop, then expand evidence based on the final set.
@@ -583,7 +613,11 @@ class RLMController:
                 await self.env.graph_neighbors(
                     user_id=pack.user_id,
                     node_id=pack.user_id,
-                    predicate_scope=self._next_predicate_scope(pack),
+                    predicate_scope=decisions.next_predicate_scope(
+                        facts=getattr(pack, "facts", []) or [],
+                        predicate_weights=getattr(self, "predicate_weights", None),
+                        graph_predicate_limit=getattr(self, "graph_predicate_limit", 2),
+                    ),
                     depth=1,
                     k=self.max_items_per_type,
                     owner_type=owner_type,
@@ -819,101 +853,6 @@ class RLMController:
             min_recent_novelty=self.min_recent_novelty,
         )
 
-    def _deterministic_decision(self, pack: ContextPack, coverage) -> Optional[ControllerDecision]:
-        actions: List[RetrievalAction] = []
-
-        if coverage.needs_semantic:
-            if pack.facts:
-                preds = self._next_predicate_scope(pack)
-                if preds:
-                    predicate = preds[0]
-                    offset = pack.get_predicate_offset(predicate)
-                    actions.append(
-                        RetrievalAction(
-                            action="fetch_more_facts",
-                            predicate=predicate,
-                            k=self.max_items_per_type,
-                            filters={"offset": offset},
-                            owner_type=pack.owner_type,
-                        )
-                    )
-                    pack.bump_predicate_offset(predicate, self.max_items_per_type)
-            else:
-                filters = {"subject": pack.user_id} if pack.owner_type == "user" else None
-                actions.append(
-                    RetrievalAction(
-                        action="search_semantic",
-                        k=self.max_items_per_type,
-                        filters=filters,
-                        owner_type=pack.owner_type,
-                    )
-                )
-
-        # Chunks: keep chunk retrieval single-shot during baseline. If chunks look weak,
-        # allow at most one explicit fallback pass (increase k) to reduce duplication.
-        try:
-            chunk_fallback_used = bool(getattr(pack, "chunk_fallback_used", False))
-        except Exception:
-            chunk_fallback_used = False
-        if self.chunk_fallback_enabled and not chunk_fallback_used:
-            try:
-                n_chunks = len(getattr(pack, "chunks", []) or [])
-            except Exception:
-                n_chunks = 0
-            if n_chunks == 0:
-                actions.append(
-                    RetrievalAction(
-                        action="search_chunks",
-                        k=min(self.max_items_per_type * self.chunk_fallback_k_multiplier, 120),
-                        owner_type=pack.owner_type,
-                    )
-                )
-                try:
-                    pack.chunk_fallback_used = True
-                except Exception:
-                    pass
-
-        if coverage.needs_clusters:
-            has_cluster = any(
-                isinstance(ep, dict) and "episode_ids" in ep for ep in (pack.episodes or [])
-            )
-            actions.append(
-                RetrievalAction(
-                    action="fetch_episode_clusters",
-                    k=self.cluster_k,
-                    time_range=None,
-                    min_salience=self.salience_threshold,
-                    owner_type=pack.owner_type,
-                )
-            )
-            if not has_cluster and len(pack.steps) >= 2:
-                actions.append(
-                    RetrievalAction(
-                        action="search_episodic",
-                        k=self.max_items_per_type,
-                        owner_type=pack.owner_type,
-                    )
-                )
-
-        # Graph is navigation, not truth: only expand as a last-mile step.
-        if not pack.graph and pack.facts and not coverage.needs_semantic and not coverage.needs_clusters:
-            predicate_scope = self._next_predicate_scope(pack)
-            if predicate_scope and pack.owner_type == "user":
-                actions.append(
-                    RetrievalAction(
-                        action="expand_graph",
-                        subject=pack.user_id,
-                        predicate=predicate_scope[0],
-                        hops=1,
-                        direction="outbound",
-                        k=min(self.max_items_per_type, 20),
-                        owner_type=pack.owner_type,
-                    )
-                )
-
-        return ControllerDecision(actions=actions) if actions else None
-
-
     # ------------------------------------------------------------------
     # ACTION EXECUTION
     # ------------------------------------------------------------------
@@ -930,7 +869,6 @@ class RLMController:
         owner_type: str,
         owner_id: Optional[str],
     ) -> List[Any]:
-
         k = int(action.k) if action.k else self.max_items_per_type
         lane_owner_type = action.owner_type or owner_type
         lane_owner_id = owner_id
@@ -973,166 +911,25 @@ class RLMController:
             logger.debug("RLMController: search_procedural returned %d", len(results or []))
             return results
 
-        if action.action == "fetch_more_facts":
-            offset = int(action.filters.get("offset", 0)) if action.filters else 0
-            # --- FETCH_MORE_FACTS-SPECIFIC TELEMETRY ---
-            if trace_id is not None:
-                logger.info(
-                    "RLM_FETCH_MORE_FACTS trace_id=%s predicate=%s offset=%s k=%s",
-                    trace_id,
-                    action.predicate,
-                    offset,
-                    k,
-                )
-            results = await self.env.fetch_more_facts(
-                user_id=user_subject,
-                predicate=action.predicate,
-                k=k,
-                offset=offset,
-                owner_type=lane_owner_type,
-                owner_id=lane_owner_id,
-            )
-            logger.debug("RLMController: fetch_more_facts returned %d", len(results or []))
-            return results
+        results = await decisions.execute_action(
+            env=self.env,
+            user_subject=user_subject,
+            action=action,
+            query_embedding=list(query_embedding),
+            query_text=query_text,
+            owner_type=lane_owner_type,
+            owner_id=lane_owner_id,
+            default_k=self.max_items_per_type,
+            trace_id=trace_id,
+        )
+        logger.debug("RLMController: %s returned %d", getattr(action, "action", "action"), len(results or []))
+        return results
 
-        if action.action == "fetch_facts":
-            results = await self.env.fetch_facts_by_ids(
-                user_id=user_subject,
-                ids=action.ids or [],
-            )
-            logger.debug("RLMController: fetch_facts returned %d", len(results or []))
-            return results
-
-        if action.action == "fetch_chunks":
-            results = await self.env.fetch_chunks(
-                user_id=user_subject,
-                ids=action.ids or [],
-                owner_type=lane_owner_type,
-                owner_id=lane_owner_id,
-            )
-            logger.debug("RLMController: fetch_chunks returned %d", len(results or []))
-            return results
-
-        if action.action == "search_chunks":
-            chunk_core = getattr(self.env, "_chunk_core", None)
-            if chunk_core is None:
-                return []
-            try:
-                lexical_k = int(getattr(getattr(self.env, "_memory", None), "retrieval_cfg", None).lexical_chunks_k)
-            except Exception:
-                lexical_k = 15
-            try:
-                neighbor_window = int(getattr(getattr(self.env, "_memory", None), "retrieval_cfg", None).neighbor_window)
-            except Exception:
-                neighbor_window = 1
-            try:
-                max_total = int(getattr(getattr(self.env, "_memory", None), "retrieval_cfg", None).max_expanded_chunks)
-            except Exception:
-                max_total = 24
-            try:
-                shortlist_k = int(getattr(getattr(self.env, "_memory", None), "retrieval_cfg", None).chunk_shortlist_k)
-            except Exception:
-                shortlist_k = 12
-            try:
-                shortlist_max_per_doc = int(getattr(getattr(self.env, "_memory", None), "retrieval_cfg", None).chunk_shortlist_max_per_doc)
-            except Exception:
-                shortlist_max_per_doc = 3
-
-            results = await chunk_core.search_chunks(
-                query_embedding=list(query_embedding),
-                owner_type=lane_owner_type,
-                owner_id=lane_owner_id,
-                k=k,
-                query_text=query_text,
-                lexical_k=lexical_k,
-                filter_terms=bool(query_text),
-                expand_neighbors=True,
-                neighbor_window=neighbor_window,
-                max_expanded_chunks=max_total,
-                shortlist_k=shortlist_k,
-                shortlist_max_per_doc=shortlist_max_per_doc,
-            )
-            logger.debug("RLMController: search_chunks returned %d", len(results or []))
-            return results
-
-        if action.action == "episodic_clusters":
-            results = await self.env.episodic_cluster_summaries(
-                user_id=user_subject,
-                k=k,
-                max_episodes=self.max_items_per_type,
-                owner_type=lane_owner_type,
-                owner_id=lane_owner_id,
-            )
-            logger.debug("RLMController: episodic_clusters returned %d", len(results or []))
-            return results
-
-        if action.action == "fetch_episode_clusters":
-            results = await self.env.fetch_episode_clusters(
-                user_id=user_subject,
-                k=k,
-                max_episodes=self.max_items_per_type,
-                time_range=action.time_range,
-                min_salience=action.min_salience,
-                owner_type=lane_owner_type,
-                owner_id=lane_owner_id,
-            )
-            logger.debug("RLMController: fetch_episode_clusters returned %d", len(results or []))
-            return results
-
-        if action.action == "graph_neighbors":
-            results = await self.env.graph_neighbors(
-                user_id=user_subject,
-                node_id=action.node_id,
-                predicate_scope=action.predicate_scope,
-                depth=int(action.depth or 1),
-                k=k,
-                owner_type=lane_owner_type,
-                owner_id=lane_owner_id,
-            )
-            logger.debug("RLMController: graph_neighbors returned %d", len(results or []))
-            return results
-
-        if action.action == "expand_graph":
-            results = await self.env.expand_graph(
-                user_id=user_subject,
-                subject=action.subject,
-                predicate=action.predicate,
-                hops=int(action.hops or 1),
-                direction=action.direction,
-                k=k,
-                owner_type=lane_owner_type,
-                owner_id=lane_owner_id,
-            )
-            logger.debug("RLMController: expand_graph returned %d", len(results or []))
-            return results
-
-        return []
+        # (Unreachable)
 
     # ------------------------------------------------------------------
     # HELPERS
     # ------------------------------------------------------------------
-
-    def _next_predicate_scope(self, pack: ContextPack) -> List[str]:
-        ordered: List[str] = []
-
-        if self.predicate_weights:
-            for p, _ in sorted(self.predicate_weights.items(), key=lambda kv: (-kv[1], kv[0])):
-                ordered.append(p)
-
-        counts = {}
-        for f in pack.facts:
-            pred = f.get("predicate") if isinstance(f, dict) else None
-            if pred:
-                counts[pred.upper()] = counts.get(pred.upper(), 0) + 1
-
-        for p, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
-            if p not in ordered:
-                ordered.append(p)
-
-        if not ordered:
-            ordered = ["RELATED_TO"]
-
-        return ordered[: self.graph_predicate_limit]
 
     def _normalize_predicate_weights(self, weights: Optional[Dict[str, float]]) -> Dict[str, float]:
         if not weights:
@@ -1155,100 +952,15 @@ class RLMController:
             return
 
         logger.info("RLMController: pruning facts with LLM (count=%d)", len(pack.facts))
-        # Score only a bounded number of facts to keep prompts small and predictable.
-        max_candidates = 20
-        candidates = list(pack.facts)[:max_candidates]
-
-        descriptions: List[str] = []
-        for idx, fact in enumerate(candidates, start=1):
-            desc = self._describe_fact(fact)
-            descriptions.append(f"{idx}. {desc}")
-
-        if not descriptions:
-            logger.debug("RLMController: prune skipped (no descriptions)")
-            return
-        logger.debug("RLMController: prune input facts=%s", descriptions)
-
-        # system_prompt = (
-        #     "You are a retrieval assistant that filters facts. Given a question and "
-        #     "a numbered list of facts, return ONLY valid JSON with a key `keep` whose value "
-        #     "is an array of 1-based indices of the facts that directly answer the question. "
-        #     "Return an empty array if none apply."
-        # )
-        # user_prompt = f"Question: {pack.query_text}\nFacts:\n" + "\n".join(descriptions)
-
-        system_prompt = (
-            "You are a retrieval assistant that scores fact relevance.\n"
-            "Given a user question and a numbered list of facts, decide "
-            "which facts are directly useful to answer the question.\n"
-            "\n"
-            "Output format requirements:\n"
-            "- Output ONLY a single JSON object.\n"
-            "- The JSON MUST have exactly one key: \"scores\".\n"
-            "- The value of \"scores\" MUST be an array of floats in [0,1].\n"
-            "- The array MUST be the same length as the fact list, in the same order.\n"
-            "- Do not include any other keys, comments, or text before or after the JSON.\n"
-            "\n"
-            "Relevance rules:\n"
-            "- A fact is relevant if it directly helps answer the question or provides "
-            "essential context needed to interpret another relevant fact.\n"
-            "- Do NOT infer or invent new indices.\n"
-            "\n"
-            "Score meaning:\n"
-            "- 1.0 = directly answers the question\n"
-            "- 0.7 = strongly relevant supporting evidence\n"
-            "- 0.4 = somewhat relevant background\n"
-            "- 0.0 = irrelevant\n"
+        pack.facts = await prune_facts_for_query(
+            llm=self.llm,
+            query_text=pack.query_text,
+            facts=list(pack.facts),
+            threshold=0.6,
+            max_keep=12,
+            max_candidates=20,
         )
-        user_prompt = (
-            f"Question:\n{pack.query_text}\n\n"
-            "Facts:\n"
-            + "\n".join(descriptions)
-            + "\n\nReturn the JSON object now."
-        )
-
-
-        try:
-            response = await self.llm.generate(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                max_tokens=128,
-                temperature=0.0,
-            )
-        except Exception:
-            logger.exception("RLMController: final pruning request failed.")
-            return
-
-        logger.debug("RLMController: prune response=%r", response)
-
-        scores = self._parse_scores_list(response, n=len(candidates))
-        if not scores:
-            logger.info("RLMController: prune scoring empty; applying fallback filter")
-            selected = self._fallback_keep_by_query(pack.query_text, pack.facts)
-            if not selected:
-                logger.info("RLMController: prune fallback kept 0 facts")
-                return
-            pack.facts = [pack.facts[i - 1] for i in selected if 1 <= i <= len(pack.facts)]
-            logger.info("RLMController: prune kept %d facts", len(pack.facts))
-            return
-
-        threshold = 0.6
-        max_keep = 12
-        indexed = list(enumerate(scores, start=1))
-        kept = [i for i, s in indexed if s >= threshold]
-        if not kept:
-            indexed.sort(key=lambda it: it[1], reverse=True)
-            kept = [i for i, _ in indexed[: min(max_keep, len(indexed))]]
-
-        filtered: List[Any] = []
-        for idx in kept:
-            if 1 <= idx <= len(candidates):
-                filtered.append(candidates[idx - 1])
-        if filtered:
-            pack.facts = filtered
-            logger.info("RLMController: prune kept %d facts", len(pack.facts))
+        logger.info("RLMController: prune kept %d facts", len(pack.facts))
 
     async def _expand_evidence_chunks_from_facts(
         self,
@@ -1257,66 +969,15 @@ class RLMController:
         owner_type: str,
         owner_id: Optional[str],
     ) -> None:
-        """
-        Evidence expansion: fetch chunks referenced by fact.source_ids (bounded).
-
-        This is called after pruning so only relevant facts can pull additional
-        chunks into the candidate set.
-        """
-        try:
-            max_ev = int(getattr(getattr(self.env, "_memory", None), "retrieval_cfg", None).max_evidence_chunks)
-        except Exception:
-            max_ev = 6
-        max_ev = max(0, max_ev)
-        if not max_ev:
-            return
-        if not hasattr(self.env, "fetch_chunks"):
-            return
-        if not pack.facts:
-            return
-
-        cited: List[str] = []
-        for f in pack.facts:
-            src = f.get("source_ids") if isinstance(f, dict) else getattr(f, "source_ids", None)
-            if isinstance(src, list):
-                for sid in src:
-                    if sid:
-                        cited.append(str(sid))
-        cited = list(dict.fromkeys(cited))[:max_ev]
-        if not cited:
-            logger.debug("RLMController: evidence expansion skipped (no source_ids after prune)")
-            return
-
-        logger.debug(
-            "RLMController: evidence expansion (post-prune) ids=%d owner=%s:%s",
-            len(cited),
-            owner_type,
-            owner_id,
-        )
-        chunks_ev = await self.env.fetch_chunks(
-            user_id=pack.user_id,
-            ids=cited,
+        chunks_ev = await expand_evidence_chunks_from_facts(
+            env=self.env,
+            pack=pack,
             owner_type=owner_type,
             owner_id=owner_id,
+            max_items_per_type=self.max_items_per_type,
         )
-        try:
-            for ch in chunks_ev or []:
-                if isinstance(ch, dict):
-                    continue
-                meta = getattr(ch, "meta", None) or {}
-                if not isinstance(meta, dict):
-                    meta = {}
-                meta.setdefault("retrieval_route", "evidence")
-                meta.setdefault("retrieval_stage", "evidence_expand")
-                ch.meta = meta
-        except Exception:
-            pass
-        pack.chunks = _merge_unique(
-            getattr(pack, "chunks", []),
-            chunks_ev,
-            self.max_items_per_type,
-        )
-        self._rebuild_chunk_buckets(pack)
+        if chunks_ev:
+            self._rebuild_chunk_buckets(pack)
 
     @staticmethod
     def _rebuild_chunk_buckets(pack: ContextPack) -> None:
@@ -1325,132 +986,13 @@ class RLMController:
         with deterministic precedence:
         1) evidence, 2) query hits, 3) neighbors.
         """
-        try:
-            from ...utils.dedupe import dedupe_by_id
-        except Exception:
-            dedupe_by_id = None
-
-        evidence: List[Any] = []
-        query_hits: List[Any] = []
-        neighbors: List[Any] = []
-
-        for ch in getattr(pack, "chunks", []) or []:
-            if isinstance(ch, dict):
-                query_hits.append(ch)
-                continue
-            meta = getattr(ch, "meta", None) or {}
-            route = meta.get("retrieval_route") if isinstance(meta, dict) else None
-            if route == "evidence":
-                evidence.append(ch)
-            elif route == "neighbor":
-                neighbors.append(ch)
-            else:
-                query_hits.append(ch)
-
+        evidence, query_hits, neighbors = partition_chunks_by_route(getattr(pack, "chunks", []) or [])
         pack.evidence_chunks = evidence
         pack.query_chunks = query_hits
         pack.neighbor_chunks = neighbors
+        pack.chunks = merge_chunks_with_precedence(evidence, query_hits, neighbors)
 
-        merged = list(evidence) + list(query_hits) + list(neighbors)
-        if dedupe_by_id:
-            merged = dedupe_by_id(merged)
-        pack.chunks = merged
-
-    def _describe_fact(self, fact: Any) -> str:
-        meta = get_attr_or_key(fact, "meta", {})
-        if isinstance(meta, dict):
-            excerpt = meta.get("excerpt") or meta.get("description")
-            if excerpt:
-                return str(excerpt).replace("\n", " ").strip()
-        obj = get_attr_or_key(fact, "object")
-        if isinstance(obj, dict):
-            text = obj.get("text") or ""
-        else:
-            text = str(obj)
-        if text and text.strip():
-            return text.strip()
-        sub = get_attr_or_key(fact, "subject", "user")
-        pred = get_attr_or_key(fact, "predicate", "related_to")
-        return f"{sub} {pred}"
-
-    def _parse_keep_list(self, response: str) -> List[int]:
-        response = response.strip()
-        values: List[int] = []
-        try:
-            parsed = json.loads(response)
-            if isinstance(parsed, dict) and isinstance(parsed.get("keep"), list):
-                values = [int(x) for x in parsed["keep"] if isinstance(x, int)]
-            elif isinstance(parsed, list):
-                values = [int(x) for x in parsed if isinstance(x, int)]
-        except Exception:
-            tokens = response.replace(",", " ").split()
-            for tok in tokens:
-                if tok.isdigit():
-                    values.append(int(tok))
-        return sorted(set(values))
-
-    def _parse_scores_list(self, response: str, *, n: int) -> List[float]:
-        response = (response or "").strip()
-        try:
-            parsed = json.loads(response)
-        except Exception:
-            return []
-        if not isinstance(parsed, dict):
-            return []
-        raw_scores = parsed.get("scores")
-        if not isinstance(raw_scores, list):
-            return []
-        scores: List[float] = []
-        for x in raw_scores[:n]:
-            try:
-                v = float(x)
-            except Exception:
-                v = 0.0
-            if v < 0.0:
-                v = 0.0
-            if v > 1.0:
-                v = 1.0
-            scores.append(v)
-        if len(scores) != n:
-            return []
-        return scores
-
-    def _fallback_keep_by_query(self, query: str, facts: List[Any]) -> List[int]:
-        """
-        Heuristic fallback if LLM pruning fails: keep facts that mention any query term.
-        """
-        stop = None
-        terms = []
-        try:
-            from ...utils.user_query_helper import get_stopwords
-        except Exception:
-            get_stopwords = None
-        if get_stopwords:
-            try:
-                stop = get_stopwords()
-            except Exception:
-                stop = None
-        if extract_keywords_and_phrases:
-            try:
-                extracted = extract_keywords_and_phrases(query)
-                terms = (extracted.get("keywords") or []) + (extracted.get("keyphrases") or [])
-                terms = [t for t in terms if isinstance(t, str) and t and t not in (stop or set())]
-            except Exception:
-                terms = []
-        if not terms:
-            terms = [
-                t for t in re.split(r"\W+", query.lower())
-                if t and len(t) >= 4 and t not in (stop or set())
-            ]
-        if not terms:
-            return []
-        logger.debug("RLMController: prune fallback terms=%s", terms)
-        kept = []
-        for idx, fact in enumerate(facts, start=1):
-            text = self._describe_fact(fact).lower()
-            if any(t in text for t in terms):
-                kept.append(idx)
-        return kept
+    # Fact description / parsing helpers live in semantic.query_pruner.
 
 
 def _merge_unique(existing: List[Any], research: List[Any], limit: int) -> List[Any]:

@@ -119,7 +119,7 @@ await memory.process_turn(
 `build_context_pack()` returns a **structured data product** (facts, episodes, chunks, graph).
 `build_context_snippet(pack)` is a **presentation layer** that formats that data
 into a string. Keeping them separate lets developers:
-- use `build_context_snippet_for_query(user_id, query_text)` as a one‑liner when they only need a rendered snippet
+- use `get_rendered_context(user_id, query_text)` as a one‑liner when they only need a rendered snippet
 - feed structured context to their own ranking/routing logic
 - render different prompt styles
 - log/debug retrieval results without string parsing

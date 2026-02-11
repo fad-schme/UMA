@@ -27,6 +27,37 @@ from ..utils.dedupe import dedupe_by_id
 logger = logging.getLogger(__name__)
 
 
+def partition_chunks_by_route(chunks: List[Chunk]) -> tuple[List[Chunk], List[Chunk], List[Chunk]]:
+    """
+    Partition chunks into (evidence, query_hits, neighbors) based on meta.retrieval_route.
+    """
+    evidence: List[Chunk] = []
+    query_hits: List[Chunk] = []
+    neighbors: List[Chunk] = []
+    for ch in chunks or []:
+        meta = getattr(ch, "meta", None) or {}
+        route = meta.get("retrieval_route") if isinstance(meta, dict) else None
+        if route == "evidence":
+            evidence.append(ch)
+        elif route == "neighbor":
+            neighbors.append(ch)
+        else:
+            query_hits.append(ch)
+    return evidence, query_hits, neighbors
+
+
+def merge_chunks_with_precedence(
+    evidence: List[Chunk],
+    query_hits: List[Chunk],
+    neighbors: List[Chunk],
+) -> List[Chunk]:
+    """
+    Merge chunk buckets with deterministic precedence:
+    1) evidence, 2) query hits, 3) neighbors.
+    """
+    return dedupe_by_id(list(evidence or []) + list(query_hits or []) + list(neighbors or []))
+
+
 class ChunkCore:
     """
     High-level interface for UMA chunk memory.
@@ -61,6 +92,60 @@ class ChunkCore:
     # ------------------------------------------------------------------
     # PUBLIC API — retrieval
     # ------------------------------------------------------------------
+
+    async def search_chunks_for_rlm(
+        self,
+        *,
+        query_embedding: List[float],
+        owner_type: str,
+        owner_id: str,
+        k: int,
+        query_text: Optional[str],
+    ) -> List[Chunk]:
+        """
+        RLM-friendly chunk retrieval wrapper.
+
+        Centralizes retrieval_cfg defaults (lexical_k, neighbor expansion, shortlist)
+        so RLM controller does not need to know chunk retrieval internals.
+        """
+        memory = getattr(self, "_memory", None)
+        retrieval_cfg = getattr(memory, "retrieval_cfg", None) if memory is not None else None
+
+        try:
+            lexical_k = int(getattr(retrieval_cfg, "lexical_chunks_k", 15))
+        except Exception:
+            lexical_k = 15
+        try:
+            neighbor_window = int(getattr(retrieval_cfg, "neighbor_window", 1))
+        except Exception:
+            neighbor_window = 1
+        try:
+            max_expanded_chunks = int(getattr(retrieval_cfg, "max_expanded_chunks", 24))
+        except Exception:
+            max_expanded_chunks = 24
+        try:
+            shortlist_k = int(getattr(retrieval_cfg, "chunk_shortlist_k", 12))
+        except Exception:
+            shortlist_k = 12
+        try:
+            shortlist_max_per_doc = int(getattr(retrieval_cfg, "chunk_shortlist_max_per_doc", 3))
+        except Exception:
+            shortlist_max_per_doc = 3
+
+        return await self.search_chunks(
+            query_embedding=list(query_embedding),
+            owner_type=owner_type,
+            owner_id=owner_id,
+            k=int(k),
+            query_text=query_text,
+            lexical_k=lexical_k,
+            filter_terms=bool(query_text and str(query_text).strip()),
+            expand_neighbors=True,
+            neighbor_window=neighbor_window,
+            max_expanded_chunks=max_expanded_chunks,
+            shortlist_k=shortlist_k,
+            shortlist_max_per_doc=shortlist_max_per_doc,
+        )
 
     async def _search(
         self,

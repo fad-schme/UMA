@@ -22,6 +22,7 @@ import logging
 from uma.core.utils.dedupe import dedupe_by_id
 from uma.core.utils.accessors import get_attr_or_key
 from uma.core.utils.serialization import chunk_to_dict
+from uma.core.utils.identity import ensure_user_subject
 
 logger = logging.getLogger(__name__)
 
@@ -527,6 +528,83 @@ class ContextPackBuilder:
                 lines.append(f"- {node}")
 
         return "\n".join(lines).strip()
+
+
+async def build_context_snippet(
+    memory: Any,
+    *,
+    pack: Dict[str, Any],
+) -> str:
+    """
+    Render a compact snippet from a ContextPack.
+
+    This is a presentation helper; use ContextPackBuilder.build() for the data product.
+    """
+    ctx_cfg = getattr(getattr(memory, "retrieval_cfg", None), "context", None)
+    if getattr(ctx_cfg, "snippet_refiner_enabled", False):
+        return await ContextPackBuilder.render_snippet_async(pack, ctx_cfg, llm=getattr(memory, "llm", None))
+    return ContextPackBuilder.render_snippet(pack, ctx_cfg)
+
+
+async def get_rendered_context(
+    memory: Any,
+    *,
+    user_id: str,
+    query_text: str,
+) -> str:
+    """
+    Retrieve context and render a production-ready snippet.
+
+    This path is shared by the app and tests to avoid divergence.
+    """
+    if not getattr(memory, "_rlm_controller", None):
+        pack = await memory.build_context_pack(user_id, query_text)
+        return await build_context_snippet(memory, pack=pack)
+
+    pack = await memory._rlm_controller.retrieve_context(
+        user_id=ensure_user_subject(user_id),
+        query_text=query_text,
+    )
+    ctx_cfg = getattr(getattr(memory, "retrieval_cfg", None), "context", None)
+    return await ContextPackBuilder.render_snippet_async(pack, ctx_cfg, llm=getattr(memory, "llm", None))
+
+
+async def build_context_pack(
+    memory: Any,
+    *,
+    user_id: str,
+    query_text: str,
+) -> Dict[str, Any]:
+    """
+    Build a RAG-ready structured context pack using UMA memory.
+
+    Convenience wrapper around:
+    - UMAMemory.get_structured_context()
+    - ContextPackBuilder.build()
+    """
+    ctx = await memory.get_structured_context(user_id, query_text)
+    return ContextPackBuilder.build(query_text, ctx)
+
+
+async def build_prompt_messages(
+    memory: Any,
+    *,
+    user_id: str,
+    query_text: str,
+) -> list:
+    """
+    Backward-compatible prompt helper (deprecated): wraps retrieval + formatting
+    into a single LLM-style messages array.
+    """
+    pack = await build_context_pack(memory, user_id=user_id, query_text=query_text)
+    ctx_cfg = getattr(getattr(memory, "retrieval_cfg", None), "context", None)
+    if getattr(ctx_cfg, "snippet_refiner_enabled", False):
+        snippet = await ContextPackBuilder.render_snippet_async(pack, ctx_cfg, llm=getattr(memory, "llm", None))
+    else:
+        snippet = ContextPackBuilder.render_snippet(pack, ctx_cfg)
+
+    user_content = f"{query_text}\n\nRelevant memory:\n{snippet}" if snippet else query_text
+    return [{"role": "user", "content": user_content}]
 
 
 def _filter_facts_by_query(facts: List[Dict[str, Any]], query_text: str) -> List[Dict[str, Any]]:
