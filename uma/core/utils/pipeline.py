@@ -94,6 +94,7 @@ class MemoryPipeline:
         self.mem = memory_client
         self.hooks = hooks
         self.promotion_policy = promotion_policy
+        self._post_turn_queue: List[Dict[str, Any]] = []
         if promotion_policy is None:
             logger.info("PromotionPolicy disabled (none provided).")
         else:
@@ -103,6 +104,99 @@ class MemoryPipeline:
             except Exception:
                 logger.exception("PromotionPolicy provided but failed during initialization checks; disabling promotion.")
                 self.promotion_policy = None
+
+    def _post_turn_defer_enabled(self) -> bool:
+        """
+        Return True if post-turn maintenance should be queued for background execution.
+        """
+        try:
+            cfg = getattr(self.mem, "pipeline_cfg", None)
+            if cfg is None:
+                return False
+            return bool(getattr(cfg, "defer_post_turn", False))
+        except Exception:
+            return False
+
+    def _post_turn_queue_limit(self) -> int:
+        """
+        Return max queued post-turn tasks before dropping new ones.
+        """
+        try:
+            cfg = getattr(self.mem, "pipeline_cfg", None)
+            limit = int(getattr(cfg, "post_turn_queue_max", 100))
+            return max(1, limit)
+        except Exception:
+            return 100
+
+    def _enqueue_post_turn(self, payload: Dict[str, Any]) -> bool:
+        """
+        Best-effort enqueue for deferred post-turn tasks.
+        """
+        limit = self._post_turn_queue_limit()
+        if len(self._post_turn_queue) >= limit:
+            logger.warning(
+                "MemoryPipeline: post-turn queue full (size=%d limit=%d). Dropping task.",
+                len(self._post_turn_queue),
+                limit,
+            )
+            return False
+        self._post_turn_queue.append(payload)
+        return True
+
+    async def process_post_turn_queue(self, *, max_items: Optional[int] = None) -> int:
+        """
+        Drain deferred post-turn tasks.
+        Returns the number of tasks processed.
+        """
+        if not self._post_turn_queue:
+            return 0
+        count = 0
+        limit = len(self._post_turn_queue) if max_items is None else max(0, int(max_items))
+        while self._post_turn_queue and count < limit:
+            payload = self._post_turn_queue.pop(0)
+            try:
+                await self._run_post_turn_tasks(**payload)
+                count += 1
+            except Exception:
+                logger.exception("MemoryPipeline: deferred post-turn task failed; continuing.")
+                count += 1
+        return count
+
+    async def _run_post_turn_tasks(
+        self,
+        *,
+        user_id: str,
+        user_msg: str,
+        assistant_reply: str,
+        episode: Any,
+        facts: Any,
+        extra_meta: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Execute post-turn tasks that can be deferred for performance:
+        - semantic ingestion (facts)
+        - optional promotion
+        - graph updates
+        - after_turn hooks
+        """
+        facts = facts or await self._semantic_ingest(user_id, assistant_reply, turn_id=None)
+        if episode is not None and facts:
+            for f in facts:
+                try:
+                    meta = getattr(f, "meta", None) or {}
+                    meta.setdefault("source_episode_id", getattr(episode, "id", None))
+                    f.meta = meta
+                except Exception:
+                    continue
+
+        await self._maybe_promote_facts(user_id=user_id, facts=facts)
+        await self._update_graph(user_id, episode, facts)
+        await self._run_after_turn_hooks(
+            user_id=user_id,
+            user_msg=user_msg,
+            reply=assistant_reply,
+            extra_meta=extra_meta or {},
+        )
 
     # ------------------------------------------------------------------
     # PUBLIC ENTRYPOINT
@@ -154,30 +248,44 @@ class MemoryPipeline:
                 # 4) Episodic storage
                 episode = await self._store_episode(user_id, user_msg, assistant_reply, turn_id=turn_id)
 
-                # 5) Semantic ingestion
-                facts = await self._semantic_ingest(user_id, assistant_reply, turn_id=turn_id)
-                if episode is not None and facts:
-                    for f in facts:
-                        try:
-                            meta = getattr(f, "meta", None) or {}
-                            meta.setdefault("source_episode_id", getattr(episode, "id", None))
-                            f.meta = meta
-                        except Exception:
-                            continue
+                if self._post_turn_defer_enabled():
+                    enqueued = self._enqueue_post_turn(
+                        {
+                            "user_id": user_id,
+                            "user_msg": user_msg,
+                            "assistant_reply": assistant_reply,
+                            "episode": episode,
+                            "facts": None,
+                            "extra_meta": extra_meta or {},
+                        }
+                    )
+                    if enqueued:
+                        logger.info("MemoryPipeline: deferred post-turn tasks queued.")
+                else:
+                    # 5) Semantic ingestion
+                    facts = await self._semantic_ingest(user_id, assistant_reply, turn_id=turn_id)
+                    if episode is not None and facts:
+                        for f in facts:
+                            try:
+                                meta = getattr(f, "meta", None) or {}
+                                meta.setdefault("source_episode_id", getattr(episode, "id", None))
+                                f.meta = meta
+                            except Exception:
+                                continue
 
-                # 5b) Optional promotion of eligible facts to agent KB
-                await self._maybe_promote_facts(user_id=user_id, facts=facts)
+                    # 5b) Optional promotion of eligible facts to agent KB
+                    await self._maybe_promote_facts(user_id=user_id, facts=facts)
 
-                # 6) Graph update
-                await self._update_graph(user_id, episode, facts)
+                    # 6) Graph update
+                    await self._update_graph(user_id, episode, facts)
 
-                # 7) Hooks
-                await self._run_after_turn_hooks(
-                    user_id=user_id,
-                    user_msg=user_msg,
-                    reply=assistant_reply,
-                    extra_meta=extra_meta or {},
-                )
+                    # 7) Hooks
+                    await self._run_after_turn_hooks(
+                        user_id=user_id,
+                        user_msg=user_msg,
+                        reply=assistant_reply,
+                        extra_meta=extra_meta or {},
+                    )
 
     # ------------------------------------------------------------------
     # PROMOTION (OPTIONAL)

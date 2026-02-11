@@ -234,6 +234,22 @@ class UMAConfig(dict):
             val = self.retrieval.get("max_evidence_chunks")
             if not isinstance(val, int) or val < 0:
                 raise ValueError("'retrieval.max_evidence_chunks' must be a non-negative integer")
+        if "neighbor_window" in self.retrieval:
+            val = self.retrieval.get("neighbor_window")
+            if not isinstance(val, int) or val < 0:
+                raise ValueError("'retrieval.neighbor_window' must be a non-negative integer")
+        if "max_expanded_chunks" in self.retrieval:
+            val = self.retrieval.get("max_expanded_chunks")
+            if not isinstance(val, int) or val < 0:
+                raise ValueError("'retrieval.max_expanded_chunks' must be a non-negative integer")
+        if "chunk_shortlist_k" in self.retrieval:
+            val = self.retrieval.get("chunk_shortlist_k")
+            if not isinstance(val, int) or val < 0:
+                raise ValueError("'retrieval.chunk_shortlist_k' must be a non-negative integer")
+        if "chunk_shortlist_max_per_doc" in self.retrieval:
+            val = self.retrieval.get("chunk_shortlist_max_per_doc")
+            if not isinstance(val, int) or val < 0:
+                raise ValueError("'retrieval.chunk_shortlist_max_per_doc' must be a non-negative integer")
         context_cfg = self.retrieval.get("context")
         if context_cfg is not None:
             if not isinstance(context_cfg, dict):
@@ -270,6 +286,12 @@ class UMAConfig(dict):
             _pos_int("max_items_per_type")
             _pos_int("max_env_calls")
             _pos_float("timeout_s")
+            if "chunk_fallback_enabled" in rlm and not isinstance(rlm["chunk_fallback_enabled"], bool):
+                raise ValueError("'retrieval.rlm.chunk_fallback_enabled' must be boolean")
+            if "chunk_fallback_k_multiplier" in rlm:
+                val = rlm.get("chunk_fallback_k_multiplier")
+                if not isinstance(val, int) or val <= 0:
+                    raise ValueError("'retrieval.rlm.chunk_fallback_k_multiplier' must be a positive integer")
 
         # -----------------------
         # CONSOLIDATION
@@ -339,6 +361,22 @@ class UMAConfig(dict):
                 policy["allow_method_override"], bool
             ):
                 raise ValueError("'features.policy.allow_method_override' must be boolean")
+
+        # -----------------------
+        # PIPELINE (optional)
+        # -----------------------
+        pipeline_cfg = self.get("pipeline")
+        if pipeline_cfg is not None:
+            if not isinstance(pipeline_cfg, dict):
+                raise ValueError("'pipeline' must be a mapping")
+            if "defer_post_turn" in pipeline_cfg and not isinstance(
+                pipeline_cfg["defer_post_turn"], bool
+            ):
+                raise ValueError("'pipeline.defer_post_turn' must be boolean")
+            if "post_turn_queue_max" in pipeline_cfg:
+                val = pipeline_cfg["post_turn_queue_max"]
+                if not isinstance(val, int) or val <= 0:
+                    raise ValueError("'pipeline.post_turn_queue_max' must be a positive integer")
 
         self._warn_on_secrets()
         logger.info("UMA configuration validated successfully.")

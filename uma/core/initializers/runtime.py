@@ -83,14 +83,14 @@ def ensure_rlm(memory: "UMAMemory") -> None:
     rlm_cfg = memory.retrieval_cfg.rlm
     if rlm_cfg is None or not rlm_cfg.enabled:
         return
-    if memory.rlm_controller is not None:
+    if getattr(memory, "_rlm_controller", None) is not None:
         return
     try:
         from ..retrieval.rlm.environment import UMAMemoryEnvironment
         from ..retrieval.rlm.controller import RLMController
 
         memory.memory_env = UMAMemoryEnvironment(memory)
-        memory.rlm_controller = RLMController(
+        memory._rlm_controller = RLMController(
             llm=memory.llm,
             env=memory.memory_env,
         )
@@ -99,4 +99,4 @@ def ensure_rlm(memory: "UMAMemory") -> None:
         logger.exception(
             "Failed to initialize RLMController; falling back to classic retrieval."
         )
-        memory.rlm_controller = None
+        memory._rlm_controller = None

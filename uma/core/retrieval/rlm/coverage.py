@@ -349,7 +349,11 @@ def _normalize_object_phrase(phrase: str) -> str:
     if not tokens:
         return ""
 
-    stop = {"the", "a", "an", "to", "of", "for", "on", "in", "my", "our", "their"}
+    try:
+        from ...utils.user_query_helper import get_stopwords
+        stop = get_stopwords()
+    except Exception:
+        stop = {"the", "a", "an", "to", "of", "for", "on", "in", "my", "our", "their"}
     while tokens and tokens[0] in stop:
         tokens.pop(0)
 

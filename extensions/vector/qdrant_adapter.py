@@ -190,7 +190,7 @@ class QdrantIndex(VectorIndex):
         k : int
             Number of results
         filters : Optional[Dict]
-            Exact-match AND filter on payload fields (e.g. {"user_id":"u1","owner_scope":"agent"}).
+            Exact-match AND filter on payload fields (e.g. {"owner_type":"agent","owner_id":"agent-1"}).
 
         Returns
         -------

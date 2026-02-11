@@ -95,12 +95,14 @@ class RetrievalService:
 
         max_episodes = int(getattr(retr_cfg, "max_episodes"))
         max_facts = int(getattr(retr_cfg, "max_facts"))
+        max_chunks = int(getattr(retr_cfg, "max_chunks", max_facts))
         max_skills = int(getattr(retr_cfg, "max_skills"))
         max_graph_items = int(getattr(retr_cfg, "max_graph_items"))
 
         self.selector = MemorySelector(
             max_episodes=max_episodes,
             max_facts=max_facts,
+            max_chunks=max_chunks,
             max_skills=max_skills,
             max_graph_items=max_graph_items,
         )
@@ -118,6 +120,7 @@ class RetrievalService:
         *,
         user_subject: str,
         query_embedding: List[float],
+        query_text: Optional[str],
         owner_type: str,
         owner_id: str,
     ) -> Dict[str, List[Any]]:
@@ -144,6 +147,11 @@ class RetrievalService:
             # - user scope: keep subject=user
             # - agent KB: subject=None for corpus-wide search within owner scope
             subject = user_subject if owner_type == "user" else None
+            if not (query_text and str(query_text).strip()):
+                logger.warning(
+                    "RetrievalService._raw_retrieval: semantic_core.search running embedding-only "
+                    "(query_text missing/blank); results may be noisier."
+                )
             tasks["facts"] = asyncio.create_task(
                 semantic_core.search(
                     subject=subject,
@@ -153,13 +161,43 @@ class RetrievalService:
                     k=self.selector.max_facts,
                     offset=0,
                     filters=None,
-                    query_text=None,
+                    query_text=query_text,
                     allowed_topics=None,
                 )
             )
 
         chunk_core = getattr(self.memory, "chunk_core", None)
-        # Chunk retrieval is centralized in ChunkCore.search_chunks.
+        if chunk_core is not None:
+            # Chunk retrieval is centralized in ChunkCore.search_chunks.
+            # Include neighbor expansion here so raw retrieval is complete/deterministic.
+            try:
+                neighbor_window = int(getattr(getattr(self.memory, "retrieval_cfg", None), "neighbor_window", 1))
+            except Exception:
+                neighbor_window = 1
+            try:
+                max_expanded_chunks = int(getattr(getattr(self.memory, "retrieval_cfg", None), "max_expanded_chunks", 24))
+            except Exception:
+                max_expanded_chunks = 24
+            try:
+                lexical_k = int(getattr(getattr(self.memory, "retrieval_cfg", None), "lexical_chunks_k", 15))
+            except Exception:
+                lexical_k = 15
+            tasks["chunks"] = asyncio.create_task(
+                chunk_core.search_chunks(
+                    query_embedding=query_embedding,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    k=self.selector.max_chunks,
+                    query_text=query_text,
+                    lexical_k=lexical_k,
+                    filter_terms=bool(query_text and query_text.strip()),
+                    expand_neighbors=True,
+                    neighbor_window=neighbor_window,
+                    max_expanded_chunks=max_expanded_chunks,
+                    shortlist_k=int(getattr(getattr(self.memory, "retrieval_cfg", None), "chunk_shortlist_k", 12)),
+                    shortlist_max_per_doc=int(getattr(getattr(self.memory, "retrieval_cfg", None), "chunk_shortlist_max_per_doc", 3)),
+                )
+            )
 
         procedural_core = getattr(self.memory, "procedural_core", None)
         if procedural_core is not None:
@@ -191,6 +229,12 @@ class RetrievalService:
                 raw[key] = []
             else:
                 raw[key] = result if isinstance(result, list) else []
+
+        if any(isinstance(x, dict) for x in (raw.get("chunks") or [])):
+            raise TypeError(
+                "RetrievalService expected Chunk objects in raw['chunks']; got dict(s). "
+                "Fix chunk store/core to return Chunk only."
+            )
 
         return raw
 
@@ -257,6 +301,7 @@ class RetrievalService:
                         raw = await self._retrieve_raw(
                             user_subject=user_subject,
                             query_embedding=[float(x) for x in embedding],
+                            query_text=query_text_or_embedding if isinstance(query_text_or_embedding, str) else None,
                             owner_type=owner_type,
                             owner_id=owner_id,
                         )
@@ -269,13 +314,18 @@ class RetrievalService:
                         # If embeddings fail (e.g., Ollama down), fall back to lexical chunks only.
                         raw = {"episodes": [], "facts": [], "chunks": [], "skills": [], "graph": []}
 
-                    # Chunk retrieval: centralized in ChunkCore.search_chunks.
-
                     # selector expects keys: episodes/facts/chunks/skills/graph (+ optional WM)
                     def _drop_invalid(items: List[Any], *, kind: str) -> List[Any]:
                         out: List[Any] = []
                         logged = False
                         for it in items or []:
+                            # Episodes/facts/skills may still be dicts depending on store/backends,
+                            # but chunks must be canonical Chunk objects end-to-end.
+                            if kind == "chunk" and isinstance(it, dict):
+                                raise TypeError(
+                                    "RetrievalService expected Chunk objects for chunks; got dict. "
+                                    "Fix chunk store/core to return Chunk only."
+                                )
                             it_id = it.get("id") if isinstance(it, dict) else getattr(it, "id", None)
                             it_owner_type = it.get("owner_type") if isinstance(it, dict) else getattr(it, "owner_type", None)
                             it_owner_id = it.get("owner_id") if isinstance(it, dict) else getattr(it, "owner_id", None)
@@ -297,36 +347,6 @@ class RetrievalService:
                     raw["skills"] = _drop_invalid(raw.get("skills") or [], kind="skill")
                     raw["graph"] = raw.get("graph") or []
 
-                    # Fill chunks via centralized search before selection.
-                    core = getattr(self.memory, "chunk_core", None)
-                    if core is not None:
-                        try:
-                            lexical_k = int(getattr(getattr(self.memory, "retrieval_cfg", None), "lexical_chunks_k", 15))
-                            if hasattr(core, "search_chunks"):
-                                raw["chunks"] = await core.search_chunks(
-                                    query_embedding=[float(x) for x in embedding],
-                                    owner_type=owner_type,
-                                    owner_id=owner_id,
-                                    k=self.selector.max_facts,
-                                    query_text=query_text_or_embedding if isinstance(query_text_or_embedding, str) else None,
-                                    lexical_k=lexical_k,
-                                    filter_terms=isinstance(query_text_or_embedding, str) and bool(query_text_or_embedding.strip()),
-                                )
-                            else:
-                                raw["chunks"] = await core.search(
-                                    user_id=user_subject,
-                                    query_embedding=[float(x) for x in embedding],
-                                    owner_type=owner_type,
-                                    owner_id=owner_id,
-                                    k=self.selector.max_facts,
-                                )
-                        except Exception:
-                            logger.exception("RetrievalService: chunk search failed.")
-                            strict = bool(getattr(getattr(self.memory, "retrieval_cfg", None), "strict", True))
-                            if strict:
-                                raise
-                            raw["chunks"] = []
-
                     selected = self.selector.select(raw, policy=policy)
 
                     # Extra defensive truncation guard:
@@ -334,7 +354,9 @@ class RetrievalService:
                     # RetrievalService MUST NEVER violate configured budgets.
                     episodes = (selected.get("episodes") or [])[: self.selector.max_episodes]
                     facts = (selected.get("facts") or [])[: self.selector.max_facts]
-                    chunks = (selected.get("chunks") or [])[: self.selector.max_facts]
+                    chunks = (selected.get("chunks") or [])[: self.selector.max_chunks]
+
+                    # Neighbor expansion happens inside ChunkCore.search_chunks(expand_neighbors=True).
 
                     # Evidence expansion: fetch cited chunks for selected facts (bounded).
                     if facts and isinstance(query_text_or_embedding, str) and query_text_or_embedding.strip():
@@ -358,8 +380,39 @@ class RetrievalService:
                                         owner_id=owner_id,
                                         log_context="chunks_evidence_expand",
                                     )
-                                    chunks = dedupe_by_id(list(cited_chunks or []) + list(chunks or []))
-                                    chunks = chunks[: self.selector.max_facts]
+                                    try:
+                                        for ch in cited_chunks or []:
+                                            if isinstance(ch, dict):
+                                                raise TypeError(
+                                                    "RetrievalService expected Chunk objects from chunk_core; got dict. "
+                                                    "Fix the chunk store/core to return Chunk only."
+                                                )
+                                            meta = getattr(ch, "meta", None) or {}
+                                            if not isinstance(meta, dict):
+                                                meta = {}
+                                            meta.setdefault("retrieval_route", "evidence")
+                                            meta.setdefault("retrieval_stage", "evidence_expand")
+                                            ch.meta = meta
+                                    except Exception:
+                                        pass
+                                    # Role-aware merge with deterministic precedence:
+                                    # 1) evidence chunks (fact-cited)
+                                    # 2) query-hit chunks (vector/lexical)
+                                    # 3) neighbor chunks
+                                    query_hits = []
+                                    neighbors = []
+                                    for ch in chunks or []:
+                                        if isinstance(ch, dict):
+                                            raise TypeError("Expected Chunk objects in chunks; got dict.")
+                                        meta = getattr(ch, "meta", None) or {}
+                                        route = meta.get("retrieval_route") if isinstance(meta, dict) else None
+                                        if route == "neighbor":
+                                            neighbors.append(ch)
+                                        else:
+                                            query_hits.append(ch)
+
+                                    merged = dedupe_by_id(list(cited_chunks or []) + list(query_hits) + list(neighbors))
+                                    chunks = merged[: self.selector.max_chunks]
                                     trace.append(
                                         {
                                             "phase": "baseline",
@@ -381,11 +434,15 @@ class RetrievalService:
                         if cited_set:
                             filtered_ids = set()
                             for c in filtered or []:
-                                cid = c.get("id") if isinstance(c, dict) else getattr(c, "id", None)
+                                if isinstance(c, dict):
+                                    raise TypeError("Expected Chunk objects in filtered chunks; got dict.")
+                                cid = getattr(c, "id", None)
                                 if cid:
                                     filtered_ids.add(str(cid))
                             for c in chunks:
-                                cid = c.get("id") if isinstance(c, dict) else getattr(c, "id", None)
+                                if isinstance(c, dict):
+                                    raise TypeError("Expected Chunk objects in chunks; got dict.")
+                                cid = getattr(c, "id", None)
                                 if cid and str(cid) in cited_set and str(cid) not in filtered_ids:
                                     filtered.append(c)
                         chunks = filtered
@@ -494,53 +551,33 @@ class RetrievalService:
         If no chunks match, return empty list.
         """
         try:
-            from ..utils.user_query_helper import extract_query_terms, expand_query_terms
+            from ..utils.user_query_helper import build_query_term_set, text_matches_query_terms
         except Exception:
-            extract_query_terms = None
-            expand_query_terms = None
+            build_query_term_set = None
+            text_matches_query_terms = None
 
         if not chunks or not query_text:
             return chunks
-        if expand_query_terms:
-            terms = expand_query_terms(query_text)
-        elif extract_query_terms:
-            terms = extract_query_terms(query_text)
-        else:
-            terms = []
-        terms = [t for t in (terms or []) if t]
-        if not terms:
-            # Fallback to simple tokenization if helper returns nothing.
-            import re
-            terms = re.findall(r"[a-zA-Z0-9]+", query_text.lower())
-            if not terms:
-                return []
-        # Drop stopwords and very short tokens to avoid matching everything.
-        stop = {
-            "the", "a", "an", "and", "or", "but", "if", "then", "else", "for", "to",
-            "of", "in", "on", "at", "by", "with", "about", "what", "who", "why",
-            "how", "when", "where", "is", "are", "was", "were", "be", "been",
-            "do", "does", "did", "you", "your", "know", "tell", "me", "please",
-        }
-        filtered_terms = []
-        for t in terms:
-            tl = t.lower()
-            if len(tl) < 3:
-                continue
-            if tl in stop:
-                continue
-            filtered_terms.append(tl)
-        if not filtered_terms:
+        if not text_matches_query_terms:
+            return chunks
+
+        if not build_query_term_set:
+            return chunks
+        term_set = build_query_term_set(query_text)
+        if not term_set or (not term_set.terms and not term_set.phrases):
             return []
 
         def _text(ch: Any) -> str:
-            txt = getattr(ch, "text", None)
-            if txt is None and isinstance(ch, dict):
-                txt = ch.get("text")
-            return (txt or "").lower()
+            if isinstance(ch, dict):
+                raise TypeError(
+                    "RetrievalService._filter_chunks_by_query expected Chunk objects; got dict. "
+                    "Fix chunk store/core to return Chunk only."
+                )
+            return (getattr(ch, "text", "") or "").lower()
 
         kept = []
         for ch in chunks:
             hay = _text(ch)
-            if any(t in hay for t in filtered_terms):
+            if text_matches_query_terms(hay, term_set, min_term_matches=2, max_terms_for_match=6):
                 kept.append(ch)
         return kept

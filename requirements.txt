@@ -3,6 +3,7 @@ pytest
 pytest-asyncio
 aiohttp
 pyyaml
+charset-normalizer
 
 # Optional PDF parsing for examples
 PyPDF2

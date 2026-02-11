@@ -93,15 +93,14 @@ retrieval:
   max_skills: 3
   max_graph_items: 3
   max_evidence_chunks: 10
-  fts5_enabled: true
   strict: true
 
   context:
-    max_working_messages: 2
+    max_working_messages: 6
     max_episodic: 2
     max_semantic: 4
     max_chunks: 2
-    snippet_max_chars: 240
+    snippet_max_chars: 600
     snippet_refiner_enabled: true
     snippet_refiner_top_k: 6
     max_procedural: 2
@@ -181,3 +180,13 @@ features:
   policy:
     on_attach_error: "log_and_skip"
     allow_method_override: false
+
+# ------------------------------
+# Pipeline (performance)
+# ------------------------------
+pipeline:
+  # If true, defer post-turn maintenance work to a background queue.
+  # This reduces response latency but makes episodic/graph updates async.
+  defer_post_turn: false
+  # Hard cap for deferred post-turn tasks.
+  post_turn_queue_max: 200

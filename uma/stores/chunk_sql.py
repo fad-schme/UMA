@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .base_vector_sql_store import BaseVectorSQLStore
 from ..adapters.db.base import DBAdapter
@@ -51,35 +51,9 @@ class ChunkSQLStore(BaseVectorSQLStore):
                 );
                 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id);
                 CREATE INDEX IF NOT EXISTS idx_chunks_owner ON chunks(owner_type, owner_id);
+                CREATE INDEX IF NOT EXISTS idx_chunks_scope_doc_pos ON chunks(owner_type, owner_id, doc_id, position);
                 """
             )
-            # Optional SQLite FTS5 index for lexical retrieval.
-            # If the runtime doesn't support FTS5, we continue without it.
-            try:
-                conn.executescript(
-                    """
-                    CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts
-                    USING fts5(text, content='chunks', content_rowid='rowid');
-
-                    CREATE TRIGGER IF NOT EXISTS chunks_ai
-                    AFTER INSERT ON chunks BEGIN
-                        INSERT INTO chunks_fts(rowid, text) VALUES (new.rowid, new.text);
-                    END;
-
-                    CREATE TRIGGER IF NOT EXISTS chunks_ad
-                    AFTER DELETE ON chunks BEGIN
-                        INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', old.rowid, old.text);
-                    END;
-
-                    CREATE TRIGGER IF NOT EXISTS chunks_au
-                    AFTER UPDATE ON chunks BEGIN
-                        INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', old.rowid, old.text);
-                        INSERT INTO chunks_fts(rowid, text) VALUES (new.rowid, new.text);
-                    END;
-                    """
-                )
-            except Exception:
-                logger.warning("ChunkSQLStore: FTS5 unavailable; lexical search falls back to LIKE.")
             ensure_store_metadata(self, conn, store_name="chunks")
             conn.commit()
         except Exception:
@@ -112,6 +86,15 @@ class ChunkSQLStore(BaseVectorSQLStore):
             meta = json.loads(meta_val) if meta_val else {}
         except Exception:
             meta = {}
+
+        # Preserve lexical confidence score when present (e.g., computed in search_text CTE).
+        try:
+            if hasattr(row, "get") and row.get("score") is not None:
+                meta["lexical_confidence"] = float(row.get("score"))  # type: ignore[arg-type]
+            elif hasattr(row, "keys") and "score" in row.keys() and row["score"] is not None:
+                meta["lexical_confidence"] = float(row["score"])
+        except Exception:
+            pass
 
         return Chunk(
             id=row["id"],
@@ -258,23 +241,36 @@ class ChunkSQLStore(BaseVectorSQLStore):
             return []
 
         try:
-            from ..core.utils.user_query_helper import extract_query_terms, expand_query_terms
+            from ..core.utils.user_query_helper import build_query_term_set
         except Exception:
-            extract_query_terms = None
-            expand_query_terms = None
+            build_query_term_set = None
 
-        if expand_query_terms:
-            terms = expand_query_terms(query_text)
-        elif extract_query_terms:
-            terms = extract_query_terms(query_text)
-        else:
-            terms = []
+        def _escape_like(term: str) -> str:
+            return (term or "").replace("%", "\\%").replace("_", "\\_")
+
+        # Consistent with user_query_helper: use the extracted keywords + phrases when available.
+        term_set = build_query_term_set(query_text, max_terms=12, max_phrases=12) if build_query_term_set else None
+        terms = list(term_set.terms) if term_set else []
+        phrases = list(term_set.phrases) if term_set else []
+        # No secondary normalization here: build_query_term_set already uses the canonical
+        # extractor (extract_keywords_and_phrases) which normalizes internally.
+
         terms = [t.strip() for t in (terms or []) if t and t.strip()]
-        if not terms:
-            terms = [query_text.strip()]
+        phrases = [p.strip() for p in (phrases or []) if p and p.strip()]
+        if not terms and not phrases:
+            return []
 
-        # Cap term count to keep SQL small.
-        terms = list(dict.fromkeys(terms))[:6]
+        # Cap term count to keep SQL small and deterministic.
+        terms = list(dict.fromkeys(terms))[:12]
+        phrases = list(dict.fromkeys(phrases))[:12]
+
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "ChunkSQLStore.search_text terms=%r phrases=%r phrase_primacy=%s",
+                terms,
+                phrases,
+                bool(phrases),
+            )
 
         where = []
         params: dict[str, Any] = {}
@@ -285,27 +281,83 @@ class ChunkSQLStore(BaseVectorSQLStore):
             where.append("owner_id = :owner_id")
             params["owner_id"] = owner_id
 
-        like_clauses = []
+        # Weighted SQL scoring, using extracted phrases/keywords.
+        # Phrase weight > keyword weight to favor coherent multi-word matches.
+        # Tuning knobs (keep these as simple constants for now).
+        # Baseline values (pre-tuning) were: phrase_weight=5.0, keyword_weight=1.0.
+        phrase_weight = 5.0
+        keyword_weight = 1.0
+        # Pre-tuning threshold behavior: allow keyword-only queries to pass with a lower score.
+        min_score = 3.0 if phrases else 2.0
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "ChunkSQLStore.search_text weights phrase_weight=%.2f keyword_weight=%.2f min_score=%.2f",
+                phrase_weight,
+                keyword_weight,
+                min_score,
+            )
+
+        phrase_terms: List[str] = []
+        for i, phrase in enumerate(phrases):
+            key = f"p{i}"
+            phrase_terms.append(f"CASE WHEN LOWER(text) LIKE :{key} THEN :phrase_weight ELSE 0.0 END")
+            params[key] = f"%{_escape_like(phrase.lower())}%"
+
+        keyword_terms: List[str] = []
         for i, term in enumerate(terms):
             key = f"t{i}"
-            like_clauses.append(f"LOWER(text) LIKE :{key}")
-            params[key] = f"%{term.lower()}%"
+            keyword_terms.append(f"CASE WHEN LOWER(text) LIKE :{key} THEN :keyword_weight ELSE 0.0 END")
+            params[key] = f"%{_escape_like(term.lower())}%"
 
-        if like_clauses:
-            where.append("(" + " OR ".join(like_clauses) + ")")
+        phrase_expr = " + ".join(phrase_terms) if phrase_terms else "0.0"
+        keyword_expr = " + ".join(keyword_terms) if keyword_terms else "0.0"
 
-        where_sql = " AND ".join(where) if where else "1=1"
+        # Pre-primacy scoring: always add phrase + keyword scores.
+        # Never allow lexical fallback to devolve to an unscoped full-table scan.
+        where_sql = " AND ".join(where) if where else "0=1"
         sql = f"""
-            SELECT * FROM chunks
-            WHERE {where_sql}
-            ORDER BY position ASC
+            WITH scored AS (
+                SELECT *,
+                       ({phrase_expr}) AS phrase_score,
+                       ({keyword_expr}) AS keyword_score
+                FROM chunks
+                WHERE {where_sql}
+                AND LENGTH(text) >= :min_len
+            )
+            SELECT *,
+                   (phrase_score + keyword_score) AS score
+            FROM scored
+            WHERE score >= :min_score
+            ORDER BY score DESC, position ASC
             LIMIT :limit
         """
         params["limit"] = int(k)
+        params["min_score"] = float(min_score)
+        params["min_len"] = 80
+        params["phrase_weight"] = float(phrase_weight)
+        params["keyword_weight"] = float(keyword_weight)
+        # min_score already accounts for presence/absence of phrases (baseline behavior).
 
         conn = self._conn()
         try:
             rows = self._query_all(conn, sql, params=params, log_context="chunk_search_text")
+            if logger.isEnabledFor(logging.INFO):
+                avg_score = 0.0
+                try:
+                    scores = [float(r.get("score") or 0.0) for r in (rows or []) if hasattr(r, "get")]
+                    avg_score = (sum(scores) / len(scores)) if scores else 0.0
+                except Exception:
+                    avg_score = 0.0
+                logger.info(
+                    "ChunkSQLStore.search_text query_len=%d terms=%d phrases=%d returned=%d avg_score=%.2f top_terms=%r top_phrases=%r",
+                    len(query_text),
+                    len(terms),
+                    len(phrases),
+                    len(rows or []),
+                    avg_score,
+                    terms[:3],
+                    phrases[:2],
+                )
             return [self._row_to_object(r) for r in rows]
         except Exception:
             logger.exception("ChunkSQLStore.search_text failed.")
@@ -313,67 +365,50 @@ class ChunkSQLStore(BaseVectorSQLStore):
         finally:
             conn.close()
 
-    async def search_fts5(
+    async def fetch_by_doc_and_position_range(
         self,
-        query_text: str,
         *,
-        owner_type: Optional[str] = None,
-        owner_id: Optional[str] = None,
-        k: int = 10,
-        required_terms: Optional[List[str]] = None,
-        optional_terms: Optional[List[str]] = None,
-        bm25_weight: float = 1.0,
+        owner_type: str,
+        owner_id: str,
+        doc_id: str,
+        pos_start: int,
+        pos_end: int,
+        log_context: str = "chunk_fetch_by_doc_pos_range",
     ) -> List[Chunk]:
-        """
-        SQLite FTS5 lexical search with bm25 ranking.
-
-        - required_terms are enforced strictly (AND).
-        - optional_terms are included softly (OR), improving recall.
-        """
-        if not query_text or not isinstance(query_text, str):
+        if not doc_id or not isinstance(doc_id, str):
             return []
-
-        terms: List[str] = []
-        if required_terms:
-            terms.extend([t for t in required_terms if isinstance(t, str) and t.strip()])
-        if not terms:
-            terms = [query_text.strip()]
-
-        soft_terms = [t for t in (optional_terms or []) if isinstance(t, str) and t.strip()]
-
-        # Build FTS query: required terms AND (optional terms OR ...)
-        required_clause = " AND ".join(f'"{t}"' for t in terms)
-        if soft_terms:
-            optional_clause = " OR ".join(f'"{t}"' for t in soft_terms)
-            fts_query = f"({required_clause}) AND ({optional_clause})"
-        else:
-            fts_query = required_clause
-
-        where = ["chunks_fts MATCH :q"]
-        params: dict[str, Any] = {"q": fts_query, "limit": int(k), "w": float(bm25_weight)}
-        if owner_type:
-            where.append("c.owner_type = :owner_type")
-            params["owner_type"] = owner_type
-        if owner_id:
-            where.append("c.owner_id = :owner_id")
-            params["owner_id"] = owner_id
-
-        where_sql = " AND ".join(where)
-        sql = f"""
-            SELECT c.*
-            FROM chunks_fts
-            JOIN chunks c ON c.rowid = chunks_fts.rowid
-            WHERE {where_sql}
-            ORDER BY bm25(chunks_fts, :w) ASC
-            LIMIT :limit
-        """
+        try:
+            pos_start_i = int(pos_start)
+            pos_end_i = int(pos_end)
+        except Exception:
+            return []
+        if pos_end_i < pos_start_i:
+            return []
 
         conn = self._conn()
         try:
-            rows = self._query_all(conn, sql, params=params, log_context="chunk_search_fts5")
-            return [self._row_to_object(r) for r in rows]
+            rows = self._query_all(
+                conn,
+                """
+                SELECT *
+                FROM chunks
+                WHERE owner_type = ?
+                  AND owner_id = ?
+                  AND doc_id = ?
+                  AND position BETWEEN ? AND ?
+                ORDER BY position ASC
+                """,
+                params=[owner_type, owner_id, doc_id, pos_start_i, pos_end_i],
+                log_context=log_context,
+            )
+            return [self._row_to_object(r) for r in (rows or [])]
         except Exception:
-            logger.exception("ChunkSQLStore.search_fts5 failed.")
+            logger.exception(
+                "ChunkSQLStore.fetch_by_doc_and_position_range failed owner=%s:%s doc_id=%s",
+                owner_type,
+                owner_id,
+                doc_id,
+            )
             return []
         finally:
             conn.close()

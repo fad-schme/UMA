@@ -16,6 +16,7 @@ def test_memory_selector_recall_does_not_reorder_facts():
     selector = MemorySelector(
         max_episodes=3,
         max_facts=5,
+        max_chunks=5,
         max_skills=2,
         max_graph_items=2,
     )
@@ -37,6 +38,7 @@ def test_memory_selector_prefers_agent_without_recall():
     selector = MemorySelector(
         max_episodes=3,
         max_facts=5,
+        max_chunks=5,
         max_skills=2,
         max_graph_items=2,
     )

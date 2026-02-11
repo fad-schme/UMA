@@ -26,7 +26,7 @@ They exist solely to improve **memory recall quality** by deciding
 All reasoning and response generation remains outside UMA.
 
 
-uma.core.retrieval.rlm_controller
+uma.core.retrieval.rlm_controller (internal)
 =================================
 
 RLMController — Recursive (bounded) retrieval controller for UMA.

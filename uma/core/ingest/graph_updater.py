@@ -76,6 +76,7 @@ async def update_graph(
     facts: List[Fact],
     *,
     graph_core: Any,
+    concurrency: int = 8,
 ) -> int:
     """Update the temporal graph with newly extracted semantic facts.
 
@@ -125,39 +126,50 @@ async def update_graph(
 
     attempted = 0
     failed = 0
-    # Upsert each fact with explicit provenance.
-    for fact in facts:
-        try:
-            _validate_fact_for_graph(fact)
-            source_chunk_id = _get_source_chunk_id(fact)
 
-            meta_json = None
+    try:
+        concurrency = int(concurrency)
+    except Exception:
+        concurrency = 8
+    concurrency = max(1, min(concurrency, 32))
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _upsert_one(fact: Fact) -> None:
+        nonlocal attempted, failed
+        async with sem:
             try:
-                if isinstance(getattr(fact, "meta", None), dict) and fact.meta:
-                    meta_json = json.dumps(fact.meta, default=str)
-            except Exception:
-                meta_json = None
+                _validate_fact_for_graph(fact)
+                source_chunk_id = _get_source_chunk_id(fact)
 
-            res = graph_core.insert_fact_triplet(
-                fact_id=str(fact.id),
-                subject=str(fact.subject),
-                predicate=str(fact.predicate),
-                object=str(fact.object),
-                owner_type=str(fact.owner_type),
-                owner_id=str(fact.owner_id),
-                source_chunk_id=source_chunk_id,
-                created_at=getattr(fact, "created_at", None),
-                updated_at=getattr(fact, "updated_at", None),
-                meta_json=meta_json,
-            )
-            await _maybe_await(res)
-            attempted += 1
-        except Exception:
-            failed += 1
-            logger.exception(
-                "update_graph: failed to upsert fact into graph (fact_id=%s)",
-                getattr(fact, "id", "<missing>"),
-            )
+                meta_json = None
+                try:
+                    if isinstance(getattr(fact, "meta", None), dict) and fact.meta:
+                        meta_json = json.dumps(fact.meta, default=str)
+                except Exception:
+                    meta_json = None
+
+                res = graph_core.insert_fact_triplet(
+                    fact_id=str(fact.id),
+                    subject=str(fact.subject),
+                    predicate=str(fact.predicate),
+                    object=str(fact.object),
+                    owner_type=str(fact.owner_type),
+                    owner_id=str(fact.owner_id),
+                    source_chunk_id=source_chunk_id,
+                    created_at=getattr(fact, "created_at", None),
+                    updated_at=getattr(fact, "updated_at", None),
+                    meta_json=meta_json,
+                )
+                await _maybe_await(res)
+                attempted += 1
+            except Exception:
+                failed += 1
+                logger.exception(
+                    "update_graph: failed to upsert fact into graph (fact_id=%s)",
+                    getattr(fact, "id", "<missing>"),
+                )
+
+    await asyncio.gather(*[_upsert_one(f) for f in facts], return_exceptions=False)
 
     if failed:
         logger.warning(

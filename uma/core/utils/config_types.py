@@ -223,10 +223,13 @@ class RetrievalConfig:
     strict: bool = True
     lexical_chunks_k: int = 15
     max_evidence_chunks: int = 6
-    fts5_enabled: bool = True
+    neighbor_window: int = 1
+    max_expanded_chunks: int = 24
 
     # NEW
     rlm: Optional[RLMConfig] = None
+    chunk_shortlist_k: int = 12
+    chunk_shortlist_max_per_doc: int = 3
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "RetrievalConfig":
@@ -237,7 +240,18 @@ class RetrievalConfig:
         max_evidence_chunks = int(d.get("max_evidence_chunks", 6))
         if max_evidence_chunks < 0:
             raise ValueError("'retrieval.max_evidence_chunks' must be a non-negative integer")
-        fts5_enabled = bool(d.get("fts5_enabled", True))
+        neighbor_window = int(d.get("neighbor_window", 1))
+        if neighbor_window < 0:
+            raise ValueError("'retrieval.neighbor_window' must be a non-negative integer")
+        max_expanded_chunks = int(d.get("max_expanded_chunks", 24))
+        if max_expanded_chunks < 0:
+            raise ValueError("'retrieval.max_expanded_chunks' must be a non-negative integer")
+        chunk_shortlist_k = int(d.get("chunk_shortlist_k", 12))
+        if chunk_shortlist_k < 0:
+            raise ValueError("'retrieval.chunk_shortlist_k' must be a non-negative integer")
+        chunk_shortlist_max_per_doc = int(d.get("chunk_shortlist_max_per_doc", 3))
+        if chunk_shortlist_max_per_doc < 0:
+            raise ValueError("'retrieval.chunk_shortlist_max_per_doc' must be a non-negative integer")
         rlm_cfg = d.get("rlm")
         rlm_obj: Optional[RLMConfig] = None
         if isinstance(rlm_cfg, dict):
@@ -267,6 +281,8 @@ class RetrievalConfig:
                 max_new_facts_per_step=int(rlm_cfg.get("max_new_facts_per_step", 12)),
                 max_new_chunks_per_step=int(rlm_cfg.get("max_new_chunks_per_step", 8)),
                 max_graph_expansions_per_step=int(rlm_cfg.get("max_graph_expansions_per_step", 1)),
+                chunk_fallback_enabled=bool(rlm_cfg.get("chunk_fallback_enabled", True)),
+                chunk_fallback_k_multiplier=int(rlm_cfg.get("chunk_fallback_k_multiplier", 2)),
             )
         else:
             rlm_obj = RLMConfig(enabled=True)
@@ -278,7 +294,10 @@ class RetrievalConfig:
             max_graph_items=int(d["max_graph_items"]),
             lexical_chunks_k=lexical_chunks_k,
             max_evidence_chunks=max_evidence_chunks,
-            fts5_enabled=fts5_enabled,
+            neighbor_window=neighbor_window,
+            max_expanded_chunks=max_expanded_chunks,
+            chunk_shortlist_k=chunk_shortlist_k,
+            chunk_shortlist_max_per_doc=chunk_shortlist_max_per_doc,
             context=RetrievalContextConfig.from_dict(d.get("context") or {}),
             strict=strict_mode,
             rlm=rlm_obj,
@@ -309,6 +328,8 @@ class RLMConfig:
     max_new_facts_per_step: int = 12
     max_new_chunks_per_step: int = 8
     max_graph_expansions_per_step: int = 1
+    chunk_fallback_enabled: bool = True
+    chunk_fallback_k_multiplier: int = 2
 
 
 @dataclass
@@ -345,6 +366,21 @@ class RetrievalContextConfig:
             snippet_max_chars=int(d.get("snippet_max_chars", 240)),
             snippet_refiner_enabled=bool(d.get("snippet_refiner_enabled", False)),
             snippet_refiner_top_k=int(d.get("snippet_refiner_top_k", 8)),
+        )
+
+# ---------------------------------------------------------------------------
+# Pipeline Config
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class PipelineConfig:
+    defer_post_turn: bool
+    post_turn_queue_max: int
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "PipelineConfig":
+        return cls(
+            defer_post_turn=bool(d.get("defer_post_turn", False)),
+            post_turn_queue_max=int(d.get("post_turn_queue_max", 100)),
         )
 
 # ---------------------------------------------------------------------------
@@ -435,6 +471,7 @@ class RuntimeConfig:
     retrieval: RetrievalConfig
     features: FeaturesConfig
     consolidation: ConsolidationConfig
+    pipeline: PipelineConfig
     semantic_salience_threshold: float
 
     @classmethod
@@ -449,6 +486,7 @@ class RuntimeConfig:
         features_cfg = FeaturesConfig.from_dict(cfg.get("features") or {})
         consolidation_cfg = ConsolidationConfig.from_dict(cfg["consolidation"])
         storage_cfg = StorageConfig.from_dict(cfg["storage"])
+        pipeline_cfg = PipelineConfig.from_dict(cfg.get("pipeline") or {})
 
         semantic_section = cfg.get("semantic", {}) if isinstance(cfg, dict) else {}
         semantic_salience = semantic_section.get("salience_threshold")
@@ -464,5 +502,6 @@ class RuntimeConfig:
             retrieval=retrieval_cfg,
             features=features_cfg,
             consolidation=consolidation_cfg,
+            pipeline=pipeline_cfg,
             semantic_salience_threshold=float(semantic_salience),
         )

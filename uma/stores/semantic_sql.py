@@ -40,9 +40,9 @@ from typing import List, Optional, Any
 from .base_vector_sql_store import BaseVectorSQLStore
 
 try:
-    from ..core.utils.user_query_helper import expand_query_terms
+    from ..core.utils.user_query_helper import extract_keywords_and_phrases
 except Exception:  # pragma: no cover
-    expand_query_terms = None
+    extract_keywords_and_phrases = None
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from ..core.utils.conflict import FactResolver, LatestWinsFactResolver
@@ -429,10 +429,11 @@ class SemanticSQLStore(BaseVectorSQLStore):
         """
         if not query or not isinstance(query, str):
             return []
-        if expand_query_terms:
-            terms = expand_query_terms(query)
-        else:
-            terms = []
+        terms = []
+        if extract_keywords_and_phrases:
+            extracted = extract_keywords_and_phrases(query)
+            terms = (extracted.get("keywords") or []) + (extracted.get("keyphrases") or [])
+        terms = [t for t in terms if isinstance(t, str) and t]
         if not terms:
             return []
 

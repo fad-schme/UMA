@@ -8,7 +8,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from uma.core.utils.user_query_helper import extract_query_terms, expand_query_terms
+from uma.core.utils.user_query_helper import extract_keywords_and_phrases
 from uma.core.utils.accessors import get_attr_or_key
 
 logger = logging.getLogger(__name__)
@@ -50,8 +50,8 @@ class SnippetRefiner:
         self,
         *,
         query_text: str,
-        facts: List[Dict[str, Any]],
-        chunks: List[Dict[str, Any]],
+        facts: List[Any],
+        chunks: List[Any],
     ) -> List[Dict[str, Any]]:
         """
         Produce final evidence snippets.
@@ -65,31 +65,71 @@ class SnippetRefiner:
             - List of final snippet dicts
         """
         if not chunks:
+            logger.debug("SnippetRefiner.refine: no chunks provided")
             return []
 
         # Step 0 — cheap deterministic prefilter
         candidates = self._prefilter_chunks(chunks, query_text)
         if not candidates:
+            logger.debug("SnippetRefiner.refine: prefilter removed all candidates")
             return []
 
         # Step 1 — group adjacent chunks
         grouped = self._group_chunks(candidates)
+        logger.debug(
+            "SnippetRefiner.refine: candidates=%d grouped=%d facts=%d",
+            len(candidates),
+            len(grouped),
+            len(facts or []),
+        )
 
         # Step 2 — score + shortlist
-        scored = self._score_candidates(grouped, query_text, facts)
-        shortlist = scored[: max(1, int(self.cfg.snippet_refiner_top_k or 6))]
+        facts_norm = [self._normalize_fact(f) for f in (facts or [])]
+        scored = self._score_candidates(grouped, query_text, facts_norm)
+        shortlist_k = max(1, int(self.cfg.snippet_refiner_top_k or 6))
+        shortlist = scored[:shortlist_k]
+        logger.debug(
+            "SnippetRefiner.refine: scored=%d shortlist_k=%d kept_for_refine=%d",
+            len(scored),
+            shortlist_k,
+            len(shortlist),
+        )
 
         # Step 3 — keep shortlist deterministically (LLM does not gate selection)
         kept = shortlist
 
         # Step 4 — per-snippet refinement (bounded)
-        final: List[Dict[str, Any]] = []
-        for cand in kept[: int(self.cfg.max_chunks or 3)]:
-            refined = await self._refine_single(query_text, cand)
-            if refined:
-                final.append(refined)
+        max_out = int(self.cfg.max_chunks or 3)
+        refined_scored: List[Tuple[float, Dict[str, Any]]] = []
+        for cand in kept[:max(1, shortlist_k)]:
+            refined, score = await self._refine_single(query_text, cand)
+            if refined is not None and score is not None:
+                refined_scored.append((float(score), refined))
 
-        return final
+        kept_scored = sorted(
+            [(s, snip) for (s, snip) in refined_scored if s >= 0.7],
+            key=lambda x: x[0],
+            reverse=True,
+        )
+
+        if kept_scored:
+            final = [snip for _, snip in kept_scored[:max_out]]
+            logger.debug("SnippetRefiner.refine: final_snippets=%d", len(final))
+            return final
+
+        # Top-K fallback: if everything is below threshold, keep the best N anyway.
+        if refined_scored:
+            refined_scored.sort(key=lambda x: x[0], reverse=True)
+            final = [snip for _, snip in refined_scored[:max_out]]
+            logger.debug(
+                "SnippetRefiner.refine: fallback_keep_top_k=%d best_score=%.2f",
+                len(final),
+                refined_scored[0][0],
+            )
+            return final
+
+        logger.debug("SnippetRefiner.refine: no snippets survived refinement")
+        return []
 
     # ------------------------------------------------------------------
     # Step 0 — deterministic prefilter
@@ -117,7 +157,15 @@ class SnippetRefiner:
 
     def _group_chunks(self, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Group chunks by doc_id and adjacency (position ±1).
+        Presentation-only grouping for snippet coherence.
+
+        Contract:
+        - This function MUST NOT fetch/expand neighbors.
+        - Deterministic neighbor expansion (pos-window fetch) happens upstream in
+          retrieval (ChunkCore.search_chunks(expand_neighbors=True)).
+        - Here we only merge already-retrieved chunks into coherent snippet candidates.
+
+        Groups by doc_id and adjacency (position ±1) among the provided chunks.
         """
         chunks = sorted(
             chunks,
@@ -154,6 +202,7 @@ class SnippetRefiner:
             "doc_id": group[0].get("doc_id"),
             "chunk_ids": [g.get("id") for g in group if g.get("id")],
             "page_range": self._merge_page_ranges(group),
+            "source_path": group[0].get("source_path"),
             "text": merged_text,
         }
 
@@ -165,7 +214,21 @@ class SnippetRefiner:
             "doc_id": get_attr_or_key(chunk, "doc_id"),
             "position": get_attr_or_key(chunk, "position", 0),
             "page_range": get_attr_or_key(chunk, "page_range"),
+            "source_path": get_attr_or_key(chunk, "source_path"),
             "text": get_attr_or_key(chunk, "text", ""),
+            "meta": get_attr_or_key(chunk, "meta") or {},
+        }
+
+    def _normalize_fact(self, fact: Any) -> Dict[str, Any]:
+        if isinstance(fact, dict):
+            return fact
+        return {
+            "id": get_attr_or_key(fact, "id"),
+            "subject": get_attr_or_key(fact, "subject"),
+            "predicate": get_attr_or_key(fact, "predicate"),
+            "object": get_attr_or_key(fact, "object"),
+            "confidence": get_attr_or_key(fact, "confidence", 0.5),
+            "meta": get_attr_or_key(fact, "meta") or {},
         }
 
     # ------------------------------------------------------------------
@@ -201,39 +264,6 @@ class SnippetRefiner:
         return kept or candidates
 
     # ------------------------------------------------------------------
-    # Step 3 — batch classification
-    # ------------------------------------------------------------------
-
-    async def _batch_classify(
-        self,
-        query_text: str,
-        candidates: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        if not self.llm:
-            return candidates
-
-        excerpts = [c["text"] for c in candidates]
-        prompt = self._batch_prompt(query_text, excerpts)
-
-        try:
-            raw = await self.llm.generate(
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=300,
-                temperature=0.0,
-            )
-            parsed = self._parse_batch_response(raw)
-        except Exception:
-            logger.exception("SnippetRefiner.batch_classify failed; keeping all")
-            return candidates
-
-        kept: List[Dict[str, Any]] = []
-        for idx, keep in parsed.items():
-            if keep and idx < len(candidates):
-                kept.append(candidates[idx])
-
-        return kept
-
-    # ------------------------------------------------------------------
     # Step 4 — per-snippet refinement
     # ------------------------------------------------------------------
 
@@ -241,10 +271,10 @@ class SnippetRefiner:
         self,
         query_text: str,
         candidate: Dict[str, Any],
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
         text = candidate["text"]
         if not self.llm:
-            return self._build_snippet(candidate, text)
+            return self._build_snippet(candidate, text), 1.0
 
         prompt = self._single_prompt(query_text, text)
         try:
@@ -256,21 +286,19 @@ class SnippetRefiner:
             result = self._parse_single_response(raw)
         except Exception:
             logger.exception("SnippetRefiner.refine_single failed")
-            return self._build_snippet(candidate, text)
+            return self._build_snippet(candidate, text), 1.0
 
-        confidence = result.get("confidence")
+        score_val = result.get("score")
         try:
-            conf = float(confidence) if confidence is not None else 0.0
+            score = float(score_val) if score_val is not None else None
         except Exception:
-            conf = 0.0
-        # Require high confidence for relevance; low confidence can be discarded.
-        if conf < 0.8:
-            return None
-        if result.get("keep") is False:
-            return None
+            score = None
+        if score is None:
+            logger.debug("SnippetRefiner.refine_single: missing score; keeping")
+            score = 1.0
 
         refined_text = result.get("rewritten_text") or text
-        return self._build_snippet(candidate, refined_text)
+        return self._build_snippet(candidate, refined_text), score
 
     # ------------------------------------------------------------------
     # Snippet construction
@@ -285,6 +313,7 @@ class SnippetRefiner:
                 "doc_id": candidate.get("doc_id"),
                 "chunk_ids": candidate.get("chunk_ids", []),
                 "page_range": candidate.get("page_range"),
+                "source_path": candidate.get("source_path"),
             },
             "text": text.strip(),
         }
@@ -294,7 +323,8 @@ class SnippetRefiner:
     # ------------------------------------------------------------------
 
     def _extract_terms(self, query_text: str) -> List[str]:
-        terms = expand_query_terms(query_text) or extract_query_terms(query_text) or []
+        extracted = extract_keywords_and_phrases(query_text)
+        terms = (extracted.get("keywords") or []) + (extracted.get("keyphrases") or [])
         return [t.lower() for t in terms if isinstance(t, str) and len(t) > 2]
 
     def _contains_terms(self, text: str, terms: List[str]) -> bool:
@@ -315,60 +345,45 @@ class SnippetRefiner:
         pages = [g.get("page_range") for g in group if g.get("page_range")]
         return pages[0] if pages else None
 
-    def _starts_like_fragment(self, text: str) -> bool:
-        return text[:1].islower() and not text.strip().endswith((".", "!", "?"))
-
     # ------------------------------------------------------------------
     # LLM prompts (safe, bounded)
     # ------------------------------------------------------------------
 
-    def _batch_prompt(self, query_text: str, snippets: List[str]) -> str:
-        numbered = "\n".join(f"{i}. {s}" for i, s in enumerate(snippets))
-        return f"""
-You are a memory quality evaluator.
-
-User question:
-\"\"\"{query_text}\"\"\"
-
-Candidate excerpts:
-{numbered}
-
-For each excerpt, decide if it is meaningful on its own.
-
-Return STRICT JSON:
-{{\"keep\": [true|false, ...]}}
-"""
-
-    def _parse_batch_response(self, raw: str) -> Dict[int, bool]:
-        data = json.loads(raw)
-        keeps = data.get("keep", [])
-        return {i: bool(v) for i, v in enumerate(keeps)}
-
     def _single_prompt(self, query_text: str, text: str) -> str:
         return f"""
-You are a memory quality evaluator.
+        You are a memory quality evaluator.
 
-User question:
-\"\"\"{query_text}\"\"\"
+        User question:
+        \"\"\"{query_text}\"\"\"
 
-Candidate excerpt:
-\"\"\"{text}\"\"\"
+        Candidate excerpt:
+        \"\"\"{text}\"\"\"
 
-Decide if the excerpt is meaningful.
-If yes, lightly rewrite for coherence only.
+        You are a retrieval assistant that scores excerpt relevance.
+        Given a user question and excerpts, evaluate how relevant this excerpt is to the user question.
+        
+        Relevance definition:
+        An excerpt is relevant if it directly helps answer the question or provides essential context needed to interpret or extend another relevant excerpts.
 
-Return STRICT JSON:
-{{\"keep\": true|false, \"confidence\": 0.0-1.0, \"rewritten_text\": \"...\"}}
+        Score definition (0.0-1.0):
+        - 1.0 = directly answers the question
+        - 0.7 = strongly relevant supporting evidence
+        - 0.4 = somewhat relevant background
+        - 0.0 = irrelevant
 
-Confidence definition:
-- High confidence means you are very sure the excerpt is relevant.
-- Low confidence means you are not sure and it can be discarded.
-"""
+        If score >= 0.7, you MAY lightly rewrite for coherence only (no new facts).
+        If score < 0.7, do not rewrite; return rewritten_text as an empty string.
+
+        Return STRICT JSON only:
+        {{\"score\": 0.0-1.0, \"rewritten_text\": \"...\"}}
+
+        """
 
     def _parse_single_response(self, raw: str) -> Dict[str, Any]:
         raw = (raw or "").strip()
         if not raw:
-            return {"keep": True}
+            logger.debug("SnippetRefiner._parse_single_response: raw is empty")
+            return {"score": 1.0}
         try:
             return json.loads(raw)
         except Exception:
@@ -380,5 +395,5 @@ Confidence definition:
             except Exception:
                 pass
         # Fallback: keep original snippet if model returns non-JSON
-        return {"keep": True}
+        return {"score": 1.0}
     

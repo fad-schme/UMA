@@ -1,4 +1,10 @@
 """
+  _   _ __  __   _      ___ _    __  __ 
+ | | | |  \/  | /_\ ___| _ \ |  |  \/  |
+ | |_| | |\/| |/ _ \___|   / |__| |\/| |
+  \___/|_|  |_/_/ \_\  |_|_\____|_|  |_|
+                                        
+
 UMAMemory — Core UMA Memory Runtime
 =====================================
 
@@ -199,7 +205,7 @@ class UMAMemory:
 
         # RLM components (initialized later)
         self.memory_env = None
-        self.rlm_controller = None
+        self._rlm_controller = None
 
         # Unified runtime config
         self.cfg = RuntimeConfig.from_uma_config(config)
@@ -210,6 +216,7 @@ class UMAMemory:
         self.retrieval_cfg = self.cfg.retrieval
         self.features_cfg = self.cfg.features
         self.consolidation_cfg = self.cfg.consolidation
+        self.pipeline_cfg = self.cfg.pipeline
         self.semantic_salience_threshold = self.cfg.semantic_salience_threshold
         self.agent_id = None
 
@@ -313,7 +320,7 @@ class UMAMemory:
         """
         Delegate store wiring to the initializer helper.
         """
-        self._stores = initialize_stores(self)
+        ensure_stores(self)
 
     # ----------------------------------------------------------------------
     # Core Subsystems (WM, Episodic, Semantic ONLY — Retrieval wired in initialize)
@@ -675,9 +682,9 @@ class UMAMemory:
                 }
 
             # 2) Prefer RLM retrieval
-            if getattr(self, "rlm_controller", None) is not None:
+            if getattr(self, "_rlm_controller", None) is not None:
                 try:
-                    pack = await self.rlm_controller.retrieve_context(
+                    pack = await self._rlm_controller.retrieve_context(
                         user_id=user_subject,
                         query_text=query_text,
                     )
@@ -832,11 +839,11 @@ class UMAMemory:
         This path is shared by the app and gold tests to avoid divergence.
         """
         from .utils.context_pack_builder import ContextPackBuilder
-        if not getattr(self, "rlm_controller", None):
+        if not getattr(self, "_rlm_controller", None):
             # Fall back to structured context if RLM isn't available.
             pack = await self.build_context_pack(user_id, query_text)
             return await self.build_context_snippet(pack)
-        pack = await self.rlm_controller.retrieve_context(
+        pack = await self._rlm_controller.retrieve_context(
             user_id=ensure_user_subject(user_id),
             query_text=query_text,
         )

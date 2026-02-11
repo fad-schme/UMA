@@ -21,6 +21,7 @@ import logging
 
 from uma.core.utils.dedupe import dedupe_by_id
 from uma.core.utils.accessors import get_attr_or_key
+from uma.core.utils.serialization import chunk_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -31,11 +32,10 @@ from uma.core.retrieval.rlm.snippet_refiner import SnippetRefiner
 
 try:
     from .config_types import RetrievalContextConfig
-    from .user_query_helper import extract_query_terms, expand_query_terms
+    from .user_query_helper import extract_keywords_and_phrases
 except Exception:  # pragma: no cover
     RetrievalContextConfig = None
-    extract_query_terms = None
-    expand_query_terms = None
+    extract_keywords_and_phrases = None
 
 # Fallback to avoid runtime errors if config_types import fails.
 if RetrievalContextConfig is None:  # pragma: no cover
@@ -456,20 +456,26 @@ class ContextPackBuilder:
                 refiner_failed = True
                 final_snippets = []
 
-            if final_snippets:
-                lines.append("\nDocument snippets:")
-                for snip in final_snippets:
-                    text = (snip.get("text") or "").strip()
-                    if text:
-                        lines.append(f"- {text}")
+        if final_snippets:
+            # Enforce context config: bound snippet length and count here as a final gate.
+            # SnippetRefiner focuses on quality; ContextPackBuilder enforces budgets.
+            bounded: List[Dict[str, Any]] = []
+            for sn in final_snippets:
+                if not isinstance(sn, dict):
+                    continue
+                text = (sn.get("text") or "").strip()
+                if not text:
+                    continue
+                sn = dict(sn)
+                sn["text"] = _trim_to_sentence_boundary(text, max_chars=int(cfg.snippet_max_chars or 240))
+                bounded.append(sn)
+                if len(bounded) >= int(cfg.max_chunks or 3):
+                    break
+            final_snippets = bounded
 
         if not final_snippets:
-            # Fallback (legacy behavior): render raw chunk snippets
+            # Fallback: build final_snippets from deterministic snippet extraction (or raw chunk texts).
             chunk_snippets = _collect_chunk_snippets(pack, cfg, query_text, facts)
-            if chunk_snippets:
-                lines.append("\nDocument chunks:")
-                for snip in chunk_snippets[: cfg.max_chunks]:
-                    lines.append(f"- {snip}")
             final_snippets = [{"text": s} for s in chunk_snippets]
             if cfg.snippet_refiner_enabled and refiner_failed:
                 logger.warning("ContextPackBuilder: SnippetRefiner failed; using fallback snippets")
@@ -481,6 +487,16 @@ class ContextPackBuilder:
                         "ContextPackBuilder: fallback produced no snippets; using raw chunk texts (%d)",
                         len(raw_snippets),
                     )
+
+        # Always render final_snippets as a single consistent evidence section.
+        if final_snippets:
+            lines.append("\nDocument snippets:")
+            for snip in final_snippets[: int(cfg.max_chunks or 3)]:
+                if not isinstance(snip, dict):
+                    continue
+                text = (snip.get("text") or "").strip()
+                if text:
+                    lines.append(f"- {text}")
 
         # Attach final_snippets to pack for downstream use (gold runner expects this field)
         try:
@@ -516,12 +532,9 @@ class ContextPackBuilder:
 def _filter_facts_by_query(facts: List[Dict[str, Any]], query_text: str) -> List[Dict[str, Any]]:
     if not facts or not query_text:
         return facts
-    if expand_query_terms:
-        terms = expand_query_terms(query_text)
-    elif extract_query_terms:
-        terms = extract_query_terms(query_text)
-    else:
-        terms = []
+    extracted = extract_keywords_and_phrases(query_text)
+    terms = (extracted.get("keywords") or []) + (extracted.get("keyphrases") or [])
+    terms = [t for t in terms if isinstance(t, str) and t]
     if not terms:
         return facts
     scored: List[tuple[int, Dict[str, Any]]] = []
@@ -554,12 +567,10 @@ def _extract_relevant_excerpt(text: str, query_text: str, max_chars: int = 240) 
         return cleaned[:max_chars]
 
     terms = []
-    if query_text and extract_query_terms:
-        if expand_query_terms:
-            terms = expand_query_terms(query_text) or []
-        else:
-            terms = extract_query_terms(query_text) or []
-    terms = [t for t in terms if t]
+    if query_text:
+        extracted = extract_keywords_and_phrases(query_text)
+        terms = (extracted.get("keywords") or []) + (extracted.get("keyphrases") or [])
+    terms = [t for t in terms if isinstance(t, str) and t]
 
     if terms:
         scored = []
@@ -683,11 +694,9 @@ def _collect_chunk_snippets(
 
     terms = []
     if query_text:
-        if expand_query_terms:
-            terms = expand_query_terms(query_text) or []
-        elif extract_query_terms:
-            terms = extract_query_terms(query_text) or []
-    terms = [t for t in terms if t]
+        extracted = extract_keywords_and_phrases(query_text)
+        terms = (extracted.get("keywords") or []) + (extracted.get("keyphrases") or [])
+    terms = [t for t in terms if isinstance(t, str) and t]
 
     seen_chunk_text = set()
     snippets: List[str] = []
@@ -794,17 +803,21 @@ def _try_parse_json_list(raw: str) -> Optional[List[Any]]:
 def _normalize_chunk(chunk: Any) -> Dict[str, Any]:
     if isinstance(chunk, dict):
         return chunk
-    text = get_attr_or_key(chunk, "text")
-    if not text:
-        text = get_attr_or_key(chunk, "chunk") or get_attr_or_key(chunk, "content")
-    return {
-        "id": get_attr_or_key(chunk, "id"),
-        "doc_id": get_attr_or_key(chunk, "doc_id"),
-        "position": get_attr_or_key(chunk, "position", 0),
-        "page_range": get_attr_or_key(chunk, "page_range"),
-        "text": text or "",
-        "meta": get_attr_or_key(chunk, "meta", {}),
-    }
+    # Internal UMA runtime expects Chunk objects; this is the serialization boundary.
+    try:
+        return chunk_to_dict(chunk)  # type: ignore[arg-type]
+    except Exception:
+        text = get_attr_or_key(chunk, "text")
+        if not text:
+            text = get_attr_or_key(chunk, "chunk") or get_attr_or_key(chunk, "content")
+        return {
+            "id": get_attr_or_key(chunk, "id"),
+            "doc_id": get_attr_or_key(chunk, "doc_id"),
+            "position": get_attr_or_key(chunk, "position", 0),
+            "page_range": get_attr_or_key(chunk, "page_range"),
+            "text": text or "",
+            "meta": get_attr_or_key(chunk, "meta", {}),
+        }
 
 
 def _group_adjacent_chunks(chunks: List[Any]) -> List[Dict[str, Any]]:

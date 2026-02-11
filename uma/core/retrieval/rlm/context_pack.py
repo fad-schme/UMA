@@ -39,6 +39,9 @@ class ContextPack:
     episodes: List[Any] = field(default_factory=list)
     facts: List[Any] = field(default_factory=list)
     chunks: List[Any] = field(default_factory=list)
+    query_chunks: List[Any] = field(default_factory=list)
+    neighbor_chunks: List[Any] = field(default_factory=list)
+    evidence_chunks: List[Any] = field(default_factory=list)
     skills: List[Any] = field(default_factory=list)
     graph: List[Any] = field(default_factory=list)
 
@@ -154,6 +157,17 @@ class ContextPack:
 
 
 def _collect_ids(items: List[Any]) -> Set[str]:
+    """
+    Defensive helper for evidence accounting.
+
+    This function is intentionally tolerant (supports dict and object shapes) because
+    ContextPack may be used at integration boundaries.
+
+    Invariants are enforced at store/core boundaries instead:
+    - Chunk retrieval must return Chunk objects (never dicts)
+    - Fact retrieval should return Fact objects (never dicts) where possible
+    - Dict conversion should happen only at serialization/report boundaries
+    """
     out: Set[str] = set()
     for it in items or []:
         try:

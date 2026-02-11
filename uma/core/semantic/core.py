@@ -36,7 +36,7 @@ from typing import Any, Dict, List, Optional
 from ...types_fact import Fact
 from ..utils.identity import ensure_user_subject
 from ..utils.dedupe import dedupe_by_id
-from ..utils.user_query_helper import extract_query_terms, expand_query_terms, build_fact_embedding_text
+from ..utils.user_query_helper import extract_keywords_and_phrases, build_fact_embedding_text
 from .ingestor import SemanticIngestor
 
 logger = logging.getLogger(__name__)
@@ -227,7 +227,9 @@ class SemanticCore:
             ]
 
         if query_text:
-            terms = expand_query_terms(query_text) or extract_query_terms(query_text)
+            extracted = extract_keywords_and_phrases(query_text)
+            terms = (extracted.get("keywords") or []) + (extracted.get("keyphrases") or [])
+            terms = [t for t in terms if isinstance(t, str) and t]
             if terms:
                 lowered_terms = [t.lower() for t in terms]
                 original_count = len(facts)

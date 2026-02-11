@@ -43,16 +43,19 @@ class MemorySelector:
         max_facts: int,
         max_skills: int,
         max_graph_items: int,
+        max_chunks: int,
     ) -> None:
         self.max_episodes = max(1, int(max_episodes))
         self.max_facts = max(1, int(max_facts))
+        self.max_chunks = max(1, int(max_chunks))
         self.max_skills = max(1, int(max_skills))
         self.max_graph_items = max(1, int(max_graph_items))
 
         logger.info(
-            "MemorySelector initialized: episodes=%d facts=%d skills=%d graph=%d",
+            "MemorySelector initialized: episodes=%d facts=%d chunks=%d skills=%d graph=%d",
             self.max_episodes,
             self.max_facts,
+            self.max_chunks,
             self.max_skills,
             self.max_graph_items,
         )
@@ -134,23 +137,75 @@ class MemorySelector:
     def _select_chunks(self, items: List[Any], *, policy: Optional[Any] = None) -> List[Any]:
         items = self._dedupe(items)
 
-        def score(ch: Any) -> float:
-            # Prefer earlier chunks to keep document context coherent.
-            try:
-                base = 1.0 / max(1, int(getattr(ch, "position", 1)))
-            except Exception:
-                base = 0.0
-            # If chunk was lexically confirmed, add a small deterministic boost.
-            try:
-                meta = ch.get("meta") if isinstance(ch, dict) else getattr(ch, "meta", None)
-                if isinstance(meta, dict):
-                    base += float(meta.get("lexical_score", 0.0) or 0.0)
-            except Exception:
-                pass
-            return base
+        def _meta(ch: Any) -> Dict[str, Any]:
+            if isinstance(ch, dict):
+                raise TypeError(
+                    "MemorySelector expected Chunk objects for chunk selection; got dict. "
+                    "Fix chunk store/core to return Chunk only."
+                )
+            m = getattr(ch, "meta", None) or {}
+            return m if isinstance(m, dict) else {}
 
-        ranked = sorted(items, key=score, reverse=True)
-        return ranked[: self.max_facts]
+        def _route_weight(route: str) -> float:
+            # Strong, deterministic precedence:
+            # evidence > query hits > neighbors
+            route = (route or "").strip().lower()
+            if route == "evidence":
+                return 10.0
+            if route == "neighbor":
+                return 0.0
+            # default: query hit (vector/lexical)
+            return 5.0
+
+        def _method_weight(method: str) -> float:
+            # Lexical confirmation gets a small deterministic bump.
+            method = (method or "").strip().lower()
+            if method == "lexical":
+                return 0.5
+            if method == "vector":
+                return 0.2
+            return 0.0
+
+        def _pos(ch: Any) -> int:
+            try:
+                return int(getattr(ch, "position", 0) or 0)
+            except Exception:
+                return 0
+
+        def score(ch: Any) -> float:
+            m = _meta(ch)
+            route = m.get("retrieval_route")
+            method = m.get("retrieval_method")
+            lexical_score = 0.0
+            try:
+                lexical_score = float(m.get("lexical_score", 0.0) or 0.0)
+            except Exception:
+                lexical_score = 0.0
+
+            # Note: we don't currently have vector similarity scores plumbed through
+            # from the vector store, so we rely on route/method + lexical score.
+            return _route_weight(str(route or "")) + _method_weight(str(method or "")) + lexical_score
+
+        # Rank by evidence first, then lexical confirmations, with position only as a tie-breaker
+        # within the same doc (so we don't globally bias toward intros).
+        def sort_key(ch: Any) -> tuple:
+            m = _meta(ch)
+            route = str(m.get("retrieval_route") or "")
+            method = str(m.get("retrieval_method") or "")
+            try:
+                lex = float(m.get("lexical_score", 0.0) or 0.0)
+            except Exception:
+                lex = 0.0
+            doc = str(getattr(ch, "doc_id", "") or "")
+            pos = _pos(ch)
+            return (
+                -score(ch),  # primary: evidence-driven score
+                doc,         # stable grouping
+                pos,         # tie-break within doc only
+            )
+
+        ranked = sorted(items, key=sort_key)
+        return ranked[: self.max_chunks]
 
     # -------------------- Skills --------------------
 

@@ -29,6 +29,10 @@ class DocumentChunk:
     text: str
     page_range: Tuple[int, int]
     position: int
+    char_start: Optional[int] = None
+    char_end: Optional[int] = None
+    paragraph_index_start: Optional[int] = None
+    paragraph_index_end: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -52,7 +56,7 @@ class IngestReport:
 
 @dataclass(frozen=True)
 class IngestConfig:
-    chunk_size_tokens: int = 600
+    chunk_size_tokens: int = 400
     overlap_tokens: int = 150
     embed_batch_size: int = 16
     embed_max_retries: int = 3
@@ -64,3 +68,8 @@ class IngestConfig:
     doc_min_fact_words: int = 15
     doc_summary_enabled: bool = True
     doc_summary_max_facts: int = 5
+    doc_episode_enabled: bool = True
+    graph_update_concurrency: int = 8
+    fact_extraction_batch_enabled: bool = False
+    fact_extraction_batch_size_chunks: int = 4
+    fact_extraction_batch_max_chars: int = 12000

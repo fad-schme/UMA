@@ -9,9 +9,14 @@ from uuid import uuid4
 from .types import IngestConfig, IngestReport
 from .parser import parse_file
 from .normalizer import normalize_document
-from .chunker import chunk_sections
+from .chunker import chunk_sections, finalize_chunks, validate_chunks, validate_docchunk_structure
 from .embedder import embed_chunks
-from .semantic_extractor import extract_facts, extract_summary_facts
+from .semantic_extractor import (
+    extract_facts,
+    extract_facts_batch,
+    extract_summary_facts,
+    select_chunks_for_fact_extraction,
+)
 from .graph_updater import update_graph
 from .episodic_writer import write_document_episode
 from .consolidation_trigger import maybe_trigger_consolidation
@@ -106,8 +111,8 @@ async def ingest_document(
         if memory is not None:
             semantic_cfg = None
             try:
-                semantic_cfg = getattr(memory, "raw_config", None)
-                semantic_cfg = semantic_cfg.get("semantic") if semantic_cfg else None
+                raw_cfg = getattr(memory, "raw_config", None)
+                semantic_cfg = raw_cfg.get("semantic") if raw_cfg else None
             except Exception:
                 semantic_cfg = None
             if isinstance(semantic_cfg, dict):
@@ -268,14 +273,34 @@ async def ingest_document(
     if not sections:
         warnings.append("no sections after normalization")
 
-    # 3) Chunk
-    chunks = chunk_sections(
+    # 3) Chunk (raw emission; not yet strict-finalized)
+    raw_chunks = chunk_sections(
         sections,
         chunk_size_tokens=config.chunk_size_tokens,
         overlap_tokens=config.overlap_tokens,
     )
-    if not chunks:
+    logger.info("DOC_CHUNK_RAW count=%d", len(raw_chunks))
+    if not raw_chunks:
         warnings.append("no chunks created")
+
+    # 3a) Strict chunker gate (MUST run before any persistence)
+    try:
+        # finalize_chunks re-ids/repositions deterministically if merges occur
+        final_chunks = finalize_chunks(raw_chunks)
+    except Exception as exc:
+        logger.exception("ingest_document: strict chunk validation failed; refusing persistence")
+        raise ValueError(f"ingest_document: strict chunk validation failed: {exc}") from exc
+    logger.info("DOC_CHUNK_FINAL count=%d", len(final_chunks))
+
+    if not final_chunks:
+        logger.warning("No final_chunks produced; skipping embedding/persistence.")
+        return IngestReport(
+            doc_id=parsed.doc_id,
+            chunks_created=0,
+            facts_created=0,
+            graph_edges_created=0,
+            warnings=warnings + ["no final chunks produced"],
+        )
 
     # 3b) Document manifest (authoritative)
     try:
@@ -307,7 +332,7 @@ async def ingest_document(
 
     now = datetime.now(timezone.utc)
     chunk_rows: Dict[str, Chunk] = {}
-    for chunk in chunks:
+    for chunk in final_chunks:
         text_hash = hashlib.sha256((chunk.text or "").encode("utf-8")).hexdigest()
         row = Chunk(
             id=chunk.chunk_id,
@@ -327,14 +352,25 @@ async def ingest_document(
                 "chunk_size_tokens": config.chunk_size_tokens,
                 "overlap_tokens": config.overlap_tokens,
                 "chunker_version": _CHUNKER_VERSION,
+                # Paragraph indices are scoped to the originating section/page_range (not doc-global).
+                # Any future paragraph-based expansion MUST use (doc_id, page_range, paragraph_index_*) together.
+                "paragraph_index_scope": "page_range",
+                "paragraph_index_start": chunk.paragraph_index_start,
+                "paragraph_index_end": chunk.paragraph_index_end,
             },
         )
         chunk_rows[chunk.chunk_id] = row
 
     # Embed + upsert chunk facts (authoritative SQL + vector)
     expected_dim = getattr(embedder, "dimension", None)
+    logger.info(
+        "DOC_CHUNK_EMBED_AND_PERSIST count=%d sample_ids=%s",
+        len(final_chunks),
+        [c.chunk_id for c in final_chunks[:3]],
+    )
+
     chunk_embeddings = await embed_chunks(
-        chunks,
+        final_chunks,
         embedder=embedder,
         batch_size=config.embed_batch_size,
         expected_dim=expected_dim if isinstance(expected_dim, int) and expected_dim > 0 else None,
@@ -342,7 +378,11 @@ async def ingest_document(
         initial_delay=config.embed_initial_delay_s,
         backoff_factor=config.embed_backoff_factor,
         max_delay=config.embed_max_delay_s,
+        strict=True,
     )
+
+    if set(chunk_embeddings.keys()) != {c.chunk_id for c in final_chunks}:
+        raise RuntimeError("Embedding id mismatch; refusing to persist inconsistent chunk set.")
 
     for chunk_id, emb in chunk_embeddings.items():
         row = chunk_rows.get(chunk_id)
@@ -356,14 +396,26 @@ async def ingest_document(
             logger.exception("ingest_document: failed to upsert chunk %s", chunk_id)
 
     # 5) Semantic extraction from chunks (optionally limit chunk count)
-    extract_chunks = chunks
+    extract_chunks = final_chunks
     if config.extract_max_chunks is not None:
-        extract_chunks = chunks[: int(config.extract_max_chunks)]
-    extracted = await extract_facts(
-        extract_chunks,
-        llm=llm,
-        min_fact_words=config.doc_min_fact_words,
-    )
+        extract_chunks = select_chunks_for_fact_extraction(
+            final_chunks,
+            max_chunks=int(config.extract_max_chunks),
+        )
+    if getattr(config, "fact_extraction_batch_enabled", False):
+        extracted = await extract_facts_batch(
+            extract_chunks,
+            llm=llm,
+            min_fact_words=config.doc_min_fact_words,
+            batch_size_chunks=getattr(config, "fact_extraction_batch_size_chunks", 4),
+            max_chars=getattr(config, "fact_extraction_batch_max_chars", 12000),
+        )
+    else:
+        extracted = await extract_facts(
+            extract_chunks,
+            llm=llm,
+            min_fact_words=config.doc_min_fact_words,
+        )
 
     # 5b) Document-level summary facts (optional)
     if config.doc_summary_enabled:
@@ -418,7 +470,7 @@ async def ingest_document(
     facts_created = 0
     if extracted_fact_records:
         try:
-            from ..core.utils.user_query_helper import build_fact_embedding_text
+            from ..utils.user_query_helper import build_fact_embedding_text
         except Exception:
             build_fact_embedding_text = None
 
@@ -454,20 +506,25 @@ async def ingest_document(
             if extracted_fact_records:
                 warnings.append("embedding returned invalid shape for extracted facts")
 
-    # 7) Graph update
-    graph_edges = await update_graph(extracted_fact_records, graph_core=graph_core)
-
-    # 8) Episodic entry for document ingest
-    summary_text = f"Document ingested: {parsed.source_path}"
-    await write_document_episode(
-        doc_id=parsed.doc_id,
-        summary_text=summary_text,
-        owner_type=owner_type,
-        owner_id=owner_id,
-        user_id=owner_id if owner_type == "user" else None,
-        embedder=embedder,
-        episodic_core=episodic_core,
+    # 7) Graph update (derived store; bounded concurrency for latency)
+    graph_edges = await update_graph(
+        extracted_fact_records,
+        graph_core=graph_core,
+        concurrency=getattr(config, "graph_update_concurrency", 8),
     )
+
+    # 8) Episodic entry for document ingest (optional)
+    if getattr(config, "doc_episode_enabled", True):
+        summary_text = f"Document ingested: {parsed.source_path}"
+        await write_document_episode(
+            doc_id=parsed.doc_id,
+            summary_text=summary_text,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            user_id=owner_id if owner_type == "user" else None,
+            embedder=embedder,
+            episodic_core=episodic_core,
+        )
 
     # 9) Optional consolidation trigger
     await maybe_trigger_consolidation(
