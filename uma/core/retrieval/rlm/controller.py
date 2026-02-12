@@ -20,10 +20,7 @@ from ...chunk.core import merge_chunks_with_precedence, partition_chunks_by_rout
 from ...semantic.query_pruner import prune_facts_for_query
 from .evidence import expand_evidence_chunks_from_facts
 
-try:
-    from ...utils.user_query_helper import extract_keywords_and_phrases
-except Exception:  # pragma: no cover - optional
-    extract_keywords_and_phrases = None
+from ...utils.user_query_helper import extract_keywords_and_phrases
 
 logger = logging.getLogger(__name__)
 
@@ -98,8 +95,10 @@ class RLMController:
 
     async def retrieve_context(self, user_id: str, query_text: str) -> ContextPack:
         if not user_id or not isinstance(user_id, str):
+            logger.error("RLMController.retrieve_context: user_id must be a non-empty string")
             raise ValueError("user_id must be a non-empty string")
         if not query_text or not isinstance(query_text, str):
+            logger.error("RLMController.retrieve_context: query_text must be a non-empty string")
             raise ValueError("query_text must be a non-empty string")
 
         policy = RetrievalPolicy(query_text)
@@ -144,6 +143,7 @@ class RLMController:
             owner_type = "agent"
             agent_id = getattr(self.env, "_agent_id", None)
             if not agent_id:
+                logger.error("RLMController.retrieve_context: agent_id is required for agent scope")
                 raise ValueError("RLMController.retrieve_context: agent_id is required for agent scope.")
             owner_id = agent_id
         pack.owner_type = owner_type
@@ -791,7 +791,8 @@ class RLMController:
         try:
             episodes = self.env._filter_time_range(episodes or [], time_range)
         except Exception:
-            pass
+            logger.exception("RLMController._search_episodic_core: failed to filter time range")
+            raise
         return episodes
 
     async def _search_procedural_core(

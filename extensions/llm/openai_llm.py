@@ -24,7 +24,7 @@ from typing import List, Dict, Any
 from openai import AsyncOpenAI
 from uma.adapters.llm.base import LLMInterface
 from uma.core.utils.config_types import LLMConfig
-from uma.adapters.llm.retry_utils import retryable
+from uma.adapters.llm.retry_utils import retryable, should_retry_openai
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ class OpenAILLM(LLMInterface):
 
         logger.info("OpenAILLM initialized with model=%s", model)
 
-    @retryable()
+    @retryable(should_retry=should_retry_openai)
     async def generate(
         self,
         messages: List[Dict[str, str]],

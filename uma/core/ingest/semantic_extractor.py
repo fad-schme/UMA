@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Any, Dict, List
 
+from ..llm.controller import LLMCallContext, generate_json
 from ..semantic.scorer import SalienceScorer
 from .types import DocumentChunk, ExtractedFact
 
 logger = logging.getLogger(__name__)
 
-_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
-_JSON_LIST_RE = re.compile(r"\[.*\]", re.DOTALL)
+from ..utils.json_utils import try_parse_json_list, try_parse_json_object
 
 _EXTRACT_KEYWORDS = (
     "architecture",
@@ -39,41 +38,11 @@ _EXTRACT_BOILERPLATE = (
 
 
 def _try_parse_json(raw: str) -> Dict[str, Any] | None:
-    raw = (raw or "").strip()
-    if not raw:
-        return None
-    try:
-        obj = json.loads(raw)
-        return obj if isinstance(obj, dict) else None
-    except Exception:
-        pass
-    m = _JSON_OBJECT_RE.search(raw)
-    if not m:
-        return None
-    try:
-        obj = json.loads(m.group(0))
-        return obj if isinstance(obj, dict) else None
-    except Exception:
-        return None
+    return try_parse_json_object(raw)
 
 
 def _try_parse_json_list(raw: str) -> List[Any] | None:
-    raw = (raw or "").strip()
-    if not raw:
-        return None
-    try:
-        obj = json.loads(raw)
-        return obj if isinstance(obj, list) else None
-    except Exception:
-        pass
-    m = _JSON_LIST_RE.search(raw)
-    if not m:
-        return None
-    try:
-        obj = json.loads(m.group(0))
-        return obj if isinstance(obj, list) else None
-    except Exception:
-        return None
+    return try_parse_json_list(raw)
 
 
 def _build_prompt(chunk_text: str, *, min_fact_words: int) -> List[Dict[str, str]]:
@@ -196,7 +165,7 @@ def _parse_facts_payload_for_chunk(
         if min_fact_words and _word_count(obj_text) < int(min_fact_words):
             continue
 
-        from ...types_fact import Fact
+        from ...types import Fact
         from datetime import datetime, timezone
 
         fact_stub = Fact(
@@ -245,34 +214,29 @@ async def extract_facts_batch(
 
     scorer = SalienceScorer()
     extracted: List[ExtractedFact] = []
+    total_chunks = len(chunks)
+    failed_chunks = 0
+    batch_failures = 0
     batches = _partition_batches_by_chars(chunks, batch_size_chunks=batch_size_chunks, max_chars=max_chars)
 
     for batch_idx, batch in enumerate(batches):
         items = [{"chunk_id": c.chunk_id, "text": (c.text or "")} for c in batch]
-        raw = ""
         data = None
         try:
-            raw = await llm.generate(
-                _build_batch_prompt(items, min_fact_words=max(0, int(min_fact_words))),
+            data = await generate_json(
+                llm=llm,
+                messages=_build_batch_prompt(items, min_fact_words=max(0, int(min_fact_words))),
                 max_tokens=800,
-                temperature=0.0,
+                ctx=LLMCallContext(op="ingest_fact_extract_batch"),
+                repair_messages_fn=lambda bad: [
+                    {"role": "system", "content": "Return ONLY valid JSON. No prose."},
+                    {"role": "user", "content": bad or ""},
+                ],
             )
-            data = _try_parse_json(raw)
         except Exception:
             logger.exception("extract_facts_batch: llm generate failed batch_idx=%d", batch_idx)
             data = None
-
-        if data is None:
-            # Repair pass
-            try:
-                repair_prompt = [
-                    {"role": "system", "content": "Return ONLY valid JSON. No prose."},
-                    {"role": "user", "content": raw},
-                ]
-                repaired = await llm.generate(repair_prompt, max_tokens=600, temperature=0.0)
-                data = _try_parse_json(repaired)
-            except Exception:
-                data = None
+            batch_failures += 1
 
         chunks_obj = data.get("chunks") if isinstance(data, dict) else None
         good_ids: set[str] = set()
@@ -294,7 +258,29 @@ async def extract_facts_batch(
         for c in batch:
             if c.chunk_id in good_ids:
                 continue
-            extracted.extend(await extract_facts_one(c, llm=llm, min_fact_words=min_fact_words, scorer=scorer))
+            try:
+                fallback = await extract_facts_one(
+                    c,
+                    llm=llm,
+                    min_fact_words=min_fact_words,
+                    scorer=scorer,
+                )
+            except Exception:
+                fallback = []
+                logger.exception("extract_facts_batch: fallback failed chunk_id=%s", c.chunk_id)
+            if not fallback and (c.text or "").strip():
+                failed_chunks += 1
+            extracted.extend(fallback)
+
+    if failed_chunks or batch_failures:
+        logger.warning(
+            "extract_facts_batch: completed with failures total_chunks=%d failed_chunks=%d batch_failures=%d",
+            total_chunks,
+            failed_chunks,
+            batch_failures,
+        )
+    else:
+        logger.info("extract_facts_batch: completed total_chunks=%d", total_chunks)
 
     return extracted
 
@@ -315,29 +301,21 @@ async def extract_facts_one(
     if not text:
         return []
 
-    raw = ""
+    data = None
     try:
-        raw = await llm.generate(
-            _build_prompt(text, min_fact_words=max(0, int(min_fact_words))),
+        data = await generate_json(
+            llm=llm,
+            messages=_build_prompt(text, min_fact_words=max(0, int(min_fact_words))),
             max_tokens=400,
-            temperature=0.0,
+            ctx=LLMCallContext(op="ingest_fact_extract_one"),
+            repair_messages_fn=lambda bad: [
+                {"role": "system", "content": "Return ONLY valid JSON. No prose."},
+                {"role": "user", "content": bad or ""},
+            ],
         )
     except Exception:
         logger.exception("extract_facts_one: llm generate failed for chunk=%s", chunk.chunk_id)
         return []
-
-    data = _try_parse_json(raw)
-    if data is None:
-        # Repair pass with stricter instruction
-        try:
-            repair_prompt = [
-                {"role": "system", "content": "Return ONLY valid JSON. No prose."},
-                {"role": "user", "content": raw},
-            ]
-            repaired = await llm.generate(repair_prompt, max_tokens=300, temperature=0.0)
-            data = _try_parse_json(repaired)
-        except Exception:
-            data = None
     if data is None:
         logger.info("extract_facts_one: skipping chunk due to invalid JSON (chunk=%s)", chunk.chunk_id)
         return []
@@ -369,7 +347,7 @@ async def extract_facts_one(
             continue
 
         # Use salience scorer from core semantic
-        from ...types_fact import Fact
+        from ...types import Fact
         from datetime import datetime, timezone
 
         fact_stub = Fact(
@@ -395,6 +373,12 @@ async def extract_facts_one(
             )
         )
 
+    if not extracted and text:
+        logger.info(
+            "extract_facts_one: no facts extracted chunk=%s words=%d",
+            chunk.chunk_id,
+            _word_count(text),
+        )
     return extracted
 
 
@@ -549,18 +533,21 @@ async def extract_summary_facts(
     if max_facts == 0:
         return []
 
-    raw = ""
+    data = None
     try:
-        raw = await llm.generate(
-            _build_summary_prompt(doc_text, max_facts=max_facts, min_fact_words=max(0, int(min_fact_words))),
+        data = await generate_json(
+            llm=llm,
+            messages=_build_summary_prompt(doc_text, max_facts=max_facts, min_fact_words=max(0, int(min_fact_words))),
             max_tokens=400,
-            temperature=0.0,
+            ctx=LLMCallContext(op="ingest_fact_extract_summary"),
+            repair_messages_fn=lambda bad: [
+                {"role": "system", "content": "Return ONLY valid JSON. No prose."},
+                {"role": "user", "content": bad or ""},
+            ],
         )
     except Exception:
         logger.exception("extract_summary_facts: llm generate failed")
         return []
-
-    data = _try_parse_json(raw)
     if data is None:
         logger.info("extract_summary_facts: invalid JSON output")
         return []
@@ -589,7 +576,7 @@ async def extract_summary_facts(
         if min_fact_words and _word_count(obj_text) < int(min_fact_words):
             continue
 
-        from ...types_fact import Fact
+        from ...types import Fact
         from datetime import datetime, timezone
         fact_stub = Fact(
             id="stub",
@@ -614,4 +601,10 @@ async def extract_summary_facts(
             )
         )
 
+    if not extracted:
+        logger.info(
+            "extract_summary_facts: no facts extracted doc_id=%s max_facts=%d",
+            doc_id,
+            max_facts,
+        )
     return extracted

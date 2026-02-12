@@ -16,13 +16,16 @@ import logging
 import re
 from typing import Any, List, Sequence
 
-try:
-    from ..utils.user_query_helper import extract_keywords_and_phrases, get_stopwords
-except Exception:  # pragma: no cover - optional
-    extract_keywords_and_phrases = None
-    get_stopwords = None
+from pydantic import BaseModel, Field
+
+from ..llm.controller import LLMCallContext, generate_model
+
+from ..utils.user_query_helper import extract_keywords_and_phrases, get_stopwords
 
 logger = logging.getLogger(__name__)
+
+class _ScoresPayload(BaseModel):
+    scores: List[float] = Field(default_factory=list)
 
 
 def describe_fact(fact: Any) -> str:
@@ -33,7 +36,7 @@ def describe_fact(fact: Any) -> str:
             if excerpt:
                 return str(excerpt).replace("\n", " ").strip()
     except Exception:
-        pass
+        logger.exception("describe_fact: failed to read meta")
 
     try:
         obj = fact.get("object") if isinstance(fact, dict) else getattr(fact, "object", None)
@@ -44,7 +47,7 @@ def describe_fact(fact: Any) -> str:
         if text and str(text).strip():
             return str(text).strip()
     except Exception:
-        pass
+        logger.exception("describe_fact: failed to read object")
 
     try:
         sub = fact.get("subject") if isinstance(fact, dict) else getattr(fact, "subject", "user")
@@ -137,19 +140,44 @@ async def prune_facts_for_query(
     user_prompt = f"Question:\n{query_text}\n\nFacts:\n" + "\n".join(descriptions) + "\n\nReturn the JSON object now."
 
     try:
-        response = await llm.generate(
+        payload = await generate_model(
+            llm=llm,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             max_tokens=128,
-            temperature=0.0,
+            ctx=LLMCallContext(op="fact_prune"),
+            model_validate=_ScoresPayload.model_validate,
+            repair_messages_fn=lambda bad: [
+                {
+                    "role": "user",
+                    "content": "Return ONLY valid JSON of the form "
+                    "{\"scores\": [0.0, ...]} with the same number of scores. "
+                    "No extra text.\n\nBad response:\n"
+                    + (bad or ""),
+                }
+            ],
         )
     except Exception:
         logger.exception("semantic.query_pruner: LLM scoring failed")
         return facts
 
-    scores = parse_scores_list(response, n=len(descriptions))
+    scores = []
+    try:
+        raw_scores = payload.scores
+        if isinstance(raw_scores, list):
+            scores = []
+            for x in raw_scores[: len(descriptions)]:
+                try:
+                    v = float(x)
+                except Exception:
+                    v = 0.0
+                scores.append(min(1.0, max(0.0, v)))
+            if len(scores) != len(descriptions):
+                scores = []
+    except Exception:
+        scores = []
     if not scores:
         selected = fallback_keep_by_query(query_text, candidates)
         return [candidates[i - 1] for i in selected if 1 <= i <= len(candidates)] or facts
@@ -161,4 +189,3 @@ async def prune_facts_for_query(
         kept = [i for i, _ in indexed[: min(int(max_keep), len(indexed))]]
     out = [candidates[i - 1] for i in kept if 1 <= i <= len(candidates)]
     return out or facts
-

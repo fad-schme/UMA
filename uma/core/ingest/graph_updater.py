@@ -7,7 +7,7 @@ import logging
 import json
 from typing import Any, Iterable, List, Optional
 
-from ...types_fact import Fact
+from ...types import Fact
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,8 @@ def _get_source_chunk_id(fact: Fact) -> Optional[str]:
             if isinstance(scid, str) and scid.strip():
                 return scid.strip()
     except Exception:
-        # Meta is best-effort; never let this crash ingestion.
-        pass
+        logger.exception("_get_source_chunk_id: failed to read fact.meta")
+        raise
 
     try:
         src_ids = getattr(fact, "source_ids", None)
@@ -37,7 +37,8 @@ def _get_source_chunk_id(fact: Fact) -> Optional[str]:
             if isinstance(first, str) and first.strip():
                 return first.strip()
     except Exception:
-        pass
+        logger.exception("_get_source_chunk_id: failed to read fact.source_ids")
+        raise
 
     return None
 
@@ -62,6 +63,7 @@ def _validate_fact_for_graph(fact: Fact) -> None:
         missing.append("owner_id")
 
     if missing:
+        logger.error("Fact missing required fields for graph update: %s", missing)
         raise ValueError(f"Fact missing required fields for graph update: {missing}")
 
 
@@ -126,6 +128,7 @@ async def update_graph(
 
     attempted = 0
     failed = 0
+    skipped = 0
 
     try:
         concurrency = int(concurrency)
@@ -135,7 +138,7 @@ async def update_graph(
     sem = asyncio.Semaphore(concurrency)
 
     async def _upsert_one(fact: Fact) -> None:
-        nonlocal attempted, failed
+        nonlocal attempted, failed, skipped
         async with sem:
             try:
                 _validate_fact_for_graph(fact)
@@ -162,6 +165,12 @@ async def update_graph(
                 )
                 await _maybe_await(res)
                 attempted += 1
+            except ValueError:
+                skipped += 1
+                logger.exception(
+                    "update_graph: skipped invalid fact for graph (fact_id=%s)",
+                    getattr(fact, "id", "<missing>"),
+                )
             except Exception:
                 failed += 1
                 logger.exception(
@@ -171,11 +180,12 @@ async def update_graph(
 
     await asyncio.gather(*[_upsert_one(f) for f in facts], return_exceptions=False)
 
-    if failed:
+    if failed or skipped:
         logger.warning(
-            "update_graph: completed with failures attempted=%d failed=%d",
+            "update_graph: completed with issues attempted=%d failed=%d skipped=%d",
             attempted,
             failed,
+            skipped,
         )
     else:
         logger.info("update_graph: upserted %d fact(s) into graph", attempted)

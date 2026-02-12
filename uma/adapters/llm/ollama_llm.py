@@ -39,7 +39,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 from ...adapters.llm.base import LLMInterface
 from ...core.utils.config_types import LLMConfig
-from .retry_utils import retryable
+from .retry_utils import retryable, should_retry_network_only
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ class OllamaLLM(LLMInterface):
 
         logger.debug("OllamaLLM initialized (model=%s, host=%s)", model, self.base_url)
 
-    @retryable()
+    @retryable(should_retry=should_retry_network_only)
     async def generate(
         self,
         messages: List[Dict[str, str]],

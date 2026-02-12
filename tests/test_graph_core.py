@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 from uma.adapters.graph.base import GraphAdapter
 from uma.core.graph.core import TemporalGraphCore
 from uma.core.graph.updater import GraphUpdater
-from uma.types_episode import Episode
+from uma.types import Episode
 
 
 class RecordingAdapter(GraphAdapter):

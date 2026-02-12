@@ -24,6 +24,7 @@ import logging
 from typing import List, Iterable, Dict, Any
 
 from ...adapters.llm.base import LLMInterface  # you must implement this
+from ..llm.controller import LLMCallContext, generate_text
 
 logger = logging.getLogger(__name__)
 
@@ -139,10 +140,11 @@ class WorkingMemorySummarizer:
                 "Calling LLM for working memory summarization; num_input_msgs=%d",
                 len(text_blocks),
             )
-            summary = await self._llm.generate(
-                llm_messages,
+            summary = await generate_text(
+                llm=self._llm,
+                messages=llm_messages,
                 max_tokens=self._max_summary_tokens,
-                temperature=0.0,
+                ctx=LLMCallContext(op="wm_summarize"),
             )
             logger.info("Working memory summarization completed successfully.")
             return summary.strip()

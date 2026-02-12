@@ -5,7 +5,7 @@ from typing import Any, Optional
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from ...types_episode import Episode
+from ...types import Episode
 
 logger = logging.getLogger(__name__)
 

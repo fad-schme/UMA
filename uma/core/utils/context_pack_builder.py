@@ -30,31 +30,8 @@ logger = logging.getLogger(__name__)
 # SnippetRefiner import
 # --------------------------------
 from uma.core.retrieval.rlm.snippet_refiner import SnippetRefiner
-
-try:
-    from .config_types import RetrievalContextConfig
-    from .user_query_helper import extract_keywords_and_phrases
-except Exception:  # pragma: no cover
-    RetrievalContextConfig = None
-    extract_keywords_and_phrases = None
-
-# Fallback to avoid runtime errors if config_types import fails.
-if RetrievalContextConfig is None:  # pragma: no cover
-    class RetrievalContextConfig:  # type: ignore[no-redef]
-        max_working_messages: int = 4
-        max_episodic: int = 3
-        max_semantic: int = 5
-        max_chunks: int = 5
-        max_procedural: int = 3
-        max_graph: int = 3
-        include_working_memory: bool = True
-        include_episodic: bool = True
-        include_graph: bool = True
-        include_procedural: bool = True
-        allowed_topics: Optional[List[str]] = None
-        snippet_max_chars: int = 240
-        snippet_refiner_enabled: bool = False
-        snippet_refiner_top_k: int = 8
+from .config_types import RetrievalContextConfig
+from .user_query_helper import extract_keywords_and_phrases
 
 class ContextPackBuilder:
     """
@@ -89,6 +66,17 @@ class ContextPackBuilder:
         dict
             A fully structured context pack suitable for RAG pipelines.
         """
+        owner_type = ctx.get("owner_type") if isinstance(ctx, dict) else None
+        owner_id = ctx.get("owner_id") if isinstance(ctx, dict) else None
+        trace_id = None
+        if isinstance(ctx, dict):
+            trace = ctx.get("trace")
+            if isinstance(trace, list):
+                for item in trace:
+                    if isinstance(item, dict) and item.get("trace_id"):
+                        trace_id = item.get("trace_id")
+                        break
+
         pack = {
             "query": query,
             "working_memory": [],
@@ -128,7 +116,12 @@ class ContextPackBuilder:
                     }
                 )
             except Exception:
-                logger.exception("Failed to pack working memory entry.")
+                logger.exception(
+                    "ContextPackBuilder: failed to pack working memory entry owner_type=%s owner_id=%s trace_id=%s",
+                    owner_type,
+                    owner_id,
+                    trace_id,
+                )
 
         # -------------------------------
         # Episodic
@@ -145,7 +138,12 @@ class ContextPackBuilder:
                     }
                 )
             except Exception:
-                logger.exception("Failed to pack episodic memory entry.")
+                logger.exception(
+                    "ContextPackBuilder: failed to pack episodic memory entry owner_type=%s owner_id=%s trace_id=%s",
+                    owner_type,
+                    owner_id,
+                    trace_id,
+                )
 
         # -------------------------------
         # Facts
@@ -165,7 +163,12 @@ class ContextPackBuilder:
                     }
                 )
             except Exception:
-                logger.exception("Failed to pack semantic fact.")
+                logger.exception(
+                    "ContextPackBuilder: failed to pack semantic fact owner_type=%s owner_id=%s trace_id=%s",
+                    owner_type,
+                    owner_id,
+                    trace_id,
+                )
 
         # -------------------------------
         # Document Chunks
@@ -183,7 +186,12 @@ class ContextPackBuilder:
                     }
                 )
             except Exception:
-                logger.exception("Failed to pack chunk.")
+                logger.exception(
+                    "ContextPackBuilder: failed to pack chunk owner_type=%s owner_id=%s trace_id=%s",
+                    owner_type,
+                    owner_id,
+                    trace_id,
+                )
 
         # -------------------------------
         # Skills
@@ -200,7 +208,12 @@ class ContextPackBuilder:
                     }
                 )
             except Exception:
-                logger.exception("Failed to pack procedural skill.")
+                logger.exception(
+                    "ContextPackBuilder: failed to pack procedural skill owner_type=%s owner_id=%s trace_id=%s",
+                    owner_type,
+                    owner_id,
+                    trace_id,
+                )
 
         # -------------------------------
         # Graph Items
@@ -212,7 +225,12 @@ class ContextPackBuilder:
                 else:
                     pack["graph"].append({"node": repr(node)})
             except Exception:
-                logger.exception("Failed to pack graph node.")
+                logger.exception(
+                    "ContextPackBuilder: failed to pack graph node owner_type=%s owner_id=%s trace_id=%s",
+                    owner_type,
+                    owner_id,
+                    trace_id,
+                )
 
         # Best-effort trace/confidence if present on ctx
         try:
@@ -220,13 +238,23 @@ class ContextPackBuilder:
             if isinstance(trace, list):
                 pack["trace"] = trace
         except Exception:
-            logger.exception("Failed to pack retrieval trace.")
+            logger.exception(
+                "ContextPackBuilder: failed to pack retrieval trace owner_type=%s owner_id=%s trace_id=%s",
+                owner_type,
+                owner_id,
+                trace_id,
+            )
         try:
             conf = ctx.get("confidence") if isinstance(ctx, dict) else None
             if isinstance(conf, dict):
                 pack["confidence"] = conf
         except Exception:
-            logger.exception("Failed to pack confidence metadata.")
+            logger.exception(
+                "ContextPackBuilder: failed to pack confidence metadata owner_type=%s owner_id=%s trace_id=%s",
+                owner_type,
+                owner_id,
+                trace_id,
+            )
 
         # Pack-level hygiene: prevent duplicates wasting budgets downstream.
         pack["episodic"] = dedupe_by_id(pack.get("episodic", []))
@@ -246,104 +274,12 @@ class ContextPackBuilder:
         """
         Render a compact, human-readable snippet for LLM prompts.
         """
-        lines: List[str] = []
         cfg = context_cfg or RetrievalContextConfig()
         query_text = (pack.get("query") or "").lower()
-        # Note: WM/episodic/chunks/procedural/graph are always allowed per design.
 
-        wm = pack.get("working_memory", [])
-        lines.append("Working memory:")
-        if wm:
-            for msg in wm[-cfg.max_working_messages:]:
-                role = msg.get("role")
-                text = (msg.get("text") or "").strip()
-                if text:
-                    lines.append(f"- {role}: {text}")
-        else:
-            lines.append("- (empty)")
-
-        episodic = pack.get("episodic", [])
-        if episodic:
-            lines.append("\nEpisodic:")
-            for ep in episodic[: cfg.max_episodic]:
-                summary = (ep.get("summary") or "").strip()
-                if summary:
-                    lines.append(f"- {summary}")
-
-        facts = pack.get("facts", [])
-        allowed_topics = cfg.allowed_topics or []
-        if allowed_topics:
-            filtered = [
-                fact
-                for fact in facts
-                if any(
-                    t in allowed_topics
-                    for t in _fact_topics(fact)
-                )
-            ]
-            if filtered:
-                facts = filtered
-        facts = _filter_facts_by_query(facts, query_text)
-        if facts:
-            deduped = []
-            seen = set()
-            for fact in facts:
-                obj = get_attr_or_key(fact, "object")
-                text = ""
-                if isinstance(obj, dict):
-                    text = (obj.get("text") or "").strip()
-                key = text or str(obj)
-                if key in seen:
-                    continue
-                seen.add(key)
-                deduped.append(fact)
-            facts = deduped
-        if facts:
-            lines.append("\nFacts:")
-            for fact in facts[: cfg.max_semantic]:
-                subject = get_attr_or_key(fact, "subject", "unknown")
-                predicate = get_attr_or_key(fact, "predicate", "related_to")
-                obj = get_attr_or_key(fact, "object")
-                fact_text = (get_attr_or_key(fact, "fact_text") or "").strip()
-                if isinstance(obj, dict):
-                    title = obj.get("title") or obj.get("text") or str(obj)
-                    raw_text = (obj.get("text") or "").strip()
-                    snippet = _extract_relevant_excerpt(raw_text, query_text, max_chars=320)
-                    lines.append(f"- {subject} {predicate} {title}")
-                    if snippet:
-                        lines.append(f"  excerpt: {snippet}")
-                else:
-                    if fact_text:
-                        lines.append(f"- {fact_text}")
-                    else:
-                        lines.append(f"- {subject} {predicate} {obj}")
-
-        # -------------------------------
-        # Chunks (render snippets)
-        # -------------------------------
-        chunk_snippets = _collect_chunk_snippets(pack, cfg, query_text, facts)
-        if chunk_snippets:
-            lines.append("\nDocument chunks:")
-            for snip in chunk_snippets[: cfg.max_chunks]:
-                lines.append(f"- {snip}")
-
-        skills = pack.get("skills", [])
-        if skills:
-            lines.append("\nSkills:")
-            for skill in skills[: cfg.max_procedural]:
-                name = skill.get("name") or "Unnamed"
-                desc = (skill.get("description") or "").strip()
-                if desc:
-                    lines.append(f"- {name}: {desc}")
-                else:
-                    lines.append(f"- {name}")
-
-        graph = pack.get("graph", [])
-        if graph:
-            lines.append("\nGraph:")
-            for node in graph[: cfg.max_graph]:
-                lines.append(f"- {node}")
-
+        lines, facts = _render_common_sections(pack, cfg, query_text)
+        _append_chunk_snippets(lines, pack, cfg, query_text, facts, heading="Document chunks:")
+        _append_skills_and_graph(lines, pack, cfg)
         return "\n".join(lines).strip()
 
     @staticmethod
@@ -361,6 +297,9 @@ class ContextPackBuilder:
         # builder operates on dict-like structures.
         # --------------------------------------------------
         orig_pack = pack
+        owner_type = None
+        owner_id = None
+        trace_id = None
         if not isinstance(pack, dict):
             try:
                 pack = pack.__dict__
@@ -370,78 +309,22 @@ class ContextPackBuilder:
                 )
                 return ""
 
-        lines: List[str] = []
+        if isinstance(pack, dict):
+            owner_type = pack.get("owner_type")
+            owner_id = pack.get("owner_id")
+            trace = pack.get("trace")
+            if isinstance(trace, list):
+                for item in trace:
+                    if isinstance(item, dict) and item.get("trace_id"):
+                        trace_id = item.get("trace_id")
+                        break
+
         cfg = context_cfg or RetrievalContextConfig()
         query_text = (pack.get("query") or "").lower()
 
-        wm = pack.get("working_memory", [])
-        lines.append("Working memory:")
-        if wm:
-            for msg in wm[-cfg.max_working_messages:]:
-                role = msg.get("role")
-                text = (msg.get("text") or "").strip()
-                if text:
-                    lines.append(f"- {role}: {text}")
-        else:
-            lines.append("- (empty)")
+        lines, facts = _render_common_sections(pack, cfg, query_text)
 
-        episodic = pack.get("episodic", [])
-        if episodic:
-            lines.append("\nEpisodic:")
-            for ep in episodic[: cfg.max_episodic]:
-                summary = (ep.get("summary") or "").strip()
-                if summary:
-                    lines.append(f"- {summary}")
-
-        facts = pack.get("facts", [])
-        allowed_topics = cfg.allowed_topics or []
-        if allowed_topics:
-            filtered = [
-                fact
-                for fact in facts
-                if any(t in allowed_topics for t in _fact_topics(fact))
-            ]
-            if filtered:
-                facts = filtered
-        facts = _filter_facts_by_query(facts, query_text)
-        if facts:
-            deduped = []
-            seen = set()
-            for fact in facts:
-                obj = get_attr_or_key(fact, "object")
-                text = ""
-                if isinstance(obj, dict):
-                    text = (obj.get("text") or "").strip()
-                key = text or str(obj)
-                if key in seen:
-                    continue
-                seen.add(key)
-                deduped.append(fact)
-            facts = deduped
-        if facts:
-            lines.append("\nFacts:")
-            for fact in facts[: cfg.max_semantic]:
-                subject = get_attr_or_key(fact, "subject", "unknown")
-                predicate = get_attr_or_key(fact, "predicate", "related_to")
-                obj = get_attr_or_key(fact, "object")
-                fact_text = (get_attr_or_key(fact, "fact_text") or "").strip()
-
-                if isinstance(obj, dict):
-                    title = obj.get("title") or obj.get("text") or str(obj)
-                    raw_text = (obj.get("text") or "").strip()
-                    snippet = _extract_relevant_excerpt(raw_text, query_text, max_chars=320)
-                    lines.append(f"- {subject} {predicate} {title}")
-                    if snippet:
-                        lines.append(f"  excerpt: {snippet}")
-                else:
-                    if fact_text:
-                        lines.append(f"- {fact_text}")
-                    else:
-                        lines.append(f"- {subject} {predicate} {obj}")
-
-        # -------------------------------
         # Final evidence snippets (via SnippetRefiner)
-        # -------------------------------
         final_snippets = []
         refiner_failed = False
         if cfg.snippet_refiner_enabled:
@@ -453,7 +336,12 @@ class ContextPackBuilder:
                     chunks=pack.get("chunks", []),
                 )
             except Exception:
-                logger.exception("ContextPackBuilder: SnippetRefiner failed")
+                logger.exception(
+                    "ContextPackBuilder: SnippetRefiner failed owner_type=%s owner_id=%s trace_id=%s",
+                    owner_type,
+                    owner_id,
+                    trace_id,
+                )
                 refiner_failed = True
                 final_snippets = []
 
@@ -475,19 +363,7 @@ class ContextPackBuilder:
             final_snippets = bounded
 
         if not final_snippets:
-            # Fallback: build final_snippets from deterministic snippet extraction (or raw chunk texts).
-            chunk_snippets = _collect_chunk_snippets(pack, cfg, query_text, facts)
-            final_snippets = [{"text": s} for s in chunk_snippets]
-            if cfg.snippet_refiner_enabled and refiner_failed:
-                logger.warning("ContextPackBuilder: SnippetRefiner failed; using fallback snippets")
-            if not final_snippets and pack.get("chunks"):
-                raw_snippets = _collect_raw_chunk_texts(pack.get("chunks", []), cfg.max_chunks)
-                final_snippets = [{"text": s} for s in raw_snippets]
-                if raw_snippets:
-                    logger.warning(
-                        "ContextPackBuilder: fallback produced no snippets; using raw chunk texts (%d)",
-                        len(raw_snippets),
-                    )
+            final_snippets = _build_fallback_snippets(pack, cfg, query_text, facts, refiner_failed)
 
         # Always render final_snippets as a single consistent evidence section.
         if final_snippets:
@@ -508,42 +384,16 @@ class ContextPackBuilder:
             if orig_pack is not pack and not isinstance(orig_pack, dict):
                 setattr(orig_pack, "final_snippets", final_snippets)
         except Exception:
-            logger.exception("ContextPackBuilder: Failed to attach final_snippets to pack")
+            logger.exception(
+                "ContextPackBuilder: failed to attach final_snippets owner_type=%s owner_id=%s trace_id=%s",
+                owner_type,
+                owner_id,
+                trace_id,
+            )
 
-        skills = pack.get("skills", [])
-        if skills:
-            lines.append("\nSkills:")
-            for skill in skills[: cfg.max_procedural]:
-                name = skill.get("name") or "Unnamed"
-                desc = (skill.get("description") or "").strip()
-                if desc:
-                    lines.append(f"- {name}: {desc}")
-                else:
-                    lines.append(f"- {name}")
-
-        graph = pack.get("graph", [])
-        if graph:
-            lines.append("\nGraph:")
-            for node in graph[: cfg.max_graph]:
-                lines.append(f"- {node}")
+        _append_skills_and_graph(lines, pack, cfg)
 
         return "\n".join(lines).strip()
-
-
-async def build_context_snippet(
-    memory: Any,
-    *,
-    pack: Dict[str, Any],
-) -> str:
-    """
-    Render a compact snippet from a ContextPack.
-
-    This is a presentation helper; use ContextPackBuilder.build() for the data product.
-    """
-    ctx_cfg = getattr(getattr(memory, "retrieval_cfg", None), "context", None)
-    if getattr(ctx_cfg, "snippet_refiner_enabled", False):
-        return await ContextPackBuilder.render_snippet_async(pack, ctx_cfg, llm=getattr(memory, "llm", None))
-    return ContextPackBuilder.render_snippet(pack, ctx_cfg)
 
 
 async def get_rendered_context(
@@ -558,8 +408,11 @@ async def get_rendered_context(
     This path is shared by the app and tests to avoid divergence.
     """
     if not getattr(memory, "_rlm_controller", None):
-        pack = await memory.build_context_pack(user_id, query_text)
-        return await build_context_snippet(memory, pack=pack)
+        pack = await build_context_pack(memory, user_id=user_id, query_text=query_text)
+        ctx_cfg = getattr(getattr(memory, "retrieval_cfg", None), "context", None)
+        if getattr(ctx_cfg, "snippet_refiner_enabled", False):
+            return await ContextPackBuilder.render_snippet_async(pack, ctx_cfg, llm=getattr(memory, "llm", None))
+        return ContextPackBuilder.render_snippet(pack, ctx_cfg)
 
     pack = await memory._rlm_controller.retrieve_context(
         user_id=ensure_user_subject(user_id),
@@ -840,42 +693,140 @@ def _collect_raw_chunk_texts(chunks: List[Any], limit: int) -> List[str]:
     return out
 
 
-def _try_parse_json(raw: str) -> Optional[Dict[str, Any]]:
-    raw = (raw or "").strip()
-    if not raw:
-        return None
-    try:
-        obj = json.loads(raw)
-        return obj if isinstance(obj, dict) else None
-    except Exception:
-        pass
-    m = re.search(r"\{.*\}", raw, re.DOTALL)
-    if not m:
-        return None
-    try:
-        obj = json.loads(m.group(0))
-        return obj if isinstance(obj, dict) else None
-    except Exception:
-        return None
+def _render_common_sections(
+    pack: Dict[str, Any],
+    cfg: "RetrievalContextConfig",
+    query_text: str,
+) -> tuple[List[str], List[Dict[str, Any]]]:
+    lines: List[str] = []
+
+    wm = pack.get("working_memory", [])
+    lines.append("Working memory:")
+    if wm:
+        for msg in wm[-cfg.max_working_messages:]:
+            role = msg.get("role")
+            text = (msg.get("text") or "").strip()
+            if text:
+                lines.append(f"- {role}: {text}")
+    else:
+        lines.append("- (empty)")
+
+    episodic = pack.get("episodic", [])
+    if episodic:
+        lines.append("\nEpisodic:")
+        for ep in episodic[: cfg.max_episodic]:
+            summary = (ep.get("summary") or "").strip()
+            if summary:
+                lines.append(f"- {summary}")
+
+    facts = pack.get("facts", [])
+    allowed_topics = cfg.allowed_topics or []
+    if allowed_topics:
+        filtered = [
+            fact
+            for fact in facts
+            if any(t in allowed_topics for t in _fact_topics(fact))
+        ]
+        if filtered:
+            facts = filtered
+    facts = _filter_facts_by_query(facts, query_text)
+    if facts:
+        deduped = []
+        seen = set()
+        for fact in facts:
+            obj = get_attr_or_key(fact, "object")
+            text = ""
+            if isinstance(obj, dict):
+                text = (obj.get("text") or "").strip()
+            key = text or str(obj)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(fact)
+        facts = deduped
+    if facts:
+        lines.append("\nFacts:")
+        for fact in facts[: cfg.max_semantic]:
+            subject = get_attr_or_key(fact, "subject", "unknown")
+            predicate = get_attr_or_key(fact, "predicate", "related_to")
+            obj = get_attr_or_key(fact, "object")
+            fact_text = (get_attr_or_key(fact, "fact_text") or "").strip()
+            if isinstance(obj, dict):
+                title = obj.get("title") or obj.get("text") or str(obj)
+                raw_text = (obj.get("text") or "").strip()
+                snippet = _extract_relevant_excerpt(raw_text, query_text, max_chars=320)
+                lines.append(f"- {subject} {predicate} {title}")
+                if snippet:
+                    lines.append(f"  excerpt: {snippet}")
+            else:
+                if fact_text:
+                    lines.append(f"- {fact_text}")
+                else:
+                    lines.append(f"- {subject} {predicate} {obj}")
+
+    return lines, facts
 
 
-def _try_parse_json_list(raw: str) -> Optional[List[Any]]:
-    raw = (raw or "").strip()
-    if not raw:
-        return None
-    try:
-        obj = json.loads(raw)
-        return obj if isinstance(obj, list) else None
-    except Exception:
-        pass
-    m = re.search(r"\[.*\]", raw, re.DOTALL)
-    if not m:
-        return None
-    try:
-        obj = json.loads(m.group(0))
-        return obj if isinstance(obj, list) else None
-    except Exception:
-        return None
+def _build_fallback_snippets(
+    pack: Dict[str, Any],
+    cfg: "RetrievalContextConfig",
+    query_text: str,
+    facts: List[Dict[str, Any]],
+    refiner_failed: bool,
+) -> List[Dict[str, Any]]:
+    chunk_snippets = _collect_chunk_snippets(pack, cfg, query_text, facts)
+    final_snippets = [{"text": s} for s in chunk_snippets]
+    if cfg.snippet_refiner_enabled and refiner_failed:
+        logger.warning("ContextPackBuilder: SnippetRefiner failed; using fallback snippets")
+    if not final_snippets and pack.get("chunks"):
+        raw_snippets = _collect_raw_chunk_texts(pack.get("chunks", []), cfg.max_chunks)
+        final_snippets = [{"text": s} for s in raw_snippets]
+        if raw_snippets:
+            logger.warning(
+                "ContextPackBuilder: fallback produced no snippets; using raw chunk texts (%d)",
+                len(raw_snippets),
+            )
+    return final_snippets
+
+
+def _append_chunk_snippets(
+    lines: List[str],
+    pack: Dict[str, Any],
+    cfg: "RetrievalContextConfig",
+    query_text: str,
+    facts: List[Dict[str, Any]],
+    *,
+    heading: str,
+) -> None:
+    chunk_snippets = _collect_chunk_snippets(pack, cfg, query_text, facts)
+    if not chunk_snippets:
+        return
+    lines.append(f"\n{heading}")
+    for snip in chunk_snippets[: cfg.max_chunks]:
+        lines.append(f"- {snip}")
+
+
+def _append_skills_and_graph(
+    lines: List[str],
+    pack: Dict[str, Any],
+    cfg: "RetrievalContextConfig",
+) -> None:
+    skills = pack.get("skills", [])
+    if skills:
+        lines.append("\nSkills:")
+        for skill in skills[: cfg.max_procedural]:
+            name = skill.get("name") or "Unnamed"
+            desc = (skill.get("description") or "").strip()
+            if desc:
+                lines.append(f"- {name}: {desc}")
+            else:
+                lines.append(f"- {name}")
+
+    graph = pack.get("graph", [])
+    if graph:
+        lines.append("\nGraph:")
+        for node in graph[: cfg.max_graph]:
+            lines.append(f"- {node}")
 
 
 def _normalize_chunk(chunk: Any) -> Dict[str, Any]:

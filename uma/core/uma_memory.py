@@ -1,4 +1,4 @@
-"""
+r"""
   _   _ __  __   _      ___ _    __  __ 
  | | | |  \/  | /_\ ___| _ \ |  |  \/  |
  | |_| | |\/| |/ _ \___|   / |__| |\/| |
@@ -785,42 +785,6 @@ class UMAMemory:
             config=config,
             memory=self,
         )
-
-    # ----------------------------------------------------------------------
-    # OPTIONAL UTILITIES — RAG-Ready Context Pack Builder
-    # ----------------------------------------------------------------------
-
-    async def build_context_pack(self, user_id: str, query_text: str) -> dict:
-        """
-        Build a RAG-ready structured context pack using UMA memory.
-
-        Convenience wrapper around:
-            - UMAMemory.get_structured_context()
-            - ContextPackBuilder.build()
-
-        Related:
-            - build_context_snippet(pack): render a snippet from an existing pack
-            - get_rendered_context(user_id, query_text): one-liner
-        """
-        from .utils.context_pack_builder import build_context_pack
-
-        return await build_context_pack(self, user_id=user_id, query_text=query_text)
-
-    async def build_context_snippet(self, pack: dict) -> str:
-        """
-        Render a compact snippet from a ContextPack.
-
-        This is a presentation helper; use build_context_pack() for the data product.
-        """
-        from .utils.context_pack_builder import build_context_snippet
-
-        return await build_context_snippet(self, pack=pack)
-
-    async def render_snippet(self, pack: dict) -> str:
-        """
-        API alias for build_context_snippet().
-        """
-        return await self.build_context_snippet(pack)
 
     async def get_rendered_context(self, user_id: str, query_text: str) -> str:
         """

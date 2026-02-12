@@ -20,8 +20,8 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import List
 
-from ...types_fact import Fact
-from ...types_episode import Episode
+from ...types import Fact
+from ...types import Episode
 
 logger = logging.getLogger(__name__)
 

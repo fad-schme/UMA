@@ -27,7 +27,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from ...types_episode import Episode
+from ...types import Episode
 
 logger = logging.getLogger(__name__)
 

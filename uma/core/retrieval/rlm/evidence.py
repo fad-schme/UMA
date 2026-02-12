@@ -72,7 +72,8 @@ async def expand_evidence_chunks_from_facts(
             meta.setdefault("retrieval_stage", "evidence_expand")
             ch.meta = meta
     except Exception:
-        pass
+        logger.exception("expand_evidence_chunks_from_facts: failed to attach evidence metadata")
+        raise
     from uma.core.utils.dedupe import dedupe_by_id
 
     merged = dedupe_by_id(list(getattr(pack, "chunks", []) or []) + list(chunks_ev or []))

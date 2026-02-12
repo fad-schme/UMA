@@ -29,8 +29,8 @@ from __future__ import annotations
 import logging
 from typing import List, Any
 
-from ...types_episode import Episode
-from ...types_fact import Fact
+from ...types import Episode
+from ...types import Fact
 from ...adapters.llm.base import LLMInterface, EmbeddingInterface
 from ...core.semantic.extractor import FactExtractor
 from ...core.semantic.scorer import SalienceScorer
@@ -332,7 +332,11 @@ class Consolidator:
                     for ep_id in to_remove:
                         if self.episodic_core is None:
                             break
-                        await self.episodic_core.delete_episode(ep_id)
+                        await self.episodic_core.delete_episode(
+                            ep_id,
+                            owner_type="user",
+                            owner_id=user_id,
+                        )
                 except Exception:
                     logger.exception(
                         "Consolidator: failed deleting episodic items (user=%s).",
@@ -347,7 +351,11 @@ class Consolidator:
             if self.semantic_core is None:
                 semantic_facts = []
             else:
-                semantic_facts = await self.semantic_core.list_facts_for_subject(user_id)
+                semantic_facts = await self.semantic_core.list_facts_for_subject(
+                    user_id,
+                    owner_type="user",
+                    owner_id=user_id,
+                )
         except Exception:
             logger.exception(
                 "Consolidator: semantic prune fetch failed for user=%s",
@@ -381,7 +389,11 @@ class Consolidator:
                 for fact_id in to_delete:
                     if self.semantic_core is None:
                         break
-                    await self.semantic_core.delete_fact(fact_id)
+                    await self.semantic_core.delete_fact(
+                        fact_id,
+                        owner_type="user",
+                        owner_id=user_id,
+                    )
             except Exception:
                 logger.exception(
                     "Consolidator: failed deleting semantic facts (user=%s).",

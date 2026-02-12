@@ -133,14 +133,14 @@ async def interactive_chat(
                     print(snippet)
                     print("**************************** End of snippet")
 
-                reply = await agent_generate(
-                    messages=[{"role": "system", "content": system_prompt}] + context_messages,
-                    llm=getattr(memory, "agent_llm", None) or memory.llm,
-                )
-                if not isinstance(reply, str) or not reply.strip():
-                    reply = "I don't have enough information to answer that yet."
+                # reply = await agent_generate(
+                #     messages=[{"role": "system", "content": system_prompt}] + context_messages,
+                #     llm=getattr(memory, "agent_llm", None) or memory.llm,
+                # )
+                # if not isinstance(reply, str) or not reply.strip():
+                #     reply = "I don't have enough information to answer that yet."
 
-                print("Assistant>", reply)
+                # print("Assistant>", reply)
                 # Update UMA memory with the turn
                 await memory.process_turn(
                     user_id=user_id, user_msg=user_message, assistant_reply=reply

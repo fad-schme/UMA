@@ -1,7 +1,7 @@
 import pytest
 
 from uma.core.retrieval.rlm.controller import RLMController
-from uma.types_chunk import Chunk
+from uma.types import Chunk
 from datetime import datetime, timezone
 
 

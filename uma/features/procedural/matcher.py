@@ -21,7 +21,7 @@ import re
 import logging
 from typing import List
 
-from ...types_skill import Skill
+from ...types import Skill
 
 logger = logging.getLogger(__name__)
 

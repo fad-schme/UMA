@@ -4,9 +4,9 @@ from datetime import datetime
 
 from uma.core.uma_memory import UMAMemory
 from uma.core.utils.identity import ensure_user_subject
-from uma.types_episode import Episode
-from uma.types_fact import Fact
-from uma.types_skill import Skill
+from uma.types import Episode
+from uma.types import Fact
+from uma.types import Skill
 
 
 async def fake_llm(messages=None, **kwargs):

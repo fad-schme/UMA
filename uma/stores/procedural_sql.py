@@ -29,7 +29,7 @@ from .base_vector_sql_store import BaseVectorSQLStore
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from ..core.utils.store_metadata import ensure_store_metadata
-from ..types_skill import Skill
+from ..types import Skill
 
 logger = logging.getLogger(__name__)
 
@@ -297,16 +297,25 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         finally:
             conn.close()
 
-    async def get_skill(self, skill_id: str) -> Optional[Skill]:
+    async def get_skill(
+        self,
+        skill_id: str,
+        *,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+    ) -> Optional[Skill]:
         """
         Fetch a single skill by ID. Returns None if not found.
         """
+        if not owner_type or not owner_id:
+            logger.error("ProceduralSQLStore.get_skill requires owner_type and owner_id")
+            raise ValueError("ProceduralSQLStore.get_skill requires owner_type and owner_id")
         conn = self._conn()
         try:
             rows = self._query_all(
                 conn,
-                "SELECT * FROM skills WHERE id=?",
-                params=[skill_id],
+                "SELECT * FROM skills WHERE id=? AND owner_type=? AND owner_id=?",
+                params=[skill_id, owner_type, owner_id],
                 log_context="get_skill",
             )
             if not rows:
@@ -319,16 +328,71 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         finally:
             conn.close()
 
-    async def list_skills(self, limit: Optional[int] = None) -> List[Skill]:
+    async def fetch_skills_by_ids(
+        self,
+        ids: List[str],
+        *,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+    ) -> List[Skill]:
+        """
+        Fetch skills by IDs, owner-scoped, preserving input order.
+        """
+        if not ids:
+            return []
+        if not owner_type or not owner_id:
+            logger.error("ProceduralSQLStore.fetch_skills_by_ids requires owner_type and owner_id")
+            raise ValueError("ProceduralSQLStore.fetch_skills_by_ids requires owner_type and owner_id")
+
+        conn = self._conn()
+        try:
+            placeholders = ",".join("?" for _ in ids)
+            params: List[Any] = list(ids) + [owner_type, owner_id]
+            sql = f"""
+                SELECT * FROM skills
+                WHERE id IN ({placeholders})
+                  AND owner_type = ?
+                  AND owner_id = ?
+            """
+            rows = self._query_all(conn, sql, params=params, log_context="fetch_skills_by_ids")
+            row_map = {r["id"]: r for r in rows}
+            ordered: List[Skill] = []
+            for sid in ids:
+                row = row_map.get(sid)
+                if row is None:
+                    continue
+                ordered.append(self._row_to_object(row))
+            return ordered
+        except Exception:
+            logger.exception("ProceduralSQLStore.fetch_skills_by_ids failed")
+            raise
+        finally:
+            conn.close()
+
+    async def list_skills(
+        self,
+        *,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> List[Skill]:
         """
         List skills ordered by updated_at DESC.
         """
+        if not owner_type or not owner_id:
+            logger.error("ProceduralSQLStore.list_skills requires owner_type and owner_id")
+            raise ValueError("ProceduralSQLStore.list_skills requires owner_type and owner_id")
         conn = self._conn()
         try:
-            sql = "SELECT * FROM skills ORDER BY updated_at DESC"
+            sql = "SELECT * FROM skills WHERE owner_type=? AND owner_id=? ORDER BY updated_at DESC"
             if limit:
                 sql += f" LIMIT {int(limit)}"
-            rows = self._query_all(conn, sql, log_context="list_skills")
+            rows = self._query_all(
+                conn,
+                sql,
+                params=[owner_type, owner_id],
+                log_context="list_skills",
+            )
             return [self._row_to_object(r) for r in rows]
         except Exception:
             logger.exception("ProceduralSQLStore.list_skills failed.")
@@ -336,16 +400,25 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         finally:
             conn.close()
 
-    async def delete_skill(self, skill_id: str) -> None:
+    async def delete_skill(
+        self,
+        skill_id: str,
+        *,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+    ) -> None:
         """
         Remove a skill from SQL + vector store.
         """
+        if not owner_type or not owner_id:
+            logger.error("ProceduralSQLStore.delete_skill requires owner_type and owner_id")
+            raise ValueError("ProceduralSQLStore.delete_skill requires owner_type and owner_id")
         conn = self._conn()
         try:
             self._execute(
                 conn,
-                "DELETE FROM skills WHERE id=?",
-                params=[skill_id],
+                "DELETE FROM skills WHERE id=? AND owner_type=? AND owner_id=?",
+                params=[skill_id, owner_type, owner_id],
                 log_context="delete_skill",
             )
             conn.commit()
@@ -358,11 +431,21 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                     skill_id,
                 )
 
-            logger.info("ProceduralSQLStore: deleted skill id=%s", skill_id)
+            logger.info(
+                "ProceduralSQLStore: deleted skill id=%s owner=%s:%s",
+                skill_id,
+                owner_type,
+                owner_id,
+            )
 
         except Exception:
             self._safe_rollback(conn, "delete_skill")
-            logger.exception("ProceduralSQLStore.delete_skill failed id=%s", skill_id)
+            logger.exception(
+                "ProceduralSQLStore.delete_skill failed id=%s owner=%s:%s",
+                skill_id,
+                owner_type,
+                owner_id,
+            )
             raise
         finally:
             conn.close()
@@ -384,11 +467,14 @@ class ProceduralSQLStore(BaseVectorSQLStore):
 
         Delegates ranking + row mapping to BaseVectorSQLStore.
         """
+        if not owner_type or not owner_id:
+            logger.error("ProceduralSQLStore.search requires owner_type and owner_id")
+            raise ValueError("ProceduralSQLStore.search requires owner_type and owner_id")
         try:
             return await self._semantic_search(
                 query_embedding=query_embedding,
                 k=k,
-                filters=({"owner_type": owner_type, "owner_id": owner_id} if owner_type and owner_id else None),
+                filters={"owner_type": owner_type, "owner_id": owner_id},
                 log_context="procedural_search",
                 id_prefix="skill_",
             )

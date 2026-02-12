@@ -21,8 +21,8 @@ from .graph_updater import update_graph
 from .episodic_writer import write_document_episode
 from .consolidation_trigger import maybe_trigger_consolidation
 
-from ...types_fact import Fact
-from ...types_chunk import Chunk
+from ...types import Fact
+from ...types import Chunk
 from ...stores.document_sql import DocumentRecord
 from ..utils.identity import ensure_user_subject
 
@@ -469,15 +469,8 @@ async def ingest_document(
     # Embed + upsert extracted facts using core helper
     facts_created = 0
     if extracted_fact_records:
-        try:
-            from ..utils.user_query_helper import build_fact_embedding_text
-        except Exception:
-            build_fact_embedding_text = None
-
-        texts = [
-            build_fact_embedding_text(f) if build_fact_embedding_text else f"{f.subject} {f.predicate} {f.object}"
-            for f in extracted_fact_records
-        ]
+        from ..utils.user_query_helper import build_fact_embedding_text
+        texts = [build_fact_embedding_text(f) for f in extracted_fact_records]
         try:
             vectors = await embedder.embed(texts)
         except Exception:

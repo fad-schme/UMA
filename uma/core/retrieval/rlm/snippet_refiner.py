@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from uma.core.utils.user_query_helper import extract_keywords_and_phrases
 from uma.core.utils.accessors import get_attr_or_key
+from uma.core.llm.controller import LLMCallContext, generate_text
 
 logger = logging.getLogger(__name__)
 
@@ -278,10 +279,11 @@ class SnippetRefiner:
 
         prompt = self._single_prompt(query_text, text)
         try:
-            raw = await self.llm.generate(
+            raw = await generate_text(
+                llm=self.llm,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=300,
-                temperature=0.0,
+                ctx=LLMCallContext(op="snippet_refine_single"),
             )
             result = self._parse_single_response(raw)
         except Exception:
@@ -387,13 +389,15 @@ class SnippetRefiner:
         try:
             return json.loads(raw)
         except Exception:
-            pass
+            logger.exception("SnippetRefiner._parse_single_response: strict json.loads failed")
+            raise
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         if m:
             try:
                 return json.loads(m.group(0))
             except Exception:
-                pass
+                logger.exception("SnippetRefiner._parse_single_response: salvaged json.loads failed")
+                raise
         # Fallback: keep original snippet if model returns non-JSON
         return {"score": 1.0}
     

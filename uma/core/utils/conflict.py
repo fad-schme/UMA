@@ -23,7 +23,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Iterable, List, Tuple
 
-from ...types_fact import Fact
+from ...types import Fact
 
 logger = logging.getLogger(__name__)
 

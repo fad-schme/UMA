@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 
 from uma.core.chunk.core import ChunkCore
-from uma.types_chunk import Chunk
+from uma.types import Chunk
 
 
 def _mk(doc_id: str, pos: int, *, owner_type: str = "user", owner_id: str = "user:u1") -> Chunk:

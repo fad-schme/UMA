@@ -29,7 +29,8 @@ import uuid
 from datetime import datetime
 from typing import Any, List
 
-from uma.types_episode import Episode
+from uma.types import Episode
+from ..llm.controller import LLMCallContext, generate_text
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +95,12 @@ class EpisodeIndexer:
             ]
 
             try:
-                summary = await self.llm.generate(summary_msgs, max_tokens=128)
+                summary = await generate_text(
+                    llm=self.llm,
+                    messages=summary_msgs,
+                    max_tokens=128,
+                    ctx=LLMCallContext(op="episode_summarize", owner_type=owner_type, owner_id=owner_id),
+                )
             except Exception:
                 logger.exception("EpisodeIndexer: LLM summary failed.")
                 summary = "Conversation summary unavailable."

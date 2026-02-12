@@ -1,7 +1,7 @@
 from uma.core.retrieval.policy import RetrievalPolicy
 from uma.core.retrieval.service import RetrievalService
 from uma.core.retrieval.selector import MemorySelector
-from uma.types_chunk import Chunk
+from uma.types import Chunk
 from datetime import datetime, timezone
 
 

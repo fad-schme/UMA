@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Any, List, Optional
 
-from ...types_skill import Skill
+from ...types import Skill
 from ..utils.dedupe import dedupe_by_id
 
 logger = logging.getLogger(__name__)
@@ -44,46 +44,81 @@ class ProceduralCore:
             logger.exception("ProceduralCore.add_skill failed for id=%s", getattr(skill, "id", None))
             return None
 
-    async def get_skill(self, skill_id: str) -> Optional[Skill]:
+    async def get_skill(
+        self,
+        skill_id: str,
+        *,
+        owner_type: str,
+        owner_id: str,
+    ) -> Optional[Skill]:
         if self.store is None or not skill_id:
             return None
         try:
-            return await self.store.get_skill(skill_id)
+            return await self.store.get_skill(
+                skill_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+            )
         except Exception:
             logger.exception("ProceduralCore.get_skill failed for id=%s", skill_id)
             return None
 
-    async def fetch_by_ids(self, ids: List[str]) -> List[Skill]:
+    async def fetch_by_ids(
+        self,
+        ids: List[str],
+        *,
+        owner_type: str,
+        owner_id: str,
+    ) -> List[Skill]:
         if self.store is None or not ids:
             return []
         try:
             if hasattr(self.store, "fetch_skills_by_ids"):
-                return await self.store.fetch_skills_by_ids(ids)
-            # Fallback: fetch one-by-one
-            results: List[Skill] = []
-            for sid in ids:
-                skill = await self.store.get_skill(sid)
-                if skill is not None:
-                    results.append(skill)
-            return results
+                return await self.store.fetch_skills_by_ids(
+                    ids,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                )
+            logger.error("ProceduralCore.fetch_by_ids requires fetch_skills_by_ids support")
+            raise RuntimeError("ProceduralCore.fetch_by_ids requires fetch_skills_by_ids support")
         except Exception:
             logger.exception("ProceduralCore.fetch_by_ids failed")
             return []
 
-    async def list_skills(self, limit: Optional[int] = None) -> List[Skill]:
+    async def list_skills(
+        self,
+        *,
+        owner_type: str,
+        owner_id: str,
+        limit: Optional[int] = None,
+    ) -> List[Skill]:
         if self.store is None:
             return []
         try:
-            return await self.store.list_skills(limit=limit)
+            return await self.store.list_skills(
+                owner_type=owner_type,
+                owner_id=owner_id,
+                limit=limit,
+            )
         except Exception:
             logger.exception("ProceduralCore.list_skills failed")
             return []
 
-    async def delete_skill(self, skill_id: str) -> bool:
+    async def delete_skill(
+        self,
+        skill_id: str,
+        *,
+        owner_type: str,
+        owner_id: str,
+    ) -> bool:
         if self.store is None or not skill_id:
             return False
         try:
-            await self.store.delete_skill(skill_id)
+            await self.store.delete_skill(
+                skill_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+            )
             return True
         except Exception:
             logger.exception("ProceduralCore.delete_skill failed for id=%s", skill_id)

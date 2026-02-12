@@ -7,7 +7,7 @@ import pytest
 from uma.core.semantic.core import SemanticCore
 from uma.adapters.db.sqlite_adapter import SQLiteAdapter
 from uma.stores.document_sql import DocumentRecord, DocumentSQLStore
-from uma.types_fact import Fact
+from uma.types import Fact
 
 
 @pytest.mark.asyncio

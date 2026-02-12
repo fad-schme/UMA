@@ -21,7 +21,7 @@ from typing import Iterable, Set
 
 from ..utils.accessors import get_attr_or_key
 
-from ...types_fact import Fact
+from ...types import Fact
 
 logger = logging.getLogger(__name__)
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from uma.core.retrieval.selector import MemorySelector
-from uma.types_chunk import Chunk
+from uma.types import Chunk
 from datetime import datetime, timezone
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from ...types_chunk import Chunk
+from ...types import Chunk
 
 
 def chunk_to_dict(ch: Chunk) -> Dict[str, Any]:

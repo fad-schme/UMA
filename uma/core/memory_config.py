@@ -14,7 +14,7 @@ import sys
 from typing import Any, Dict
 
 import yaml
-
+from .initializers.runtime import init_runtime_env
 logger = logging.getLogger(__name__)
 
 
@@ -41,7 +41,11 @@ class UMAConfig(dict):
             # Keep non-fatal: path bookkeeping should not block config loading.
             cfg._source_path = None
             cfg._source_dir = None
-        _register_plugin_root(cfg._source_dir)
+
+        # Initialize lightweight runtime environment (plugin roots, process defaults).
+        # MUST remain cheap: no DB/LLM/embedder initialization here.
+        init_runtime_env(cfg)
+
         cfg._validate()
         return cfg
 
@@ -380,24 +384,3 @@ class UMAConfig(dict):
 
         self._warn_on_secrets()
         logger.info("UMA configuration validated successfully.")
-
-
-def _register_plugin_root(source_dir: str | None) -> None:
-    """
-    Add ROOT/plugins to sys.path so config plugin specs can import local modules.
-    """
-    if not source_dir:
-        return
-    root_dir = os.path.dirname(source_dir)
-    plugins_dir = os.path.join(root_dir, "plugins")
-    extensions_dir = os.path.join(root_dir, "extensions")
-    registered = False
-    for path in (extensions_dir, plugins_dir):
-        if not os.path.isdir(path):
-            continue
-        if path not in sys.path:
-            sys.path.insert(0, path)
-            logger.info("Registered plugin root on sys.path: %s", path)
-        registered = True
-    if not registered:
-        return

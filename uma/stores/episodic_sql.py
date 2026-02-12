@@ -16,7 +16,7 @@ from .base_vector_sql_store import BaseVectorSQLStore
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from ..core.utils.store_metadata import ensure_store_metadata
-from ..types_episode import Episode
+from ..types import Episode
 
 logger = logging.getLogger(__name__)
 
@@ -268,33 +268,56 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         finally:
             conn.close()
 
-    async def get_episode(self, episode_id: str) -> Optional[Episode]:
+    async def get_episode(
+        self,
+        episode_id: str,
+        *,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+    ) -> Optional[Episode]:
+        if not owner_type or not owner_id:
+            logger.error("EpisodicSQLStore.get_episode requires owner_type and owner_id")
+            raise ValueError("EpisodicSQLStore.get_episode requires owner_type and owner_id")
         conn = self._conn()
         try:
             row = self._query_one(
                 conn,
-                "SELECT * FROM episodes WHERE id = ?",
-                params=[episode_id],
+                "SELECT * FROM episodes WHERE id = ? AND owner_type = ? AND owner_id = ?",
+                params=[episode_id, owner_type, owner_id],
                 log_context="get_episode",
             )
             return self._row_to_object(row) if row else None
         except Exception:
             logger.exception("EpisodicSQLStore.get_episode failed id=%s", episode_id)
-            return None
+            raise
         finally:
             conn.close()
 
-    async def delete_episode(self, episode_id: str) -> None:
+    async def delete_episode(
+        self,
+        episode_id: str,
+        *,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+    ) -> None:
+        if not owner_type or not owner_id:
+            logger.error("EpisodicSQLStore.delete_episode requires owner_type and owner_id")
+            raise ValueError("EpisodicSQLStore.delete_episode requires owner_type and owner_id")
         conn = self._conn()
         try:
             self._execute(
                 conn,
-                "DELETE FROM episodes WHERE id = ?",
-                params=[episode_id],
+                "DELETE FROM episodes WHERE id = ? AND owner_type = ? AND owner_id = ?",
+                params=[episode_id, owner_type, owner_id],
                 log_context="delete_episode",
             )
             conn.commit()
-            logger.info("EpisodicSQLStore: deleted episode id=%s", episode_id)
+            logger.info(
+                "EpisodicSQLStore: deleted episode id=%s owner=%s:%s",
+                episode_id,
+                owner_type,
+                owner_id,
+            )
 
             try:
                 self.vector_index.delete(ids=[episode_id])
@@ -303,7 +326,12 @@ class EpisodicSQLStore(BaseVectorSQLStore):
 
         except Exception:
             self._safe_rollback(conn, "delete_episode")
-            logger.exception("EpisodicSQLStore.delete_episode failed id=%s", episode_id)
+            logger.exception(
+                "EpisodicSQLStore.delete_episode failed id=%s owner=%s:%s",
+                episode_id,
+                owner_type,
+                owner_id,
+            )
             raise
         finally:
             conn.close()
@@ -401,7 +429,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             return ordered
         except Exception:
             logger.exception("EpisodicSQLStore.fetch_summaries failed.")
-            return []
+            raise
         finally:
             conn.close()
 
@@ -450,7 +478,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             return ordered
         except Exception:
             logger.exception("EpisodicSQLStore.fetch_transcripts failed.")
-            return []
+            raise
         finally:
             conn.close()
 
@@ -470,7 +498,10 @@ class EpisodicSQLStore(BaseVectorSQLStore):
 
         Filter by owner_type/owner_id when provided.
         """
-        filters = {"owner_type": owner_type, "owner_id": owner_id} if owner_type and owner_id else None
+        if not owner_type or not owner_id:
+            logger.error("EpisodicSQLStore.search requires owner_type and owner_id")
+            raise ValueError("EpisodicSQLStore.search requires owner_type and owner_id")
+        filters = {"owner_type": owner_type, "owner_id": owner_id}
         try:
             return await self._semantic_search(
                 query_embedding=query_embedding,

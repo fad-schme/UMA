@@ -23,7 +23,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from ...core.utils.registry import FeatureContext, FeatureHandle, FeatureResult, UMAFeature
-from ...types_fact import Fact
+from ...types import Fact
 from .consolidator import Consolidator
 
 if TYPE_CHECKING:

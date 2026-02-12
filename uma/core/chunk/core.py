@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from ...types_chunk import Chunk
+from ...types import Chunk
 from ..utils.dedupe import dedupe_by_id
 
 logger = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ class ChunkCore:
             return True
         except Exception:
             logger.exception("ChunkCore.upsert_chunk failed for id=%s", getattr(chunk, "id", None))
-            return False
+            raise
 
     # ------------------------------------------------------------------
     # PUBLIC API — retrieval
@@ -176,6 +176,7 @@ class ChunkCore:
                 chunks.extend(found)
         except Exception:
             logger.exception("ChunkCore._search failed owner=%s:%s", owner_type, owner_id)
+            raise
         return dedupe_by_id(chunks)
 
     async def _search_text(
@@ -204,6 +205,7 @@ class ChunkCore:
                 chunks.extend(found)
         except Exception:
             logger.exception("ChunkCore._search_text failed owner=%s:%s", owner_type, owner_id)
+            raise
         return dedupe_by_id(chunks)
 
     async def _fetch_by_ids(
@@ -231,7 +233,7 @@ class ChunkCore:
             )
         except Exception:
             logger.exception("ChunkCore._fetch_by_ids failed owner=%s:%s", owner_type, owner_id)
-            return []
+            raise
 
     async def _fetch_ranked_by_ids(
         self,
@@ -258,7 +260,7 @@ class ChunkCore:
             )
         except Exception:
             logger.exception("ChunkCore._fetch_ranked_by_ids failed owner=%s:%s", owner_type, owner_id)
-            return []
+            raise
 
     async def search_chunks(
         self,
@@ -309,6 +311,7 @@ class ChunkCore:
             doc_id=doc_id,
         )
         if any(isinstance(x, dict) for x in (chunks or [])):
+            logger.error("ChunkCore.search_chunks: expected Chunk objects from store.search; got dict(s)")
             raise TypeError(
                 "ChunkCore expected Chunk objects from store.search(); got dict(s). "
                 "Fix the chunk store to return Chunk only."
@@ -353,6 +356,7 @@ class ChunkCore:
                 if found:
                     for it in found:
                         if isinstance(it, dict):
+                            logger.error("ChunkCore.search_chunks: expected Chunk objects from store.search_text; got dict")
                             raise TypeError(
                                 "ChunkCore expected Chunk objects from store.search_text(); got dict. "
                                 "Fix the chunk store to return Chunk only."
@@ -397,6 +401,7 @@ class ChunkCore:
             try:
                 for ch in chunks:
                     if isinstance(ch, dict):
+                        logger.error("ChunkCore.search_chunks: expected Chunk objects from store.search; got dict")
                         raise TypeError(
                             "ChunkCore expected Chunk objects from store.search(); got dict. "
                             "Fix the chunk store to return Chunk only."
@@ -409,7 +414,8 @@ class ChunkCore:
                     meta.setdefault("retrieval_method", "vector")
                     ch.meta = meta
             except Exception:
-                pass
+                logger.exception("ChunkCore.search_chunks: failed to attach retrieval metadata")
+                raise
 
             try:
                 confs = []
@@ -427,33 +433,28 @@ class ChunkCore:
                         max(confs),
                     )
             except Exception:
-                pass
+                logger.exception("ChunkCore.search_chunks: failed to summarize lexical_confidence")
+                raise
 
         if filter_terms and query_text and query_text.strip():
-            try:
-                from ..utils.user_query_helper import build_query_term_set
-            except Exception:
-                build_query_term_set = None
-            term_set = build_query_term_set(query_text) if build_query_term_set else None
+            from ..utils.user_query_helper import build_query_term_set
+            term_set = build_query_term_set(query_text)
             if term_set and (term_set.terms or term_set.phrases):
-                try:
-                    from ..utils.user_query_helper import text_matches_query_terms
-                except Exception:
-                    text_matches_query_terms = None
-                if text_matches_query_terms:
-                    filtered: List[Chunk] = []
-                    for ch in chunks:
-                        if isinstance(ch, dict):
-                            raise TypeError(
-                                "ChunkCore expected Chunk objects from store.search(); got dict. "
-                                "Fix the chunk store to return Chunk only."
-                            )
-                        text = getattr(ch, "text", "")
-                        if not text:
-                            continue
-                        if text_matches_query_terms(text, term_set, min_term_matches=2, max_terms_for_match=6):
-                            filtered.append(ch)
-                    chunks = filtered
+                from ..utils.user_query_helper import text_matches_query_terms
+                filtered: List[Chunk] = []
+                for ch in chunks:
+                    if isinstance(ch, dict):
+                        logger.error("ChunkCore.search_chunks: expected Chunk objects from store.search; got dict")
+                        raise TypeError(
+                            "ChunkCore expected Chunk objects from store.search(); got dict. "
+                            "Fix the chunk store to return Chunk only."
+                        )
+                    text = getattr(ch, "text", "")
+                    if not text:
+                        continue
+                    if text_matches_query_terms(text, term_set, min_term_matches=2, max_terms_for_match=6):
+                        filtered.append(ch)
+                chunks = filtered
 
         if expand_neighbors and chunks:
             try:
@@ -471,6 +472,7 @@ class ChunkCore:
                 )
             except Exception:
                 logger.exception("ChunkCore.search_chunks neighbor expansion failed")
+                raise
         return chunks
 
     @staticmethod
@@ -547,6 +549,7 @@ class ChunkCore:
             return []
 
         if any(isinstance(x, dict) for x in anchors):
+            logger.error("ChunkCore.expand_neighbors: expected Chunk anchors; got dict(s)")
             raise TypeError("ChunkCore.expand_neighbors expected Chunk anchors; got dict(s).")
 
         # Compute merged ranges per doc to minimize SQL calls.

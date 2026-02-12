@@ -33,7 +33,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from ...types_fact import Fact
+from ...types import Fact
 from ..utils.identity import ensure_user_subject
 from ..utils.dedupe import dedupe_by_id
 from ..utils.user_query_helper import extract_keywords_and_phrases, build_fact_embedding_text
@@ -95,7 +95,7 @@ class SemanticCore:
             subj = ensure_user_subject(subject)
         except Exception:
             logger.exception("SemanticCore.extract: invalid subject=%r", subject)
-            return []
+            raise
 
         return await self.ingestor.extract(subj, text, extra_meta=extra_meta)
 
@@ -119,7 +119,7 @@ class SemanticCore:
             subj = ensure_user_subject(subject)
         except Exception:
             logger.exception("SemanticCore.ingest: invalid subject=%r", subject)
-            return []
+            raise
 
         facts = await self.ingestor.ingest(subj, text, extra_meta=extra_meta)
 
@@ -130,7 +130,8 @@ class SemanticCore:
                 f.owner_type = "user"
                 f.owner_id = subj
             except Exception:
-                continue
+                logger.exception("SemanticCore.ingest: failed to set owner on fact id=%s", getattr(f, "id", None))
+                raise
 
         # EXPLICIT DEDUP (DAT v1 requirement)
         facts = self._dedup_facts(facts)
@@ -167,7 +168,7 @@ class SemanticCore:
                 subj = ensure_user_subject(subject)
             except Exception:
                 logger.exception("SemanticCore.search: invalid subject=%r", subject)
-                return []
+                raise
 
         requested_topic = filters.get("topic") if isinstance(filters, dict) else None
         requested_predicate = filters.get("predicate") if isinstance(filters, dict) else None
@@ -205,6 +206,7 @@ class SemanticCore:
                 owner_type,
                 owner_id,
             )
+            raise
 
         # Optional topic filtering (soft)
         if requested_topic:
@@ -246,38 +248,36 @@ class SemanticCore:
                         original_count,
                     )
                 else:
+                    fallback: List[Any] = []
                     try:
-                        fallback: List[Any] = []
-                        try:
-                            if subj is not None:
-                                found = await self._search_text(
-                                    subj,
-                                    query_text,
-                                    limit=int(k),
-                                    owner_type=owner_type,
-                                    owner_id=owner_id,
-                                )
-                            else:
-                                logger.warning(
-                                    "SemanticCore.search: no subject; skipping lexical fallback"
-                                )
-                                found = []
-                            if found:
-                                fallback.extend(found)
-                        except Exception:
-                            logger.exception(
-                                "SemanticCore.search: lexical fallback owner=%s:%s failed",
-                                owner_type,
-                                owner_id,
+                        if subj is not None:
+                            found = await self._search_text(
+                                subj,
+                                query_text,
+                                limit=int(k),
+                                owner_type=owner_type,
+                                owner_id=owner_id,
                             )
-                        if fallback:
-                            facts = fallback
-                            logger.debug(
-                                "SemanticCore.search: lexical fallback returned %d",
-                                len(facts),
+                        else:
+                            logger.warning(
+                                "SemanticCore.search: no subject; skipping lexical fallback"
                             )
+                            found = []
+                        if found:
+                            fallback.extend(found)
                     except Exception:
-                        logger.exception("SemanticCore.search: lexical fallback failed")
+                        logger.exception(
+                            "SemanticCore.search: lexical fallback owner=%s:%s failed",
+                            owner_type,
+                            owner_id,
+                        )
+                        raise
+                    if fallback:
+                        facts = fallback
+                        logger.debug(
+                            "SemanticCore.search: lexical fallback returned %d",
+                            len(facts),
+                        )
 
         return dedupe_by_id(facts)
 
@@ -303,7 +303,10 @@ class SemanticCore:
                 subj = ensure_user_subject(subject)
             except Exception:
                 logger.exception("SemanticCore.fetch_more_facts: invalid subject=%r", subject)
-                return []
+                raise
+        if not owner_type or not owner_id:
+            logger.error("SemanticCore.fetch_more_facts requires owner_type and owner_id")
+            raise ValueError("SemanticCore.fetch_more_facts requires owner_type and owner_id")
 
         predicate_u = (predicate or "").upper()
         try:
@@ -328,7 +331,7 @@ class SemanticCore:
                 owner_type,
                 owner_id,
             )
-            facts = []
+            raise
 
         filtered = []
         for f in facts or []:
@@ -363,7 +366,10 @@ class SemanticCore:
             subj = ensure_user_subject(subject)
         except Exception:
             logger.exception("SemanticCore.search_text: invalid subject=%r", subject)
-            return []
+            raise
+        if not owner_type or not owner_id:
+            logger.error("SemanticCore.search_text requires owner_type and owner_id")
+            raise ValueError("SemanticCore.search_text requires owner_type and owner_id")
         try:
             return await store.search_text(
                 query_text,
@@ -374,7 +380,7 @@ class SemanticCore:
             )
         except Exception:
             logger.exception("SemanticCore.search_text failed")
-            return []
+            raise
 
     async def fetch_by_ids(
         self,
@@ -389,6 +395,9 @@ class SemanticCore:
         store = getattr(self.ingestor, "semantic_store", None)
         if store is None:
             return []
+        if not owner_type or not owner_id:
+            logger.error("SemanticCore.fetch_by_ids requires owner_type and owner_id")
+            raise ValueError("SemanticCore.fetch_by_ids requires owner_type and owner_id")
         try:
             return await store.fetch_facts_by_ids(
                 ids,
@@ -397,7 +406,7 @@ class SemanticCore:
             )
         except Exception:
             logger.exception("SemanticCore.fetch_by_ids failed")
-            return []
+            raise
 
     async def fetch_by_predicate(
         self,
@@ -419,7 +428,10 @@ class SemanticCore:
             subj = ensure_user_subject(subject)
         except Exception:
             logger.exception("SemanticCore.fetch_by_predicate: invalid subject=%r", subject)
-            return []
+            raise
+        if not owner_type or not owner_id:
+            logger.error("SemanticCore.fetch_by_predicate requires owner_type and owner_id")
+            raise ValueError("SemanticCore.fetch_by_predicate requires owner_type and owner_id")
         try:
             return await store.fetch_by_predicate(
                 subject=subj,
@@ -431,7 +443,7 @@ class SemanticCore:
             )
         except Exception:
             logger.exception("SemanticCore.fetch_by_predicate failed")
-            return []
+            raise
 
     async def upsert_fact(self, fact: Fact, embedding: List[float]) -> bool:
         """
@@ -477,7 +489,10 @@ class SemanticCore:
             subj = ensure_user_subject(subject)
         except Exception:
             logger.exception("SemanticCore.list_facts_for_subject: invalid subject=%r", subject)
-            return []
+            raise
+        if not owner_type or not owner_id:
+            logger.error("SemanticCore.list_facts_for_subject requires owner_type and owner_id")
+            raise ValueError("SemanticCore.list_facts_for_subject requires owner_type and owner_id")
         try:
             return await store.list_facts_for_subject(
                 subject=subj,
@@ -487,7 +502,7 @@ class SemanticCore:
             )
         except Exception:
             logger.exception("SemanticCore.list_facts_for_subject failed")
-            return []
+            raise
 
     async def delete_fact(
         self,
@@ -502,12 +517,15 @@ class SemanticCore:
         store = getattr(self.ingestor, "semantic_store", None)
         if store is None or not hasattr(store, "delete_fact"):
             return False
+        if not owner_type or not owner_id:
+            logger.error("SemanticCore.delete_fact requires owner_type and owner_id")
+            raise ValueError("SemanticCore.delete_fact requires owner_type and owner_id")
         try:
             await store.delete_fact(fact_id, owner_type=owner_type, owner_id=owner_id)
             return True
         except Exception:
             logger.exception("SemanticCore.delete_fact failed for id=%s", fact_id)
-            return False
+            raise
 
     def _dedup_facts(self, facts: List[Fact]) -> List[Fact]:
         """

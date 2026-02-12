@@ -9,8 +9,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from ...types_fact import Fact
-from ...types_skill import Skill
+from ...types import Fact
+from ...types import Skill
 from .identity import ensure_user_subject
 from .user_query_helper import build_fact_embedding_text
 
@@ -145,7 +145,11 @@ async def rebuild_vector_indexes(
         else:
             try:
                 subject = ensure_user_subject(owner_id)
-                facts: List[Fact] = await memory.semantic_core.list_facts_for_subject(subject)
+                facts: List[Fact] = await memory.semantic_core.list_facts_for_subject(
+                    subject,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                )
                 if facts:
                     texts = [build_fact_embedding_text(f) for f in facts]
                     vectors = await _embed_in_batches(embedder, texts, batch_size)
@@ -171,17 +175,23 @@ async def rebuild_vector_indexes(
 
     if include_procedural:
         try:
-            skills: List[Skill] = await memory.procedural_core.list_skills()
-            if skills:
-                texts = [_skill_embedding_text(s) for s in skills]
-                vectors = await _embed_in_batches(embedder, texts, batch_size)
-                ids = [s.id for s in skills]
-                metas = [{"name": s.name} for s in skills]
-                idx = memory.procedural_core.vector_index() if memory.procedural_core else None
-                if idx is None:
-                    raise RuntimeError("procedural vector index missing")
-                idx.upsert(ids=ids, vectors=vectors, metadata=metas)
-            report["procedural"] = {"status": "ok", "count": len(skills)}
+            if not owner_type or not owner_id:
+                report["procedural"]["status"] = "skipped"
+            else:
+                skills = await memory.procedural_core.list_skills(
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                )
+                if skills:
+                    texts = [_skill_embedding_text(s) for s in skills]
+                    vectors = await _embed_in_batches(embedder, texts, batch_size)
+                    ids = [s.id for s in skills]
+                    metas = [{"name": s.name, "owner_type": s.owner_type, "owner_id": s.owner_id} for s in skills]
+                    idx = memory.procedural_core.vector_index() if memory.procedural_core else None
+                    if idx is None:
+                        raise RuntimeError("procedural vector index missing")
+                    idx.upsert(ids=ids, vectors=vectors, metadata=metas)
+                report["procedural"] = {"status": "ok", "count": len(skills)}
         except Exception:
             logger.exception("rebuild_vector_indexes: procedural rebuild failed.")
             report["procedural"] = {"status": "error", "count": 0}

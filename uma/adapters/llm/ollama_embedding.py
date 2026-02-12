@@ -36,7 +36,7 @@ import os
 
 from ...core.utils.config_types import EmbeddingConfig
 from .base import EmbeddingInterface
-from .retry_utils import retryable
+from .retry_utils import retryable, should_retry_network_only
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +198,7 @@ class OllamaEmbedder(EmbeddingInterface):
     # Native embedding
     # ------------------------------------------------------------------
 
-    @retryable(max_attempts=1)
+    @retryable(max_attempts=3, should_retry=should_retry_network_only)
     async def _embed_native(self, texts: List[str]) -> List[List[float]]:
         """
         Perform embedding using Ollama's Python API.

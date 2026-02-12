@@ -22,7 +22,7 @@ from typing import Iterable, List
 from openai import AsyncOpenAI
 from uma.adapters.llm.base import EmbeddingInterface
 from uma.core.utils.config_types import EmbeddingConfig
-from uma.adapters.llm.retry_utils import retryable
+from uma.adapters.llm.retry_utils import retryable, should_retry_openai
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ class OpenAIEmbedder(EmbeddingInterface):
     def dimension(self) -> int:
         return self._dimension
 
-    @retryable()
+    @retryable(should_retry=should_retry_openai)
     async def embed(self, texts: Iterable[str]) -> List[List[float]]:
         """
         Embed texts in batches using the OpenAI embeddings API.

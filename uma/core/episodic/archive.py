@@ -34,7 +34,13 @@ class EpisodicArchive:
     # PUBLIC API
     # ------------------------------------------------------------------
 
-    async def delete_many(self, episode_ids: List[str]):
+    async def delete_many(
+        self,
+        episode_ids: List[str],
+        *,
+        owner_type: str,
+        owner_id: str,
+    ):
         """
         Bulk-delete episodes from the store.
 
@@ -44,6 +50,15 @@ class EpisodicArchive:
         """
         for eid in episode_ids:
             try:
-                await self.store.delete_episode(eid)
+                await self.store.delete_episode(
+                    eid,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                )
             except Exception:
-                logger.exception("Failed to delete episode id=%s", eid)
+                logger.exception(
+                    "Failed to delete episode id=%s owner=%s:%s",
+                    eid,
+                    owner_type,
+                    owner_id,
+                )

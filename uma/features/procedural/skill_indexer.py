@@ -25,7 +25,7 @@ import uuid
 from typing import Dict, List, Tuple, Any
 
 from ...adapters.llm.base import LLMInterface, EmbeddingInterface
-from ...types_skill import Skill
+from ...types import Skill
 
 logger = logging.getLogger(__name__)
 

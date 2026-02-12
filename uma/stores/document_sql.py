@@ -122,7 +122,7 @@ class DocumentSQLStore(BaseSQLStore):
                 owner_type,
                 owner_id,
             )
-            return None
+            raise
         finally:
             conn.close()
 

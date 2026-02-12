@@ -31,7 +31,7 @@ from .indexer import EpisodeIndexer
 from .archive import EpisodicArchive
 from .mapper import EpisodeMapper
 from .policies import EpisodicRetentionPolicy
-from ...types_episode import Episode
+from ...types import Episode
 from ..utils.dedupe import dedupe_by_id
 from ..utils.identity import ensure_user_subject
 
@@ -147,7 +147,11 @@ class EpisodicCore:
             prunable = self.policy.select_prunable(episodes)
 
             if prunable:
-                await self.archive.delete_many([ep.id for ep in prunable])
+                await self.archive.delete_many(
+                    [ep.id for ep in prunable],
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                )
                 logger.debug(
                     "EpisodicCore: pruned %d episode(s) for owner=%s:%s",
                     len(prunable),
@@ -173,14 +177,24 @@ class EpisodicCore:
             logger.exception("EpisodicCore.list_recent failed.")
             return []
 
-    async def delete_episode(self, episode_id: str) -> bool:
+    async def delete_episode(
+        self,
+        episode_id: str,
+        *,
+        owner_type: str,
+        owner_id: str,
+    ) -> bool:
         """
         Delete a single episode by ID.
         """
         if self.store is None or not episode_id:
             return False
         try:
-            await self.store.delete_episode(episode_id)
+            await self.store.delete_episode(
+                episode_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+            )
             return True
         except Exception:
             logger.exception("EpisodicCore.delete_episode failed id=%s", episode_id)

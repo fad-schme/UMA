@@ -190,6 +190,13 @@ class BaseVectorSQLStore(BaseSQLStore):
     ) -> List[Any]:
         if not ids:
             return []
+        if not owner_type or not owner_id:
+            logger.error(
+                "%s _fetch_ranked_rows_by_ids requires owner_type and owner_id%s",
+                self.__class__.__name__,
+                f" [{log_context}]" if log_context else "",
+            )
+            raise ValueError(f"{self.__class__.__name__} fetch_by_ids requires owner_type and owner_id")
 
         ctx = f" [{log_context}]" if log_context else ""
         conn = self._conn()
@@ -296,6 +303,13 @@ class BaseVectorSQLStore(BaseSQLStore):
 
         This is an optional optimization to enable "IDs+scores first" retrieval.
         """
+        if not filters or not filters.get("owner_type") or not filters.get("owner_id"):
+            logger.error(
+                "%s search_ids requires owner_type and owner_id%s",
+                self.__class__.__name__,
+                f" [{log_context}]" if log_context else "",
+            )
+            raise ValueError(f"{self.__class__.__name__} search_ids requires owner_type and owner_id")
         return await self._vector_search_ids(
             query_embedding=query_embedding,
             k=k,
@@ -315,6 +329,13 @@ class BaseVectorSQLStore(BaseSQLStore):
         """
         Fetch rows by IDs in ranked order (SQL authoritative payload).
         """
+        if not owner_type or not owner_id:
+            logger.error(
+                "%s fetch_by_ids requires owner_type and owner_id%s",
+                self.__class__.__name__,
+                f" [{log_context}]" if log_context else "",
+            )
+            raise ValueError(f"{self.__class__.__name__} fetch_by_ids requires owner_type and owner_id")
         return await self._fetch_ranked_rows_by_ids(
             ids=ids,
             log_context=log_context,

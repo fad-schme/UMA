@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Any
 
-from ...adapters.llm.retry_utils import retryable
+from ...adapters.llm.retry_utils import retryable, should_retry_network_only
 from .types import DocumentChunk
 
 logger = logging.getLogger(__name__)
@@ -55,6 +55,7 @@ async def embed_chunks(
         initial_delay=initial_delay,
         backoff_factor=backoff_factor,
         max_delay=max_delay,
+        should_retry=should_retry_network_only,
     )
     async def _embed_batch(texts: List[str]) -> List[List[float]]:
         return await embedder.embed(texts)

@@ -231,6 +231,7 @@ class RetrievalService:
                 raw[key] = result if isinstance(result, list) else []
 
         if any(isinstance(x, dict) for x in (raw.get("chunks") or [])):
+            logger.error("RetrievalService: expected Chunk objects in raw['chunks']; got dict(s).")
             raise TypeError(
                 "RetrievalService expected Chunk objects in raw['chunks']; got dict(s). "
                 "Fix chunk store/core to return Chunk only."
@@ -260,14 +261,17 @@ class RetrievalService:
             try:
                 with timed("retrieval.retrieve.latency_s", tags={"memory_type": memory_type_norm or "unknown"}):
                     if not user_id or not isinstance(user_id, str):
+                        logger.error("RetrievalService.retrieve: user_id must be a non-empty string.")
                         raise ValueError("RetrievalService.retrieve: user_id must be a non-empty string.")
 
                     user_subject = ensure_user_subject(user_id)
 
                     if query_text_or_embedding is None:
+                        logger.error("RetrievalService.retrieve: query_text_or_embedding is required.")
                         raise ValueError("RetrievalService.retrieve: query_text_or_embedding is required.")
 
                     if not memory_type_norm:
+                        logger.error("RetrievalService.retrieve: memory_type must not be empty.")
                         raise ValueError("RetrievalService.retrieve: memory_type must not be empty.")
 
                     if memory_type_norm == "working_memory":
@@ -287,6 +291,7 @@ class RetrievalService:
                     else:
                         owner_type = "agent"
                         if not agent_id:
+                            logger.error("RetrievalService.retrieve: agent_id is required for agent scope.")
                             raise ValueError("RetrievalService.retrieve: agent_id is required for agent scope.")
                         owner_id = agent_id
                     if logger.isEnabledFor(logging.DEBUG):
@@ -322,6 +327,7 @@ class RetrievalService:
                             # Episodes/facts/skills may still be dicts depending on store/backends,
                             # but chunks must be canonical Chunk objects end-to-end.
                             if kind == "chunk" and isinstance(it, dict):
+                                logger.error("RetrievalService expected Chunk objects for chunks; got dict.")
                                 raise TypeError(
                                     "RetrievalService expected Chunk objects for chunks; got dict. "
                                     "Fix chunk store/core to return Chunk only."
@@ -383,6 +389,9 @@ class RetrievalService:
                                     try:
                                         for ch in cited_chunks or []:
                                             if isinstance(ch, dict):
+                                                logger.error(
+                                                    "RetrievalService expected Chunk objects from chunk_core; got dict."
+                                                )
                                                 raise TypeError(
                                                     "RetrievalService expected Chunk objects from chunk_core; got dict. "
                                                     "Fix the chunk store/core to return Chunk only."
@@ -394,7 +403,10 @@ class RetrievalService:
                                             meta.setdefault("retrieval_stage", "evidence_expand")
                                             ch.meta = meta
                                     except Exception:
-                                        pass
+                                        logger.exception(
+                                            "RetrievalService: failed to attach evidence metadata to chunks"
+                                        )
+                                        raise
                                     # Role-aware merge with deterministic precedence:
                                     # 1) evidence chunks (fact-cited)
                                     # 2) query-hit chunks (vector/lexical)
@@ -403,6 +415,7 @@ class RetrievalService:
                                     neighbors = []
                                     for ch in chunks or []:
                                         if isinstance(ch, dict):
+                                            logger.error("RetrievalService: expected Chunk objects in chunks; got dict.")
                                             raise TypeError("Expected Chunk objects in chunks; got dict.")
                                         meta = getattr(ch, "meta", None) or {}
                                         route = meta.get("retrieval_route") if isinstance(meta, dict) else None
@@ -435,12 +448,14 @@ class RetrievalService:
                             filtered_ids = set()
                             for c in filtered or []:
                                 if isinstance(c, dict):
+                                    logger.error("RetrievalService: expected Chunk objects in filtered chunks; got dict.")
                                     raise TypeError("Expected Chunk objects in filtered chunks; got dict.")
                                 cid = getattr(c, "id", None)
                                 if cid:
                                     filtered_ids.add(str(cid))
                             for c in chunks:
                                 if isinstance(c, dict):
+                                    logger.error("RetrievalService: expected Chunk objects in chunks; got dict.")
                                     raise TypeError("Expected Chunk objects in chunks; got dict.")
                                 cid = getattr(c, "id", None)
                                 if cid and str(cid) in cited_set and str(cid) not in filtered_ids:
@@ -502,9 +517,11 @@ class RetrievalService:
                             "trace": trace,
                         }
 
+                    logger.error("RetrievalService.retrieve: unsupported memory_type=%r", memory_type_norm)
                     raise ValueError(f"RetrievalService.retrieve: unsupported memory_type={memory_type_norm!r}")
             except Exception:
                 increment("retrieval.retrieve.error", tags={"memory_type": memory_type_norm or "unknown"})
+                logger.exception("RetrievalService.retrieve failed")
                 raise
 
     async def _ensure_embedding(self, query: Any) -> NumericVector:
@@ -518,19 +535,29 @@ class RetrievalService:
             try:
                 expected_dim = getattr(self.memory.embedder, "dimension", None)
                 if not isinstance(expected_dim, int) or expected_dim <= 0:
+                    logger.error("RetrievalService._ensure_embedding: embedder.dimension must be a positive integer.")
                     raise ValueError("Embedder.dimension must be a positive integer.")
                 # IMPORTANT: embedders expect List[str] -> List[List[float]]
                 vectors = await self.memory.embedder.embed([query])
                 if not vectors or not isinstance(vectors, list) or not vectors[0]:
+                    logger.error("RetrievalService._ensure_embedding: embedder returned empty embedding.")
                     raise ValueError("Embedder returned empty embedding.")
                 vec0 = vectors[0]
                 if not isinstance(vec0, list) or len(vec0) != expected_dim:
-                    raise ValueError(f"Embedder returned invalid dim (expected={expected_dim} got={len(vec0) if isinstance(vec0, list) else None}).")
+                    logger.error(
+                        "RetrievalService._ensure_embedding: invalid embedding dim expected=%s got=%s",
+                        expected_dim,
+                        len(vec0) if isinstance(vec0, list) else None,
+                    )
+                    raise ValueError(
+                        f"Embedder returned invalid dim (expected={expected_dim} got={len(vec0) if isinstance(vec0, list) else None})."
+                    )
                 return [float(x) for x in vec0]
             except Exception as exc:
-                logger.exception("RetrievalService._ensure_embedding: embed failed.")
+                logger.exception("RetrievalService._ensure_embedding: failed to embed query text.")
                 raise ValueError("Failed to embed query text.") from exc
 
+        logger.error("RetrievalService._ensure_embedding: query must be a non-empty str or numeric vector list.")
         raise ValueError("RetrievalService._ensure_embedding: query must be a non-empty str or numeric vector list.")
 
     def _get_working_memory(self, user_id: str) -> List[Any]:
@@ -550,11 +577,7 @@ class RetrievalService:
         Hard filter: only keep chunks containing query terms (case-insensitive).
         If no chunks match, return empty list.
         """
-        try:
-            from ..utils.user_query_helper import build_query_term_set, text_matches_query_terms
-        except Exception:
-            build_query_term_set = None
-            text_matches_query_terms = None
+        from ..utils.user_query_helper import build_query_term_set, text_matches_query_terms
 
         if not chunks or not query_text:
             return chunks
@@ -569,6 +592,7 @@ class RetrievalService:
 
         def _text(ch: Any) -> str:
             if isinstance(ch, dict):
+                logger.error("RetrievalService._filter_chunks_by_query expected Chunk objects; got dict.")
                 raise TypeError(
                     "RetrievalService._filter_chunks_by_query expected Chunk objects; got dict. "
                     "Fix chunk store/core to return Chunk only."

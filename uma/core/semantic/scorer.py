@@ -23,7 +23,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict
 
-from ...types_fact import Fact
+from ...types import Fact
 
 logger = logging.getLogger(__name__)
 

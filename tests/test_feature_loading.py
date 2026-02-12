@@ -6,6 +6,7 @@ class DummyMemory:
     def __init__(self) -> None:
         self.features = {}
         self._methods = {}
+        self.user_id = "user:dummy"
 
     def register_methods(self, feature_name, methods, allow_override=None) -> None:
         for name, func in methods.items():
@@ -19,10 +20,10 @@ class StubProceduralCore:
     async def add_skill(self, skill, embedding):
         return None
 
-    async def search(self, query_embedding, k=5, owner_type=None, owner_id=None):
+    async def search(self, query_embedding, k=5, owner_type=None, owner_id=None, user_id=None):
         return []
 
-    async def get_skill(self, skill_id):
+    async def get_skill(self, skill_id, owner_type=None, owner_id=None):
         return None
 
 

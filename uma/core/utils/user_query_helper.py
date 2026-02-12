@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+import logging
 from typing import Dict, Iterable, List, Sequence, Set, Tuple
 
 from uma.core.utils.accessors import get_attr_or_key
+
+logger = logging.getLogger(__name__)
 
 
 _STOPWORDS = {
@@ -419,7 +422,7 @@ def build_fact_embedding_text(fact: object) -> str:
                 if isinstance(val, str) and val.strip():
                     return val.strip().replace("\n", " ")
     except Exception:
-        pass
+        logger.exception("build_fact_embedding_text: failed to read fact meta")
 
     try:
         obj = get_attr_or_key(fact, "object") if isinstance(fact, dict) else getattr(fact, "object", None)
@@ -431,7 +434,7 @@ def build_fact_embedding_text(fact: object) -> str:
         elif isinstance(obj, str) and obj.strip():
             return obj.strip().replace("\n", " ")
     except Exception:
-        pass
+        logger.exception("build_fact_embedding_text: failed to read fact object")
 
     try:
         subject = get_attr_or_key(fact, "subject")

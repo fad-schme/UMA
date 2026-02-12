@@ -277,6 +277,7 @@ else:
 #### Procedural feature usage
 Procedural memory is an optional feature that lets you store and retrieve skills using
 vector search plus rule-based matching. It exposes async methods that return FeatureResult.
+All procedural reads are owner-scoped; set `memory.user_id` before calling read methods.
 
 ```yaml
 features:
@@ -289,6 +290,8 @@ features:
 ```
 
 ```python
+memory.user_id = "user-123"
+
 result = await memory.procedural_add_skill(skill, embedding)
 if not result.ok:
     print("add failed:", result.errors)

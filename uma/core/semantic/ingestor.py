@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any, List
 
-from ...types_fact import Fact
+from ...types import Fact
 from ..utils.user_query_helper import build_fact_embedding_text
 from .extractor import FactExtractor
 from .scorer import SalienceScorer

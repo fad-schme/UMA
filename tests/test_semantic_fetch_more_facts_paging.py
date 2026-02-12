@@ -3,7 +3,7 @@ from datetime import datetime
 import pytest
 
 from uma.core.semantic.core import SemanticCore
-from uma.types_fact import Fact
+from uma.types import Fact
 
 
 class DummyStore:

@@ -48,8 +48,10 @@ class DummySemanticCore:
     ):
         return await self.search_store(subject, query_embedding, owner_type, owner_id, k=k, offset=offset)
 
-    async def fetch_by_ids(self, ids):
-        return [DummyFact(fid, "user:1", "likes", "tea") for fid in ids]
+    async def fetch_by_ids(self, ids, *, owner_type=None, owner_id=None):
+        assert owner_type in {"user", "agent"}
+        assert isinstance(owner_id, str) and owner_id
+        return [DummyFact(fid, "user:1", "likes", "tea", owner_type=owner_type, owner_id=owner_id) for fid in ids]
 
 
 class DummyEpisodicStore:
@@ -189,7 +191,9 @@ def test_environment_semantic_and_episodic_search():
 def test_environment_fetch_and_neighbors():
     env = UMAMemoryEnvironment(DummyMemory())
 
-    facts = asyncio_run(env.fetch_facts_by_ids("u1", ["f1", "f2"]))
+    facts = asyncio_run(
+        env.fetch_facts_by_ids("u1", ["f1", "f2"], owner_type="agent", owner_id="agent-default")
+    )
     assert len(facts) == 2
 
     neighbors = asyncio_run(env.graph_neighbors("u1", "node1", predicate_scope=["likes"], depth=2, k=5))

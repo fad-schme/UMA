@@ -38,16 +38,12 @@ from datetime import datetime
 from typing import List, Optional, Any
 
 from .base_vector_sql_store import BaseVectorSQLStore
-
-try:
-    from ..core.utils.user_query_helper import extract_keywords_and_phrases
-except Exception:  # pragma: no cover
-    extract_keywords_and_phrases = None
+from ..core.utils.user_query_helper import extract_keywords_and_phrases
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from ..core.utils.conflict import FactResolver, LatestWinsFactResolver
 from ..core.utils.store_metadata import ensure_store_metadata
-from ..types_fact import Fact
+from ..types import Fact
 
 logger = logging.getLogger(__name__)
 
@@ -183,15 +179,18 @@ class SemanticSQLStore(BaseVectorSQLStore):
         try:
             obj = json.loads(object_val) if object_val else None
         except Exception:
-            obj = object_val
+            logger.exception("SemanticSQLStore: failed to parse object JSON for id=%s", row["id"])
+            raise
         try:
             source_ids = json.loads(source_ids_val) if source_ids_val else []
         except Exception:
-            source_ids = []
+            logger.exception("SemanticSQLStore: failed to parse source_ids JSON for id=%s", row["id"])
+            raise
         try:
             meta = json.loads(meta_val) if meta_val else {}
         except Exception:
-            meta = {}
+            logger.exception("SemanticSQLStore: failed to parse meta JSON for id=%s", row["id"])
+            raise
 
         return Fact(
             id=row["id"],
@@ -396,6 +395,9 @@ class SemanticSQLStore(BaseVectorSQLStore):
 
         Returns ranked list preserving vector search order.
         """
+        if not owner_type or not owner_id:
+            logger.error("SemanticSQLStore.search requires owner_type and owner_id")
+            raise ValueError("SemanticSQLStore.search requires owner_type and owner_id")
         filters = {"subject": subject} if subject else None
 
         try:
@@ -429,6 +431,9 @@ class SemanticSQLStore(BaseVectorSQLStore):
         """
         if not query or not isinstance(query, str):
             return []
+        if not owner_type or not owner_id:
+            logger.error("SemanticSQLStore.search_text requires owner_type and owner_id")
+            raise ValueError("SemanticSQLStore.search_text requires owner_type and owner_id")
         terms = []
         if extract_keywords_and_phrases:
             extracted = extract_keywords_and_phrases(query)
@@ -447,12 +452,10 @@ class SemanticSQLStore(BaseVectorSQLStore):
             for term in terms:
                 where.append("LOWER(object) LIKE ?")
                 params.append(f"%{term}%")
-            if owner_type:
-                where.append("owner_type=?")
-                params.append(owner_type)
-            if owner_id:
-                where.append("owner_id=?")
-                params.append(owner_id) 
+            where.append("owner_type=?")
+            params.append(owner_type)
+            where.append("owner_id=?")
+            params.append(owner_id)
 
             sql = f"""
                 SELECT * FROM facts
@@ -464,16 +467,20 @@ class SemanticSQLStore(BaseVectorSQLStore):
             return [self._row_to_object(r) for r in rows]
         except Exception:
             logger.exception("SemanticSQLStore.search_text failed.")
-            return []
+            raise
         finally:
             conn.close()
 
     # ------------------------------------------------------------------ #
     # Fact Listing (required by Consolidator + Pruner)
     # ------------------------------------------------------------------ #
-    async def list_facts_for_subject(self, subject: str, limit: Optional[int] = None,
+    async def list_facts_for_subject(
+        self,
+        subject: str,
+        limit: Optional[int] = None,
         owner_type: Optional[str] = None,
-        owner_id: Optional[str] = None,) -> List[Fact]:
+        owner_id: Optional[str] = None,
+    ) -> List[Fact]:
         """
         Return all facts for a given subject, ordered by updated_at DESC.
 
@@ -488,14 +495,16 @@ class SemanticSQLStore(BaseVectorSQLStore):
         -------
         List[Fact]
         """
+        if not owner_type or not owner_id:
+            logger.error("SemanticSQLStore.list_facts_for_subject requires owner_type and owner_id")
+            raise ValueError("SemanticSQLStore.list_facts_for_subject requires owner_type and owner_id")
         conn = self._conn()
         try:
             where_clauses = ["subject=?"]
             params = [subject]
-            if owner_type is not None and owner_id is not None:
-                where_clauses.append("owner_type=?")
-                where_clauses.append("owner_id=?")
-                params.extend([owner_type, owner_id])
+            where_clauses.append("owner_type=?")
+            where_clauses.append("owner_id=?")
+            params.extend([owner_type, owner_id])
 
             sql = f"SELECT * FROM facts WHERE {' AND '.join(where_clauses)} ORDER BY updated_at DESC"
             # Tie-break by id to ensure deterministic paging.
@@ -523,7 +532,8 @@ class SemanticSQLStore(BaseVectorSQLStore):
         Return all facts for a given owner scope, ordered by updated_at DESC.
         """
         if not owner_type or not owner_id:
-            return []
+            logger.error("SemanticSQLStore.list_facts_for_owner requires owner_type and owner_id")
+            raise ValueError("SemanticSQLStore.list_facts_for_owner requires owner_type and owner_id")
         conn = self._conn()
         try:
             sql = "SELECT * FROM facts WHERE owner_type=? AND owner_id=? ORDER BY updated_at DESC, id ASC"
@@ -547,15 +557,17 @@ class SemanticSQLStore(BaseVectorSQLStore):
         """
         if not ids:
             return []
+        if not owner_type or not owner_id:
+            logger.error("SemanticSQLStore.fetch_facts_by_ids requires owner_type and owner_id")
+            raise ValueError("SemanticSQLStore.fetch_facts_by_ids requires owner_type and owner_id")
 
         conn = self._conn()
         try:
             placeholders = ",".join("?" for _ in ids)
             params = ids[:]
             sql = f"SELECT * FROM facts WHERE id IN ({placeholders})"
-            if owner_type is not None and owner_id is not None:
-                sql += " AND owner_type=? AND owner_id=?"
-                params.extend([owner_type, owner_id])
+            sql += " AND owner_type=? AND owner_id=?"
+            params.extend([owner_type, owner_id])
             rows = self._query_all(
                 conn,
                 sql,
@@ -579,8 +591,12 @@ class SemanticSQLStore(BaseVectorSQLStore):
     # ------------------------------------------------------------------ #
     # Fact Deletion (required by Pruner)
     # ------------------------------------------------------------------ #
-    async def delete_fact(self, fact_id: str, owner_type: Optional[str] = None,
-        owner_id: Optional[str] = None,) -> None:
+    async def delete_fact(
+        self,
+        fact_id: str,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+    ) -> None:
         """
         Delete a fact from SQL + remove its embedding from VectorIndex.
 
@@ -589,14 +605,14 @@ class SemanticSQLStore(BaseVectorSQLStore):
         fact_id : str
             Primary key of the fact to delete.
         """
+        if not owner_type or not owner_id:
+            logger.error("SemanticSQLStore.delete_fact requires owner_type and owner_id")
+            raise ValueError("SemanticSQLStore.delete_fact requires owner_type and owner_id")
         conn = self._conn()
         try:
             # SQL delete (conditionally filter by owner if provided)
-            sql = "DELETE FROM facts WHERE id=?"
-            params = [fact_id]
-            if owner_type is not None and owner_id is not None:
-                sql += " AND owner_type=? AND owner_id=?"
-                params.extend([owner_type, owner_id])
+            sql = "DELETE FROM facts WHERE id=? AND owner_type=? AND owner_id=?"
+            params = [fact_id, owner_type, owner_id]
             self._execute(conn, sql, params=params, log_context="delete_fact")
             conn.commit()
 
@@ -609,11 +625,21 @@ class SemanticSQLStore(BaseVectorSQLStore):
                     fact_id,
                 )
 
-            logger.info("SemanticSQLStore: deleted fact id=%s", fact_id)
+            logger.info(
+                "SemanticSQLStore: deleted fact id=%s owner=%s:%s",
+                fact_id,
+                owner_type,
+                owner_id,
+            )
 
         except Exception:
             self._safe_rollback(conn, "delete_fact")
-            logger.exception("SemanticSQLStore.delete_fact failed.")
+            logger.exception(
+                "SemanticSQLStore.delete_fact failed id=%s owner=%s:%s",
+                fact_id,
+                owner_type,
+                owner_id,
+            )
             raise
         finally:
             conn.close()

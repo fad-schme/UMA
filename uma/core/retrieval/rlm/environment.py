@@ -219,7 +219,14 @@ class UMAMemoryEnvironment:
             logger.exception("Environment.fetch_chunks failed")
             return []
 
-    async def fetch_facts_by_ids(self, user_id: str, ids: List[str]) -> List[Any]:
+    async def fetch_facts_by_ids(
+        self,
+        user_id: str,
+        ids: List[str],
+        *,
+        owner_type: str = "agent",
+        owner_id: Optional[str] = None,
+    ) -> List[Any]:
         """
         Fetch semantic facts by IDs (bounded by the controller).
 
@@ -230,8 +237,21 @@ class UMAMemoryEnvironment:
         if self._semantic_core is None or not ids:
             return []
         try:
-            _ = ensure_user_subject(user_id)  # ensures caller isn't passing garbage
-            facts = await self._semantic_core.fetch_by_ids(ids)
+            user_subject = ensure_user_subject(user_id)  # ensures caller isn't passing garbage
+            if owner_type == "agent":
+                resolved_owner_id = owner_id or self._agent_id
+                if not resolved_owner_id:
+                    return []
+            elif owner_type == "user":
+                resolved_owner_id = owner_id or user_subject
+            else:
+                logger.warning("Environment.fetch_facts_by_ids: invalid owner_type=%r", owner_type)
+                return []
+            facts = await self._semantic_core.fetch_by_ids(
+                ids,
+                owner_type=owner_type,
+                owner_id=resolved_owner_id,
+            )
             logger.debug("Environment.fetch_facts_by_ids: returned %d", len(facts or []))
             return facts or []
         except Exception:

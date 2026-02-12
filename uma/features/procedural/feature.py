@@ -24,7 +24,7 @@ import logging
 from typing import TYPE_CHECKING, List, Optional
 
 from ...core.utils.registry import FeatureContext, FeatureHandle, FeatureResult, UMAFeature
-from ...types_skill import Skill
+from ...types import Skill
 from .matcher import SkillMatcher
 
 if TYPE_CHECKING:
@@ -134,6 +134,10 @@ class ProceduralFeature(UMAFeature):
             if not query_text_clean:
                 logger.debug("ProceduralFeature.find_skills: empty query_text.")
                 return FeatureResult.success([])
+            user_id = getattr(memory_client, "user_id", None)
+            if not user_id:
+                logger.error("ProceduralFeature.find_skills: missing memory_client.user_id.")
+                return FeatureResult.failure(["missing user_id"], data=[])
 
             try:
                 vectors = await self.embedder.embed([query_text_clean])
@@ -158,7 +162,13 @@ class ProceduralFeature(UMAFeature):
 
             k_clamped = min(k_int, self.max_k)
             try:
-                candidates = await self.core.search(query_embedding=query_emb, k=k_clamped)
+                candidates = await self.core.search(
+                    user_id=user_id,
+                    query_embedding=query_emb,
+                    owner_type="user",
+                    owner_id=user_id,
+                    k=k_clamped,
+                )
             except Exception as exc:
                 logger.exception("ProceduralFeature.find_skills: core.search failed.")
                 return FeatureResult.failure([str(exc)], data=[])
@@ -187,9 +197,17 @@ class ProceduralFeature(UMAFeature):
             if not skill_id:
                 logger.debug("ProceduralFeature.get_skill: empty skill_id.")
                 return FeatureResult.failure(["empty skill_id"], data=None)
+            user_id = getattr(memory_client, "user_id", None)
+            if not user_id:
+                logger.error("ProceduralFeature.get_skill: missing memory_client.user_id.")
+                return FeatureResult.failure(["missing user_id"], data=None)
 
             try:
-                skill = await self.core.get_skill(skill_id)
+                skill = await self.core.get_skill(
+                    skill_id,
+                    owner_type="user",
+                    owner_id=user_id,
+                )
                 if skill is None:
                     logger.info("ProceduralFeature.get_skill: no skill for id=%s", skill_id)
                 else:

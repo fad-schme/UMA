@@ -24,7 +24,7 @@ The controller may:
 
 import json
 import logging
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, NoReturn
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
@@ -96,6 +96,10 @@ class RetrievalAction(BaseModel):
 
         This prevents the controller from emitting ambiguous or unsafe actions.
         """
+        def _raise(msg: str) -> "NoReturn":
+            logger.error("RetrievalAction.validate_action failed: %s", msg)
+            raise ValueError(msg)
+
         a = self.action
 
         # --- STOP ---
@@ -111,99 +115,99 @@ class RetrievalAction(BaseModel):
                     self.depth,
                 ]
             ):
-                raise ValueError("stop action must not include any parameters")
+                _raise("stop action must not include any parameters")
             return self
 
         # --- SEARCH SEMANTIC ---
         if a == "search_semantic":
             if self.k is None:
-                raise ValueError("search_semantic requires k")
+                _raise("search_semantic requires k")
             if self.ids or self.node_id:
-                raise ValueError("search_semantic does not accept ids or node_id")
+                _raise("search_semantic does not accept ids or node_id")
             return self
 
         # --- SEARCH EPISODIC ---
         if a == "search_episodic":
             if self.k is None:
-                raise ValueError("search_episodic requires k")
+                _raise("search_episodic requires k")
             if self.ids or self.node_id:
-                raise ValueError("search_episodic does not accept ids or node_id")
+                _raise("search_episodic does not accept ids or node_id")
             return self
 
         # --- EPISODIC CLUSTERS ---
         if a == "episodic_clusters":
             if self.k is None:
-                raise ValueError("episodic_clusters requires k")
+                _raise("episodic_clusters requires k")
             if self.filters or self.ids or self.node_id:
-                raise ValueError("episodic_clusters does not accept filters, ids, or node_id")
+                _raise("episodic_clusters does not accept filters, ids, or node_id")
             return self
 
         if a == "fetch_episode_clusters":
             if self.k is None:
-                raise ValueError("fetch_episode_clusters requires k")
+                _raise("fetch_episode_clusters requires k")
             if self.filters or self.ids or self.node_id:
-                raise ValueError("fetch_episode_clusters does not accept filters, ids, or node_id")
+                _raise("fetch_episode_clusters does not accept filters, ids, or node_id")
             if self.min_salience is not None and not (0 <= self.min_salience <= 1):
-                raise ValueError("min_salience must be between 0 and 1")
+                _raise("min_salience must be between 0 and 1")
             return self
 
         # --- SEARCH PROCEDURAL ---
         if a == "search_procedural":
             if self.k is None:
-                raise ValueError("search_procedural requires k")
+                _raise("search_procedural requires k")
             if self.ids or self.node_id:
-                raise ValueError("search_procedural does not accept ids or node_id")
+                _raise("search_procedural does not accept ids or node_id")
             return self
 
         # --- FETCH FACTS ---
         if a == "fetch_facts":
             if not self.ids:
-                raise ValueError("fetch_facts requires ids")
+                _raise("fetch_facts requires ids")
             if self.k or self.filters or self.node_id:
-                raise ValueError("fetch_facts does not accept k, filters, or node_id")
+                _raise("fetch_facts does not accept k, filters, or node_id")
             return self
 
         # --- FETCH CHUNKS ---
         if a == "fetch_chunks":
             if not self.ids:
-                raise ValueError("fetch_chunks requires ids")
+                _raise("fetch_chunks requires ids")
             if self.k or self.filters or self.node_id or self.time_range:
-                raise ValueError("fetch_chunks does not accept k, filters, node_id, or time_range")
+                _raise("fetch_chunks does not accept k, filters, node_id, or time_range")
             return self
 
         # --- SEARCH CHUNKS ---
         if a == "search_chunks":
             if self.k is None:
-                raise ValueError("search_chunks requires k")
+                _raise("search_chunks requires k")
             if self.ids or self.node_id or self.time_range:
-                raise ValueError("search_chunks does not accept ids, node_id, or time_range")
+                _raise("search_chunks does not accept ids, node_id, or time_range")
             return self
         
         # --- FETCH MORE FACTS (predicate-scoped semantic expansion) ---
         if a == "fetch_more_facts":
             if self.k is None:
-                raise ValueError("fetch_more_facts requires k")
+                _raise("fetch_more_facts requires k")
             if not self.predicate or not isinstance(self.predicate, str):
-                raise ValueError("fetch_more_facts requires a non-empty predicate")
+                _raise("fetch_more_facts requires a non-empty predicate")
             if self.ids or self.node_id or self.time_range:
-                raise ValueError("fetch_more_facts does not accept ids, node_id, or time_range")
+                _raise("fetch_more_facts does not accept ids, node_id, or time_range")
             if self.owner_type and self.owner_type not in {"user", "agent"}:
-                raise ValueError("owner_type must be one of: user, agent")
+                _raise("owner_type must be one of: user, agent")
             return self
         
         if a == "expand_graph":
             if not self.subject or not isinstance(self.subject, str):
-                raise ValueError("expand_graph requires a non-empty subject")
+                _raise("expand_graph requires a non-empty subject")
             if self.k is None:
-                raise ValueError("expand_graph requires k")
+                _raise("expand_graph requires k")
             if self.filters or self.ids or self.time_range:
-                raise ValueError("expand_graph does not accept filters, ids, or time_range")
+                _raise("expand_graph does not accept filters, ids, or time_range")
             if self.node_id:
-                raise ValueError("expand_graph does not accept node_id")
+                _raise("expand_graph does not accept node_id")
             if self.direction:
                 dir_val = str(self.direction).lower()
                 if dir_val not in {"inbound", "outbound", "both"}:
-                    raise ValueError("direction must be one of: inbound, outbound, both")
+                    _raise("direction must be one of: inbound, outbound, both")
                 self.direction = dir_val
             if self.hops is None:
                 self.hops = 1
@@ -213,19 +217,19 @@ class RetrievalAction(BaseModel):
         # --- GRAPH NEIGHBORS ---
         if a == "graph_neighbors":
             if not self.node_id:
-                raise ValueError("graph_neighbors requires node_id")
+                _raise("graph_neighbors requires node_id")
             if self.k is None:
-                raise ValueError("graph_neighbors requires k")
+                _raise("graph_neighbors requires k")
             if self.depth is None:
                 self.depth = 1
             if self.predicate_scope:
                 if not isinstance(self.predicate_scope, list):
-                    raise ValueError("predicate_scope must be a list")
+                    _raise("predicate_scope must be a list")
                 if len(self.predicate_scope) > 20:
-                    raise ValueError("predicate_scope too large (max 20)")
+                    _raise("predicate_scope too large (max 20)")
             return self
 
-        raise ValueError(f"Unknown action: {a}")
+        _raise(f"Unknown action: {a}")
 
 
 class ControllerDecision(BaseModel):
@@ -326,7 +330,8 @@ def deterministic_decision(
             try:
                 setattr(pack, "chunk_fallback_used", True)
             except Exception:
-                pass
+                logger.exception("deterministic_decision: failed to mark chunk_fallback_used")
+                raise
 
     # --- Episodic / clusters ---
     if getattr(coverage, "needs_clusters", False):
@@ -456,6 +461,8 @@ async def execute_action(
         return await env.fetch_facts_by_ids(
             user_id=user_subject,
             ids=action.ids or [],
+            owner_type=lane_owner_type,
+            owner_id=lane_owner_id,
         )
 
     if action.action == "fetch_chunks":

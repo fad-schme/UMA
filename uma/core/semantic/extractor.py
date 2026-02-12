@@ -24,52 +24,19 @@ This extractor attempts:
 
 from __future__ import annotations
 
-import json
 import logging
-import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from ...adapters.llm.base import LLMInterface
-from ...types_fact import Fact
+from ...types import Fact
 from .scorer import SalienceScorer
 
 logger = logging.getLogger(__name__)
 
 
-_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
-
-
-def _try_parse_json(raw: str) -> Optional[Dict[str, Any]]:
-    """
-    Best-effort JSON parsing helper.
-
-    Attempts strict parsing first, then tries to salvage the first JSON object
-    found in the string (handles markdown fences / leading prose).
-    """
-    raw = (raw or "").strip()
-    if not raw:
-        return None
-
-    # 1) Strict parse
-    try:
-        obj = json.loads(raw)
-        return obj if isinstance(obj, dict) else None
-    except Exception:
-        pass
-
-    # 2) Salvage: locate the first JSON object substring
-    m = _JSON_OBJECT_RE.search(raw)
-    if not m:
-        return None
-
-    candidate = m.group(0)
-    try:
-        obj = json.loads(candidate)
-        return obj if isinstance(obj, dict) else None
-    except Exception:
-        return None
+from ..utils.json_utils import try_parse_json_object
 
 
 class FactExtractor:
@@ -114,7 +81,7 @@ class FactExtractor:
             logger.exception("FactExtractor: LLM generate failed.")
             return []
 
-        data = _try_parse_json(raw)
+        data = try_parse_json_object(raw)
         if data is None:
             logger.error("FactExtractor: invalid JSON output (unsalvageable). RAW=%r", raw)
             return []

@@ -14,9 +14,18 @@ from .base_vector_sql_store import BaseVectorSQLStore
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from ..core.utils.store_metadata import ensure_store_metadata
-from ..types_chunk import Chunk
+from ..types import Chunk
 
 logger = logging.getLogger(__name__)
+_DEBUG_LOGGED_PARSE_FAILURES: set[tuple[str, str]] = set()
+
+
+def _debug_once(mode: str, chunk_id: str, message: str) -> None:
+    key = (mode, chunk_id)
+    if key in _DEBUG_LOGGED_PARSE_FAILURES:
+        return
+    _DEBUG_LOGGED_PARSE_FAILURES.add(key)
+    logger.debug(message, chunk_id)
 
 
 class ChunkSQLStore(BaseVectorSQLStore):
@@ -81,11 +90,13 @@ class ChunkSQLStore(BaseVectorSQLStore):
         else:
             keys = list(row.keys()) if hasattr(row, "keys") else []
             meta_val = row["meta"] if "meta" in keys else None
+        chunk_id = row.get("id") if hasattr(row, "get") else row["id"]
 
         try:
             meta = json.loads(meta_val) if meta_val else {}
         except Exception:
             meta = {}
+            _debug_once("meta_json", str(chunk_id), "ChunkSQLStore: failed to parse meta JSON id=%s")
 
         # Preserve lexical confidence score when present (e.g., computed in search_text CTE).
         try:
@@ -94,7 +105,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
             elif hasattr(row, "keys") and "score" in row.keys() and row["score"] is not None:
                 meta["lexical_confidence"] = float(row["score"])
         except Exception:
-            pass
+            _debug_once("lexical_score", str(chunk_id), "ChunkSQLStore: failed to parse lexical score id=%s")
 
         return Chunk(
             id=row["id"],
@@ -210,13 +221,14 @@ class ChunkSQLStore(BaseVectorSQLStore):
         owner_id: Optional[str] = None,
         k: int = 10,
     ) -> List[Chunk]:
+        if not owner_type or not owner_id:
+            logger.error("ChunkSQLStore.search requires owner_type and owner_id")
+            raise ValueError("ChunkSQLStore.search requires owner_type and owner_id")
         filters = {}
         if doc_id:
             filters["doc_id"] = doc_id
-        if owner_type:
-            filters["owner_type"] = owner_type
-        if owner_id:
-            filters["owner_id"] = owner_id
+        filters["owner_type"] = owner_type
+        filters["owner_id"] = owner_id
         return await self._semantic_search(
             query_embedding=query_embedding,
             k=k,
@@ -239,17 +251,17 @@ class ChunkSQLStore(BaseVectorSQLStore):
         """
         if not query_text or not isinstance(query_text, str):
             return []
+        if not owner_type or not owner_id:
+            logger.error("ChunkSQLStore.search_text requires owner_type and owner_id")
+            raise ValueError("ChunkSQLStore.search_text requires owner_type and owner_id")
 
-        try:
-            from ..core.utils.user_query_helper import build_query_term_set
-        except Exception:
-            build_query_term_set = None
+        from ..core.utils.user_query_helper import build_query_term_set
 
         def _escape_like(term: str) -> str:
             return (term or "").replace("%", "\\%").replace("_", "\\_")
 
         # Consistent with user_query_helper: use the extracted keywords + phrases when available.
-        term_set = build_query_term_set(query_text, max_terms=12, max_phrases=12) if build_query_term_set else None
+        term_set = build_query_term_set(query_text, max_terms=12, max_phrases=12)
         terms = list(term_set.terms) if term_set else []
         phrases = list(term_set.phrases) if term_set else []
         # No secondary normalization here: build_query_term_set already uses the canonical
@@ -361,7 +373,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
             return [self._row_to_object(r) for r in rows]
         except Exception:
             logger.exception("ChunkSQLStore.search_text failed.")
-            return []
+            raise
         finally:
             conn.close()
 
@@ -409,6 +421,6 @@ class ChunkSQLStore(BaseVectorSQLStore):
                 owner_id,
                 doc_id,
             )
-            return []
+            raise
         finally:
             conn.close()

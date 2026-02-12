@@ -1,7 +1,7 @@
 import pytest
 
 from uma.core.chunk.core import ChunkCore
-from uma.types_chunk import Chunk
+from uma.types import Chunk
 from uma.core.procedural.core import ProceduralCore
 from datetime import datetime, timezone
 
