@@ -115,6 +115,142 @@ class RetrievalService:
             max_graph_items,
         )
 
+    async def _store_search(
+        self,
+        *,
+        store: Any,
+        kind: str,
+        user_subject: str,
+        query_embedding: List[float],
+        query_text: Optional[str],
+        owner_type: str,
+        owner_id: str,
+        k: int,
+    ) -> List[Any]:
+        """
+        Store-level search fallback (no cores), using UMA's store APIs.
+
+        This keeps retrieval functional even if ingestion cores haven't been initialized yet.
+        """
+        if store is None:
+            return []
+
+        try:
+            # Stores take query_embedding as first positional arg in your repo.
+            if kind == "episodic":
+                return await store.search(query_embedding, owner_type=owner_type, owner_id=owner_id, k=k)
+
+            if kind == "procedural":
+                return await store.search(query_embedding, owner_type=owner_type, owner_id=owner_id, k=k)
+
+            if kind == "semantic":
+                subject = user_subject if owner_type == "user" else None
+                return await store.search(
+                    query_embedding,
+                    subject=subject,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    k=k,
+                )
+
+            if kind == "chunks":
+                # ChunkSQLStore.search + optional lexical add-on (if implemented).
+                # We keep this lean: no neighbor expansion when cores are absent.
+                vec = await store.search(query_embedding, owner_type=owner_type, owner_id=owner_id, k=k)
+
+                lex: List[Any] = []
+                if query_text and isinstance(query_text, str) and query_text.strip():
+                    search_text = getattr(store, "search_text", None)
+                    if callable(search_text):
+                        try:
+                            # Use a small bounded lexical budget.
+                            lex_k = max(5, min(k, 15))
+                            lex = await search_text(query_text, owner_type=owner_type, owner_id=owner_id, k=lex_k)
+                        except Exception:
+                            logger.exception("Chunk store lexical search_text failed (non-fatal).")
+
+                # Merge with stable de-duplication by id if present.
+                out: List[Any] = []
+                seen = set()
+                for it in list(vec or []) + list(lex or []):
+                    it_id = it.get("id") if isinstance(it, dict) else getattr(it, "id", None)
+                    if it_id and it_id in seen:
+                        continue
+                    if it_id:
+                        seen.add(it_id)
+                    out.append(it)
+                    if len(out) >= k:
+                        break
+                return out
+
+        except TypeError:
+            logger.exception("Store search signature mismatch for kind=%s store=%r", kind, store)
+            return []
+        except Exception:
+            logger.exception("Store search failed for kind=%s store=%r", kind, store)
+            return []
+
+        return []
+
+    async def retrieve_raw_multi_scope(
+        self,
+        *,
+        user_subject: str,
+        query_embedding: List[float],
+        query_text: Optional[str],
+        scopes: List[tuple[str, str]],
+        mode: str,
+    ) -> Dict[str, List[Any]]:
+        """Run raw retrieval across multiple (owner_type, owner_id) scopes and merge deterministically.
+
+        mode:
+          - "kb": retrieve facts+chunks for each scope; DO NOT retrieve episodic for user scope.
+          - "recall": retrieve episodes+facts+chunks for user scope.
+        """
+        merged: Dict[str, List[Any]] = {"episodes": [], "facts": [], "chunks": [], "skills": [], "graph": []}
+
+        for (owner_type, owner_id) in scopes:
+            raw = await self._retrieve_raw(
+                user_subject=user_subject,
+                query_embedding=query_embedding,
+                query_text=query_text,
+                owner_type=owner_type,
+                owner_id=owner_id,
+            )
+
+            # In KB mode, user scope is for user-owned documents only; do not pull episodic/graph.
+            if mode == "kb" and owner_type == "user":
+                raw["episodes"] = []
+                raw["graph"] = []
+
+            for key in list(merged.keys()):
+                merged[key].extend(list(raw.get(key) or []))
+
+        # Deterministic de-duplication.
+        try:
+            merged["episodes"] = dedupe_by_id(merged.get("episodes") or [])
+        except Exception:
+            pass
+        try:
+            merged["facts"] = dedupe_by_id(merged.get("facts") or [])
+        except Exception:
+            pass
+        try:
+            merged["chunks"] = dedupe_by_id(merged.get("chunks") or [])
+        except Exception:
+            pass
+        try:
+            merged["skills"] = dedupe_by_id(merged.get("skills") or [])
+        except Exception:
+            pass
+        try:
+            merged["graph"] = dedupe_by_id(merged.get("graph") or [])
+        except Exception:
+            pass
+
+        return merged
+    
+
     async def _retrieve_raw(
         self,
         *,
@@ -140,12 +276,23 @@ class RetrievalService:
                     k=self.selector.max_episodes,
                 )
             )
+        else:
+            store = (getattr(self.memory, "_stores", {}) or {}).get("episodic")
+            tasks["episodes"] = asyncio.create_task(
+                self._store_search(
+                    store=store,
+                    kind="episodic",
+                    user_subject=user_subject,
+                    query_embedding=query_embedding,
+                    query_text=query_text,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    k=self.selector.max_episodes,
+                )
+            )
 
         semantic_core = getattr(self.memory, "semantic_core", None)
         if semantic_core is not None:
-            # Subject filtering is optional:
-            # - user scope: keep subject=user
-            # - agent KB: subject=None for corpus-wide search within owner scope
             subject = user_subject if owner_type == "user" else None
             if not (query_text and str(query_text).strip()):
                 logger.warning(
@@ -163,6 +310,20 @@ class RetrievalService:
                     filters=None,
                     query_text=query_text,
                     allowed_topics=None,
+                )
+            )
+        else:
+            store = (getattr(self.memory, "_stores", {}) or {}).get("semantic")
+            tasks["facts"] = asyncio.create_task(
+                self._store_search(
+                    store=store,
+                    kind="semantic",
+                    user_subject=user_subject,
+                    query_embedding=query_embedding,
+                    query_text=query_text,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    k=self.selector.max_facts,
                 )
             )
 
@@ -198,6 +359,21 @@ class RetrievalService:
                     shortlist_max_per_doc=int(getattr(getattr(self.memory, "retrieval_cfg", None), "chunk_shortlist_max_per_doc", 3)),
                 )
             )
+        else:
+            store = (getattr(self.memory, "_stores", {}) or {}).get("chunk")
+            tasks["chunks"] = asyncio.create_task(
+                self._store_search(
+                    store=store,
+                    kind="chunks",
+                    user_subject=user_subject,
+                    query_embedding=query_embedding,
+                    query_text=query_text,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    k=self.selector.max_chunks,
+                )
+            )
+
 
         procedural_core = getattr(self.memory, "procedural_core", None)
         if procedural_core is not None:
@@ -205,6 +381,20 @@ class RetrievalService:
                 procedural_core.search(
                     user_id=None,
                     query_embedding=query_embedding,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    k=self.selector.max_skills,
+                )
+            )
+        else:
+            store = (getattr(self.memory, "_stores", {}) or {}).get("procedural")
+            tasks["skills"] = asyncio.create_task(
+                self._store_search(
+                    store=store,
+                    kind="procedural",
+                    user_subject=user_subject,
+                    query_embedding=query_embedding,
+                    query_text=query_text,
                     owner_type=owner_type,
                     owner_id=owner_id,
                     k=self.selector.max_skills,
@@ -438,29 +628,7 @@ class RetrievalService:
                                 strict = bool(getattr(self.memory, "retrieval_cfg", None) and self.memory.retrieval_cfg.strict)
                                 if strict:
                                     raise
-                    # Strict keyword gate for traditional RAG: only keep chunks that match query terms.
-                    # Evidence-expanded chunks may not contain the literal query tokens, so keep cited evidence.
-                    if isinstance(query_text_or_embedding, str) and query_text_or_embedding.strip():
-                        cited_set = set(cited_ids) if "cited_ids" in locals() else set()
-                        filtered = self._filter_chunks_by_query(chunks, query_text_or_embedding)
-                        # Re-add cited evidence that may not match lexically.
-                        if cited_set:
-                            filtered_ids = set()
-                            for c in filtered or []:
-                                if isinstance(c, dict):
-                                    logger.error("RetrievalService: expected Chunk objects in filtered chunks; got dict.")
-                                    raise TypeError("Expected Chunk objects in filtered chunks; got dict.")
-                                cid = getattr(c, "id", None)
-                                if cid:
-                                    filtered_ids.add(str(cid))
-                            for c in chunks:
-                                if isinstance(c, dict):
-                                    logger.error("RetrievalService: expected Chunk objects in chunks; got dict.")
-                                    raise TypeError("Expected Chunk objects in chunks; got dict.")
-                                cid = getattr(c, "id", None)
-                                if cid and str(cid) in cited_set and str(cid) not in filtered_ids:
-                                    filtered.append(c)
-                        chunks = filtered
+ 
                     skills = (selected.get("skills") or [])[: self.selector.max_skills]
                     graph = (selected.get("graph") or [])[: self.selector.max_graph_items]
 

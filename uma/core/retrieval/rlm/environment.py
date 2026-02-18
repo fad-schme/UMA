@@ -37,30 +37,10 @@ class UMAMemoryEnvironment:
         self._memory = memory
         self._agent_id = getattr(memory, "agent_id", None)
 
-        self._wm = getattr(memory, "working_memory", None)
-        self._semantic_core = getattr(memory, "semantic_core", None)
-        self._chunk_core = getattr(memory, "chunk_core", None)
-        self._episodic_core = getattr(memory, "episodic_core", None)
-        self._procedural_core = getattr(memory, "procedural_core", None)
-        self._graph_core = getattr(memory, "graph_core", None)
-        self._embedder = getattr(memory, "embedder", None)
-
-        if self._embedder is None:
+        if getattr(memory, "embedder", None) is None:
             raise ValueError("UMAMemoryEnvironment requires an embedder to operate")
 
-        # Log missing subsystems. Not fatal for environment (controller can still run partially).
-        if self._wm is None:
-            logger.warning("UMAMemoryEnvironment: working_memory missing")
-        if self._semantic_core is None:
-            logger.warning("UMAMemoryEnvironment: semantic_core missing")
-        if self._chunk_core is None:
-            logger.warning("UMAMemoryEnvironment: chunk_core missing")
-        if self._episodic_core is None:
-            logger.warning("UMAMemoryEnvironment: episodic_core missing")
-        if self._procedural_core is None:
-            logger.warning("UMAMemoryEnvironment: procedural_core missing")
-        if self._graph_core is None:
-            logger.warning("UMAMemoryEnvironment: graph_core missing")
+        # Missing subsystems are expected before ingestion warmup; avoid noisy logs here.
 
     # ------------------------------------------------------------------
     # Internal helpers (bounds, sanitation)
@@ -169,10 +149,11 @@ class UMAMemoryEnvironment:
         if not isinstance(query_text, str) or not query_text.strip():
             raise ValueError("Environment.get_query_embedding: query_text must be non-empty")
         try:
-            expected_dim = getattr(self._embedder, "dimension", None)
+            embedder = getattr(self._memory, "embedder", None)
+            expected_dim = getattr(embedder, "dimension", None)
             if not isinstance(expected_dim, int) or expected_dim <= 0:
                 raise ValueError("Environment.get_query_embedding: embedder.dimension must be a positive integer")
-            vectors = await self._embedder.embed([query_text])
+            vectors = await embedder.embed([query_text])
             if not vectors or not isinstance(vectors, list) or not vectors[0]:
                 raise ValueError("Embedder returned empty embedding.")
             vec0 = vectors[0]
@@ -194,8 +175,10 @@ class UMAMemoryEnvironment:
         """
         Fetch chunks by IDs (bounded, owner-scoped).
         """
-        if self._chunk_core is None:
-            return []
+        chunk_core = getattr(self._memory, "chunk_core", None)
+        if chunk_core is None:
+            logger.error("Environment.fetch_chunks: chunk_core is None")
+            raise RuntimeError("Environment.fetch_chunks: chunk_core is None")
         if not isinstance(ids, list) or not ids:
             return []
         if len(ids) > 50:
@@ -208,13 +191,30 @@ class UMAMemoryEnvironment:
                     return []
             else:
                 resolved_owner_id = owner_id or user_subject
-
-            return await self._chunk_core._fetch_by_ids(
-                ids=[str(x) for x in ids if x],
+            if not owner_type or not resolved_owner_id:
+                logger.error("Environment.fetch_chunks requires owner_type and owner_id")
+                raise ValueError("Environment.fetch_chunks requires owner_type and owner_id")
+            clean_ids = [str(x) for x in ids if x]
+            logger.debug(
+                "Environment.fetch_chunks: ids_count=%d owner=%s:%s",
+                len(clean_ids),
+                owner_type,
+                resolved_owner_id,
+            )
+            chunks = await chunk_core._fetch_by_ids(
+                ids=clean_ids,
                 owner_type=owner_type,
                 owner_id=resolved_owner_id,
                 log_context="Environment.fetch_chunks",
             )
+            if clean_ids and not chunks:
+                logger.warning(
+                    "Environment.fetch_chunks: fetched 0 for ids_count=%d owner=%s:%s",
+                    len(clean_ids),
+                    owner_type,
+                    resolved_owner_id,
+                )
+            return chunks
         except Exception:
             logger.exception("Environment.fetch_chunks failed")
             return []
@@ -234,7 +234,11 @@ class UMAMemoryEnvironment:
         - Store should enforce ownership if IDs are global.
         - Environment still scopes user_id at call boundary.
         """
-        if self._semantic_core is None or not ids:
+        semantic_core = getattr(self._memory, "semantic_core", None)
+        if semantic_core is None:
+            logger.error("Environment.fetch_facts_by_ids: semantic_core is None")
+            raise RuntimeError("Environment.fetch_facts_by_ids: semantic_core is None")
+        if not ids:
             return []
         try:
             user_subject = ensure_user_subject(user_id)  # ensures caller isn't passing garbage
@@ -247,7 +251,7 @@ class UMAMemoryEnvironment:
             else:
                 logger.warning("Environment.fetch_facts_by_ids: invalid owner_type=%r", owner_type)
                 return []
-            facts = await self._semantic_core.fetch_by_ids(
+            facts = await semantic_core.fetch_by_ids(
                 ids,
                 owner_type=owner_type,
                 owner_id=resolved_owner_id,
@@ -268,8 +272,10 @@ class UMAMemoryEnvironment:
         owner_type: str = "agent",
         owner_id: Optional[str] = None,
     ) -> List[Any]:
-        if self._semantic_core is None:
-            return []
+        semantic_core = getattr(self._memory, "semantic_core", None)
+        if semantic_core is None:
+            logger.error("Environment.fetch_more_facts: semantic_core is None")
+            raise RuntimeError("Environment.fetch_more_facts: semantic_core is None")
         try:
             user_subject = ensure_user_subject(user_id)
             k = self._validate_k("Environment.fetch_more_facts", k)
@@ -286,7 +292,7 @@ class UMAMemoryEnvironment:
                 return []
 
             subject: Optional[str] = user_subject if owner_type == "user" else None
-            return await self._semantic_core.fetch_more_facts(
+            return await semantic_core.fetch_more_facts(
                 subject=subject,
                 predicate=predicate,
                 owner_type=owner_type,
@@ -320,18 +326,19 @@ class UMAMemoryEnvironment:
         """
         episodic_core = getattr(self._memory, "episodic_core", None)
         if episodic_core is None:
-            logger.warning("Environment.episodic_cluster_summaries: episodic_core missing")
-            return []
+            logger.error("Environment.episodic_cluster_summaries: episodic_core is None")
+            raise RuntimeError("Environment.episodic_cluster_summaries: episodic_core is None")
 
         k = self._validate_k("Environment.episodic_cluster_summaries", k)
 
         try:
+            user_subject = ensure_user_subject(user_id)
             if owner_type == "agent":
                 resolved_owner_id = owner_id or self._agent_id
                 if not resolved_owner_id:
                     return []
             else:
-                resolved_owner_id = owner_id or user_id
+                resolved_owner_id = owner_id or user_subject
             clusters = await episodic_core.list_cluster_summaries(
                 user_id=user_id,
                 owner_type=owner_type,
@@ -407,8 +414,10 @@ class UMAMemoryEnvironment:
         - bounded depth and result size
         - no raw Cypher exposure
         """
-        if self._graph_core is None:
-            return []
+        graph_core = getattr(self._memory, "graph_core", None)
+        if graph_core is None:
+            logger.error("Environment.graph_neighbors: graph_core is None")
+            raise RuntimeError("Environment.graph_neighbors: graph_core is None")
 
         k = self._validate_k("Environment.graph_neighbors", k)
         depth_i = self._safe_depth(depth)
@@ -425,7 +434,7 @@ class UMAMemoryEnvironment:
             else:
                 resolved_owner_id = owner_id or user_subject
             results = await _maybe_await(
-                self._graph_core.neighbors(
+                graph_core.neighbors(
                 user_id=user_subject,
                 node_id=node_id,
                 predicate_scope=predicate_scope,
@@ -452,8 +461,10 @@ class UMAMemoryEnvironment:
         direction: Optional[Literal["inbound", "outbound", "both"]] = None,
         k: int = 10,
     ) -> List[Any]:
-        if self._graph_core is None:
-            return []
+        graph_core = getattr(self._memory, "graph_core", None)
+        if graph_core is None:
+            logger.error("Environment.expand_graph: graph_core is None")
+            raise RuntimeError("Environment.expand_graph: graph_core is None")
 
         k = self._validate_k("Environment.expand_graph.k", k)
         depth = self._safe_depth(hops)
@@ -552,11 +563,13 @@ class UMAMemoryEnvironment:
         a = getattr(action, "action", None)
 
         if a == "search_semantic":
-            if self._semantic_core is None:
-                return []
+            semantic_core = getattr(self._memory, "semantic_core", None)
+            if semantic_core is None:
+                logger.error("Environment.execute_action: semantic_core is None")
+                raise RuntimeError("Environment.execute_action: semantic_core is None")
             filters = getattr(action, "filters", None)
             subject: Optional[str] = user_subject if lane_owner_type == "user" else None
-            return await self._semantic_core.search(
+            return await semantic_core.search(
                 subject=subject,
                 query_embedding=[float(x) for x in query_embedding],
                 owner_type=lane_owner_type,
@@ -602,7 +615,8 @@ class UMAMemoryEnvironment:
         if a == "search_chunks":
             chunk_core = getattr(self._memory, "chunk_core", None)
             if chunk_core is None:
-                return []
+                logger.error("Environment.execute_action: chunk_core is None")
+                raise RuntimeError("Environment.execute_action: chunk_core is None")
             return await chunk_core.search_chunks_for_rlm(
                 query_embedding=[float(x) for x in query_embedding],
                 owner_type=lane_owner_type,
@@ -612,9 +626,11 @@ class UMAMemoryEnvironment:
             )
 
         if a == "search_episodic":
-            if self._episodic_core is None:
-                return []
-            return await self._episodic_core.search(
+            episodic_core = getattr(self._memory, "episodic_core", None)
+            if episodic_core is None:
+                logger.error("Environment.execute_action: episodic_core is None")
+                raise RuntimeError("Environment.execute_action: episodic_core is None")
+            return await episodic_core.search(
                 user_id=user_subject,
                 query_embedding=[float(x) for x in query_embedding],
                 owner_type=lane_owner_type,
@@ -664,9 +680,11 @@ class UMAMemoryEnvironment:
             )
 
         if a == "search_procedural":
-            if self._procedural_core is None:
-                return []
-            return await self._procedural_core.search(
+            procedural_core = getattr(self._memory, "procedural_core", None)
+            if procedural_core is None:
+                logger.error("Environment.execute_action: procedural_core is None")
+                raise RuntimeError("Environment.execute_action: procedural_core is None")
+            return await procedural_core.search(
                 user_id=None,
                 query_embedding=[float(x) for x in query_embedding],
                 owner_type=lane_owner_type,

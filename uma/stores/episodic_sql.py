@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from .base_vector_sql_store import BaseVectorSQLStore
 from ..adapters.db.base import DBAdapter
@@ -155,6 +155,11 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     # ------------------------------------------------------------------ #
     # CRUD operations
     # ------------------------------------------------------------------ #
+
+    def _require_owner(self, owner_type: Optional[str], owner_id: Optional[str]) -> None:
+        if not owner_type or not owner_id:
+            logger.error("EpisodicSQLStore requires owner_type and owner_id")
+            raise ValueError("EpisodicSQLStore requires owner_type and owner_id")
 
     async def add_episode(self, ep: Episode, embedding: List[float]) -> None:
         """
@@ -341,6 +346,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     # ------------------------------------------------------------------ #
 
     async def list_episodes(self, owner_type: str, owner_id: str) -> List[Episode]:
+        self._require_owner(owner_type, owner_id)
         conn = self._conn()
         try:
             rows = self._query_all(
@@ -348,6 +354,12 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 "SELECT * FROM episodes WHERE owner_type = ? AND owner_id = ?",
                 params=[owner_type, owner_id],
                 log_context="list_episodes",
+            )
+            logger.debug(
+                "EpisodicSQLStore.list_episodes owner=%s:%s count=%d",
+                owner_type,
+                owner_id,
+                len(rows or []),
             )
             return [self._row_to_object(row) for row in rows]
         except Exception:
@@ -361,6 +373,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             conn.close()
 
     async def list_recent(self, owner_type: str, owner_id: str, n: int = 5) -> List[Episode]:
+        self._require_owner(owner_type, owner_id)
         conn = self._conn()
         try:
             rows = self._query_all(
@@ -373,6 +386,12 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 """,
                 params=[owner_type, owner_id, n],
                 log_context="list_recent",
+            )
+            logger.debug(
+                "EpisodicSQLStore.list_recent owner=%s:%s count=%d",
+                owner_type,
+                owner_id,
+                len(rows or []),
             )
             return [self._row_to_object(row) for row in rows]
         except Exception:
@@ -503,13 +522,278 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             raise ValueError("EpisodicSQLStore.search requires owner_type and owner_id")
         filters = {"owner_type": owner_type, "owner_id": owner_id}
         try:
-            return await self._semantic_search(
+            ids = await self._vector_search_ids(
                 query_embedding=query_embedding,
                 k=k,
                 filters=filters,
                 log_context="episodic_search",
                 id_prefix="episode_",
             )
+            if not ids:
+                logger.debug(
+                    "EpisodicSQLStore.search: vector candidates=0, sql_fetched=0, owner=%s:%s",
+                    owner_type,
+                    owner_id,
+                )
+                return []
+            episodes = await self.fetch_by_ids(
+                ids,
+                owner_type=owner_type,
+                owner_id=owner_id,
+            )
+            logger.debug(
+                "EpisodicSQLStore.search: vector candidates=%d, sql_fetched=%d, owner=%s:%s",
+                len(ids),
+                len(episodes),
+                owner_type,
+                owner_id,
+            )
+            if ids and not episodes:
+                logger.warning(
+                    "EpisodicSQLStore.search: vector candidates=%d but SQL returned 0 op=search owner=%s:%s ids=%s",
+                    len(ids),
+                    owner_type,
+                    owner_id,
+                    ids[:3],
+                )
+            return episodes
         except Exception:
             logger.exception("EpisodicSQLStore.search failed.")
             raise
+
+    async def fetch_by_ids(
+        self,
+        ids: List[str],
+        *,
+        owner_type: str,
+        owner_id: str,
+    ) -> List[Episode]:
+        if not ids:
+            return []
+        if not owner_type or not owner_id:
+            logger.error("EpisodicSQLStore.fetch_by_ids requires owner_type and owner_id")
+            raise ValueError("EpisodicSQLStore.fetch_by_ids requires owner_type and owner_id")
+
+        conn = self._conn()
+        try:
+            placeholders = ",".join("?" for _ in ids)
+            params: List[str] = list(ids) + [owner_type, owner_id]
+            sql = f"SELECT * FROM episodes WHERE id IN ({placeholders}) AND owner_type=? AND owner_id=?"
+            rows = self._query_all(conn, sql, params=params, log_context="fetch_episodes_by_ids")
+            row_map = {r["id"]: r for r in rows}
+            ordered: List[Episode] = []
+            for eid in ids:
+                row = row_map.get(eid)
+                if row is None:
+                    continue
+                ordered.append(self._row_to_object(row))
+            missing = max(0, len(ids) - len(ordered))
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "EpisodicSQLStore.fetch_by_ids ids=%d fetched=%d owner=%s:%s",
+                    len(ids),
+                    len(ordered),
+                    owner_type,
+                    owner_id,
+                )
+            if missing:
+                logger.warning(
+                    "EpisodicSQLStore.fetch_by_ids missing=%d owner=%s:%s",
+                    missing,
+                    owner_type,
+                    owner_id,
+                )
+            return ordered
+        except Exception:
+            logger.exception("EpisodicSQLStore.fetch_by_ids failed")
+            raise
+        finally:
+            conn.close()
+
+    async def upsert_cluster_summary(
+        self,
+        *,
+        owner_type: str,
+        owner_id: str,
+        user_id: str,
+        episode_ids: List[str],
+        summary: str,
+        latest_timestamp: str,
+    ) -> None:
+        self._require_owner(owner_type, owner_id)
+        if not user_id:
+            raise ValueError("EpisodicSQLStore.upsert_cluster_summary requires user_id")
+        conn = self._conn()
+        try:
+            payload = {
+                "id": f"cluster:{owner_type}:{owner_id}:{user_id}:{latest_timestamp}",
+                "summary": summary,
+                "episode_ids": json.dumps(episode_ids or []),
+                "owner_type": owner_type,
+                "owner_id": owner_id,
+                "user_id": user_id,
+                "latest_timestamp": latest_timestamp,
+            }
+            self._execute(
+                conn,
+                """
+                INSERT INTO episode_clusters (
+                    id, summary, episode_ids, owner_type, owner_id, user_id, latest_timestamp
+                ) VALUES (
+                    :id, :summary, :episode_ids, :owner_type, :owner_id, :user_id, :latest_timestamp
+                )
+                ON CONFLICT(id) DO UPDATE SET
+                    summary=excluded.summary,
+                    episode_ids=excluded.episode_ids,
+                    owner_type=excluded.owner_type,
+                    owner_id=excluded.owner_id,
+                    user_id=excluded.user_id,
+                    latest_timestamp=excluded.latest_timestamp
+                """,
+                params=payload,
+                log_context="upsert_cluster_summary",
+            )
+            conn.commit()
+            logger.debug(
+                "EpisodicSQLStore.upsert_cluster_summary owner=%s:%s user_id=%s",
+                owner_type,
+                owner_id,
+                user_id,
+            )
+        except Exception:
+            self._safe_rollback(conn, "upsert_cluster_summary")
+            logger.exception(
+                "EpisodicSQLStore.upsert_cluster_summary failed owner=%s:%s",
+                owner_type,
+                owner_id,
+            )
+            raise
+        finally:
+            conn.close()
+
+    async def list_cluster_summaries(
+        self,
+        *,
+        owner_type: str,
+        owner_id: str,
+        k: int = 5,
+        max_episodes: Optional[int] = None,
+        time_range: Optional[dict] = None,
+    ) -> List[dict]:
+        self._require_owner(owner_type, owner_id)
+        conn = self._conn()
+        try:
+            where = ["owner_type = ?", "owner_id = ?"]
+            params: List[Any] = [owner_type, owner_id]
+            if isinstance(time_range, dict):
+                start = time_range.get("start")
+                end = time_range.get("end")
+                if start is not None:
+                    where.append("latest_timestamp >= ?")
+                    params.append(str(start))
+                if end is not None:
+                    where.append("latest_timestamp <= ?")
+                    params.append(str(end))
+            sql = f"""
+                SELECT * FROM episode_clusters
+                WHERE {' AND '.join(where)}
+                ORDER BY latest_timestamp DESC
+                LIMIT ?
+            """
+            params.append(int(k))
+            rows = self._query_all(conn, sql, params=params, log_context="list_cluster_summaries")
+            out: List[dict] = []
+            for row in rows or []:
+                try:
+                    episode_ids = json.loads(row["episode_ids"]) if row.get("episode_ids") else []
+                except Exception:
+                    episode_ids = []
+                out.append(
+                    {
+                        "id": row["id"],
+                        "owner_type": row["owner_type"],
+                        "owner_id": row["owner_id"],
+                        "user_id": row["user_id"],
+                        "summary": row["summary"],
+                        "episode_ids": episode_ids,
+                        "latest_timestamp": row["latest_timestamp"],
+                        "count": len(episode_ids),
+                    }
+                )
+            logger.debug(
+                "EpisodicSQLStore.list_cluster_summaries owner=%s:%s count=%d",
+                owner_type,
+                owner_id,
+                len(out),
+            )
+            return out
+        except Exception:
+            logger.exception(
+                "EpisodicSQLStore.list_cluster_summaries failed owner=%s:%s",
+                owner_type,
+                owner_id,
+            )
+            raise
+        finally:
+            conn.close()
+
+    async def get_cluster_members(
+        self,
+        *,
+        owner_type: str,
+        owner_id: str,
+        cluster_id: str,
+    ) -> List[Episode]:
+        self._require_owner(owner_type, owner_id)
+        if not cluster_id:
+            return []
+        conn = self._conn()
+        try:
+            cluster = self._query_one(
+                conn,
+                """
+                SELECT id FROM episode_clusters
+                WHERE id = ? AND owner_type = ? AND owner_id = ?
+                """,
+                params=[cluster_id, owner_type, owner_id],
+                log_context="get_cluster_members",
+            )
+            if not cluster:
+                logger.warning(
+                    "EpisodicSQLStore.get_cluster_members: cluster not found owner=%s:%s id=%s",
+                    owner_type,
+                    owner_id,
+                    cluster_id,
+                )
+                return []
+            rows = self._query_all(
+                conn,
+                """
+                SELECT e.*
+                FROM episode_cluster_members m
+                JOIN episodes e ON e.id = m.episode_id
+                WHERE m.cluster_id = ? AND e.owner_type = ? AND e.owner_id = ?
+                ORDER BY e.timestamp DESC
+                """,
+                params=[cluster_id, owner_type, owner_id],
+                log_context="get_cluster_members",
+            )
+            episodes = [self._row_to_object(r) for r in rows]
+            logger.debug(
+                "EpisodicSQLStore.get_cluster_members owner=%s:%s cluster=%s count=%d",
+                owner_type,
+                owner_id,
+                cluster_id,
+                len(episodes),
+            )
+            return episodes
+        except Exception:
+            logger.exception(
+                "EpisodicSQLStore.get_cluster_members failed owner=%s:%s cluster=%s",
+                owner_type,
+                owner_id,
+                cluster_id,
+            )
+            raise
+        finally:
+            conn.close()

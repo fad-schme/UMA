@@ -66,7 +66,7 @@ async def test_rebuild_vector_indexes(tmp_path):
     cfg_path.write_text(yaml.safe_dump(cfg))
 
     memory = UMAMemory.from_yaml(str(cfg_path))
-    memory.initialize()
+    memory._ensure_ingestion_ready()
 
     user_id = "user:123"
     embedding = [0.1, 0.1, 0.1]

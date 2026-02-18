@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass
+import re
 from typing import Any, Callable, Dict, Optional, Sequence, TypeVar
 
 T = TypeVar("T")
@@ -43,22 +44,67 @@ def extract_json_object(raw: str, *, max_chars: int = 50_000) -> Dict[str, Any]:
     if max_chars and len(cleaned) > max_chars:
         cleaned = cleaned[:max_chars]
 
+    # Strip fenced code blocks if present.
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```[a-zA-Z0-9_-]*\n?", "", cleaned)
+        cleaned = re.sub(r"\n?```$", "", cleaned).strip()
+
     try:
         parsed = json.loads(cleaned)
         if isinstance(parsed, dict):
             return parsed
-    except Exception:
-        logger.exception("extract_json_object: failed to parse JSON response")
-        raise
+    except Exception as e:
+        logger.warning("extract_json_object: failed to parse JSON response: %s", e)
 
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start == -1 or end == -1 or end <= start:
+    def _extract_balanced_json(text: str) -> Optional[str]:
+        start = text.find("{")
+        if start == -1:
+            return None
+        depth = 0
+        in_str = False
+        escape = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_str:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == "\"":
+                    in_str = False
+            else:
+                if ch == "\"":
+                    in_str = True
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return text[start : i + 1]
+        return None
+
+    obj = _extract_balanced_json(cleaned)
+    if obj is None:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            obj = cleaned[start : end + 1]
+
+    if not obj:
         logger.error("extract_json_object: no JSON object found in response")
         raise ValueError("No JSON object found in response")
 
-    obj = cleaned[start : end + 1]
-    parsed = json.loads(obj)
+    try:
+        parsed = json.loads(obj)
+    except Exception:
+        preview = obj or cleaned
+        if len(preview) > 2000:
+            preview = preview[:2000] + "...(truncated)"
+        logger.exception(
+            "extract_json_object: failed to parse extracted JSON object preview=%s",
+            preview,
+        )
+        raise
     if not isinstance(parsed, dict):
         logger.error("extract_json_object: extracted JSON was not an object")
         raise ValueError("Extracted JSON was not an object")

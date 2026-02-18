@@ -1,7 +1,7 @@
 import asyncio
+import yaml
 
 from uma.core.uma_memory import UMAMemory
-from uma.core.memory_config import UMAConfig
 
 
 def _good_embedder(texts=None, **kwargs):
@@ -39,8 +39,9 @@ def test_process_turn_is_idempotent_by_turn_id(tmp_path):
         "features": {"load": [], "policy": {"on_attach_error": "log_and_skip", "allow_method_override": False}},
     }
 
-    mem = UMAMemory(UMAConfig(cfg))
-    mem.initialize()
+    cfg_path = tmp_path / "uma_test.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    mem = UMAMemory.from_yaml(str(cfg_path))
 
     async def run():
         await mem.process_turn(user_id="user:u1", user_msg="hello", assistant_reply="hi")

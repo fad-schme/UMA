@@ -15,13 +15,18 @@ Coding agent instructions
 -------------------------
 - Extend predicate weights for your domain.
 - Consider adding cross-referencing, frequency, or usage stats.
-"""
 
+NOTE:
+-------------------------
+UMA is data-agnostic. This scorer must not hardcode domain predicates.
+If you ever want predicate weighting, it should be provided via configuration,
+not embedded as constants here.
+
+"""
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Dict
 
 from ...types import Fact
 
@@ -41,26 +46,8 @@ class SalienceScorer:
         age_days = max(0.0, (now - updated).total_seconds() / 86400.0)
 
         base_conf = fact.confidence if fact.confidence is not None else 0.5
+        # Half-life ~180 days
         decay_factor = 0.5 ** (age_days / 180.0)
 
-        predicate_weights: Dict[str, float] = {
-            "prefers": 1.2,
-            "likes": 1.1,
-            "dislikes": 1.1,
-            "works_on": 1.0,
-        }
-        weight = predicate_weights.get(fact.predicate, 1.0)
-
-        salience = max(0.0, min(1.0, base_conf * decay_factor * weight))
-
-        # logger.debug(
-        #     "Salience: id=%s conf=%.2f age=%.1f decay=%.2f weight=%.2f -> %.3f",
-        #     fact.id,
-        #     base_conf,
-        #     age_days,
-        #     decay_factor,
-        #     weight,
-        #     salience,
-        # )
-
+        salience = max(0.0, min(1.0, float(base_conf) * float(decay_factor)))
         return salience

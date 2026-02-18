@@ -1,8 +1,8 @@
 import asyncio
 from datetime import datetime, timezone
+import yaml
 
 from uma.core.uma_memory import UMAMemory
-from uma.core.memory_config import UMAConfig
 from uma.stores.document_sql import DocumentRecord
 
 
@@ -22,7 +22,12 @@ def test_document_manifest_persistence(tmp_path):
             "vector_backend": "inmemory",
             "graph_backend": "disabled",
         },
-        "working_memory": {"max_tokens": 100, "warning_ratio": 0.7, "hard_limit_ratio": 0.95},
+        "working_memory": {
+            "max_tokens": 100,
+            "warning_ratio": 0.7,
+            "hard_limit_ratio": 0.95,
+            "chunk_size": 10,
+        },
         "embedding": {
             "provider": "tests.test_document_ingest_manifest:_good_embedder",
             "model": "x",
@@ -39,8 +44,9 @@ def test_document_manifest_persistence(tmp_path):
         "features": {"load": [], "policy": {"on_attach_error": "log_and_skip", "allow_method_override": False}},
     }
 
-    mem = UMAMemory(UMAConfig(cfg))
-    mem.initialize()
+    cfg_path = tmp_path / "uma_test.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    mem = UMAMemory.from_yaml(str(cfg_path))
 
     record = DocumentRecord(
         doc_id="doc_test",

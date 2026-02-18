@@ -11,12 +11,7 @@ from .parser import parse_file
 from .normalizer import normalize_document
 from .chunker import chunk_sections, finalize_chunks, validate_chunks, validate_docchunk_structure
 from .embedder import embed_chunks
-from .semantic_extractor import (
-    extract_facts,
-    extract_facts_batch,
-    extract_summary_facts,
-    select_chunks_for_fact_extraction,
-)
+from ..semantic import extractor as semantic_extractor
 from .graph_updater import update_graph
 from .episodic_writer import write_document_episode
 from .consolidation_trigger import maybe_trigger_consolidation
@@ -398,47 +393,30 @@ async def ingest_document(
     # 5) Semantic extraction from chunks (optionally limit chunk count)
     extract_chunks = final_chunks
     if config.extract_max_chunks is not None:
-        extract_chunks = select_chunks_for_fact_extraction(
+        extract_chunks = semantic_extractor.select_chunks_for_fact_extraction(
             final_chunks,
             max_chunks=int(config.extract_max_chunks),
         )
-    if getattr(config, "fact_extraction_batch_enabled", False):
-        extracted = await extract_facts_batch(
-            extract_chunks,
-            llm=llm,
-            min_fact_words=config.doc_min_fact_words,
-            batch_size_chunks=getattr(config, "fact_extraction_batch_size_chunks", 4),
-            max_chars=getattr(config, "fact_extraction_batch_max_chars", 12000),
-        )
-    else:
-        extracted = await extract_facts(
-            extract_chunks,
-            llm=llm,
-            min_fact_words=config.doc_min_fact_words,
-        )
-
-    # 5b) Document-level summary facts (optional)
-    if config.doc_summary_enabled:
-        try:
-            full_text = "\n".join([str(s.text) for s in sections if getattr(s, "text", None)])
-        except Exception:
-            full_text = ""
-        if full_text.strip():
-            try:
-                summary_facts = await extract_summary_facts(
-                    full_text,
-                    llm=llm,
-                    max_facts=config.doc_summary_max_facts,
-                    min_fact_words=config.doc_min_fact_words,
-                    doc_id=parsed.doc_id,
-                )
-                extracted.extend(summary_facts)
-            except Exception:
-                logger.exception("ingest_document: summary fact extraction failed")
+    # Core behavior: always use batched semantic extraction for performance and predictable cost.
+    # Keep payload bounded to preserve JSON/schema compliance.
+    extracted = await semantic_extractor.extract_facts_batch(
+        extract_chunks,
+        llm=llm,
+        min_fact_words=config.doc_min_fact_words,
+        batch_size_chunks=4,
+        max_chars=12000,
+    )
 
     # 6) Store extracted facts as semantic facts
     extracted_fact_records: List[Fact] = []
     for ef in extracted:
+        # Robustly resolve the source chunk id from the extractor output.
+        src_chunk_id = str(getattr(ef, "source_chunk_id", "") or getattr(ef, "chunk_id", "") or "")
+        if not src_chunk_id:
+            warnings.append("extracted fact missing source_chunk_id; skipping")
+            logger.warning("ingest_document: extracted fact missing source_chunk_id; skipping")
+            continue
+
         fact = Fact(
             id=f"fact_{uuid4().hex}",
             subject=ef.subject,
@@ -446,14 +424,14 @@ async def ingest_document(
             object=ef.object,
             created_at=now,
             updated_at=now,
-            source_ids=[ef.source_chunk_id],
+            source_ids=[src_chunk_id],
             confidence=ef.confidence,
             salience=ef.salience,
             owner_type=owner_type,
             owner_id=owner_id,
             meta={
                 "source_type": "pdf",
-                "source_chunk_id": ef.source_chunk_id,
+                "source_chunk_id": src_chunk_id,
                 "doc_id": parsed.doc_id,
                 "source_path": parsed.source_path,
                 "source_hash": parsed.source_hash,

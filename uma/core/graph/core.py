@@ -12,11 +12,22 @@ Responsibilities
 
 Identity Convention (v1)
 ------------------------
-All User nodes are keyed using the canonical form:
+Graph traversal and persistence are governed by explicit ownership scope:
+
+    (owner_type, owner_id)
+
+Where:
+- owner_type is one of {'user','agent'} (optionally 'global' later)
+- owner_id is the canonical identifier within that scope
+
+User canonicalization:
+- When owner_type == 'user', owner_id SHOULD be stored in canonical form:
 
     "user:<id>"
 
-This invariant is enforced by GraphUpdater via ensure_user_subject().
+Important:
+- Fact.subject is NOT an identity key and MUST NOT be normalized into "user:<id>".
+- subject/object are treated as entity labels for navigation; ownership scoping happens on edges/nodes via (owner_type, owner_id).
 """
 
 from __future__ import annotations
@@ -54,7 +65,7 @@ class TemporalGraphCore:
             "TemporalGraphCore initialized with adapter=%s",
             adapter.__class__.__name__,
         )
-    
+
     # ------------------------------------------------------------------
     # PUBLIC API
     # ------------------------------------------------------------------
@@ -152,7 +163,7 @@ class TemporalGraphCore:
         except Exception:
             logger.exception("TemporalGraphCore.insert_fact_triplet failed.")
             return False
-        
+
     def link_episode_to_facts(self, episode: Any, facts: List[Any]) -> None:
         """Link Episode to its extracted Facts."""
         try:
@@ -179,7 +190,14 @@ class TemporalGraphCore:
     ) -> List[dict]:
         """
         Fetch graph neighbors for a node, STRICTLY scoped by ownership.
-        This is a read-only helper intended for RLM navigation.
+
+        Navigation-only contract
+        ------------------------
+        This method is used for navigation / expansion only. It must NOT be treated as an
+        authoritative source of truth. Callers SHOULD use the returned nodes to route to
+        evidence by fetching chunks/facts from the authoritative stores using provenance
+        recorded on relationships and Fact nodes (e.g., owner_type/owner_id, source_chunk_id, fact_id).
+
         DAT invariant (critical)
         ------------------------
         This method enforces that traversal ONLY follows relationships
@@ -194,7 +212,7 @@ class TemporalGraphCore:
         owner_type : str
             One of {'user','agent'}.
         owner_id : str
-            Canonical owner identifier (e.g. 'user:u1').
+            Canonical owner identifier (e.g. 'user:u1' or 'agent-default').
         predicate_scope : Optional[List[str]]
             Optional list of predicate names to restrict traversal.
         depth : int
@@ -202,15 +220,23 @@ class TemporalGraphCore:
         k : int
             Maximum number of results.
         """
-        
+
         if not user_id or not node_id:
             logger.warning("TemporalGraphCore.neighbors: missing user_id or node_id")
             return []
-        
+
         if not owner_type or not owner_id:
             logger.error("TemporalGraphCore.neighbors: owner_type and owner_id are required")
             return []
-        
+
+        # Canonicalize user owner_id for consistency (owner scoping, not subject normalization).
+        try:
+            if owner_type == "user":
+                owner_id = ensure_user_subject(owner_id)
+        except Exception:
+            logger.exception("TemporalGraphCore.neighbors: invalid user owner_id")
+            return []
+
         depth_i = max(1, min(5, int(depth)))
         limit = max(1, int(k))
 
@@ -226,7 +252,7 @@ class TemporalGraphCore:
         RETURN DISTINCT m AS node, labels(m) AS labels, properties(m) AS properties
         LIMIT $limit
         """
-        params = {          
+        params = {
             "node_id": node_id,
             "owner_type": owner_type,
             "owner_id": owner_id,
@@ -235,8 +261,31 @@ class TemporalGraphCore:
         }
 
         try:
-            return self.adapter.run_query(cypher, params=params)
+            logger.debug(
+                "TemporalGraphCore.neighbors: node_id=%s owner=%s:%s depth=%d limit=%d preds=%s",
+                node_id,
+                owner_type,
+                owner_id,
+                depth_i,
+                limit,
+                preds,
+            )
+            results = self.adapter.run_query(cypher, params=params)
+            if not results:
+                logger.warning(
+                    "TemporalGraphCore.neighbors: returned 0 owner=%s:%s node_id=%s",
+                    owner_type,
+                    owner_id,
+                    node_id,
+                )
+            return results
         except Exception:
+            logger.warning(
+                "TemporalGraphCore.neighbors failed owner=%s:%s node_id=%s",
+                owner_type,
+                owner_id,
+                node_id,
+            )
             logger.exception("TemporalGraphCore.neighbors failed.")
             return []
 
@@ -275,4 +324,9 @@ class TemporalGraphCore:
         return cleaned.upper()
 
     def run_query(self, cypher: str, params: dict):
+        """
+        Internal helper for write paths.
+
+        GraphUpdater uses this wrapper so it does not depend on adapter internals.
+        """
         return self.adapter.run_query(cypher, params)

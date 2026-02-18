@@ -12,8 +12,9 @@ logger = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT_DEFAULT = (
-    "You are an assistant that answers questions using available memory. "
-    "Be concise and cite memory where helpful."
+    "You are a memory quality evaluator. "
+    "Do not answer user questions. "
+    "Only evaluate the snippet for relevance, completeness, and gaps."
 )
 
 
@@ -41,10 +42,6 @@ async def interactive_chat(
     # Initialize UMA memory runtime
     memory = UMAMemory.from_yaml(config_path)
     memory.agent_id = agent_id
-    # Ensure retrieval stack (including RLM) is wired before queries.
-    memory.initialize(profile="retrieval")
-    # Ensure ingestion pipeline is available for process_turn() calls.
-    memory.initialize(profile="ingestion")
     
     try:
         vector_backend = getattr(memory.raw_config.storage, "vector_backend", "")
@@ -121,30 +118,32 @@ async def interactive_chat(
                 )
                 if not snippet:
                     context_messages = [{"role": "user", "content": user_message}]
-                    reply = (
-                        "I don't have relevant memory stored for that question. "
-                        "Please load documents or provide more context."
-                    )
+                    reply = "No memory snippet available to evaluate."
                 else:
-                    user_content = f"{user_message}\n\nRelevant memory:\n{snippet}"
+                    user_content = (
+                        "You are evaluating UMA memory. Do NOT answer the user question.\n"
+                        "Return ONLY a brief evaluation of the snippet quality and relevance.\n"
+                        "Focus on: relevance to the question, completeness, and any gaps.\n\n"
+                        f"User question:\n{user_message}\n\n"
+                        f"Snippet to evaluate:\n{snippet}\n"
+                    )
                     context_messages = [{"role": "user", "content": user_content}]
-
-                    print("**************************** Context snippet:")
+                    print("\n**************************** Snippet to evaluate:")
                     print(snippet)
-                    print("**************************** End of snippet")
+                    print("**************************** End of snippet\n\n")
 
-                # reply = await agent_generate(
-                #     messages=[{"role": "system", "content": system_prompt}] + context_messages,
-                #     llm=getattr(memory, "agent_llm", None) or memory.llm,
-                # )
-                # if not isinstance(reply, str) or not reply.strip():
-                #     reply = "I don't have enough information to answer that yet."
-
-                # print("Assistant>", reply)
-                # Update UMA memory with the turn
-                await memory.process_turn(
-                    user_id=user_id, user_msg=user_message, assistant_reply=reply
+                reply = await agent_generate(
+                    messages=[{"role": "system", "content": system_prompt}] + context_messages,
+                    llm=getattr(memory, "agent_llm", None) or memory.llm,
                 )
+                if not isinstance(reply, str) or not reply.strip():
+                    reply = "Snippet evaluation unavailable."
+
+                print("Assistant>", reply)
+                # Update UMA memory with the turn
+                # await memory.process_turn(
+                #     user_id=user_id, user_msg=user_message, assistant_reply=reply
+                # )
 
             except Exception as exc:
                 logging.exception("Chat turn failed: %s", exc)

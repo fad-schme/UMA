@@ -29,7 +29,6 @@ Typical developer workflow
 1. Initialize UMA:
 
     memory = UMAMemory.from_yaml("uma.yaml")
-    memory.initialize()
 
 2. After the developer's agent produces a reply, store the memory turn:
 
@@ -68,7 +67,7 @@ Typical developer workflow
 
 Internal retrieval components
 -----------------------------
-    The following attributes are internal and initialized during `initialize()`:
+    The following attributes are internal and initialized lazily on first use:
 
     • memory_env
         An instance of UMAMemoryEnvironment.
@@ -102,13 +101,12 @@ import logging
 import os
 from typing import Any, Dict, Optional
 
-
-from .memory_config import UMAConfig     # YAML loader + validation (dict-like)
+from .memory_config import UMAConfig  # YAML loader + validation (dict-like)
 from .utils.config_types import RuntimeConfig
 
 from .utils.hooks import UMAHooks
 from .utils.identity import ensure_user_subject
-from .utils.logging_setup import logger as uma_logger  # noqa: F401 (init side‑effect)
+from .utils.logging_setup import logger as uma_logger  # noqa: F401 (init side-effect)
 from .working_memory.core import WorkingMemoryCore
 from .episodic.core import EpisodicCore
 from .episodic.indexer import EpisodeIndexer
@@ -118,21 +116,10 @@ from .procedural.core import ProceduralCore
 from .chunk.core import ChunkCore
 from .retrieval.service import RetrievalService
 from .graph import TemporalGraphCore
-from .initializers.runtime import (
-    ensure_embedder,
-    ensure_features,
-    ensure_graph,
-    ensure_llm,
-    ensure_pipeline,
-    ensure_retrieval,
-    ensure_rlm,
-    ensure_cores,
-    ensure_stores,
-)
 
 # Stores
 from .utils.config_types import parse_plugin_spec
-
+from .initializers.runtime import init_retrieval_ready, init_ingestion_ready, schedule_ingestion_warmup
 
 # Optional Features
 from .utils.registry import FeatureLoader, FeaturePolicy, default_feature_registry
@@ -145,13 +132,12 @@ class UMAMemory:
     UMA Memory Runtime Container.
 
     This class:
-        - Initializes all core subsystems
+        - Initializes all core subsystems lazily
         - Provides public APIs for pipeline and retrieval
-    - Loads optional features via direct attachment
+        - Loads optional features via direct attachment
 
     Developers ONLY interact with:
         memory = UMAMemory.from_yaml("uma.yaml")
-        memory.initialize()
 
         # after their own agent produces a reply:
         await memory.process_turn(user_id=user_id, user_msg=user_msg, assistant_reply=assistant_reply)
@@ -179,9 +165,19 @@ class UMAMemory:
 
     @classmethod
     def from_yaml(cls, path: str) -> "UMAMemory":
-        """Load YAML config and construct UMAMemory."""
         cfg = UMAConfig.load_yaml(path)
-        return cls(cfg, config_path=path)
+        mem = cls(cfg, config_path=path)
+
+        # Predictable startup cost: make retrieval instant thereafter.
+        init_retrieval_ready(mem)
+        mem._retrieval_ready = True
+        mem.initialized = True
+
+        # Background warmup: cores/features/pipeline (ingestion readiness).
+        schedule_ingestion_warmup(mem)
+        # Ingestion readiness is best-effort in warmup; enforced on first ingestion API call.
+
+        return mem
 
     def __init__(self, config: UMAConfig, config_path: Optional[str] = None) -> None:
         """
@@ -202,6 +198,9 @@ class UMAMemory:
         self._config_dir = getattr(config, "_source_dir", None)
         self.initialized: bool = False
         self._features_initialized: bool = False
+        self._retrieval_ready: bool = False
+        self._ingestion_ready: bool = False
+        self._warmup_scheduled: bool = False
 
         # RLM components (initialized later)
         self.memory_env = None
@@ -218,7 +217,7 @@ class UMAMemory:
         self.consolidation_cfg = self.cfg.consolidation
         self.pipeline_cfg = self.cfg.pipeline
         self.semantic_salience_threshold = self.cfg.semantic_salience_threshold
-        self.agent_id = None
+        self._agent_id: Optional[str] = None
 
         # Internal store registry (core-only access; no direct store usage outside cores)
         self._stores: Dict[str, Any] = {}
@@ -249,81 +248,74 @@ class UMAMemory:
         logger.debug("UMAMemory instance created with unified storage config.")
 
     # ----------------------------------------------------------------------
-    # Initialization Entry Point
+    # Internal lazy initialization (developer should NOT call initialization)
     # ----------------------------------------------------------------------
 
-    def initialize(self, profile: str = "full") -> None:
+    @property
+    def agent_id(self) -> Optional[str]:
+        return self._agent_id
+
+    @agent_id.setter
+    def agent_id(self, value: Optional[str]) -> None:
+        if value is not None:
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError("UMAMemory.agent_id must be a non-empty string or None.")
+            value = value.strip()
+        self._agent_id = value
+        # Keep RLM environment in sync with the canonical agent_id.
+        if getattr(self, "memory_env", None) is not None:
+            self.memory_env._agent_id = value
+
+    def _ensure_base_ready(self) -> None:
         """
-        Initialize UMA subsystems in a safe, idempotent way.
+        Minimal baseline readiness:
+        - stores only
 
-        Profiles
-        --------
-        - minimal   : config-only (no heavy services)
-        - retrieval : embedder + stores + cores + retrieval (+ RLM if enabled)
-        - ingestion : llm + embedder + stores + cores + pipeline (+ features)
-        - full      : all subsystems
+        This must be cheap and safe to call from any public API.
         """
-        if self.initialized:
-            profile_norm = (profile or "full").strip().lower()
-            # Allow "upgrade" when a later call needs missing subsystems.
-            if profile_norm in {"retrieval", "full"} and not getattr(self, "retrieval_service", None):
-                logger.debug("UMAMemory.initialize(): upgrading to retrieval profile.")
-                self._lazy_init(profile="retrieval")
-                return
-            if profile_norm in {"ingestion", "full"} and not getattr(self, "pipeline", None):
-                logger.debug("UMAMemory.initialize(): upgrading to ingestion profile.")
-                self._lazy_init(profile="ingestion")
-                return
-            logger.debug("UMAMemory.initialize(): already initialized — skipping.")
-            return
-
-        self._lazy_init(profile=profile)
-
-        logger.debug("UMA Memory Runtime initialized successfully (profile=%s).", profile)
-
-    def _lazy_init(self, profile: str = "full") -> None:
-        """
-        Lazily initialize UMA subsystems on-demand.
-        """
-        profile_norm = (profile or "full").strip().lower()
-        logger.debug("UMAMemory._lazy_init(profile=%s)", profile_norm)
-
-        if profile_norm == "minimal":
-            self.initialized = True
-            return
-
-        if profile_norm in {"retrieval", "full"}:
-            ensure_llm(self)
-            ensure_embedder(self)
-            ensure_stores(self)
-            ensure_cores(self)
-            ensure_retrieval(self)
-            ensure_graph(self)
-            ensure_rlm(self)
-
-        if profile_norm in {"ingestion", "full"}:
-            ensure_llm(self)
-            ensure_embedder(self)
-            ensure_stores(self)
-            ensure_cores(self)
-            ensure_features(self)
-            ensure_pipeline(self)
-
+        # In the new model, from_yaml() makes retrieval ready immediately.
+        # Base readiness is therefore equivalent to ensuring retrieval is ready.
+        if not getattr(self, "_retrieval_ready", False):
+            init_retrieval_ready(self)
         self.initialized = True
 
 
+    def _ensure_retrieval_ready(self) -> None:
+        """
+        Retrieval readiness (automatic lazy init).
+
+        RLM is the default retrieval mode when enabled AND LLM is available.
+        Classic retrieval is ALWAYS wired as fallback and used when LLM/RLM unavailable.
+
+        Must remain lean:
+        - stores + embedder + RetrievalService (+ graph if enabled)
+        - MUST NOT initialize ingestion cores/pipeline/features
+        """
+        # Retrieval must be ready immediately after from_yaml().
+        # Keep a defensive guard for non-standard construction paths.
+        if not getattr(self, "_retrieval_ready", False):
+            init_retrieval_ready(self)
+        self.initialized = True
+
+    def _ensure_ingestion_ready(self) -> None:
+        """
+        Ingestion readiness (automatic lazy init).
+
+        Heavy path:
+        - stores
+        - LLM (required)
+        - embedder
+        - cores
+        - optional features
+        - pipeline
+        """
+        # Ingestion is warmed up in the background, but must self-heal on first ingestion call.
+        if not getattr(self, "_ingestion_ready", False):
+            init_ingestion_ready(self)
+        self.initialized = True
 
     # ----------------------------------------------------------------------
-    # Stores Initialization (uses unified storage config)
-    # ----------------------------------------------------------------------
-    def _init_stores(self) -> None:
-        """
-        Delegate store wiring to the initializer helper.
-        """
-        ensure_stores(self)
-
-    # ----------------------------------------------------------------------
-    # Core Subsystems (WM, Episodic, Semantic ONLY — Retrieval wired in initialize)
+    # Core Subsystems (WM, Episodic, Semantic, Procedural, Chunk — Retrieval wired lazily)
     # ----------------------------------------------------------------------
 
     def _init_core_subsystems(self) -> None:
@@ -338,9 +330,6 @@ class UMAMemory:
             - SemanticCore
             - ProceduralCore
             - ChunkCore
-
-        RetrievalService is *NOT* wired here anymore — it is initialized
-        exactly once inside initialize() to preserve idempotency.
         """
         if self.llm is None or self.embedder is None:
             raise RuntimeError(
@@ -642,6 +631,8 @@ class UMAMemory:
         """
         from ..adapters.observability.metrics import increment, timed
 
+        self._ensure_retrieval_ready()
+        
         if not user_id or not isinstance(user_id, str):
             raise ValueError("UMAMemory.get_structured_context: user_id must be a non-empty string.")
         if not query_text or not isinstance(query_text, str):
@@ -649,8 +640,6 @@ class UMAMemory:
         user_subject = ensure_user_subject(user_id)
 
         with timed("uma.get_structured_context.latency"):
-            if not self.initialized:
-                self._lazy_init(profile="retrieval")
             # 1) Stored WM
             try:
                 wm_stored = (
@@ -664,22 +653,6 @@ class UMAMemory:
                     user_subject,
                 )
                 wm_stored = []
-
-            # If retrieval isn't wired, return WM only
-            if not getattr(self, "retrieval_service", None):
-                increment("uma.get_structured_context.calls", tags={"path": "wm_only"})
-                logger.warning(
-                    "UMAMemory.get_structured_context: retrieval_service not initialized; WM-only user=%s",
-                    user_id,
-                )
-                return {
-                    "working_memory": wm_stored,
-                    "episodic": [],
-                    "semantic": [],
-                    "chunks": [],
-                    "procedural": [],
-                    "graph": [],
-                }
 
             # 2) Prefer RLM retrieval
             if getattr(self, "_rlm_controller", None) is not None:
@@ -752,8 +725,8 @@ class UMAMemory:
 
         This is the primary ingestion API and wraps the internal pipeline.
         """
-        if not self.initialized:
-            self._lazy_init(profile="ingestion")
+        self._ensure_ingestion_ready()
+
         if not getattr(self, "pipeline", None):
             raise RuntimeError("UMAMemory.process_turn: pipeline not initialized.")
 
@@ -775,8 +748,8 @@ class UMAMemory:
         """
         Ingest an unstructured document into UMA memory.
         """
-        if not self.initialized:
-            self._lazy_init(profile="ingestion")
+        self._ensure_ingestion_ready()
+
         from .ingest.ingest_service import ingest_document as _ingest
         return await _ingest(
             file_path,
@@ -795,23 +768,6 @@ class UMAMemory:
 
         return await get_rendered_context(self, user_id=user_id, query_text=query_text)
 
-    # Backward-compatible alias (deprecated)
-
-    async def build_prompt_messages(
-        self,
-        *,
-        user_id: str,
-        query_text: str,
-    ) -> list:
-        """
-        Build LLM messages with UMA-RLM context embedded.
-
-        This wraps retrieval + context formatting so developers do not
-        manually collect memory slices. It does not inject a system prompt.
-        """
-        from .utils.context_pack_builder import build_prompt_messages
-
-        return await build_prompt_messages(self, user_id=user_id, query_text=query_text)
 
     # ----------------------------------------------------------------------
     # OPTIONAL UTILITIES — Structured CoT Memory Builder
@@ -846,8 +802,7 @@ class UMAMemory:
         from .utils.cot_memory_builder import build_cot_memory
 
         return await build_cot_memory(self, user_id=user_id, query_text=query_text)
-    
-    
+
     # ----------------------------------------------------------------------
     # Shutdown
     # ----------------------------------------------------------------------
@@ -860,5 +815,4 @@ class UMAMemory:
             except Exception:
                 logger.exception("Error shutting down GraphCore.")
 
-    
-        # 
+        #

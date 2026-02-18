@@ -159,12 +159,16 @@ class Neo4jAdapter(GraphAdapter):
                 result = session.run(cypher, params or {})
                 return [self._normalize_record(dict(record)) for record in result]
 
-        records = retry_sync(_call)
-        logger.debug(
-            "Neo4jAdapter.run_query: executed Cypher with %d row(s) returned.",
-            len(records),
-        )
-        return records
+        try:
+            records = retry_sync(_call)
+            logger.debug(
+                "Neo4jAdapter.run_query: executed Cypher with %d row(s) returned.",
+                len(records),
+            )
+            return records
+        except Exception:
+            logger.exception("Neo4jAdapter.run_query failed")
+            return []
 
     def close(self) -> None:
         """

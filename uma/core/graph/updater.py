@@ -19,6 +19,7 @@ Strict mode (UMA-RLM v1)
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, List
 
@@ -120,35 +121,98 @@ class GraphUpdater:
         try:
             insert = getattr(self.graph_core, "insert_fact_triplet", None)
             if not callable(insert):
-                logger.error("GraphUpdater.add_fact_node skipped: insert_fact_triplet missing.")
+                logger.error("GraphUpdater.add_fact skipped: insert_fact_triplet missing.")
                 return
 
-            subj = ensure_user_subject(str(getattr(fact, "subject", "") or ""))
-            pred = str(getattr(fact, "predicate", "") or "")
-            obj = str(getattr(fact, "object", "") or "")
+            # Ownership is mandatory for graph navigation safety.
+            owner_type = str(getattr(fact, "owner_type", "") or "").strip()
+            owner_id_raw = str(getattr(fact, "owner_id", "") or "").strip()
+            if not owner_type or not owner_id_raw:
+                logger.warning(
+                    "GraphUpdater.add_fact skipped: missing owner (fact_id=%s owner_type=%r owner_id=%r)",
+                    getattr(fact, "id", None),
+                    owner_type,
+                    owner_id_raw,
+                )
+                return
 
-            owner_type = str(getattr(fact, "owner_type", "user") or "user")
-            owner_id_raw = str(getattr(fact, "owner_id", "") or "")
+            # Canonicalize owner_id only for user-owned facts.
             owner_id = ensure_user_subject(owner_id_raw) if owner_type == "user" else owner_id_raw
 
+            # IMPORTANT: do NOT normalize KB fact.subject into user:<id>.
+            subj = str(getattr(fact, "subject", "") or "").strip()
+            pred = str(getattr(fact, "predicate", "") or "").strip()
+            obj = str(getattr(fact, "object", "") or "").strip()
+
+            if not subj or not obj:
+                logger.warning(
+                    "GraphUpdater.add_fact skipped: missing subject/object (fact_id=%s subj=%r obj_len=%d)",
+                    getattr(fact, "id", None),
+                    subj,
+                    len(obj) if isinstance(obj, str) else 0,
+                )
+                return
+            if not pred:
+                logger.warning(
+                    "GraphUpdater.add_fact skipped: missing predicate (fact_id=%s subj=%r)",
+                    getattr(fact, "id", None),
+                    subj,
+                )
+                return
+
+            # Provenance: prefer Fact.source_ids[0], then meta["source_chunk_id"], else "".
             meta = getattr(fact, "meta", {}) or {}
-            source_chunk_id = meta.get("source_chunk_id")
+            source_chunk_id = ""
+            try:
+                source_ids = getattr(fact, "source_ids", None)
+                if isinstance(source_ids, list) and source_ids:
+                    source_chunk_id = str(source_ids[0] or "")
+            except Exception:
+                source_chunk_id = ""
+
+            if not source_chunk_id and isinstance(meta, dict):
+                try:
+                    source_chunk_id = str(meta.get("source_chunk_id") or "")
+                except Exception:
+                    source_chunk_id = ""
+
+            # Timestamps must be strings (TemporalGraphCore.insert_fact_triplet expects str).
+            def _to_iso(x: Any) -> str:
+                if x is None:
+                    return ""
+                try:
+                    if hasattr(x, "isoformat"):
+                        return str(x.isoformat())
+                    return str(x)
+                except Exception:
+                    return ""
+
+            created_at_s = _to_iso(getattr(fact, "created_at", None))
+            updated_at_s = _to_iso(getattr(fact, "updated_at", None))
+
+            # Optional meta_json for diagnostics/provenance. Keep it bounded and safe.
+            meta_json = None
+            if isinstance(meta, dict) and meta:
+                try:
+                    meta_json = json.dumps(meta, ensure_ascii=False)[:4000]
+                except Exception:
+                    meta_json = None
 
             insert(
+                fact_id=str(getattr(fact, "id", "")),
                 subject=subj,
                 predicate=pred,
                 object=obj,
-                confidence=float(getattr(fact, "confidence", 1.0) or 1.0),
-                fact_id=str(getattr(fact, "id", "")),
                 owner_type=owner_type,
                 owner_id=owner_id,
                 source_chunk_id=source_chunk_id,
-                created_at=getattr(fact, "created_at", None),
-                updated_at=getattr(fact, "updated_at", None),
+                created_at=created_at_s,
+                updated_at=updated_at_s,
+                meta_json=meta_json,
             )
 
         except Exception:
-            logger.exception("GraphUpdater.add_fact_node failed (ignored).")
+            logger.exception("GraphUpdater.add_fact failed (ignored).")
 
     # ------------------------------------------------------------------
     # LINKS: EPISODE ↔ FACTS (STAMP OWNERSHIP)

@@ -137,3 +137,35 @@ def initialize_embedder(memory: Any) -> None:
         logger.exception("Embedder preflight failed at init; continuing.")
 
     logger.info("Embedder initialization successful.")
+
+
+def ensure_llm(memory: Any, *, required: bool = False) -> bool:
+    """
+    Ensure UMA LLM is initialized.
+
+    Retrieval startup:
+      - required=False (RLM best-effort; classic fallback must still work)
+
+    Ingestion warmup / ingestion calls:
+      - required=True (ingestion requires LLM)
+
+    Returns True if LLM is available, else False (unless required=True which raises).
+    """
+    if getattr(memory, "llm", None) is not None:
+        return True
+    try:
+        initialize_llm(memory)
+        return getattr(memory, "llm", None) is not None
+    except Exception:
+        logger.exception("LLM initialization failed.")
+        memory.llm = None
+        memory.agent_llm = None
+        if required:
+            raise
+        return False
+
+
+def ensure_embedder(memory: Any) -> None:
+    """Ensure embedder exists (required for classic vector retrieval)."""
+    if getattr(memory, "embedder", None) is None:
+        initialize_embedder(memory)

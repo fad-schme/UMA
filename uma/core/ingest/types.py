@@ -65,7 +65,7 @@ class IngestConfig:
     embed_max_delay_s: float = 8.0
     extract_max_chunks: Optional[int] = None
     allow_empty_pages: bool = False
-    doc_min_fact_words: int = 15
+    doc_min_fact_words: int = 10
     doc_summary_enabled: bool = True
     doc_summary_max_facts: int = 5
     doc_episode_enabled: bool = True

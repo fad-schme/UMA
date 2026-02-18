@@ -1,7 +1,7 @@
 import asyncio
+import yaml
 
 from uma.core.uma_memory import UMAMemory
-from uma.core.memory_config import UMAConfig
 
 
 _CAPTURE_CALLS = []
@@ -51,7 +51,12 @@ def test_ingest_document_is_idempotent_by_owner_and_hash(tmp_path):
             "vector_backend": "inmemory",
             "graph_backend": "disabled",
         },
-        "working_memory": {"max_tokens": 100, "warning_ratio": 0.7, "hard_limit_ratio": 0.95},
+        "working_memory": {
+            "max_tokens": 100,
+            "warning_ratio": 0.7,
+            "hard_limit_ratio": 0.95,
+            "chunk_size": 10,
+        },
         "embedding": {
             "provider": "tests.test_document_ingest_idempotent:_good_embedder",
             "model": "x",
@@ -68,8 +73,9 @@ def test_ingest_document_is_idempotent_by_owner_and_hash(tmp_path):
         "features": {"load": [], "policy": {"on_attach_error": "log_and_skip", "allow_method_override": False}},
     }
 
-    mem = UMAMemory(UMAConfig(cfg))
-    mem.initialize()
+    cfg_path = tmp_path / "uma_test.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    mem = UMAMemory.from_yaml(str(cfg_path))
 
     report1 = asyncio.run(mem.ingest_document(str(p), owner_type="user", owner_id="u1"))
     assert report1.doc_id
@@ -120,7 +126,12 @@ def test_ingest_embeds_final_chunks_only(tmp_path):
             "vector_backend": "inmemory",
             "graph_backend": "disabled",
         },
-        "working_memory": {"max_tokens": 100, "warning_ratio": 0.7, "hard_limit_ratio": 0.95},
+        "working_memory": {
+            "max_tokens": 100,
+            "warning_ratio": 0.7,
+            "hard_limit_ratio": 0.95,
+            "chunk_size": 10,
+        },
         "embedding": {
             "provider": "tests.test_document_ingest_idempotent:_good_embedder",
             "model": "x",
@@ -137,8 +148,10 @@ def test_ingest_embeds_final_chunks_only(tmp_path):
         "features": {"load": [], "policy": {"on_attach_error": "log_and_skip", "allow_method_override": False}},
     }
 
-    mem = UMAMemory(UMAConfig(cfg))
-    mem.initialize()
+    cfg_path = tmp_path / "uma_test.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    mem = UMAMemory.from_yaml(str(cfg_path))
+    mem._ensure_ingestion_ready()
 
     from uma.core.ingest.ingest_service import ingest_document as _ingest
     from uma.core.ingest.types import IngestConfig
@@ -177,7 +190,12 @@ def test_ingest_fails_fast_on_embedding_size_mismatch(tmp_path):
             "vector_backend": "inmemory",
             "graph_backend": "disabled",
         },
-        "working_memory": {"max_tokens": 100, "warning_ratio": 0.7, "hard_limit_ratio": 0.95},
+        "working_memory": {
+            "max_tokens": 100,
+            "warning_ratio": 0.7,
+            "hard_limit_ratio": 0.95,
+            "chunk_size": 10,
+        },
         "embedding": {
             "provider": "tests.test_document_ingest_idempotent:_bad_embedder_returns_wrong_size",
             "model": "x",
@@ -194,8 +212,9 @@ def test_ingest_fails_fast_on_embedding_size_mismatch(tmp_path):
         "features": {"load": [], "policy": {"on_attach_error": "log_and_skip", "allow_method_override": False}},
     }
 
-    mem = UMAMemory(UMAConfig(cfg))
-    mem.initialize()
+    cfg_path = tmp_path / "uma_test.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    mem = UMAMemory.from_yaml(str(cfg_path))
 
     try:
         asyncio.run(mem.ingest_document(str(p), owner_type="user", owner_id="u1"))
@@ -216,7 +235,12 @@ def test_ingest_document_reingests_when_signature_changes(tmp_path):
             "vector_backend": "inmemory",
             "graph_backend": "disabled",
         },
-        "working_memory": {"max_tokens": 100, "warning_ratio": 0.7, "hard_limit_ratio": 0.95},
+        "working_memory": {
+            "max_tokens": 100,
+            "warning_ratio": 0.7,
+            "hard_limit_ratio": 0.95,
+            "chunk_size": 10,
+        },
         "embedding": {
             "provider": "tests.test_document_ingest_idempotent:_good_embedder_kwargs",
             "model": "x",
@@ -233,8 +257,9 @@ def test_ingest_document_reingests_when_signature_changes(tmp_path):
         "features": {"load": [], "policy": {"on_attach_error": "log_and_skip", "allow_method_override": False}},
     }
 
-    mem = UMAMemory(UMAConfig(cfg))
-    mem.initialize()
+    cfg_path = tmp_path / "uma_test.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    mem = UMAMemory.from_yaml(str(cfg_path))
 
     report1 = asyncio.run(mem.ingest_document(str(p), owner_type="user", owner_id="u1"))
     assert report1.chunks_created > 0

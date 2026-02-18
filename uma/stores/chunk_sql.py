@@ -126,6 +126,13 @@ class ChunkSQLStore(BaseVectorSQLStore):
     # Insert/Upsert
     # ------------------------------------------------------------------ #
 
+    def _owner_where(self, owner_type: Optional[str], owner_id: Optional[str], params: List[Any]) -> str:
+        if not owner_type or not owner_id:
+            logger.error("ChunkSQLStore requires owner_type and owner_id")
+            raise ValueError("ChunkSQLStore requires owner_type and owner_id")
+        params.extend([owner_type, owner_id])
+        return "owner_type=? AND owner_id=?"
+
     async def upsert_chunk(self, chunk: Chunk, embedding: List[float]) -> None:
         conn = self._conn()
         try:
@@ -224,18 +231,46 @@ class ChunkSQLStore(BaseVectorSQLStore):
         if not owner_type or not owner_id:
             logger.error("ChunkSQLStore.search requires owner_type and owner_id")
             raise ValueError("ChunkSQLStore.search requires owner_type and owner_id")
-        filters = {}
+        filters: Dict[str, Any] = {}
         if doc_id:
             filters["doc_id"] = doc_id
         filters["owner_type"] = owner_type
         filters["owner_id"] = owner_id
-        return await self._semantic_search(
-            query_embedding=query_embedding,
-            k=k,
-            filters=filters or None,
-            log_context="chunk_search",
-            id_prefix="chunk_",
-        )
+        try:
+            ids = await self._vector_search_ids(
+                query_embedding=query_embedding,
+                k=k,
+                filters=filters,
+                log_context="chunk_search",
+                id_prefix="chunk_",
+            )
+            if not ids:
+                logger.debug(
+                    "ChunkSQLStore.search: vector candidates=0, sql_fetched=0, owner=%s:%s",
+                    owner_type,
+                    owner_id,
+                )
+                return []
+            chunks = await self.fetch_by_ids(ids, owner_type=owner_type, owner_id=owner_id)
+            logger.debug(
+                "ChunkSQLStore.search: vector candidates=%d, sql_fetched=%d, owner=%s:%s",
+                len(ids),
+                len(chunks),
+                owner_type,
+                owner_id,
+            )
+            if ids and not chunks:
+                logger.warning(
+                    "ChunkSQLStore.search: vector candidates=%d but SQL returned 0 op=search owner=%s:%s ids=%s",
+                    len(ids),
+                    owner_type,
+                    owner_id,
+                    ids[:3],
+                )
+            return chunks
+        except Exception:
+            logger.exception("ChunkSQLStore.search failed.")
+            raise
 
     async def search_text(
         self,
@@ -249,6 +284,9 @@ class ChunkSQLStore(BaseVectorSQLStore):
         Lightweight lexical fallback for chunk retrieval.
         Uses SQL LIKE against chunk text (case-insensitive).
         """
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("ChunkSQLStore.search_text STARTED")
+
         if not query_text or not isinstance(query_text, str):
             return []
         if not owner_type or not owner_id:
@@ -421,6 +459,58 @@ class ChunkSQLStore(BaseVectorSQLStore):
                 owner_id,
                 doc_id,
             )
+            raise
+        finally:
+            conn.close()
+
+    async def fetch_by_ids(
+        self,
+        ids: List[str],
+        *,
+        owner_type: str,
+        owner_id: str,
+        log_context: str = "",
+    ) -> List[Chunk]:
+        """
+        Fetch Chunk objects by ID, owner-scoped.
+        """
+        if not ids:
+            return []
+        if not owner_type or not owner_id:
+            logger.error("ChunkSQLStore.fetch_by_ids requires owner_type and owner_id")
+            raise ValueError("ChunkSQLStore.fetch_by_ids requires owner_type and owner_id")
+
+        logger.debug(
+            "ChunkSQLStore.fetch_by_ids: ids=%d owner=%s:%s",
+            len(ids),
+            owner_type,
+            owner_id,
+        )
+        conn = self._conn()
+        try:
+            placeholders = ",".join("?" for _ in ids)
+            params: List[Any] = list(ids)
+            owner_clause = self._owner_where(owner_type, owner_id, params)
+            sql = f"SELECT * FROM chunks WHERE id IN ({placeholders}) AND {owner_clause}"
+            rows = self._query_all(conn, sql, params=params, log_context="fetch_by_ids")
+            row_map = {r["id"]: r for r in rows}
+            ordered: List[Chunk] = []
+            for cid in ids:
+                row = row_map.get(cid)
+                if row is None:
+                    continue
+                ordered.append(self._row_to_object(row))
+            missing = max(0, len(ids) - len(ordered))
+            if missing:
+                logger.warning(
+                    "ChunkSQLStore.fetch_by_ids: missing=%d owner=%s:%s",
+                    missing,
+                    owner_type,
+                    owner_id,
+                )
+            return ordered
+        except Exception:
+            logger.exception("ChunkSQLStore.fetch_by_ids failed.")
             raise
         finally:
             conn.close()

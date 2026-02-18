@@ -128,7 +128,7 @@ def test_pipeline_updates_graph_with_facts_and_temporal_links():
         cfg_path.write_text(yaml.safe_dump(cfg))
 
         mem = UMAMemory.from_yaml(str(cfg_path))
-        mem.initialize()
+        mem._ensure_ingestion_ready()
 
         mem.working_memory = DummyWM()
         mem.episodic_core = DummyEpisodicCore()

@@ -215,6 +215,9 @@ class EpisodicCore:
     async def upsert_cluster_summary(
         self,
         user_id: str,
+        *,
+        owner_type: str,
+        owner_id: str,
         episode_ids: List[str],
         summary: str,
         latest_timestamp: str,
@@ -226,6 +229,8 @@ class EpisodicCore:
             return False
         try:
             await self.store.upsert_cluster_summary(
+                owner_type=owner_type,
+                owner_id=owner_id,
                 user_id=user_id,
                 episode_ids=episode_ids,
                 summary=summary,
@@ -267,6 +272,9 @@ class EpisodicCore:
             ensure_user_subject(user_id)
         except Exception:
             logger.exception("EpisodicCore.search: invalid subject=%r", user_id)
+            return []
+        if not owner_type or not owner_id:
+            logger.error("EpisodicCore.search requires owner_type and owner_id")
             return []
 
         episodes: List[Episode] = []
@@ -320,6 +328,9 @@ class EpisodicCore:
         except Exception:
             logger.exception("EpisodicCore.list_cluster_summaries: invalid subject=%r", user_id)
             return []
+        if not owner_type or not owner_id:
+            logger.error("EpisodicCore.list_cluster_summaries requires owner_type and owner_id")
+            return []
 
         clusters: List[Any] = []
         try:
@@ -347,6 +358,9 @@ class EpisodicCore:
         """
         if self.store is None or not hasattr(self.store, "fetch_summaries"):
             return []
+        if not owner_type or not owner_id:
+            logger.error("EpisodicCore.fetch_summaries requires owner_type and owner_id")
+            return []
         try:
             return await self.store.fetch_summaries(ids, owner_type=owner_type, owner_id=owner_id)
         except Exception:
@@ -358,6 +372,9 @@ class EpisodicCore:
         Fetch transcript payloads for a list of episodic IDs.
         """
         if self.store is None or not hasattr(self.store, "fetch_transcripts"):
+            return []
+        if not owner_type or not owner_id:
+            logger.error("EpisodicCore.fetch_transcripts requires owner_type and owner_id")
             return []
         try:
             return await self.store.fetch_transcripts(ids, owner_type=owner_type, owner_id=owner_id)

@@ -10,11 +10,11 @@ This configuration format uses:
 from __future__ import annotations
 import logging
 import os
-import sys
 from typing import Any, Dict
 
 import yaml
 from .initializers.runtime import init_runtime_env
+
 logger = logging.getLogger(__name__)
 
 

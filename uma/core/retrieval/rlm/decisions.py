@@ -474,7 +474,7 @@ async def execute_action(
         )
 
     if action.action == "search_chunks":
-        chunk_core = getattr(env, "_chunk_core", None)
+        chunk_core = getattr(getattr(env, "_memory", None), "chunk_core", None)
         if chunk_core is None:
             return []
         return await chunk_core.search_chunks_for_rlm(

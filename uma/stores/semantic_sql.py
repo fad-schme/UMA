@@ -210,6 +210,13 @@ class SemanticSQLStore(BaseVectorSQLStore):
     # Upsert Fact
     # ------------------------------------------------------------------ #
 
+    def _owner_where(self, owner_type: Optional[str], owner_id: Optional[str], params: List[Any]) -> str:
+        if not owner_type or not owner_id:
+            logger.error("SemanticSQLStore requires owner_type and owner_id")
+            raise ValueError("SemanticSQLStore requires owner_type and owner_id")
+        params.extend([owner_type, owner_id])
+        return "owner_type=? AND owner_id=?"
+
     async def upsert_fact(self, fact: Fact, embedding: List[float]) -> None:
         """
         Insert or update a Fact and its embedding using conflict resolution.
@@ -334,12 +341,14 @@ class SemanticSQLStore(BaseVectorSQLStore):
                 meta = canonical.meta if isinstance(canonical.meta, dict) else {}
                 topic = meta.get("topic")
 
+                owner_type_out = canonical.owner_type or owner_type_in
+                owner_id_out = canonical.owner_id or owner_id_in
                 vector_meta = {
                     "subject": canonical.subject,
                     "predicate": canonical.predicate,
-                    "owner_type": canonical.owner_type,
-                    "owner_id": canonical.owner_id,
-                    "scope_key": f"{canonical.owner_type}:{canonical.owner_id}",
+                    "owner_type": owner_type_out,
+                    "owner_id": owner_id_out,
+                    "scope_key": f"{owner_type_out}:{owner_id_out}",
                 }
 
                 if topic:
@@ -386,8 +395,8 @@ class SemanticSQLStore(BaseVectorSQLStore):
         self,
         query_embedding: List[float],
         subject: Optional[str] = None,
-        owner_type: Optional[str] = None,
-        owner_id: Optional[str] = None,
+        owner_type: str | None = None,
+        owner_id: str | None = None,
         k: int = 10,
     ) -> List[Fact]:
         """
@@ -398,22 +407,52 @@ class SemanticSQLStore(BaseVectorSQLStore):
         if not owner_type or not owner_id:
             logger.error("SemanticSQLStore.search requires owner_type and owner_id")
             raise ValueError("SemanticSQLStore.search requires owner_type and owner_id")
-        filters = {"subject": subject} if subject else None
+
+        filters: dict[str, Any] = {
+            "owner_type": owner_type,
+            "owner_id": owner_id,
+        }
+        if subject:
+            filters["subject"] = subject
 
         try:
-            filters = filters or {}
-            if owner_type:
-                filters["owner_type"] = owner_type
-            if owner_id:
-                filters["owner_id"] = owner_id
-
-            return await self._semantic_search(
+            ids = await self._vector_search_ids(
                 query_embedding=query_embedding,
                 k=k,
                 filters=filters,
                 log_context="semantic_search",
                 id_prefix="fact_",
             )
+            if not ids:
+                logger.debug(
+                    "SemanticSQLStore.search: vector candidates=0, sql_fetched=0, owner=%s:%s",
+                    owner_type,
+                    owner_id,
+                )
+                return []
+
+            facts = await self.fetch_by_ids(
+                ids,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                log_context="semantic_search",
+            )
+            logger.debug(
+                "SemanticSQLStore.search: vector candidates=%d, sql_fetched=%d, owner=%s:%s",
+                len(ids),
+                len(facts),
+                owner_type,
+                owner_id,
+            )
+            if ids and not facts:
+                logger.warning(
+                    "SemanticSQLStore.search: vector candidates=%d but SQL returned 0 op=search owner=%s:%s ids=%s",
+                    len(ids),
+                    owner_type,
+                    owner_id,
+                    ids[:3],
+                )
+            return facts
         except Exception:
             logger.exception("SemanticSQLStore.search failed.")
             raise
@@ -452,10 +491,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
             for term in terms:
                 where.append("LOWER(object) LIKE ?")
                 params.append(f"%{term}%")
-            where.append("owner_type=?")
-            params.append(owner_type)
-            where.append("owner_id=?")
-            params.append(owner_id)
+            where.append(self._owner_where(owner_type, owner_id, params))
 
             sql = f"""
                 SELECT * FROM facts
@@ -555,6 +591,36 @@ class SemanticSQLStore(BaseVectorSQLStore):
         """
         Fetch Fact objects by ID, preserving requested order.
         """
+        return await self._fetch_facts_by_ids_sql(
+            ids=ids,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            log_context="fetch_facts_by_ids",
+        )
+
+    async def fetch_by_ids(
+        self,
+        ids: List[str],
+        *,
+        log_context: str = "",
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+    ) -> List[Fact]:
+        return await self._fetch_facts_by_ids_sql(
+            ids=ids,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            log_context=log_context or "fetch_by_ids",
+        )
+
+    async def _fetch_facts_by_ids_sql(
+        self,
+        *,
+        ids: List[str],
+        owner_type: Optional[str],
+        owner_id: Optional[str],
+        log_context: str,
+    ) -> List[Fact]:
         if not ids:
             return []
         if not owner_type or not owner_id:
@@ -565,14 +631,13 @@ class SemanticSQLStore(BaseVectorSQLStore):
         try:
             placeholders = ",".join("?" for _ in ids)
             params = ids[:]
-            sql = f"SELECT * FROM facts WHERE id IN ({placeholders})"
-            sql += " AND owner_type=? AND owner_id=?"
-            params.extend([owner_type, owner_id])
+            owner_clause = self._owner_where(owner_type, owner_id, params)
+            sql = f"SELECT * FROM facts WHERE id IN ({placeholders}) AND {owner_clause}"
             rows = self._query_all(
                 conn,
                 sql,
                 params=params,
-                log_context="fetch_facts_by_ids",
+                log_context=log_context,
             )
             row_map = {r["id"]: r for r in rows}
             ordered: List[Fact] = []

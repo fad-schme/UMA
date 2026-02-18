@@ -148,7 +148,7 @@ retrieval:
 # ------------------------------
 semantic:
   salience_threshold: 0.45
-  doc_min_fact_words: 15
+  doc_min_fact_words: 10
   doc_summary_enabled: true
   doc_summary_max_facts: 5
 

@@ -321,10 +321,10 @@ class BaseVectorSQLStore(BaseSQLStore):
     async def fetch_by_ids(
         self,
         ids: List[str],
-        *,
-        log_context: str = "",
+        *,     
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
+        log_context: str = "",
     ) -> List[Any]:
         """
         Fetch rows by IDs in ranked order (SQL authoritative payload).

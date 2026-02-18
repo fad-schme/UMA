@@ -390,14 +390,12 @@ class SnippetRefiner:
             return json.loads(raw)
         except Exception:
             logger.exception("SnippetRefiner._parse_single_response: strict json.loads failed")
-            raise
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         if m:
             try:
                 return json.loads(m.group(0))
             except Exception:
                 logger.exception("SnippetRefiner._parse_single_response: salvaged json.loads failed")
-                raise
         # Fallback: keep original snippet if model returns non-JSON
         return {"score": 1.0}
     

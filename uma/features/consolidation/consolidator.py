@@ -121,6 +121,8 @@ class Consolidator:
                 if self.episodic_core is not None:
                     await self.episodic_core.upsert_cluster_summary(
                         user_id=user_id,
+                        owner_type="user",
+                        owner_id=user_id,
                         episode_ids=episode_ids,
                         summary=summary,
                         latest_timestamp=latest_ts.isoformat(),

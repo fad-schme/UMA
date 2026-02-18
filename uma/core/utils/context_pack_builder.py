@@ -158,6 +158,7 @@ class ContextPackBuilder:
                         "predicate": get_attr_or_key(fact, "predicate", "related_to"),
                         "object": get_attr_or_key(fact, "object"),
                         "confidence": get_attr_or_key(fact, "confidence", 0.0),
+                        "source_ids": get_attr_or_key(fact, "source_ids", []),
                         "meta": meta,
                         "fact_text": meta.get("fact_text") if isinstance(meta, dict) else None,
                     }
@@ -719,50 +720,79 @@ def _render_common_sections(
             if summary:
                 lines.append(f"- {summary}")
 
-    facts = pack.get("facts", [])
-    allowed_topics = cfg.allowed_topics or []
-    if allowed_topics:
-        filtered = [
-            fact
-            for fact in facts
-            if any(t in allowed_topics for t in _fact_topics(fact))
-        ]
-        if filtered:
-            facts = filtered
-    facts = _filter_facts_by_query(facts, query_text)
-    if facts:
-        deduped = []
-        seen = set()
-        for fact in facts:
-            obj = get_attr_or_key(fact, "object")
-            text = ""
-            if isinstance(obj, dict):
-                text = (obj.get("text") or "").strip()
-            key = text or str(obj)
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(fact)
-        facts = deduped
+    # -------------------------------
+    # Facts (single consistent format)
+    # -------------------------------
+    facts = pack.get("facts", []) or []
+
+    # Normalize facts into dicts (some paths may pass objects)
+    norm_facts: List[Dict[str, Any]] = []
+    for f in facts:
+        if not f:
+            continue
+        if isinstance(f, dict):
+            norm_facts.append(f)
+        else:
+            try:
+                norm_facts.append(f.__dict__)
+            except Exception:
+                norm_facts.append({"fact": repr(f)})
+
+    facts = norm_facts
+
     if facts:
         lines.append("\nFacts:")
-        for fact in facts[: cfg.max_semantic]:
-            subject = get_attr_or_key(fact, "subject", "unknown")
-            predicate = get_attr_or_key(fact, "predicate", "related_to")
-            obj = get_attr_or_key(fact, "object")
-            fact_text = (get_attr_or_key(fact, "fact_text") or "").strip()
+
+        max_facts = int(getattr(cfg, "max_facts", 0) or 0)
+        facts_to_render = facts[:max_facts] if max_facts > 0 else facts
+
+        for f in facts_to_render:
+            subj = get_attr_or_key(f, "subject", "")
+            pred = get_attr_or_key(f, "predicate", "")
+            obj = get_attr_or_key(f, "object", "")
+            conf = get_attr_or_key(f, "confidence", None)
+            src_ids = get_attr_or_key(f, "source_ids", None)
+
+            # Normalize object text (may be dict in some store backends)
             if isinstance(obj, dict):
-                title = obj.get("title") or obj.get("text") or str(obj)
-                raw_text = (obj.get("text") or "").strip()
-                snippet = _extract_relevant_excerpt(raw_text, query_text, max_chars=320)
-                lines.append(f"- {subject} {predicate} {title}")
-                if snippet:
-                    lines.append(f"  excerpt: {snippet}")
+                obj_text = " ".join(
+                    str(v) for v in (obj.get("title"), obj.get("text"), obj.get("path")) if v
+                )
             else:
-                if fact_text:
-                    lines.append(f"- {fact_text}")
-                else:
-                    lines.append(f"- {subject} {predicate} {obj}")
+                obj_text = str(obj or "")
+            obj_text = " ".join(obj_text.split())
+
+            # Prefer the first source chunk id as evidence tag.
+            src = ""
+            if isinstance(src_ids, list) and src_ids:
+                src = str(src_ids[0] or "")
+            elif isinstance(src_ids, str) and src_ids:
+                src = src_ids
+
+            # Confidence rendering (compact)
+            conf_s = ""
+            try:
+                if conf is not None:
+                    conf_s = f" conf={float(conf):.2f}"
+            except Exception:
+                conf_s = ""
+
+            # Final deterministic bullet line.
+            # Format: - [src:<chunk_id>] <subject> <predicate> <object> conf=0.xx
+            parts: List[str] = []
+            if src:
+                parts.append(f"[src:{src}]")
+            if subj:
+                parts.append(str(subj))
+            if pred:
+                parts.append(str(pred))
+            if obj_text:
+                parts.append(obj_text)
+
+            line = " ".join(parts).strip()
+            if not line:
+                continue
+            lines.append(f"- {line}{conf_s}")
 
     return lines, facts
 
