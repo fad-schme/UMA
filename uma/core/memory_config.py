@@ -261,10 +261,6 @@ class UMAConfig(dict):
             for key in ("max_working_messages", "max_episodic", "max_semantic", "max_procedural", "max_graph"):
                 if key in context_cfg and (not isinstance(context_cfg[key], int) or context_cfg[key] < 0):
                     raise ValueError(f"'retrieval.context.{key}' must be a non-negative integer")
-            if "allowed_topics" in context_cfg:
-                allowed = context_cfg["allowed_topics"]
-                if not isinstance(allowed, list) or not all(isinstance(x, str) for x in allowed):
-                    raise ValueError("'retrieval.context.allowed_topics' must be a list of strings")
 
         # -----------------------
         # RETRIEVAL.RLM (optional)

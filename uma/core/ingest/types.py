@@ -36,16 +36,6 @@ class DocumentChunk:
 
 
 @dataclass(frozen=True)
-class ExtractedFact:
-    subject: str
-    predicate: str
-    object: str
-    confidence: float
-    salience: float
-    source_chunk_id: str
-
-
-@dataclass(frozen=True)
 class IngestReport:
     doc_id: str
     chunks_created: int

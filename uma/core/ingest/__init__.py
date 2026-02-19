@@ -2,7 +2,6 @@ from .types import (
     ParsedDocument,
     NormalizedSection,
     DocumentChunk,
-    ExtractedFact,
     IngestConfig,
     IngestReport,
 )
@@ -12,7 +11,6 @@ __all__ = [
     "ParsedDocument",
     "NormalizedSection",
     "DocumentChunk",
-    "ExtractedFact",
     "IngestConfig",
     "IngestReport",
     "ingest_document",

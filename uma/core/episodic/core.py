@@ -33,7 +33,7 @@ from .mapper import EpisodeMapper
 from .policies import EpisodicRetentionPolicy
 from ...types import Episode
 from ..utils.dedupe import dedupe_by_id
-from ..utils.identity import ensure_user_subject
+from ..utils.identity import normalize_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -268,11 +268,11 @@ class EpisodicCore:
         """
         if self.store is None:
             return []
-        try:
-            ensure_user_subject(user_id)
-        except Exception:
-            logger.exception("EpisodicCore.search: invalid subject=%r", user_id)
-            return []
+        # try:
+        #     normalize_user_id(user_id)
+        # except Exception:
+        #     logger.exception("EpisodicCore.search: invalid subject=%r", user_id)
+        #     return []
         if not owner_type or not owner_id:
             logger.error("EpisodicCore.search requires owner_type and owner_id")
             return []
@@ -323,11 +323,11 @@ class EpisodicCore:
                 "EpisodicCore.list_cluster_summaries: store does not support clustering"
             )
             return []
-        try:
-            ensure_user_subject(user_id)
-        except Exception:
-            logger.exception("EpisodicCore.list_cluster_summaries: invalid subject=%r", user_id)
-            return []
+        # try:
+        #     normalize_user_id(user_id)
+        # except Exception:
+        #     logger.exception("EpisodicCore.list_cluster_summaries: invalid subject=%r", user_id)
+        #     return []
         if not owner_type or not owner_id:
             logger.error("EpisodicCore.list_cluster_summaries requires owner_type and owner_id")
             return []

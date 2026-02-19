@@ -22,7 +22,7 @@ import logging
 from uma.core.utils.dedupe import dedupe_by_id
 from uma.core.utils.accessors import get_attr_or_key
 from uma.core.utils.serialization import chunk_to_dict
-from uma.core.utils.identity import ensure_user_subject
+from uma.core.utils.identity import normalize_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -416,7 +416,7 @@ async def get_rendered_context(
         return ContextPackBuilder.render_snippet(pack, ctx_cfg)
 
     pack = await memory._rlm_controller.retrieve_context(
-        user_id=ensure_user_subject(user_id),
+        user_id=normalize_user_id(user_id),
         query_text=query_text,
     )
     ctx_cfg = getattr(getattr(memory, "retrieval_cfg", None), "context", None)

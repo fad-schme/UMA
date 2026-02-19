@@ -23,7 +23,7 @@ import json
 import logging
 from typing import Any, List
 
-from ..utils.identity import ensure_user_subject
+from ..utils.identity import normalize_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ class GraphUpdater:
 
             owner_type = str(getattr(episode, "owner_type", "user") or "user")
             owner_id_raw = str(getattr(episode, "owner_id", "") or "")
-            owner_id = ensure_user_subject(owner_id_raw) if owner_type == "user" else owner_id_raw
+            owner_id = normalize_user_id(owner_id_raw) if owner_type == "user" else owner_id_raw
 
             self.graph_core.adapter.run_query(
                 """
@@ -137,7 +137,7 @@ class GraphUpdater:
                 return
 
             # Canonicalize owner_id only for user-owned facts.
-            owner_id = ensure_user_subject(owner_id_raw) if owner_type == "user" else owner_id_raw
+            owner_id = normalize_user_id(owner_id_raw) if owner_type == "user" else owner_id_raw
 
             # IMPORTANT: do NOT normalize KB fact.subject into user:<id>.
             subj = str(getattr(fact, "subject", "") or "").strip()
@@ -234,7 +234,7 @@ class GraphUpdater:
         try:
             owner_type = str(getattr(episode, "owner_type", "user") or "user")
             owner_id_raw = str(getattr(episode, "owner_id", "") or "")
-            owner_id = ensure_user_subject(owner_id_raw) if owner_type == "user" else owner_id_raw
+            owner_id = normalize_user_id(owner_id_raw) if owner_type == "user" else owner_id_raw
         except Exception:
             logger.exception("GraphUpdater.link_episode_to_facts: invalid episode ownership")
             return
@@ -298,7 +298,7 @@ class GraphUpdater:
         try:
             owner_type = str(getattr(ep_prev, "owner_type", "user") or "user")
             owner_id_raw = str(getattr(ep_prev, "owner_id", "") or "")
-            owner_id = ensure_user_subject(owner_id_raw) if owner_type == "user" else owner_id_raw
+            owner_id = normalize_user_id(owner_id_raw) if owner_type == "user" else owner_id_raw
 
             self.graph_core.adapter.run_query(
                 """

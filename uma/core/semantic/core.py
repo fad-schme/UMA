@@ -4,28 +4,22 @@ semantic/core.py
 
 SemanticCore — The unified interface for UMA semantic memory.
 
-Exposes:
-    - extract(subject_or_user_id, text)
-    - ingest(subject_or_user_id, text)
-
-Subject convention (v1)
+Ownership model (vNext)
 -----------------------
-UMA-RLM standardizes semantic subjects as:
-    "user:<id>"
+Retrieval MUST be ownership-scoped ONLY via (owner_type, owner_id).
 
-Callers MAY pass either:
-- raw user_id: "123"
-- canonical subject: "user:123"
+- owner_type: "user" | "agent"
+- owner_id: scope identifier (for user scope: canonical "user:<id>" string)
 
-SemanticCore will normalize automatically.
+Fact.subject is treated as OPTIONAL metadata and MUST NOT gate retrieval.
+
+Ingestion/extract APIs still accept a `subject`/user_id string for backward compatibility,
+but persisted facts MUST have explicit ownership (owner_type/owner_id).
 
 Coding Agent Instructions
 -------------------------
 - Keep this interface simple and stable.
-- This is the ONLY class MemoryPipeline should call for semantic ingestion.
-Note for maintainers:
-- Semantic retrieval should go through `search`.
-- Lexical search is internal-only via `_search_text`.
+- Retrieval must NOT require or accept "subject" gating.
 """
 
 from __future__ import annotations
@@ -34,7 +28,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from ...types import Fact
-from ..utils.identity import ensure_user_subject
+from ..utils.identity import normalize_user_id
 from ..utils.dedupe import dedupe_by_id
 from ..utils.user_query_helper import extract_keywords_and_phrases, build_fact_embedding_text
 from .ingestor import SemanticIngestor
@@ -47,13 +41,12 @@ class SemanticCore:
     High-level interface for UMA semantic memory.
 
     Wraps:
-        - FactExtractor
-        - SalienceScorer
         - SemanticIngestor
-        - SemanticSQLStore
+        - semantic_store (SQL + vector)
 
-    This class enforces subject normalization but delegates all business logic
-    to SemanticIngestor.
+    IMPORTANT:
+    - Retrieval is ownership-only.
+    - No subject-driven retrieval is allowed.
     """
 
     def __init__(
@@ -72,18 +65,35 @@ class SemanticCore:
         logger.debug("SemanticCore initialized.")
 
     # ------------------------------------------------------------------
-    # PUBLIC API
+    # PUBLIC API (WRITE / INGEST)
     # ------------------------------------------------------------------
 
     async def upsert_fact(self, fact: Fact, embedding: List[float]) -> None:
+        """
+        Persist a fact + embedding.
+
+        Ownership consistency:
+        - owner_type and owner_id MUST be present.
+        - We do not infer owner_id from fact.subject.
+        """
         store = getattr(self.ingestor, "semantic_store", None)
         if store is None or not hasattr(store, "upsert_fact"):
             logger.error("SemanticCore.upsert_fact: semantic_store missing")
             raise RuntimeError("SemanticCore.upsert_fact: semantic_store missing")
+
+        owner_type = getattr(fact, "owner_type", None)
+        owner_id = getattr(fact, "owner_id", None)
+
+        if not owner_type or not owner_id:
+            logger.error(
+                "SemanticCore.upsert_fact: missing ownership on fact id=%r owner_type=%r owner_id=%r",
+                getattr(fact, "id", None),
+                owner_type,
+                owner_id,
+            )
+            raise ValueError("SemanticCore.upsert_fact: fact must include owner_type and owner_id")
+
         try:
-            if not getattr(fact, "owner_id", None):
-                fact.owner_type = getattr(fact, "owner_type", None) or "user"
-                fact.owner_id = getattr(fact, "subject", "") or ""
             await store.upsert_fact(fact, embedding)
         except Exception:
             logger.exception("SemanticCore.upsert_fact failed")
@@ -95,87 +105,48 @@ class SemanticCore:
             raise RuntimeError("SemanticCore.vector_index: semantic_store missing")
         return getattr(store, "vector_index", None)
 
-    async def list_facts_for_subject(
+    async def extract(
         self,
-        subject: str,
+        subject_or_user_id: str,
+        text: str,
         *,
-        owner_type: str,
-        owner_id: str,
-        limit: Optional[int] = None,
+        extra_meta: dict | None = None,
     ) -> List[Fact]:
-        store = getattr(self.ingestor, "semantic_store", None)
-        if store is None or not hasattr(store, "list_facts_for_subject"):
-            logger.error("SemanticCore.list_facts_for_subject: store missing")
-            raise RuntimeError("SemanticCore.list_facts_for_subject: store missing")
-        if not owner_type or not owner_id:
-            logger.error("SemanticCore.list_facts_for_subject requires owner_type and owner_id")
-            raise ValueError("SemanticCore.list_facts_for_subject requires owner_type and owner_id")
-        try:
-            subj = ensure_user_subject(subject)
-        except Exception:
-            logger.exception("SemanticCore.list_facts_for_subject: invalid subject=%r", subject)
-            raise
-        try:
-            return await store.list_facts_for_subject(
-                subj,
-                limit=limit,
-                owner_type=owner_type,
-                owner_id=owner_id,
-            )
-        except Exception:
-            logger.exception("SemanticCore.list_facts_for_subject failed")
-            raise
-
-    async def extract(self, subject: str, text: str, *, extra_meta: dict | None = None) -> List[Fact]:
         """
         Extract semantic facts (not persisted).
-
-        Parameters
-        ----------
-        subject : str
-            Raw user_id or canonical subject ("user:<id>").
-        text : str
-            Text to extract facts from (typically assistant reply).
-
-        Returns
-        -------
-        List[Fact]
-            Extracted facts (not persisted).
+        Kept for back-compat: accepts raw user_id or canonical "user:<id>".
         """
         try:
-            subj = ensure_user_subject(subject)
+            subj = normalize_user_id(subject_or_user_id)
         except Exception:
-            logger.exception("SemanticCore.extract: invalid subject=%r", subject)
+            logger.exception("SemanticCore.extract: invalid subject_or_user_id=%r", subject_or_user_id)
             raise
 
         return await self.ingestor.extract(subj, text, extra_meta=extra_meta)
 
-    async def ingest(self, subject: str, text: str, *, extra_meta: dict | None = None) -> List[Fact]:
+    async def ingest(
+        self,
+        subject_or_user_id: str,
+        text: str,
+        *,
+        extra_meta: dict | None = None,
+    ) -> List[Fact]:
         """
         Extract + ingest facts into the semantic store.
 
-        Parameters
-        ----------
-        subject : str
-            Raw user_id or canonical subject ("user:<id>").
-        text : str
-            Text to ingest facts from.
-
-        Returns
-        -------
-        List[Fact]
-            Persisted facts.
+        Ownership consistency:
+        - Facts extracted from user-scoped turns MUST be persisted as:
+          owner_type="user", owner_id="user:<id>"
         """
         try:
-            subj = ensure_user_subject(subject)
+            subj = normalize_user_id(subject_or_user_id)
         except Exception:
-            logger.exception("SemanticCore.ingest: invalid subject=%r", subject)
+            logger.exception("SemanticCore.ingest: invalid subject_or_user_id=%r", subject_or_user_id)
             raise
 
         facts = await self.ingestor.ingest(subj, text, extra_meta=extra_meta)
 
-        # Enforce ownership scoping for persisted facts.
-        # Facts extracted from user-scoped turns should be user-owned under the canonical subject.
+        # Explicitly set ownership (never infer from "subject" fields)
         for f in facts or []:
             try:
                 f.owner_type = "user"
@@ -184,18 +155,37 @@ class SemanticCore:
                 logger.exception("SemanticCore.ingest: failed to set owner on fact id=%s", getattr(f, "id", None))
                 raise
 
-        # EXPLICIT DEDUP (DAT v1 requirement)
-        facts = self._dedup_facts(facts)
-
-        return facts
+        return self._dedup_facts(facts)
 
     # ------------------------------------------------------------------
-    # RETRIEVAL API
+    # RETRIEVAL API (OWNERSHIP-ONLY)
     # ------------------------------------------------------------------
+
+    async def list_facts_for_owner(
+        self,
+        *,
+        owner_type: str,
+        owner_id: str,
+        limit: Optional[int] = None,
+    ) -> List[Fact]:
+        """
+        List facts for an owner scope (ownership-only).
+        """
+        store = getattr(self.ingestor, "semantic_store", None)
+        if store is None or not hasattr(store, "list_facts_for_owner"):
+            logger.error("SemanticCore.list_facts_for_owner: store missing or unsupported")
+            raise RuntimeError("SemanticCore.list_facts_for_owner: store missing or unsupported")
+        if not owner_type or not owner_id:
+            logger.error("SemanticCore.list_facts_for_owner requires owner_type and owner_id")
+            raise ValueError("SemanticCore.list_facts_for_owner requires owner_type and owner_id")
+        try:
+            return await store.list_facts_for_owner(owner_type=owner_type, owner_id=owner_id, limit=limit)
+        except Exception:
+            logger.exception("SemanticCore.list_facts_for_owner failed")
+            raise
 
     async def search(
         self,
-        subject: Optional[str],
         query_embedding: List[float],
         *,
         owner_type: str,
@@ -204,27 +194,20 @@ class SemanticCore:
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         query_text: Optional[str] = None,
-        allowed_topics: Optional[List[str]] = None,
     ) -> List[Fact]:
         """
-        Unified semantic retrieval entry point.
-        Performs vector search, optional topic/predicate filtering, and lexical fallback.
+        Unified semantic retrieval entry point (ownership-only).
 
-        IMPORTANT (KB lane):
-        - When `subject` is None (common for agent-owned KB facts), this method MUST NOT
-          hard-filter results by query_text keywords. Otherwise we can drop to 0 results
-          even when vector search returned good candidates (the “Qdrant IDs → 0 facts” bug).
+        - Vector search is primary.
+        - Optional topic/predicate filtering is applied after retrieval.
+        - Lexical fallback is allowed but must also be ownership-only.
         """
         store = getattr(self.ingestor, "semantic_store", None)
         if store is None:
             return []
-        subj: Optional[str] = None
-        if subject:
-            try:
-                subj = ensure_user_subject(subject)
-            except Exception:
-                logger.exception("SemanticCore.search: invalid subject=%r", subject)
-                raise
+        if not owner_type or not owner_id:
+            logger.error("SemanticCore.search requires owner_type and owner_id")
+            raise ValueError("SemanticCore.search requires owner_type and owner_id")
 
         requested_topic = filters.get("topic") if isinstance(filters, dict) else None
         requested_predicate = filters.get("predicate") if isinstance(filters, dict) else None
@@ -233,47 +216,29 @@ class SemanticCore:
 
         facts: List[Any] = []
         try:
+            # Preferred: ownership-only store.search
             try:
-                logger.debug(
-                    "SemanticCore.search: path=vector owner=%s:%s subject=%s",
-                    owner_type,
-                    owner_id,
-                    subj,
-                )
-                search_kwargs = dict(
+                logger.debug("SemanticCore.search: path=vector owner=%s:%s", owner_type, owner_id)
+                found = await store.search(
                     query_embedding=query_embedding,
                     owner_type=owner_type,
                     owner_id=owner_id,
                     k=int(k),
                     offset=int(offset),
                 )
-                if subj is not None:
-                    search_kwargs["subject"] = subj
-                found = await store.search(**search_kwargs)
             except TypeError:
-                logger.debug(
-                    "SemanticCore.search: path=vector_legacy owner=%s:%s subject=%s",
-                    owner_type,
-                    owner_id,
-                    subj,
-                )
-                search_kwargs = dict(
+                # Legacy store.search signature (no offset)
+                logger.debug("SemanticCore.search: path=vector_legacy owner=%s:%s", owner_type, owner_id)
+                found = await store.search(
                     query_embedding=query_embedding,
                     owner_type=owner_type,
                     owner_id=owner_id,
                     k=int(k),
                 )
-                if subj is not None:
-                    search_kwargs["subject"] = subj
-                found = await store.search(**search_kwargs)
             if found:
                 facts.extend(found)
         except Exception:
-            logger.exception(
-                "SemanticCore.search failed owner=%s:%s",
-                owner_type,
-                owner_id,
-            )
+            logger.exception("SemanticCore.search failed owner=%s:%s", owner_type, owner_id)
             raise
 
         # Optional topic filtering (soft)
@@ -282,27 +247,15 @@ class SemanticCore:
             if filtered:
                 facts = filtered
 
-        if allowed_topics:
-            filtered = [
-                f for f in facts
-                if any(t in allowed_topics for t in _fact_topics(f))
-            ]
-            if filtered:
-                facts = filtered
-
         if requested_predicate:
-            facts = [
-                f for f in facts
-                if getattr(f, "predicate", "").upper() == requested_predicate
-            ]
+            facts = [f for f in facts if getattr(f, "predicate", "").upper() == requested_predicate]
 
-        # IMPORTANT: only apply lexical hard-filtering when we have a user subject.
-        # For KB facts (subject=None), keep vector results (no hard gating).
-        if query_text and subj is not None:
+        # Soft lexical re-rank / filter (ownership-only). This should not hard-gate to zero if vector found good facts.
+        if query_text and isinstance(query_text, str) and query_text.strip():
             extracted = extract_keywords_and_phrases(query_text)
             terms = (extracted.get("keywords") or []) + (extracted.get("keyphrases") or [])
             terms = [t for t in terms if isinstance(t, str) and t]
-            if terms:
+            if terms and facts:
                 lowered_terms = [t.lower() for t in terms]
                 original_count = len(facts)
                 filtered = []
@@ -310,49 +263,41 @@ class SemanticCore:
                     text = build_fact_embedding_text(fact).lower()
                     if any(t in text for t in lowered_terms):
                         filtered.append(fact)
+                # Keep if we still have signal; otherwise preserve vector results.
                 if filtered:
                     facts = filtered
-                    logger.debug(
-                        "SemanticCore.search: lexical filter kept %d/%d",
-                        len(facts),
-                        original_count,
+                    logger.debug("SemanticCore.search: lexical filter kept %d/%d", len(facts), original_count)
+
+        # Lexical fallback ONLY if vector yielded nothing.
+        if (not facts) and query_text and hasattr(store, "search_text"):
+            try:
+                logger.debug("SemanticCore.search: lexical fallback owner=%s:%s", owner_type, owner_id)
+                # Ownership-only lexical search (no subject param)
+                try:
+                    found = await store.search_text(
+                        query_text,
+                        owner_type=owner_type,
+                        owner_id=owner_id,
+                        limit=int(k),
                     )
-                else:
-                    fallback: List[Any] = []
-                    try:
-                        logger.warning(
-                            "SemanticCore.search: lexical fallback used (no vector matches after filter) owner=%s:%s",
-                            owner_type,
-                            owner_id,
-                        )
-                        found = await self._search_text(
-                            subj,
-                            query_text,
-                            limit=int(k),
-                            owner_type=owner_type,
-                            owner_id=owner_id,
-                        )
-                        if found:
-                            fallback.extend(found)
-                    except Exception:
-                        logger.exception(
-                            "SemanticCore.search: lexical fallback owner=%s:%s failed",
-                            owner_type,
-                            owner_id,
-                        )
-                        raise
-                    if fallback:
-                        facts = fallback
-                        logger.debug(
-                            "SemanticCore.search: lexical fallback returned %d",
-                            len(facts),
-                        )
+                except TypeError:
+                    # Some stores may name the limit parameter differently.
+                    found = await store.search_text(
+                        query_text,
+                        owner_type=owner_type,
+                        owner_id=owner_id,
+                        k=int(k),
+                    )
+                if found:
+                    facts = list(found)
+            except Exception:
+                logger.exception("SemanticCore.search: lexical fallback failed owner=%s:%s", owner_type, owner_id)
+                raise
 
         return dedupe_by_id(facts)
 
     async def fetch_more_facts(
         self,
-        subject: Optional[str],
         predicate: str,
         *,
         owner_type: str,
@@ -361,105 +306,55 @@ class SemanticCore:
         offset: int = 0,
     ) -> List[Fact]:
         """
-        Fetch additional facts for a subject/predicate using deterministic paging.
+        Fetch additional facts for an owner scope, filtered by predicate using deterministic paging.
+
+        Ownership-only:
+        - No subject parameter allowed.
+        - Store must provide stable ordering for list_facts_for_owner (e.g., updated_at desc).
         """
         store = getattr(self.ingestor, "semantic_store", None)
         if store is None:
             return []
-        subj: Optional[str] = None
-        if subject:
-            try:
-                subj = ensure_user_subject(subject)
-            except Exception:
-                logger.exception("SemanticCore.fetch_more_facts: invalid subject=%r", subject)
-                raise
         if not owner_type or not owner_id:
             logger.error("SemanticCore.fetch_more_facts requires owner_type and owner_id")
             raise ValueError("SemanticCore.fetch_more_facts requires owner_type and owner_id")
 
         predicate_u = (predicate or "").upper()
         try:
-            # Deterministic paging MUST be SQL-backed with stable ORDER BY before applying offset.
-            if hasattr(store, "list_facts_for_subject") and subj is not None:
-                facts = await store.list_facts_for_subject(
-                    subj,
-                    limit=None,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                )
-            elif hasattr(store, "list_facts_for_owner"):
-                facts = await store.list_facts_for_owner(
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                )
+            if hasattr(store, "list_facts_for_owner"):
+                facts = await store.list_facts_for_owner(owner_type=owner_type, owner_id=owner_id, limit=None)
             else:
                 facts = []
         except Exception:
             logger.exception(
-                "SemanticCore.fetch_more_facts: list_facts_for_subject failed owner=%s:%s",
+                "SemanticCore.fetch_more_facts: list_facts_for_owner failed owner=%s:%s",
                 owner_type,
                 owner_id,
             )
             raise
 
-        filtered = []
+        filtered: List[Any] = []
         for f in facts or []:
             pred_val = getattr(f, "predicate", None) if hasattr(f, "predicate") else (
                 f.get("predicate") if isinstance(f, dict) else None
             )
             if pred_val and str(pred_val).upper() == predicate_u:
                 filtered.append(f)
-        # Stable ordering comes from the store (updated_at desc). Apply offset/limit after filtering.
+
         offset_i = max(0, int(offset))
         k_i = max(0, int(k))
         windowed = filtered[offset_i : offset_i + k_i] if k_i else filtered[offset_i:]
         return dedupe_by_id(windowed)
 
-    async def _search_text(
-        self,
-        subject: str,
-        query_text: str,
-        *,
-        limit: int = 5,
-        owner_type: Optional[str] = None,
-        owner_id: Optional[str] = None,
-    ) -> List[Fact]:
-        """
-        Internal lexical-only fact search (store-level LIKE query).
-        Used by `search` for fallback only.
-        """
-        store = getattr(self.ingestor, "semantic_store", None)
-        if store is None or not hasattr(store, "search_text"):
-            return []
-        try:
-            subj = ensure_user_subject(subject)
-        except Exception:
-            logger.exception("SemanticCore.search_text: invalid subject=%r", subject)
-            raise
-        if not owner_type or not owner_id:
-            logger.error("SemanticCore.search_text requires owner_type and owner_id")
-            raise ValueError("SemanticCore.search_text requires owner_type and owner_id")
-        try:
-            return await store.search_text(
-                query_text,
-                subject=subj,
-                limit=int(limit),
-                owner_type=owner_type,
-                owner_id=owner_id,
-            )
-        except Exception:
-            logger.exception("SemanticCore.search_text failed")
-            raise
-
     async def fetch_by_ids(
         self,
         ids: List[str],
         *,
-        owner_type: Optional[str] = None,
-        owner_id: Optional[str] = None,
+        owner_type: str,
+        owner_id: str,
     ) -> List[Fact]:
         """
-        Fetch facts by IDs (authoritative payload).
+        Fetch facts by IDs (authoritative payload) with ownership enforcement.
         """
         store = getattr(self.ingestor, "semantic_store", None)
         if store is None or not hasattr(store, "fetch_by_ids"):

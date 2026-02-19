@@ -16,7 +16,7 @@ ALL User nodes are keyed using the canonical form:
 
     User.id = "user:<id>"
 
-This is enforced by the graph updater via ensure_user_subject().
+This is enforced by the graph updater via normalize_user_id().
 
 Modules
 -------

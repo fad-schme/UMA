@@ -15,7 +15,7 @@ from pathlib import Path
 import yaml
 
 from uma.core.uma_memory import UMAMemory
-from uma.core.utils.identity import ensure_user_subject
+from uma.core.utils.identity import normalize_user_id
 from uma.types_episode import Episode
 from uma.types_fact import Fact
 from uma.types_skill import Skill
@@ -95,7 +95,7 @@ async def seed_memory(memory: UMAMemory, user_id: str) -> None:
 
     fact = Fact(
         id="fact-1",
-        subject=ensure_user_subject(user_id),
+        subject=normalize_user_id(user_id),
         predicate="likes",
         object="coffee",
         created_at=datetime.utcnow(),

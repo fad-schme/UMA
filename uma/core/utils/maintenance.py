@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from ...types import Fact
 from ...types import Skill
-from .identity import ensure_user_subject
+from .identity import normalize_user_id
 from .user_query_helper import build_fact_embedding_text
 
 logger = logging.getLogger(__name__)
@@ -144,7 +144,7 @@ async def rebuild_vector_indexes(
             report["semantic"]["status"] = "skipped"
         else:
             try:
-                subject = ensure_user_subject(owner_id)
+                subject = normalize_user_id(owner_id)
                 facts: List[Fact] = await memory.semantic_core.list_facts_for_subject(
                     subject,
                     owner_type=owner_type,

@@ -19,7 +19,7 @@ from .consolidation_trigger import maybe_trigger_consolidation
 from ...types import Fact
 from ...types import Chunk
 from ...stores.document_sql import DocumentRecord
-from ..utils.identity import ensure_user_subject
+from ..utils.identity import normalize_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ def _validate_owner(owner_type: str, owner_id: str) -> tuple[str, str]:
     if not owner_id or not isinstance(owner_id, str):
         raise ValueError("owner_id must be a non-empty string")
     if owner_type == "user":
-        return "user", ensure_user_subject(owner_id)
+        return "user", normalize_user_id(owner_id)
     return owner_type, owner_id
 
 
@@ -393,56 +393,46 @@ async def ingest_document(
     # 5) Semantic extraction from chunks (optionally limit chunk count)
     extract_chunks = final_chunks
     if config.extract_max_chunks is not None:
-        extract_chunks = semantic_extractor.select_chunks_for_fact_extraction(
+        extract_chunks = semantic_extractor.FactExtractor.select_chunks_for_fact_extraction(
             final_chunks,
             max_chunks=int(config.extract_max_chunks),
         )
+
     # Core behavior: always use batched semantic extraction for performance and predictable cost.
     # Keep payload bounded to preserve JSON/schema compliance.
-    extracted = await semantic_extractor.extract_facts_batch(
+    fact_extractor = semantic_extractor.FactExtractor(llm=llm)
+    extracted_fact_records: List[Fact] = await fact_extractor.extract_chunk_facts_batch(
         extract_chunks,
-        llm=llm,
-        min_fact_words=config.doc_min_fact_words,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        source_path=parsed.source_path,
+        source_hash=parsed.source_hash,
+        doc_id=parsed.doc_id,
+        min_fact_words=int(config.doc_min_fact_words),
         batch_size_chunks=4,
         max_chars=12000,
     )
 
-    # 6) Store extracted facts as semantic facts
-    extracted_fact_records: List[Fact] = []
-    for ef in extracted:
-        # Robustly resolve the source chunk id from the extractor output.
-        src_chunk_id = str(getattr(ef, "source_chunk_id", "") or getattr(ef, "chunk_id", "") or "")
-        if not src_chunk_id:
-            warnings.append("extracted fact missing source_chunk_id; skipping")
-            logger.warning("ingest_document: extracted fact missing source_chunk_id; skipping")
-            continue
-
-        fact = Fact(
-            id=f"fact_{uuid4().hex}",
-            subject=ef.subject,
-            predicate=ef.predicate,
-            object=ef.object,
-            created_at=now,
-            updated_at=now,
-            source_ids=[src_chunk_id],
-            confidence=ef.confidence,
-            salience=ef.salience,
-            owner_type=owner_type,
-            owner_id=owner_id,
-            meta={
-                "source_type": "pdf",
-                "source_chunk_id": src_chunk_id,
-                "doc_id": parsed.doc_id,
-                "source_path": parsed.source_path,
-                "source_hash": parsed.source_hash,
-                "ingest_pipeline_version": _INGEST_PIPELINE_VERSION,
-                "extractor_version": _EXTRACTOR_VERSION,
-                "chunker_version": _CHUNKER_VERSION,
-                "fact_text": ef.object,
-                "fact_type": "summary" if ef.predicate == "SUMMARY" else "claim",
-            },
-        )
-        extracted_fact_records.append(fact)
+    # Ensure all extracted facts carry ingest metadata expected downstream.
+    for f in extracted_fact_records:
+        if f.owner_type != owner_type:
+            f.owner_type = owner_type
+        if f.owner_id != owner_id:
+            f.owner_id = owner_id
+        if f.meta is None:
+            f.meta = {}
+        f.meta.setdefault("source_type", "pdf")
+        # Keep both keys for compatibility with any downstream readers.
+        if f.source_ids:
+            f.meta.setdefault("source_chunk_id", f.source_ids[0])
+        f.meta.setdefault("doc_id", parsed.doc_id)
+        f.meta.setdefault("source_path", parsed.source_path)
+        f.meta.setdefault("source_hash", parsed.source_hash)
+        f.meta.setdefault("ingest_pipeline_version", _INGEST_PIPELINE_VERSION)
+        f.meta.setdefault("extractor_version", _EXTRACTOR_VERSION)
+        f.meta.setdefault("chunker_version", _CHUNKER_VERSION)
+        f.meta.setdefault("fact_text", f.object)
+        f.meta.setdefault("fact_type", "summary" if f.predicate == "SUMMARY" else "claim")
 
     # Embed + upsert extracted facts using core helper
     facts_created = 0

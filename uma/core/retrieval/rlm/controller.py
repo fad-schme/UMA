@@ -14,7 +14,7 @@ from .decisions import ControllerDecision, RetrievalAction
 from . import decisions
 from .coverage import assess_coverage, compute_confidence
 from ..policy import RetrievalPolicy, should_stop
-from ...utils.identity import ensure_user_subject
+from ...utils.identity import normalize_user_id
 from ...utils.accessors import get_attr_or_key
 from ...chunk.core import merge_chunks_with_precedence, partition_chunks_by_route
 from ...semantic.query_pruner import prune_facts_for_query
@@ -108,20 +108,20 @@ class RLMController:
             query_text,
         )
         start = time.time()
-        user_subject = ensure_user_subject(user_id)
+        normalized_user_id = normalize_user_id(user_id)
 
         # --- TRACE CONTEXT ---
-        trace_id = f"rlm:{user_subject}:{int(time.time()*1000)}"
+        trace_id = f"rlm:{user_id}:{int(time.time()*1000)}"
         logger.info(
             "RLM_START trace_id=%s user=%s recall_query=%s",
             trace_id,
-            user_subject,
+            user_id,
             any(k in query_text.lower() for k in ["remember", "recall", "previous", "earlier", "last time"]),
         )
 
         agent_id = getattr(self.env, "_agent_id", None)
         pack = ContextPack(
-            user_id=user_subject,
+            user_id=user_id,
             query_text=query_text,
             owner_type=None,
             owner_id=None,
@@ -132,7 +132,7 @@ class RLMController:
         if hasattr(self.env, "_memory"):
             wm = getattr(getattr(self.env, "_memory", None), "working_memory", None)
             if wm is not None:
-                pack.working_memory = wm.get_context(user_subject)
+                pack.working_memory = wm.get_context(user_id)
         query_embedding = await self.env.get_query_embedding(query_text)
 
         # Lane decision: recall = user-only; KB = agent KB + user-owned KB docs.
@@ -144,10 +144,10 @@ class RLMController:
             raise ValueError("RLMController.retrieve_context: agent_id is required")
 
         if is_recall:
-            scopes = [("user", user_subject)]
+            scopes = [("user", user_id)]
         else:
             # KB lane must include BOTH agent scope and user-owned documents scope.
-            scopes = [("agent", agent_id), ("user", user_subject)]
+            scopes = [("agent", agent_id), ("user", user_id)]
 
         # Keep these fields for telemetry/back-compat; primary execution uses `scopes`.
         pack.owner_type, pack.owner_id = scopes[0]
@@ -394,7 +394,7 @@ class RLMController:
                         action.k,
                     )
                 items = await self._execute_action(
-                    user_subject=user_subject,
+                    user_id=user_id,
                     action=action,
                     query_embedding=query_embedding,
                     query_text=pack.query_text,
@@ -759,7 +759,7 @@ class RLMController:
         except Exception:
             offset = max(0, int(filters.get("offset", 0))) if isinstance(filters, dict) else 0
         try:
-            user_subject = ensure_user_subject(user_id)
+            normalized_user_id = normalize_user_id(user_id)
         except Exception:
             logger.exception("RLMController._search_semantic_core: invalid subject=%r", user_id)
             return []
@@ -769,14 +769,14 @@ class RLMController:
             raw_subject = str(filters.get("subject")).strip()
             if raw_subject.startswith("user:"):
                 try:
-                    normalized = ensure_user_subject(raw_subject)
+                    normalized = normalize_user_id(raw_subject)
                 except Exception:
                     normalized = None
-                if normalized != user_subject:
+                if normalized != user_id:
                     logger.warning(
                         "RLMController._search_semantic_core: rejected cross-user subject=%r user=%s",
                         raw_subject,
-                        user_subject,
+                        user_id,
                     )
                     subject = None
                 else:
@@ -794,11 +794,6 @@ class RLMController:
         retrieval_cfg = getattr(self.env, "_memory", None)
         retrieval_cfg = getattr(retrieval_cfg, "retrieval_cfg", None)
         ctx_cfg = getattr(retrieval_cfg, "context", None) if retrieval_cfg else None
-        allowed_topics = getattr(ctx_cfg, "allowed_topics", None) if ctx_cfg else None
-        if isinstance(allowed_topics, list):
-            allowed_topics = [t for t in allowed_topics if isinstance(t, str) and t.strip()]
-        else:
-            allowed_topics = None
 
         if owner_type == "agent":
             resolved_owner_id = owner_id or getattr(self.env, "_agent_id", None)
@@ -809,7 +804,7 @@ class RLMController:
             if subject is None:
                 logger.debug("RLMController._search_semantic_core: skipping user scope without subject")
                 return []
-            resolved_owner_id = owner_id or user_subject
+            resolved_owner_id = owner_id or user_id
         else:
             logger.warning("RLMController._search_semantic_core: invalid owner_type=%r", owner_type)
             return []
@@ -832,7 +827,6 @@ class RLMController:
             offset=int(offset),
             filters=filters,
             query_text=query_text,
-            allowed_topics=allowed_topics,
         )
 
     async def _search_episodic_core(
@@ -853,7 +847,7 @@ class RLMController:
         if episodic_core is None:
             return []
         try:
-            user_subject = ensure_user_subject(user_id)
+            normalized_user_id = normalize_user_id(user_id)
         except Exception:
             logger.exception("RLMController._search_episodic_core: invalid subject=%r", user_id)
             return []
@@ -873,10 +867,10 @@ class RLMController:
                 logger.warning("RLMController._search_episodic_core: missing agent_id for agent scope")
                 return []
         else:
-            resolved_owner_id = owner_id or user_subject
+            resolved_owner_id = owner_id or user_id
 
         episodes = await episodic_core.search(
-            user_id=user_subject,
+            user_id=user_id,
             query_embedding=list(query_embedding),
             owner_type=owner_type,
             owner_id=resolved_owner_id,
@@ -907,7 +901,7 @@ class RLMController:
         if procedural_core is None:
             return []
         try:
-            user_subject = ensure_user_subject(user_id)
+            normalized_user_id = normalize_user_id(user_id)
         except Exception:
             logger.exception("RLMController._search_procedural_core: invalid subject=%r", user_id)
             return []
@@ -923,10 +917,10 @@ class RLMController:
                 logger.warning("RLMController._search_procedural_core: missing agent_id for agent scope")
                 return []
         else:
-            resolved_owner_id = owner_id or user_subject
+            resolved_owner_id = owner_id or user_id
 
         return await procedural_core.search(
-            user_id=user_subject,
+            user_id=user_id,
             query_embedding=list(query_embedding),
             owner_type=owner_type,
             owner_id=resolved_owner_id,
@@ -956,7 +950,7 @@ class RLMController:
     async def _execute_action(
         self,
         *,
-        user_subject: str,
+        user_id: str,
         action: RetrievalAction,
         query_embedding: List[float],
         query_text: Optional[str] = None,
@@ -973,7 +967,7 @@ class RLMController:
 
         if action.action == "search_semantic":
             results = await self._search_semantic_core(
-                user_id=user_subject,
+                user_id=user_id,
                 query_embedding=query_embedding,
                 k=k,
                 filters=action.filters,
@@ -986,7 +980,7 @@ class RLMController:
 
         if action.action == "search_episodic":
             results = await self._search_episodic_core(
-                user_id=user_subject,
+                user_id=user_id,
                 query_embedding=query_embedding,
                 k=k,
                 time_range=action.time_range,
@@ -998,7 +992,7 @@ class RLMController:
 
         if action.action == "search_procedural":
             results = await self._search_procedural_core(
-                user_id=user_subject,
+                user_id=user_id,
                 query_embedding=query_embedding,
                 k=k,
                 owner_type=lane_owner_type,
@@ -1009,7 +1003,7 @@ class RLMController:
 
         results = await decisions.execute_action(
             env=self.env,
-            user_subject=user_subject,
+            user_id=user_id,
             action=action,
             query_embedding=list(query_embedding),
             query_text=query_text,

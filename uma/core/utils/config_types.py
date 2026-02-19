@@ -344,7 +344,6 @@ class RetrievalContextConfig:
     include_episodic: bool = True
     include_graph: bool = True
     include_procedural: bool = True
-    allowed_topics: Optional[List[str]] = None
     snippet_max_chars: int = 240
     snippet_refiner_enabled: bool = False
     snippet_refiner_top_k: int = 8
@@ -362,7 +361,6 @@ class RetrievalContextConfig:
             include_episodic=bool(d.get("include_episodic", True)),
             include_graph=bool(d.get("include_graph", True)),
             include_procedural=bool(d.get("include_procedural", True)),
-            allowed_topics=d.get("allowed_topics"),
             snippet_max_chars=int(d.get("snippet_max_chars", 240)),
             snippet_refiner_enabled=bool(d.get("snippet_refiner_enabled", False)),
             snippet_refiner_top_k=int(d.get("snippet_refiner_top_k", 8)),

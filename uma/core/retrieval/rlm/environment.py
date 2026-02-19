@@ -7,7 +7,7 @@ import inspect
 import logging
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from ...utils.identity import ensure_user_subject
+from ...utils.identity import normalize_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -184,13 +184,13 @@ class UMAMemoryEnvironment:
         if len(ids) > 50:
             ids = ids[:50]
         try:
-            user_subject = ensure_user_subject(user_id)
+            normalized_user_id = normalize_user_id(user_id)
             if owner_type == "agent":
                 resolved_owner_id = owner_id or self._agent_id
                 if not resolved_owner_id:
                     return []
             else:
-                resolved_owner_id = owner_id or user_subject
+                resolved_owner_id = owner_id or normalized_user_id
             if not owner_type or not resolved_owner_id:
                 logger.error("Environment.fetch_chunks requires owner_type and owner_id")
                 raise ValueError("Environment.fetch_chunks requires owner_type and owner_id")
@@ -241,13 +241,13 @@ class UMAMemoryEnvironment:
         if not ids:
             return []
         try:
-            user_subject = ensure_user_subject(user_id)  # ensures caller isn't passing garbage
+            normalized_user_id = normalize_user_id(user_id)  # ensures caller isn't passing garbage
             if owner_type == "agent":
                 resolved_owner_id = owner_id or self._agent_id
                 if not resolved_owner_id:
                     return []
             elif owner_type == "user":
-                resolved_owner_id = owner_id or user_subject
+                resolved_owner_id = owner_id or normalized_user_id
             else:
                 logger.warning("Environment.fetch_facts_by_ids: invalid owner_type=%r", owner_type)
                 return []
@@ -277,7 +277,7 @@ class UMAMemoryEnvironment:
             logger.error("Environment.fetch_more_facts: semantic_core is None")
             raise RuntimeError("Environment.fetch_more_facts: semantic_core is None")
         try:
-            user_subject = ensure_user_subject(user_id)
+            normalized_user_id = normalize_user_id(user_id)
             k = self._validate_k("Environment.fetch_more_facts", k)
             offset = self._safe_offset(offset)
 
@@ -286,14 +286,13 @@ class UMAMemoryEnvironment:
                 if not resolved_owner_id:
                     return []
             elif owner_type == "user":
-                resolved_owner_id = owner_id or user_subject
+                resolved_owner_id = owner_id or normalized_user_id
             else:
                 logger.warning("Environment.fetch_more_facts: invalid owner_type=%r", owner_type)
                 return []
 
-            subject: Optional[str] = user_subject if owner_type == "user" else None
+            # Ownership-only: subject must not be used for semantic retrieval.
             return await semantic_core.fetch_more_facts(
-                subject=subject,
                 predicate=predicate,
                 owner_type=owner_type,
                 owner_id=resolved_owner_id,
@@ -332,13 +331,13 @@ class UMAMemoryEnvironment:
         k = self._validate_k("Environment.episodic_cluster_summaries", k)
 
         try:
-            user_subject = ensure_user_subject(user_id)
+            normalized_user_id = normalize_user_id(user_id)
             if owner_type == "agent":
                 resolved_owner_id = owner_id or self._agent_id
                 if not resolved_owner_id:
                     return []
             else:
-                resolved_owner_id = owner_id or user_subject
+                resolved_owner_id = owner_id or normalized_user_id
             clusters = await episodic_core.list_cluster_summaries(
                 user_id=user_id,
                 owner_type=owner_type,
@@ -423,7 +422,7 @@ class UMAMemoryEnvironment:
         depth_i = self._safe_depth(depth)
 
         try:
-            user_subject = ensure_user_subject(user_id)
+            normalized_user_id = normalize_user_id(user_id)
             if not node_id:
                 return []
 
@@ -432,10 +431,10 @@ class UMAMemoryEnvironment:
                 if not resolved_owner_id:
                     return []
             else:
-                resolved_owner_id = owner_id or user_subject
+                resolved_owner_id = owner_id or normalized_user_id
             results = await _maybe_await(
                 graph_core.neighbors(
-                user_id=user_subject,
+                user_id=normalized_user_id,
                 node_id=node_id,
                 predicate_scope=predicate_scope,
                 depth=depth_i,
@@ -491,14 +490,14 @@ class UMAMemoryEnvironment:
             return []
 
         try:
-            user_subject = ensure_user_subject(user_id)
+            normalized_user_id = normalize_user_id(user_id)
             if dir_val and dir_val != "both":
                 logger.debug(
                     "Environment.expand_graph: direction=%s currently treated as both", dir_val
                 )
 
             return await self.graph_neighbors(
-                user_id=user_subject,
+                user_id=normalized_user_id,
                 node_id=subject,
                 predicate_scope=predicate_scope,
                 depth=depth,
@@ -568,9 +567,7 @@ class UMAMemoryEnvironment:
                 logger.error("Environment.execute_action: semantic_core is None")
                 raise RuntimeError("Environment.execute_action: semantic_core is None")
             filters = getattr(action, "filters", None)
-            subject: Optional[str] = user_subject if lane_owner_type == "user" else None
             return await semantic_core.search(
-                subject=subject,
                 query_embedding=[float(x) for x in query_embedding],
                 owner_type=lane_owner_type,
                 owner_id=lane_owner_id,
@@ -578,7 +575,6 @@ class UMAMemoryEnvironment:
                 offset=0,
                 filters=filters,
                 query_text=query_text,
-                allowed_topics=None,
             )
 
         if a == "fetch_more_facts":

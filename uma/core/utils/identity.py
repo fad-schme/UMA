@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 USER_PREFIX = "user:"
 
 
-def ensure_user_subject(user_id_or_subject: str) -> str:
+def normalize_user_id(user_id_or_subject: str) -> str:
     """
     Normalize a user identifier into the canonical UMA subject format.
 
@@ -48,7 +48,7 @@ def ensure_user_subject(user_id_or_subject: str) -> str:
         If the input is empty or not a string.
     """
     if not isinstance(user_id_or_subject, str) or not user_id_or_subject.strip():
-        raise ValueError("ensure_user_subject: input must be a non-empty string.")
+        raise ValueError("normalize_user_id: input must be a non-empty string.")
 
     s = user_id_or_subject.strip()
     if s.startswith(USER_PREFIX):

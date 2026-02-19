@@ -507,9 +507,9 @@ class MemoryPipeline:
             return []
 
         # Canonical subject format in UMA-RLM v1: "user:<id>"
-        from .identity import ensure_user_subject
+        from .identity import normalize_user_id
         try:
-            subject = ensure_user_subject(user_id)
+            subject = normalize_user_id(user_id)
         except Exception:
             logger.exception("SemanticCore.ingest failed; invalid subject user_id=%r", user_id)
             return []

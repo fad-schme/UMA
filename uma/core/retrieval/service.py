@@ -29,7 +29,7 @@ from .policy import RetrievalPolicy
 from ..utils.dedupe import dedupe_by_id
 from ...adapters.observability.context import get_request_id, request_context
 from ...adapters.observability.metrics import increment, timed
-from ..utils.identity import ensure_user_subject
+from ..utils.identity import normalize_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +120,7 @@ class RetrievalService:
         *,
         store: Any,
         kind: str,
-        user_subject: str,
+        user_id: str,
         query_embedding: List[float],
         query_text: Optional[str],
         owner_type: str,
@@ -144,10 +144,9 @@ class RetrievalService:
                 return await store.search(query_embedding, owner_type=owner_type, owner_id=owner_id, k=k)
 
             if kind == "semantic":
-                subject = user_subject if owner_type == "user" else None
                 return await store.search(
                     query_embedding,
-                    subject=subject,
+                    subject=user_id,
                     owner_type=owner_type,
                     owner_id=owner_id,
                     k=k,
@@ -195,7 +194,7 @@ class RetrievalService:
     async def retrieve_raw_multi_scope(
         self,
         *,
-        user_subject: str,
+        user_id: str,
         query_embedding: List[float],
         query_text: Optional[str],
         scopes: List[tuple[str, str]],
@@ -211,7 +210,7 @@ class RetrievalService:
 
         for (owner_type, owner_id) in scopes:
             raw = await self._retrieve_raw(
-                user_subject=user_subject,
+                user_id=user_id,
                 query_embedding=query_embedding,
                 query_text=query_text,
                 owner_type=owner_type,
@@ -254,7 +253,7 @@ class RetrievalService:
     async def _retrieve_raw(
         self,
         *,
-        user_subject: str,
+        user_id: str,
         query_embedding: List[float],
         query_text: Optional[str],
         owner_type: str,
@@ -269,7 +268,7 @@ class RetrievalService:
         if episodic_core is not None:
             tasks["episodes"] = asyncio.create_task(
                 episodic_core.search(
-                    user_id=user_subject,
+                    user_id=user_id,
                     query_embedding=query_embedding,
                     owner_type=owner_type,
                     owner_id=owner_id,
@@ -282,7 +281,7 @@ class RetrievalService:
                 self._store_search(
                     store=store,
                     kind="episodic",
-                    user_subject=user_subject,
+                    user_id=user_id,
                     query_embedding=query_embedding,
                     query_text=query_text,
                     owner_type=owner_type,
@@ -293,7 +292,6 @@ class RetrievalService:
 
         semantic_core = getattr(self.memory, "semantic_core", None)
         if semantic_core is not None:
-            subject = user_subject if owner_type == "user" else None
             if not (query_text and str(query_text).strip()):
                 logger.warning(
                     "RetrievalService._raw_retrieval: semantic_core.search running embedding-only "
@@ -301,7 +299,7 @@ class RetrievalService:
                 )
             tasks["facts"] = asyncio.create_task(
                 semantic_core.search(
-                    subject=subject,
+                    subject=user_id,
                     query_embedding=query_embedding,
                     owner_type=owner_type,
                     owner_id=owner_id,
@@ -309,7 +307,6 @@ class RetrievalService:
                     offset=0,
                     filters=None,
                     query_text=query_text,
-                    allowed_topics=None,
                 )
             )
         else:
@@ -318,7 +315,7 @@ class RetrievalService:
                 self._store_search(
                     store=store,
                     kind="semantic",
-                    user_subject=user_subject,
+                    user_id=user_id,
                     query_embedding=query_embedding,
                     query_text=query_text,
                     owner_type=owner_type,
@@ -365,7 +362,7 @@ class RetrievalService:
                 self._store_search(
                     store=store,
                     kind="chunks",
-                    user_subject=user_subject,
+                    user_id=user_id,
                     query_embedding=query_embedding,
                     query_text=query_text,
                     owner_type=owner_type,
@@ -392,7 +389,7 @@ class RetrievalService:
                 self._store_search(
                     store=store,
                     kind="procedural",
-                    user_subject=user_subject,
+                    user_id=user_id,
                     query_embedding=query_embedding,
                     query_text=query_text,
                     owner_type=owner_type,
@@ -454,7 +451,7 @@ class RetrievalService:
                         logger.error("RetrievalService.retrieve: user_id must be a non-empty string.")
                         raise ValueError("RetrievalService.retrieve: user_id must be a non-empty string.")
 
-                    user_subject = ensure_user_subject(user_id)
+                    normalized_user_id = normalize_user_id(user_id)
 
                     if query_text_or_embedding is None:
                         logger.error("RetrievalService.retrieve: query_text_or_embedding is required.")
@@ -465,7 +462,7 @@ class RetrievalService:
                         raise ValueError("RetrievalService.retrieve: memory_type must not be empty.")
 
                     if memory_type_norm == "working_memory":
-                        return self._get_working_memory(user_subject)
+                        return self._get_working_memory(normalized_user_id)
 
                     raw: Dict[str, List[Any]]
                     trace: List[Dict[str, Any]] = []
@@ -477,7 +474,7 @@ class RetrievalService:
                     )
                     if policy and policy.recall_score >= 0.75:
                         owner_type = "user"
-                        owner_id = user_subject
+                        owner_id = normalized_user_id
                     else:
                         owner_type = "agent"
                         if not agent_id:
@@ -489,12 +486,12 @@ class RetrievalService:
                             "RetrievalService.retrieve: scope owner_type=%s owner_id=%s user=%s",
                             owner_type,
                             owner_id,
-                            user_subject,
+                            normalized_user_id,
                         )
                     try:
                         embedding = await self._ensure_embedding(query_text_or_embedding)
                         raw = await self._retrieve_raw(
-                            user_subject=user_subject,
+                            user_id=user_id,
                             query_embedding=[float(x) for x in embedding],
                             query_text=query_text_or_embedding if isinstance(query_text_or_embedding, str) else None,
                             owner_type=owner_type,
@@ -640,8 +637,8 @@ class RetrievalService:
                             should_fetch = bool(facts or chunks or episodes)
                             if should_fetch:
                                 graph = graph_core.neighbors(
-                                    user_id=user_subject,
-                                    node_id=user_subject,
+                                    user_id=user_id,
+                                    node_id=user_id,
                                     depth=2,
                                     k=self.selector.max_graph_items,
                                     owner_type=owner_type,

@@ -105,7 +105,7 @@ from .memory_config import UMAConfig  # YAML loader + validation (dict-like)
 from .utils.config_types import RuntimeConfig
 
 from .utils.hooks import UMAHooks
-from .utils.identity import ensure_user_subject
+from .utils.identity import normalize_user_id
 from .utils.logging_setup import logger as uma_logger  # noqa: F401 (init side-effect)
 from .working_memory.core import WorkingMemoryCore
 from .episodic.core import EpisodicCore
@@ -637,20 +637,20 @@ class UMAMemory:
             raise ValueError("UMAMemory.get_structured_context: user_id must be a non-empty string.")
         if not query_text or not isinstance(query_text, str):
             raise ValueError("UMAMemory.get_structured_context: query_text must be a non-empty string.")
-        user_subject = ensure_user_subject(user_id)
+        normalized_user_id = normalize_user_id(user_id)
 
         with timed("uma.get_structured_context.latency"):
             # 1) Stored WM
             try:
                 wm_stored = (
-                    self.working_memory.get_context(user_subject)
+                    self.working_memory.get_context(normalized_user_id)
                     if self.working_memory
                     else []
                 )
             except Exception:
                 logger.exception(
                     "UMAMemory.get_structured_context: failed to load WM user=%s",
-                    user_subject,
+                    normalized_user_id,
                 )
                 wm_stored = []
 
@@ -658,7 +658,7 @@ class UMAMemory:
             if getattr(self, "_rlm_controller", None) is not None:
                 try:
                     pack = await self._rlm_controller.retrieve_context(
-                        user_id=user_subject,
+                        user_id=normalized_user_id,
                         query_text=query_text,
                     )
                     increment("uma.get_structured_context.calls", tags={"path": "rlm"})
@@ -677,19 +677,19 @@ class UMAMemory:
                 except Exception:
                     logger.exception(
                         "UMAMemory.get_structured_context: RLM failed",
-                        extra={"user": user_subject},
+                        extra={"user": normalized_user_id},
                     )
                     if bool(getattr(self, "retrieval_cfg", None) and self.retrieval_cfg.strict):
                         raise
                     logger.warning(
                         "UMAMemory.get_structured_context: falling back to classic user=%s",
-                        user_subject,
+                        normalized_user_id,
                     )
 
             # 3) Classic fallback
             try:
                 retrieved = await self.retrieval_service.retrieve(
-                    user_id=user_subject,
+                    user_id=normalized_user_id,
                     memory_type="all",
                     query_text_or_embedding=query_text,
                     agent_id=getattr(self, "agent_id", None),
@@ -697,7 +697,7 @@ class UMAMemory:
             except Exception:
                 logger.exception(
                     "UMAMemory.get_structured_context: classic retrieval failed user=%s",
-                    user_subject,
+                    normalized_user_id,
                 )
                 retrieved = {}
 
@@ -730,9 +730,9 @@ class UMAMemory:
         if not getattr(self, "pipeline", None):
             raise RuntimeError("UMAMemory.process_turn: pipeline not initialized.")
 
-        user_subject = ensure_user_subject(user_id)
+        normalized_user_id = normalize_user_id(user_id)
         await self.pipeline.process_turn(
-            user_id=user_subject,
+            user_id=normalized_user_id,
             user_msg=user_msg,
             assistant_reply=assistant_reply,
         )

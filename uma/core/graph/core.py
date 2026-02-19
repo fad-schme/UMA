@@ -37,7 +37,7 @@ import re
 from typing import Any, List, Optional
 
 from ...adapters.graph.base import GraphAdapter
-from ..utils.identity import ensure_user_subject
+from ..utils.identity import normalize_user_id
 from .updater import GraphUpdater
 
 logger = logging.getLogger(__name__)
@@ -232,7 +232,7 @@ class TemporalGraphCore:
         # Canonicalize user owner_id for consistency (owner scoping, not subject normalization).
         try:
             if owner_type == "user":
-                owner_id = ensure_user_subject(owner_id)
+                owner_id = normalize_user_id(owner_id)
         except Exception:
             logger.exception("TemporalGraphCore.neighbors: invalid user owner_id")
             return []
