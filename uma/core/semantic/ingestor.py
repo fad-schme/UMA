@@ -41,7 +41,13 @@ class SemanticIngestor:
 
     async def extract(self, subject: str, text: str, *, extra_meta: dict | None = None) -> List[Fact]:
         try:
-            return await self.extractor.extract_from_text(subject, text, extra_meta=extra_meta)
+            return await self.extractor.extract_user_facts(
+                subject=subject,
+                text=text,
+                owner_type="user",
+                owner_id=subject,
+                extra_meta=extra_meta,
+            )
         except Exception:
             logger.exception("SemanticIngestor.extract failed.")
             return []
@@ -51,7 +57,7 @@ class SemanticIngestor:
         if not candidates:
             return []
 
-        selected = [f for f in candidates if float(f.meta.get("salience", 0.0)) >= self.threshold]
+        selected = [f for f in candidates if float(getattr(f, "salience", 0.0) or 0.0) >= self.threshold]
         if not selected:
             logger.debug("SemanticIngestor: no facts above threshold.")
             return []

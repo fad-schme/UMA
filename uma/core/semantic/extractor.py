@@ -192,7 +192,7 @@ class FactExtractor:
                 sid_list = [str(s) for s in source_ids if s is not None]
 
             fact = Fact(
-                id=str(uuid.uuid4()),
+                id=f"fact_{uuid.uuid4()}",
                 subject=subj_n,
                 predicate=pred_n,
                 object=obj_n,
@@ -370,24 +370,6 @@ class FactExtractor:
                         source_path=source_path,
                         source_hash=source_hash,
                     )
-
-                    # Salvage: if empty because of min_fact_words, re-parse same payload with min_fact_words=0
-                    if not extracted_for_chunk and min_fact_words > 0:
-                        extracted_for_chunk = utils.parse_chunk_payload_into_facts(
-                            chunk=c,
-                            payload=payload,
-                            min_fact_words=0,
-                            scorer=self.scorer,
-                            max_facts_per_chunk=int(max_facts_per_chunk),
-                            object_max_words=int(object_max_words),
-                            max_fact_tokens=int(max_fact_tokens),
-                            owner_type=owner_type,
-                            owner_id=owner_id,
-                            now=now,
-                            doc_id=doc_id,
-                            source_path=source_path,
-                            source_hash=source_hash,
-                        )
 
                 # 2) if missing/invalid payload, fallback to per-chunk LLM call
                 if not extracted_for_chunk and not isinstance(payload, dict):

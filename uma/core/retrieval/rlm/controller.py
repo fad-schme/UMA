@@ -742,7 +742,12 @@ class RLMController:
     ) -> List[Any]:
         """
         Centralized semantic retrieval via SemanticCore (no environment wrapper).
-        Resolves owner scope, validates subjects, and passes through filters.
+        Resolves owner scope and passes through filters.
+
+        IMPORTANT
+        ---------
+        Retrieval is ownership-scoped only via (owner_type, owner_id). Fact.subject
+        is metadata and must not gate retrieval.
         """
         semantic_core = getattr(getattr(self.env, "_memory", None), "semantic_core", None)
         if semantic_core is None:
@@ -764,33 +769,6 @@ class RLMController:
             logger.exception("RLMController._search_semantic_core: invalid subject=%r", user_id)
             return []
 
-        subject: Optional[str] = None
-        if isinstance(filters, dict) and filters.get("subject"):
-            raw_subject = str(filters.get("subject")).strip()
-            if raw_subject.startswith("user:"):
-                try:
-                    normalized = normalize_user_id(raw_subject)
-                except Exception:
-                    normalized = None
-                if normalized != user_id:
-                    logger.warning(
-                        "RLMController._search_semantic_core: rejected cross-user subject=%r user=%s",
-                        raw_subject,
-                        user_id,
-                    )
-                    subject = None
-                else:
-                    subject = normalized
-            else:
-                if raw_subject.startswith(("entity:", "doc:", "agent:")):
-                    subject = raw_subject
-                else:
-                    logger.debug(
-                        "RLMController._search_semantic_core: ignoring unknown subject namespace=%r",
-                        raw_subject,
-                    )
-                    subject = None
-
         retrieval_cfg = getattr(self.env, "_memory", None)
         retrieval_cfg = getattr(retrieval_cfg, "retrieval_cfg", None)
         ctx_cfg = getattr(retrieval_cfg, "context", None) if retrieval_cfg else None
@@ -801,33 +779,36 @@ class RLMController:
                 logger.warning("RLMController._search_semantic_core: missing agent_id for agent scope")
                 return []
         elif owner_type == "user":
-            if subject is None:
-                logger.debug("RLMController._search_semantic_core: skipping user scope without subject")
-                return []
-            resolved_owner_id = owner_id or user_id
+            resolved_owner_id = owner_id or normalized_user_id
         else:
             logger.warning("RLMController._search_semantic_core: invalid owner_type=%r", owner_type)
             return []
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "RLMController._search_semantic_core: owner_type=%s owner_id=%s subject=%s k=%d offset=%d",
+                "RLMController._search_semantic_core: owner_type=%s owner_id=%s k=%d offset=%d",
                 owner_type,
                 resolved_owner_id,
-                subject,
                 k,
                 offset,
             )
-        return await semantic_core.search(
-            subject=subject,
-            query_embedding=list(query_embedding),
-            owner_type=owner_type,
-            owner_id=resolved_owner_id,
-            k=int(k),
-            offset=int(offset),
-            filters=filters,
-            query_text=query_text,
-        )
+        try:
+            return await semantic_core.search(
+                query_embedding=list(query_embedding),
+                owner_type=owner_type,
+                owner_id=resolved_owner_id,
+                k=int(k),
+                offset=int(offset),
+                filters=filters,
+                query_text=query_text,
+            )
+        except TypeError:
+            return await semantic_core.search(
+                query_embedding=list(query_embedding),
+                owner_type=owner_type,
+                owner_id=resolved_owner_id,
+                k=int(k),
+            )
 
     async def _search_episodic_core(
         self,

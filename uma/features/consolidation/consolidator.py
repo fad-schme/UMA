@@ -34,6 +34,7 @@ from ...types import Fact
 from ...adapters.llm.base import LLMInterface, EmbeddingInterface
 from ...core.semantic.extractor import FactExtractor
 from ...core.semantic.scorer import SalienceScorer
+from ...core.utils.identity import normalize_user_id
 
 from .clusterer import EpisodeClusterer
 from .summarizer import ConsolidationSummarizer
@@ -86,8 +87,10 @@ class Consolidator:
         6. Prune episodes
         """
 
+        normalized_user_id = normalize_user_id(user_id)
+
         # STEP 1: Fetch recent episodes
-        episodes = await self._fetch_recent_episodes(user_id)
+        episodes = await self._fetch_recent_episodes(normalized_user_id)
         if not episodes:
             logger.info("Consolidator: no episodes for user=%s", user_id)
             return []
@@ -120,9 +123,9 @@ class Consolidator:
                 latest_ts = max(ep.timestamp for ep in cluster if getattr(ep, "timestamp", None))
                 if self.episodic_core is not None:
                     await self.episodic_core.upsert_cluster_summary(
-                        user_id=user_id,
+                        user_id=normalized_user_id,
                         owner_type="user",
-                        owner_id=user_id,
+                        owner_id=normalized_user_id,
                         episode_ids=episode_ids,
                         summary=summary,
                         latest_timestamp=latest_ts.isoformat(),
@@ -131,7 +134,13 @@ class Consolidator:
                 logger.exception("Consolidator: failed to upsert cluster summary user=%s", user_id)
 
             try:
-                new_facts = await self.extractor.extract_from_text(user_id, summary)
+                new_facts = await self.extractor.extract_user_facts(
+                    subject=normalized_user_id,
+                    text=summary,
+                    owner_type="user",
+                    owner_id=normalized_user_id,
+                    min_fact_words=0,
+                )
                 distilled_facts.extend(new_facts)
             except Exception:
                 logger.exception("Consolidator: fact extraction failed for user=%s", user_id)
@@ -140,7 +149,7 @@ class Consolidator:
         await self._persist_facts(distilled_facts)
 
         # STEP 5: Prune obsolete / redundant episodes
-        await self._prune(user_id)
+        await self._prune(normalized_user_id)
 
         logger.info(
             "Consolidator: completed cycle for user=%s → %d distilled facts",
@@ -162,9 +171,10 @@ class Consolidator:
         try:
             if self.episodic_core is None:
                 return []
+            normalized_user_id = normalize_user_id(user_id)
             episodes = await self.episodic_core.list_recent(
                 owner_type="user",
-                owner_id=user_id,
+                owner_id=normalized_user_id,
                 n=self.max_episodes,
             )
             return episodes
@@ -291,6 +301,8 @@ class Consolidator:
         6. Remove pruned facts via SemanticCore
         """
 
+        normalized_user_id = normalize_user_id(user_id)
+
         # ---------------------------------------------------------------
         # 1) EPISODIC PRUNING
         # ---------------------------------------------------------------
@@ -300,7 +312,7 @@ class Consolidator:
             else:
                 episodes = await self.episodic_core.list_recent(
                     owner_type="user",
-                    owner_id=user_id,
+                    owner_id=normalized_user_id,
                     n=self.max_episodes,
                 )
         except Exception:
@@ -337,7 +349,7 @@ class Consolidator:
                         await self.episodic_core.delete_episode(
                             ep_id,
                             owner_type="user",
-                            owner_id=user_id,
+                            owner_id=normalized_user_id,
                         )
                 except Exception:
                     logger.exception(
@@ -349,14 +361,12 @@ class Consolidator:
         # 2) SEMANTIC FACT PRUNING
         # ---------------------------------------------------------------
         try:
-            # NOTE: fetch all facts for subject=user
             if self.semantic_core is None:
                 semantic_facts = []
             else:
-                semantic_facts = await self.semantic_core.list_facts_for_subject(
-                    user_id,
+                semantic_facts = await self.semantic_core.list_facts_for_owner(
                     owner_type="user",
-                    owner_id=user_id,
+                    owner_id=normalized_user_id,
                 )
         except Exception:
             logger.exception(
@@ -394,7 +404,7 @@ class Consolidator:
                     await self.semantic_core.delete_fact(
                         fact_id,
                         owner_type="user",
-                        owner_id=user_id,
+                        owner_id=normalized_user_id,
                     )
             except Exception:
                 logger.exception(

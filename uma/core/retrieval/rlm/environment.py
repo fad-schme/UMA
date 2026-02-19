@@ -459,6 +459,9 @@ class UMAMemoryEnvironment:
         hops: int = 1,
         direction: Optional[Literal["inbound", "outbound", "both"]] = None,
         k: int = 10,
+        *,
+        owner_type: str = "agent",
+        owner_id: Optional[str] = None,
     ) -> List[Any]:
         graph_core = getattr(self._memory, "graph_core", None)
         if graph_core is None:
@@ -502,6 +505,8 @@ class UMAMemoryEnvironment:
                 predicate_scope=predicate_scope,
                 depth=depth,
                 k=k,
+                owner_type=owner_type,
+                owner_id=owner_id,
             )
         except Exception:
             logger.exception("Environment.expand_graph failed")
@@ -598,6 +603,8 @@ class UMAMemoryEnvironment:
             return await self.fetch_facts_by_ids(
                 user_id=user_subject,
                 ids=getattr(action, "ids", None) or [],
+                owner_type=lane_owner_type,
+                owner_id=lane_owner_id,
             )
 
         if a == "fetch_chunks":
@@ -673,6 +680,8 @@ class UMAMemoryEnvironment:
                 hops=int(getattr(action, "hops", 1) or 1),
                 direction=getattr(action, "direction", None),
                 k=k,
+                owner_type=lane_owner_type,
+                owner_id=lane_owner_id,
             )
 
         if a == "search_procedural":

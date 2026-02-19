@@ -24,6 +24,7 @@ import logging
 from typing import TYPE_CHECKING, List, Optional
 
 from ...core.utils.registry import FeatureContext, FeatureHandle, FeatureResult, UMAFeature
+from ...core.utils.identity import normalize_user_id
 from ...types import Skill
 from .matcher import SkillMatcher
 
@@ -162,11 +163,12 @@ class ProceduralFeature(UMAFeature):
 
             k_clamped = min(k_int, self.max_k)
             try:
+                normalized_user_id = normalize_user_id(user_id)
                 candidates = await self.core.search(
-                    user_id=user_id,
+                    user_id=normalized_user_id,
                     query_embedding=query_emb,
                     owner_type="user",
-                    owner_id=user_id,
+                    owner_id=normalized_user_id,
                     k=k_clamped,
                 )
             except Exception as exc:
@@ -203,10 +205,11 @@ class ProceduralFeature(UMAFeature):
                 return FeatureResult.failure(["missing user_id"], data=None)
 
             try:
+                normalized_user_id = normalize_user_id(user_id)
                 skill = await self.core.get_skill(
                     skill_id,
                     owner_type="user",
-                    owner_id=user_id,
+                    owner_id=normalized_user_id,
                 )
                 if skill is None:
                     logger.info("ProceduralFeature.get_skill: no skill for id=%s", skill_id)

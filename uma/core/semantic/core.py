@@ -81,6 +81,11 @@ class SemanticCore:
             logger.error("SemanticCore.upsert_fact: semantic_store missing")
             raise RuntimeError("SemanticCore.upsert_fact: semantic_store missing")
 
+        fact_id = getattr(fact, "id", None)
+        if not fact_id or not isinstance(fact_id, str) or not fact_id.startswith("fact_"):
+            logger.error("SemanticCore.upsert_fact: invalid fact id=%r (must start with 'fact_')", fact_id)
+            raise ValueError("SemanticCore.upsert_fact: fact.id must start with 'fact_'")
+
         owner_type = getattr(fact, "owner_type", None)
         owner_id = getattr(fact, "owner_id", None)
 
@@ -182,6 +187,37 @@ class SemanticCore:
             return await store.list_facts_for_owner(owner_type=owner_type, owner_id=owner_id, limit=limit)
         except Exception:
             logger.exception("SemanticCore.list_facts_for_owner failed")
+            raise
+
+    async def delete_fact(
+        self,
+        fact_id: str,
+        *,
+        owner_type: str,
+        owner_id: str,
+    ) -> None:
+        """
+        Delete a fact by id, scoped by ownership.
+
+        Notes
+        -----
+        - This is a maintenance/pruning API, not a retrieval filter.
+        - Store must enforce ownership in the delete path.
+        """
+        store = getattr(self.ingestor, "semantic_store", None)
+        if store is None or not hasattr(store, "delete_fact"):
+            logger.error("SemanticCore.delete_fact: store missing or unsupported")
+            raise RuntimeError("SemanticCore.delete_fact: store missing or unsupported")
+        if not fact_id or not isinstance(fact_id, str):
+            logger.error("SemanticCore.delete_fact requires fact_id as a non-empty string")
+            raise ValueError("SemanticCore.delete_fact requires fact_id as a non-empty string")
+        if not owner_type or not owner_id:
+            logger.error("SemanticCore.delete_fact requires owner_type and owner_id")
+            raise ValueError("SemanticCore.delete_fact requires owner_type and owner_id")
+        try:
+            await store.delete_fact(fact_id, owner_type=owner_type, owner_id=owner_id)
+        except Exception:
+            logger.exception("SemanticCore.delete_fact failed")
             raise
 
     async def search(

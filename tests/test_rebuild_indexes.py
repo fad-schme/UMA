@@ -3,7 +3,7 @@ import pytest
 from datetime import datetime
 
 from uma.core.uma_memory import UMAMemory
-from uma.core.utils.identity import ensure_user_subject
+from uma.core.utils.identity import normalize_user_id
 from uma.types import Episode
 from uma.types import Fact
 from uma.types import Skill
@@ -85,14 +85,16 @@ async def test_rebuild_vector_indexes(tmp_path):
     await memory.episodic_core.add_episode(episode, embedding)
 
     fact = Fact(
-        id="fact-1",
-        subject=ensure_user_subject(user_id),
+        id="fact_1",
+        subject=normalize_user_id(user_id),
         predicate="prefers",
         object="coffee",
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
         source_ids=[episode.id],
         confidence=0.9,
+        owner_type="user",
+        owner_id=normalize_user_id(user_id),
     )
     await memory.semantic_core.upsert_fact(fact, embedding)
 

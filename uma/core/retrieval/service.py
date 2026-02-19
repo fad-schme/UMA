@@ -115,81 +115,27 @@ class RetrievalService:
             max_graph_items,
         )
 
-    async def _store_search(
-        self,
-        *,
-        store: Any,
-        kind: str,
-        user_id: str,
-        query_embedding: List[float],
-        query_text: Optional[str],
-        owner_type: str,
-        owner_id: str,
-        k: int,
-    ) -> List[Any]:
+    def _ensure_core_retrieval_ready(self) -> None:
         """
-        Store-level search fallback (no cores), using UMA's store APIs.
+        Ensure retrieval cores are initialized.
 
-        This keeps retrieval functional even if ingestion cores haven't been initialized yet.
+        Architectural invariant:
+        - RetrievalService MUST call core subsystems only.
+        - Only core subsystems may call stores.
         """
-        if store is None:
-            return []
+        episodic_core = getattr(self.memory, "episodic_core", None)
+        semantic_core = getattr(self.memory, "semantic_core", None)
+        procedural_core = getattr(self.memory, "procedural_core", None)
+        chunk_core = getattr(self.memory, "chunk_core", None)
 
-        try:
-            # Stores take query_embedding as first positional arg in your repo.
-            if kind == "episodic":
-                return await store.search(query_embedding, owner_type=owner_type, owner_id=owner_id, k=k)
+        if all(core is not None for core in (episodic_core, semantic_core, procedural_core, chunk_core)):
+            return
 
-            if kind == "procedural":
-                return await store.search(query_embedding, owner_type=owner_type, owner_id=owner_id, k=k)
-
-            if kind == "semantic":
-                return await store.search(
-                    query_embedding,
-                    subject=user_id,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    k=k,
-                )
-
-            if kind == "chunks":
-                # ChunkSQLStore.search + optional lexical add-on (if implemented).
-                # We keep this lean: no neighbor expansion when cores are absent.
-                vec = await store.search(query_embedding, owner_type=owner_type, owner_id=owner_id, k=k)
-
-                lex: List[Any] = []
-                if query_text and isinstance(query_text, str) and query_text.strip():
-                    search_text = getattr(store, "search_text", None)
-                    if callable(search_text):
-                        try:
-                            # Use a small bounded lexical budget.
-                            lex_k = max(5, min(k, 15))
-                            lex = await search_text(query_text, owner_type=owner_type, owner_id=owner_id, k=lex_k)
-                        except Exception:
-                            logger.exception("Chunk store lexical search_text failed (non-fatal).")
-
-                # Merge with stable de-duplication by id if present.
-                out: List[Any] = []
-                seen = set()
-                for it in list(vec or []) + list(lex or []):
-                    it_id = it.get("id") if isinstance(it, dict) else getattr(it, "id", None)
-                    if it_id and it_id in seen:
-                        continue
-                    if it_id:
-                        seen.add(it_id)
-                    out.append(it)
-                    if len(out) >= k:
-                        break
-                return out
-
-        except TypeError:
-            logger.exception("Store search signature mismatch for kind=%s store=%r", kind, store)
-            return []
-        except Exception:
-            logger.exception("Store search failed for kind=%s store=%r", kind, store)
-            return []
-
-        return []
+        # Heavy but deterministic self-heal: initialize LLM + embedder + cores (+ optional pipeline/features).
+        ensure = getattr(self.memory, "_ensure_ingestion_ready", None)
+        if not callable(ensure):
+            raise RuntimeError("RetrievalService requires UMAMemory._ensure_ingestion_ready to initialize cores.")
+        ensure()
 
     async def retrieve_raw_multi_scope(
         self,
@@ -262,141 +208,90 @@ class RetrievalService:
         """
         Perform raw retrieval from core subsystems.
         """
+        self._ensure_core_retrieval_ready()
+
         tasks = {}
 
         episodic_core = getattr(self.memory, "episodic_core", None)
-        if episodic_core is not None:
-            tasks["episodes"] = asyncio.create_task(
-                episodic_core.search(
-                    user_id=user_id,
-                    query_embedding=query_embedding,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    k=self.selector.max_episodes,
-                )
+        if episodic_core is None:
+            raise RuntimeError("RetrievalService._retrieve_raw: episodic_core missing (core-only retrieval).")
+        tasks["episodes"] = asyncio.create_task(
+            episodic_core.search(
+                user_id=user_id,
+                query_embedding=query_embedding,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                k=self.selector.max_episodes,
             )
-        else:
-            store = (getattr(self.memory, "_stores", {}) or {}).get("episodic")
-            tasks["episodes"] = asyncio.create_task(
-                self._store_search(
-                    store=store,
-                    kind="episodic",
-                    user_id=user_id,
-                    query_embedding=query_embedding,
-                    query_text=query_text,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    k=self.selector.max_episodes,
-                )
-            )
+        )
 
         semantic_core = getattr(self.memory, "semantic_core", None)
-        if semantic_core is not None:
-            if not (query_text and str(query_text).strip()):
-                logger.warning(
-                    "RetrievalService._raw_retrieval: semantic_core.search running embedding-only "
-                    "(query_text missing/blank); results may be noisier."
-                )
-            tasks["facts"] = asyncio.create_task(
-                semantic_core.search(
-                    subject=user_id,
-                    query_embedding=query_embedding,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    k=self.selector.max_facts,
-                    offset=0,
-                    filters=None,
-                    query_text=query_text,
-                )
+        if semantic_core is None:
+            raise RuntimeError("RetrievalService._retrieve_raw: semantic_core missing (core-only retrieval).")
+        if not (query_text and str(query_text).strip()):
+            logger.warning(
+                "RetrievalService._raw_retrieval: semantic_core.search running embedding-only "
+                "(query_text missing/blank); results may be noisier."
             )
-        else:
-            store = (getattr(self.memory, "_stores", {}) or {}).get("semantic")
-            tasks["facts"] = asyncio.create_task(
-                self._store_search(
-                    store=store,
-                    kind="semantic",
-                    user_id=user_id,
-                    query_embedding=query_embedding,
-                    query_text=query_text,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    k=self.selector.max_facts,
-                )
+        tasks["facts"] = asyncio.create_task(
+            semantic_core.search(
+                query_embedding=query_embedding,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                k=self.selector.max_facts,
+                offset=0,
+                filters=None,
+                query_text=query_text,
             )
+        )
 
         chunk_core = getattr(self.memory, "chunk_core", None)
-        if chunk_core is not None:
-            # Chunk retrieval is centralized in ChunkCore.search_chunks.
-            # Include neighbor expansion here so raw retrieval is complete/deterministic.
-            try:
-                neighbor_window = int(getattr(getattr(self.memory, "retrieval_cfg", None), "neighbor_window", 1))
-            except Exception:
-                neighbor_window = 1
-            try:
-                max_expanded_chunks = int(getattr(getattr(self.memory, "retrieval_cfg", None), "max_expanded_chunks", 24))
-            except Exception:
-                max_expanded_chunks = 24
-            try:
-                lexical_k = int(getattr(getattr(self.memory, "retrieval_cfg", None), "lexical_chunks_k", 15))
-            except Exception:
-                lexical_k = 15
-            tasks["chunks"] = asyncio.create_task(
-                chunk_core.search_chunks(
-                    query_embedding=query_embedding,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    k=self.selector.max_chunks,
-                    query_text=query_text,
-                    lexical_k=lexical_k,
-                    filter_terms=bool(query_text and query_text.strip()),
-                    expand_neighbors=True,
-                    neighbor_window=neighbor_window,
-                    max_expanded_chunks=max_expanded_chunks,
-                    shortlist_k=int(getattr(getattr(self.memory, "retrieval_cfg", None), "chunk_shortlist_k", 12)),
-                    shortlist_max_per_doc=int(getattr(getattr(self.memory, "retrieval_cfg", None), "chunk_shortlist_max_per_doc", 3)),
-                )
+        if chunk_core is None:
+            raise RuntimeError("RetrievalService._retrieve_raw: chunk_core missing (core-only retrieval).")
+        # Chunk retrieval is centralized in ChunkCore.search_chunks.
+        # Include neighbor expansion here so raw retrieval is complete/deterministic.
+        try:
+            neighbor_window = int(getattr(getattr(self.memory, "retrieval_cfg", None), "neighbor_window", 1))
+        except Exception:
+            neighbor_window = 1
+        try:
+            max_expanded_chunks = int(getattr(getattr(self.memory, "retrieval_cfg", None), "max_expanded_chunks", 24))
+        except Exception:
+            max_expanded_chunks = 24
+        try:
+            lexical_k = int(getattr(getattr(self.memory, "retrieval_cfg", None), "lexical_chunks_k", 15))
+        except Exception:
+            lexical_k = 15
+        tasks["chunks"] = asyncio.create_task(
+            chunk_core.search_chunks(
+                query_embedding=query_embedding,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                k=self.selector.max_chunks,
+                query_text=query_text,
+                lexical_k=lexical_k,
+                filter_terms=bool(query_text and query_text.strip()),
+                expand_neighbors=True,
+                neighbor_window=neighbor_window,
+                max_expanded_chunks=max_expanded_chunks,
+                shortlist_k=int(getattr(getattr(self.memory, "retrieval_cfg", None), "chunk_shortlist_k", 12)),
+                shortlist_max_per_doc=int(getattr(getattr(self.memory, "retrieval_cfg", None), "chunk_shortlist_max_per_doc", 3)),
             )
-        else:
-            store = (getattr(self.memory, "_stores", {}) or {}).get("chunk")
-            tasks["chunks"] = asyncio.create_task(
-                self._store_search(
-                    store=store,
-                    kind="chunks",
-                    user_id=user_id,
-                    query_embedding=query_embedding,
-                    query_text=query_text,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    k=self.selector.max_chunks,
-                )
-            )
+        )
 
 
         procedural_core = getattr(self.memory, "procedural_core", None)
-        if procedural_core is not None:
-            tasks["skills"] = asyncio.create_task(
-                procedural_core.search(
-                    user_id=None,
-                    query_embedding=query_embedding,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    k=self.selector.max_skills,
-                )
+        if procedural_core is None:
+            raise RuntimeError("RetrievalService._retrieve_raw: procedural_core missing (core-only retrieval).")
+        tasks["skills"] = asyncio.create_task(
+            procedural_core.search(
+                user_id=None,
+                query_embedding=query_embedding,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                k=self.selector.max_skills,
             )
-        else:
-            store = (getattr(self.memory, "_stores", {}) or {}).get("procedural")
-            tasks["skills"] = asyncio.create_task(
-                self._store_search(
-                    store=store,
-                    kind="procedural",
-                    user_id=user_id,
-                    query_embedding=query_embedding,
-                    query_text=query_text,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    k=self.selector.max_skills,
-                )
-            )
+        )
 
         # Graph is a navigation layer; do not fetch it eagerly here.
         graph_res: List[Any] = []

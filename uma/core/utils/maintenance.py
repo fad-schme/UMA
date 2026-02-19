@@ -144,11 +144,13 @@ async def rebuild_vector_indexes(
             report["semantic"]["status"] = "skipped"
         else:
             try:
-                subject = normalize_user_id(owner_id)
-                facts: List[Fact] = await memory.semantic_core.list_facts_for_subject(
-                    subject,
+                scoped_owner_id = owner_id
+                if owner_type == "user":
+                    scoped_owner_id = normalize_user_id(owner_id)
+                facts: List[Fact] = await memory.semantic_core.list_facts_for_owner(
                     owner_type=owner_type,
-                    owner_id=owner_id,
+                    owner_id=scoped_owner_id,
+                    limit=None,
                 )
                 if facts:
                     texts = [build_fact_embedding_text(f) for f in facts]

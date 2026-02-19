@@ -485,9 +485,11 @@ class MemoryPipeline:
             wm_context = []
 
         try:
+            from .identity import normalize_user_id
+            normalized_user_id = normalize_user_id(user_id)
             return await epi.store_episode(
                 owner_type="user",
-                owner_id=user_id,
+                owner_id=normalized_user_id,
                 user_message=user_msg,
                 assistant_reply=assistant_reply,
                 working_memory_context=wm_context,
@@ -509,13 +511,13 @@ class MemoryPipeline:
         # Canonical subject format in UMA-RLM v1: "user:<id>"
         from .identity import normalize_user_id
         try:
-            subject = normalize_user_id(user_id)
+            user_subject = normalize_user_id(user_id)
         except Exception:
             logger.exception("SemanticCore.ingest failed; invalid subject user_id=%r", user_id)
             return []
 
         try:
-            return await sem.ingest(subject=subject, text=reply, extra_meta={"turn_id": turn_id})
+            return await sem.ingest(user_subject, reply, extra_meta={"turn_id": turn_id})
         except Exception:
             logger.exception("SemanticCore.ingest failed; continuing.")
             return []
@@ -545,7 +547,9 @@ class MemoryPipeline:
             core = getattr(self.mem, "episodic_core", None)
             if core is None:
                 return
-            recent = await core.list_recent(owner_type="user", owner_id=user_id, n=2)
+            from .identity import normalize_user_id
+            normalized_user_id = normalize_user_id(user_id)
+            recent = await core.list_recent(owner_type="user", owner_id=normalized_user_id, n=2)
             if len(recent) >= 2:
                 prev = recent[1]
                 graph.link_temporal(prev, episode)

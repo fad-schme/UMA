@@ -306,12 +306,10 @@ def deterministic_decision(
                 )
                 getattr(pack, "bump_predicate_offset")(predicate, max_items_per_type)
         else:
-            filters = {"subject": getattr(pack, "user_id", None)} if getattr(pack, "owner_type", None) == "user" else None
             actions.append(
                 RetrievalAction(
                     action="search_semantic",
                     k=max_items_per_type,
-                    filters=filters,
                     owner_type=getattr(pack, "owner_type", None),
                 )
             )

@@ -222,7 +222,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
         Insert or update a Fact and its embedding using conflict resolution.
 
         Steps:
-        1. Fetch existing competing facts via subject + predicate.
+        1. Fetch existing competing facts via subject + predicate + object.
         2. Resolve conflicts.
         3. Upsert canonical fact.
         4. Upsert embedding into vector index.
@@ -277,11 +277,16 @@ class SemanticSQLStore(BaseVectorSQLStore):
             except Exception:
                 logger.exception("SemanticSQLStore.upsert_fact: idempotency guard failed; continuing.")
 
-            # Fetch competitors
+            # Fetch competitors: only facts with the SAME (subject, predicate, object) compete.
+            # This avoids dropping distinct objects like:
+            #   user LIKES sushi
+            #   user LIKES pizza
+            # which should coexist as separate facts.
+            object_json = json.dumps(fact.object)
             rows = self._query_all(
                 conn,
-                "SELECT * FROM facts WHERE owner_type=? AND owner_id=? AND subject=? AND predicate=?",
-                params=[owner_type_in, owner_id_in, fact.subject, fact.predicate],
+                "SELECT * FROM facts WHERE owner_type=? AND owner_id=? AND subject=? AND predicate=? AND object=?",
+                params=[owner_type_in, owner_id_in, fact.subject, fact.predicate, object_json],
                 log_context="fetch_conflicts",
             )
             existing = [self._row_to_object(r) for r in rows]
