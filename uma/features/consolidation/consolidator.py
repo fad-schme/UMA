@@ -135,7 +135,7 @@ class Consolidator:
 
             try:
                 new_facts = await self.extractor.extract_user_facts(
-                    subject=normalized_user_id,
+                    subject="user",
                     text=summary,
                     owner_type="user",
                     owner_id=normalized_user_id,

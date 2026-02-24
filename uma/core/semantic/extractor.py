@@ -192,7 +192,7 @@ class FactExtractor:
                 sid_list = [str(s) for s in source_ids if s is not None]
 
             fact = Fact(
-                id=f"fact_{uuid.uuid4()}",
+                id=f"fact_{utils.uuid_from_text(f'userfact:v1:{owner_type}:{owner_id}:{subj_n}:{pred_n}:{obj_n}')}",
                 subject=subj_n,
                 predicate=pred_n,
                 object=obj_n,
@@ -513,43 +513,43 @@ class FactExtractor:
         )
 
         # Salvage: same payload but relaxed min_fact_words
-        if not out and min_fact_words > 0:
-            out = utils.parse_facts_list_into_facts(
-                facts_payload=facts_payload,
-                chunk=chunk,
-                min_fact_words=0,
-                scorer=self.scorer,
-                max_facts_per_chunk=int(max_facts),
-                object_max_words=int(object_max_words),
-                max_fact_tokens=int(max_fact_tokens),
-                predicate_default="STATES",
-                owner_type=owner_type,
-                owner_id=owner_id,
-                now=now,
-                doc_id=doc_id,
-                source_path=source_path,
-                source_hash=source_hash,
-            )
+        # if not out and min_fact_words > 0:
+        #     out = utils.parse_facts_list_into_facts(
+        #         facts_payload=facts_payload,
+        #         chunk=chunk,
+        #         min_fact_words=0,
+        #         scorer=self.scorer,
+        #         max_facts_per_chunk=int(max_facts),
+        #         object_max_words=int(object_max_words),
+        #         max_fact_tokens=int(max_fact_tokens),
+        #         predicate_default="STATES",
+        #         owner_type=owner_type,
+        #         owner_id=owner_id,
+        #         now=now,
+        #         doc_id=doc_id,
+        #         source_path=source_path,
+        #         source_hash=source_hash,
+        #     )
 
-        if not out:
-            logger.warning(
-                "FactExtractor.extract_chunk_facts_one: no facts after parsing; forcing fallback chunk_id=%s",
-                chunk.chunk_id,
-            )
-            out = [
-                utils.fallback_fact_for_chunk(
-                    chunk,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    doc_id=doc_id,
-                    source_path=source_path,
-                    source_hash=source_hash,
-                    now=now,
-                    object_max_words=int(object_max_words),
-                    max_fact_tokens=int(max_fact_tokens),
-                    scorer=self.scorer,
-                )
-            ]
+        # if not out:
+        #     logger.warning(
+        #         "FactExtractor.extract_chunk_facts_one: no facts after parsing; forcing fallback chunk_id=%s",
+        #         chunk.chunk_id,
+        #     )
+        #     out = [
+        #         utils.fallback_fact_for_chunk(
+        #             chunk,
+        #             owner_type=owner_type,
+        #             owner_id=owner_id,
+        #             doc_id=doc_id,
+        #             source_path=source_path,
+        #             source_hash=source_hash,
+        #             now=now,
+        #             object_max_words=int(object_max_words),
+        #             max_fact_tokens=int(max_fact_tokens),
+        #             scorer=self.scorer,
+        #         )
+        #     ]
         return out
 
     async def extract_chunk_facts(

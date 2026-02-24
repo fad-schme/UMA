@@ -6,12 +6,12 @@ from uma.core.semantic.core import SemanticCore
 class DummyStore:
     def __init__(self, facts):
         self._facts = facts
+        self.last_search_kwargs = None
 
     async def search(self, **kwargs):
-        subject = kwargs.get("subject")
-        if subject is None:
-            return list(self._facts)
-        return [f for f in self._facts if f.get("subject") == subject]
+        self.last_search_kwargs = dict(kwargs)
+        # SemanticCore no longer passes/accepts subject-gating; store should treat this as corpus-wide.
+        return list(self._facts)
 
     async def search_text(self, **kwargs):
         return []
@@ -24,26 +24,21 @@ async def test_semantic_search_subject_optional():
         {"id": "f2", "subject": "entity:cloud_security", "predicate": "principle", "object": "segmentation"},
         {"id": "f3", "subject": "user:local", "predicate": "remembered", "object": "note"},
     ]
-    core = SemanticCore(llm=None, embedder=None, semantic_store=DummyStore(facts))
-    core.ingestor.semantic_store = DummyStore(facts)
+    store = DummyStore(facts)
+    core = SemanticCore(llm=None, embedder=None, semantic_store=store)
+    core.store = store
 
-    # Subject=None => corpus-wide within owner scope.
-    all_facts = await core.search(
-        subject=None,
-        query_embedding=[0.0],
-        owner_type="agent",
-        owner_id="agent-default",
-        k=10,
-    )
+    all_facts = await core.search(query_embedding=[0.0], owner_type="agent", owner_id="agent-default", k=10)
     assert len(all_facts) == 3
+    assert store.last_search_kwargs is not None
+    assert "subject" not in store.last_search_kwargs
 
-    # Subject=user:<id> => filtered.
-    user_facts = await core.search(
-        subject="user:local",
+    # Subject filters are ignored (ownership-only retrieval).
+    filtered = await core.search(
         query_embedding=[0.0],
         owner_type="agent",
         owner_id="agent-default",
         k=10,
+        filters={"subject": "user:local"},
     )
-    assert len(user_facts) == 1
-    assert user_facts[0]["subject"] == "user:local"
+    assert len(filtered) == 3

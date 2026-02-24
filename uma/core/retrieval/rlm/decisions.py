@@ -474,14 +474,27 @@ async def execute_action(
     if action.action == "search_chunks":
         chunk_core = getattr(getattr(env, "_memory", None), "chunk_core", None)
         if chunk_core is None:
+            chunk_core = getattr(env, "_chunk_core", None)
+        if chunk_core is None:
             return []
-        return await chunk_core.search_chunks_for_rlm(
-            query_embedding=list(query_embedding),
-            owner_type=lane_owner_type,
-            owner_id=lane_owner_id,
-            k=k,
-            query_text=query_text,
-        )
+
+        search_fn = getattr(chunk_core, "search_chunks_for_rlm", None) or getattr(chunk_core, "search_chunks", None)
+        if search_fn is None:
+            return []
+
+        kwargs = {
+            "query_embedding": list(query_embedding),
+            "owner_type": lane_owner_type,
+            "owner_id": lane_owner_id,
+            "k": k,
+            "query_text": query_text,
+        }
+        try:
+            return await search_fn(**kwargs)
+        except TypeError:
+            # Back-compat for adapters that don't accept `query_text`.
+            kwargs.pop("query_text", None)
+            return await search_fn(**kwargs)
 
     if action.action == "episodic_clusters":
         return await env.episodic_cluster_summaries(

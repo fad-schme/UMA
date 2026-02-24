@@ -508,9 +508,11 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     async def search(
         self,
         query_embedding: List[float],
-        owner_type: Optional[str] = None,
-        owner_id: Optional[str] = None,
+        *,
+        owner_type: str,
+        owner_id: str,
         k: int = 20,
+        offset: int = 0,
     ) -> List[Episode]:
         """
         Semantic episodic search.
@@ -520,11 +522,21 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         if not owner_type or not owner_id:
             logger.error("EpisodicSQLStore.search requires owner_type and owner_id")
             raise ValueError("EpisodicSQLStore.search requires owner_type and owner_id")
+        try:
+            k_i = max(0, int(k))
+        except Exception:
+            k_i = 20
+        try:
+            offset_i = max(0, int(offset))
+        except Exception:
+            offset_i = 0
+        if k_i <= 0:
+            return []
         filters = {"owner_type": owner_type, "owner_id": owner_id}
         try:
             ids = await self._vector_search_ids(
                 query_embedding=query_embedding,
-                k=k,
+                k=k_i + offset_i,
                 filters=filters,
                 log_context="episodic_search",
                 id_prefix="episode_",
@@ -536,25 +548,28 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                     owner_id,
                 )
                 return []
+            windowed_ids = ids[offset_i : offset_i + k_i]
+            if not windowed_ids:
+                return []
             episodes = await self.fetch_by_ids(
-                ids,
+                windowed_ids,
                 owner_type=owner_type,
                 owner_id=owner_id,
             )
             logger.debug(
                 "EpisodicSQLStore.search: vector candidates=%d, sql_fetched=%d, owner=%s:%s",
-                len(ids),
+                len(windowed_ids),
                 len(episodes),
                 owner_type,
                 owner_id,
             )
-            if ids and not episodes:
+            if windowed_ids and not episodes:
                 logger.warning(
                     "EpisodicSQLStore.search: vector candidates=%d but SQL returned 0 op=search owner=%s:%s ids=%s",
-                    len(ids),
+                    len(windowed_ids),
                     owner_type,
                     owner_id,
-                    ids[:3],
+                    windowed_ids[:3],
                 )
             return episodes
         except Exception:

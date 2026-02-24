@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 
-from uma.core.ingest.semantic_extractor import extract_facts_batch
 from uma.core.ingest.types import DocumentChunk
+from uma.core.semantic.extractor import FactExtractor
 
 
 class _FakeLLM:
@@ -113,7 +113,7 @@ def test_extract_facts_batch_salvages_missing_chunks() -> None:
         DocumentChunk(
             chunk_id="chunk_b",
             doc_id="doc1",
-            text="Design " * 30 + ".",
+            text="Design " * 60 + ".",
             page_range=(1, 1),
             position=2,
             paragraph_index_start=1,
@@ -124,9 +124,24 @@ def test_extract_facts_batch_salvages_missing_chunks() -> None:
     llm = _FakeLLMMixed()
 
     async def run():
-        return await extract_facts_batch(chunks, llm=llm, min_fact_words=5, batch_size_chunks=2, max_chars=12000)
+        extractor = FactExtractor(llm=llm)
+        return await extractor.extract_chunk_facts_batch(
+            chunks,
+            owner_type="user",
+            owner_id="user:u1",
+            source_path="p.pdf",
+            source_hash="h",
+            doc_id="doc1",
+            min_fact_words=5,
+            batch_size_chunks=2,
+            max_chars=12000,
+        )
 
     facts = asyncio.run(run())
     # Expect at least one fact, and it must be attributed to one of the chunks.
     assert facts
-    assert all(f.source_chunk_id in {"chunk_a", "chunk_b"} for f in facts)
+    sources = set()
+    for f in facts:
+        if getattr(f, "source_ids", None):
+            sources.add(str(f.source_ids[0]))
+    assert {"chunk_a", "chunk_b"}.issubset(sources)

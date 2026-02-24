@@ -21,7 +21,6 @@ class LaneEnv:
 
         async def search(
             self,
-            subject,
             query_embedding,
             owner_type,
             owner_id,
@@ -73,4 +72,4 @@ async def test_rlm_lane_subject_filters_only_for_recall():
     # Recall => user lane, subject filter applied
     await c.retrieve_context("u1", "Remember what we discussed last time about zero trust?")
     assert env.last["owner_type"] == "user"
-    assert env.last["filters"] == {"subject": "user:u1"}
+    assert env.last["filters"] is None

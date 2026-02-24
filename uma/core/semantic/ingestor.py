@@ -33,27 +33,52 @@ class SemanticIngestor:
         semantic_store: Any,
         salience_threshold: float = 0.3,
     ) -> None:
-        self.extractor = FactExtractor(llm, SalienceScorer())
+        # Allow SemanticCore to be constructed in retrieval-only mode (tests / minimal envs)
+        # without requiring an LLM. Extraction/ingestion APIs will safely no-op.
+        self.extractor: FactExtractor | None = None
+        try:
+            if llm is not None:
+                self.extractor = FactExtractor(llm, SalienceScorer())
+        except Exception:
+            logger.exception("SemanticIngestor: failed to initialize FactExtractor; extraction disabled.")
+            self.extractor = None
         self.embedder = embedder
         self.semantic_store = semantic_store
         self.threshold = float(salience_threshold)
         logger.debug("SemanticIngestor initialized (threshold=%.2f).", self.threshold)
 
-    async def extract(self, subject: str, text: str, *, extra_meta: dict | None = None) -> List[Fact]:
+    @staticmethod
+    # def _user_fact_subject_label(*, user_id: str) -> str:
+    #     # Fact.subject is an entity label (used for graph navigation and embedding text),
+    #     # NOT an identity key. Keep it stable and human-meaningful for user facts.
+    #     _ = user_id
+    #     return "user"
+
+    async def extract(self, user_id: str, text: str, *, extra_meta: dict | None = None) -> List[Fact]:
+        if self.extractor is None:
+            logger.debug("SemanticIngestor.extract: extractor unavailable; returning [].")
+            return []
         try:
             return await self.extractor.extract_user_facts(
-                subject=subject,
+                subject="",
                 text=text,
                 owner_type="user",
-                owner_id=subject,
+                owner_id=user_id,
                 extra_meta=extra_meta,
             )
         except Exception:
             logger.exception("SemanticIngestor.extract failed.")
             return []
 
-    async def ingest(self, subject: str, text: str, *, extra_meta: dict | None = None) -> List[Fact]:
-        candidates = await self.extract(subject, text, extra_meta=extra_meta)
+    async def ingest(self, user_id: str, text: str, *, extra_meta: dict | None = None) -> List[Fact]:
+        if self.embedder is None:
+            logger.debug("SemanticIngestor.ingest: embedder unavailable; returning [].")
+            return []
+        if self.semantic_store is None or not hasattr(self.semantic_store, "upsert_fact"):
+            logger.debug("SemanticIngestor.ingest: semantic_store unavailable; returning [].")
+            return []
+
+        candidates = await self.extract(user_id, text, extra_meta=extra_meta)
         if not candidates:
             return []
 
@@ -86,7 +111,7 @@ class SemanticIngestor:
                 if not getattr(fact, "owner_type", None):
                     fact.owner_type = "user"
                 if not getattr(fact, "owner_id", None):
-                    fact.owner_id = subject
+                    fact.owner_id = user_id
                 await self.semantic_store.upsert_fact(fact, vec)
                 persisted.append(fact)
             except Exception:

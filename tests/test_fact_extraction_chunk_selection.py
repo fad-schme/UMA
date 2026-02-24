@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from uma.core.ingest.semantic_extractor import select_chunks_for_fact_extraction
 from uma.core.ingest.types import DocumentChunk
+from uma.core.semantic.extractor import FactExtractor
 
 
 def _mk(chunk_id: str, text: str, page_range=(1, 1), position=1) -> DocumentChunk:
@@ -24,8 +24,8 @@ def test_select_chunks_for_fact_extraction_is_deterministic() -> None:
         _mk("c4", ("Risk " * 50) + ".", page_range=(3, 3), position=4),
     ]
 
-    a = select_chunks_for_fact_extraction(chunks, max_chunks=3)
-    b = select_chunks_for_fact_extraction(chunks, max_chunks=3)
+    a = FactExtractor.select_chunks_for_fact_extraction(chunks, max_chunks=3)
+    b = FactExtractor.select_chunks_for_fact_extraction(chunks, max_chunks=3)
     assert [c.chunk_id for c in a] == [c.chunk_id for c in b]
 
 
@@ -36,6 +36,5 @@ def test_select_chunks_for_fact_extraction_caps_per_page() -> None:
         _mk("c5", ("Controls " * 50) + ".", page_range=(2, 2), position=5),
         _mk("c4", ("Risk " * 50) + ".", page_range=(3, 3), position=4),
     ]
-    out = select_chunks_for_fact_extraction(chunks, max_chunks=4, max_per_page=2)
+    out = FactExtractor.select_chunks_for_fact_extraction(chunks, max_chunks=4, max_per_page=2)
     assert sum(1 for c in out if c.page_range == (2, 2)) <= 2
-

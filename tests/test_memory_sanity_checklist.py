@@ -46,13 +46,13 @@ async def test_memory_sanity_fetch_more_facts_offset_is_deterministic():
     ]
 
     class Store:
-        async def list_facts_for_subject(self, subject, limit=None, owner_type=None, owner_id=None):
+        async def list_facts_for_owner(self, *, owner_type: str, owner_id: str, limit=None):
             return facts
 
     core = SemanticCore(llm=None, embedder=None, semantic_store=Store())
-    core.ingestor.semantic_store = Store()
+    core.store = Store()
 
-    page1 = await core.fetch_more_facts("u1", "P", owner_type="user", owner_id="user:u1", k=2, offset=0)
-    page2 = await core.fetch_more_facts("u1", "P", owner_type="user", owner_id="user:u1", k=2, offset=2)
+    page1 = await core.fetch_more_facts("P", owner_type="user", owner_id="user:u1", k=2, offset=0)
+    page2 = await core.fetch_more_facts("P", owner_type="user", owner_id="user:u1", k=2, offset=2)
     assert [f.id for f in page1] == ["1", "2"]
     assert [f.id for f in page2] == ["4"]

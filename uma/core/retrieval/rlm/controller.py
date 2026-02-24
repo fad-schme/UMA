@@ -144,10 +144,10 @@ class RLMController:
             raise ValueError("RLMController.retrieve_context: agent_id is required")
 
         if is_recall:
-            scopes = [("user", user_id)]
+            scopes = [("user", normalized_user_id)]
         else:
             # KB lane must include BOTH agent scope and user-owned documents scope.
-            scopes = [("agent", agent_id), ("user", user_id)]
+            scopes = [("agent", agent_id), ("user", normalized_user_id)]
 
         # Keep these fields for telemetry/back-compat; primary execution uses `scopes`.
         pack.owner_type, pack.owner_id = scopes[0]
@@ -536,25 +536,15 @@ class RLMController:
         start_episodes = len(pack.episodes)
         start_graph = len(pack.graph)
         if query_embedding:
-            try:
-                results = await self._search_semantic_core(
-                    user_id=pack.user_id,
-                    query_embedding=query_embedding,
-                    k=self.max_items_per_type,
-                    query_text=pack.query_text,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    filters=None,
-                )
-            except TypeError:
-                results = await self._search_semantic_core(
-                    user_id=pack.user_id,
-                    query_embedding=query_embedding,
-                    k=self.max_items_per_type,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    filters=None,
-                )
+            results = await self._search_semantic_core(
+                user_id=pack.user_id,
+                query_embedding=query_embedding,
+                k=self.max_items_per_type,
+                query_text=pack.query_text,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                filters=None,
+            )
             pack.facts = _merge_unique(
                 pack.facts,
                 results,
@@ -567,87 +557,32 @@ class RLMController:
                 owner_id,
             )
             # Optional chunk retrieval via centralized ChunkCore search.
-            try:
-                chunk_core = getattr(getattr(self.env, "_memory", None), "chunk_core", None)
-                if chunk_core is None:
-                    chunk_core = getattr(self.env, "_chunk_core", None)
-                if chunk_core is None:
-                    logger.debug(
-                        "RLMController._baseline_retrieval: chunk_core missing on env; skipping chunk search"
-                    )
-                if chunk_core is not None:
-                    logger.debug(
-                        "RLMController._baseline_retrieval: chunk_core NOT NONE"
-                    )
-                    retrieval_cfg = getattr(getattr(self.env, "_memory", None), "retrieval_cfg", None)
-                    lexical_k = int(getattr(retrieval_cfg, "lexical_chunks_k", 15)) if retrieval_cfg else 15
-                else:
-                    lexical_k = 0
-            except Exception:
-                lexical_k = 15
-            if chunk_core is not None:
+            chunk_core = getattr(getattr(self.env, "_memory", None), "chunk_core", None)
+            if chunk_core is None:
+                chunk_core = getattr(self.env, "_chunk_core", None)
+            if chunk_core is None:
+                logger.debug("RLMController._baseline_retrieval: chunk_core missing on env; skipping chunk search")
+            else:
                 try:
-                    try:
-                        window = int(getattr(getattr(self.env, "_memory", None), "retrieval_cfg", None).neighbor_window)
-                    except Exception:
-                        window = 1
-                    try:
-                        max_total = int(getattr(getattr(self.env, "_memory", None), "retrieval_cfg", None).max_expanded_chunks)
-                    except Exception:
-                        max_total = 24
-                    logger.debug(
-                        "RLMController._baseline_retrieval: chunk search start owner=%s:%s k=%d lexical_k=%d",
-                        owner_type,
-                        owner_id,
-                        self.max_items_per_type,
-                        lexical_k,
+                    search_fn = getattr(chunk_core, "search_chunks_for_rlm", None) or getattr(
+                        chunk_core, "search_chunks", None
                     )
-                    try:
-                        shortlist_k = int(getattr(getattr(self.env, "_memory", None), "retrieval_cfg", None).chunk_shortlist_k)
-                    except Exception:
-                        shortlist_k = 12
-                    try:
-                        shortlist_max_per_doc = int(getattr(getattr(self.env, "_memory", None), "retrieval_cfg", None).chunk_shortlist_max_per_doc)
-                    except Exception:
-                        shortlist_max_per_doc = 3
-                    try:
-                        chunks = await chunk_core.search_chunks(
-                            query_embedding=list(query_embedding),
-                            owner_type=owner_type,
-                            owner_id=owner_id,
-                            k=self.max_items_per_type,
-                            query_text=pack.query_text,
-                            lexical_k=lexical_k,
-                            filter_terms=bool(pack.query_text),
-                            expand_neighbors=True,
-                            neighbor_window=window,
-                            max_expanded_chunks=max_total,
-                            shortlist_k=shortlist_k,
-                            shortlist_max_per_doc=shortlist_max_per_doc,
-                        )
-                    except TypeError:
+                    if search_fn is None:
+                        chunks = []
+                    else:
+                        kwargs = {
+                            "query_embedding": list(query_embedding),
+                            "owner_type": owner_type,
+                            "owner_id": owner_id,
+                            "k": self.max_items_per_type,
+                            "query_text": pack.query_text,
+                        }
                         try:
-                            chunks = await chunk_core.search_chunks_for_rlm(
-                                query_embedding=list(query_embedding),
-                                owner_type=owner_type,
-                                owner_id=owner_id,
-                                k=self.max_items_per_type,
-                                query_text=pack.query_text,
-                            )
+                            chunks = await search_fn(**kwargs)
                         except TypeError:
-                            chunks = await chunk_core.search_chunks(
-                                query_embedding=list(query_embedding),
-                                owner_type=owner_type,
-                                owner_id=owner_id,
-                                k=self.max_items_per_type,
-                                lexical_k=lexical_k,
-                                filter_terms=bool(pack.query_text),
-                                expand_neighbors=True,
-                                neighbor_window=window,
-                                max_expanded_chunks=max_total,
-                                shortlist_k=shortlist_k,
-                                shortlist_max_per_doc=shortlist_max_per_doc,
-                            )
+                            # Back-compat for adapters that don't accept `query_text`.
+                            kwargs.pop("query_text", None)
+                            chunks = await search_fn(**kwargs)
                     # Neighbor expansion happens inside ChunkCore.search_chunks(expand_neighbors=True).
                     pack.chunks = _merge_unique(
                         getattr(pack, "chunks", []),
@@ -792,23 +727,15 @@ class RLMController:
                 k,
                 offset,
             )
-        try:
-            return await semantic_core.search(
-                query_embedding=list(query_embedding),
-                owner_type=owner_type,
-                owner_id=resolved_owner_id,
-                k=int(k),
-                offset=int(offset),
-                filters=filters,
-                query_text=query_text,
-            )
-        except TypeError:
-            return await semantic_core.search(
-                query_embedding=list(query_embedding),
-                owner_type=owner_type,
-                owner_id=resolved_owner_id,
-                k=int(k),
-            )
+        return await semantic_core.search(
+            query_embedding=list(query_embedding),
+            owner_type=owner_type,
+            owner_id=resolved_owner_id,
+            k=int(k),
+            offset=int(offset),
+            filters=filters,
+            query_text=query_text,
+        )
 
     async def _search_episodic_core(
         self,
@@ -982,9 +909,14 @@ class RLMController:
             logger.debug("RLMController: search_procedural returned %d", len(results or []))
             return results
 
+        try:
+            user_subject = normalize_user_id(user_id)
+        except Exception:
+            user_subject = user_id
+
         results = await decisions.execute_action(
             env=self.env,
-            user_id=user_id,
+            user_subject=user_subject,
             action=action,
             query_embedding=list(query_embedding),
             query_text=query_text,

@@ -279,21 +279,13 @@ class EpisodicCore:
 
         episodes: List[Episode] = []
         try:
-            try:
-                found = await self.store.search(
-                    query_embedding=query_embedding,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    k=int(k),
-                    offset=int(offset),
-                )
-            except TypeError:
-                found = await self.store.search(
-                    query_embedding=query_embedding,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    k=int(k),
-                )
+            found = await self.store.search(
+                query_embedding=query_embedding,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                k=int(k),
+                offset=int(offset),
+            )
             if found:
                 episodes.extend(found)
         except Exception:

@@ -114,13 +114,18 @@ class MemorySelector:
         def score(f: Any) -> float:
             # --- Base score: salience + confidence ---
             try:
-                meta = getattr(f, "meta", {}) or {}
-                sal = float(meta.get("salience", 0.0))
+                if isinstance(f, dict):
+                    sal = float(f.get("salience", 0.0) or 0.0)
+                else:
+                    sal = float(getattr(f, "salience", 0.0) or 0.0)
             except Exception:
                 sal = 0.0
 
             try:
-                conf = float(getattr(f, "confidence", 0.5) or 0.5)
+                if isinstance(f, dict):
+                    conf = float(f.get("confidence", 0.5) or 0.5)
+                else:
+                    conf = float(getattr(f, "confidence", 0.5) or 0.5)
             except Exception:
                 conf = 0.5
 

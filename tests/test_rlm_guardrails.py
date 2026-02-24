@@ -28,7 +28,6 @@ class DummyEnv:
     class _SemanticCore:
         async def search(
             self,
-            subject,
             query_embedding,
             owner_type,
             owner_id,
@@ -36,7 +35,6 @@ class DummyEnv:
             offset=0,
             filters=None,
             query_text=None,
-            allowed_topics=None,
         ):
             # Return a dict with a large string field to exercise truncation/guardrails
             return [

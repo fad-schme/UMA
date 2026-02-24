@@ -16,9 +16,9 @@ class DummyEnv:
         return [0.0, 0.0, 0.0]
 
     class _SemanticCore:
-        async def search(self, subject, query_embedding, owner_type, owner_id, k=10, offset=0, filters=None, query_text=None, allowed_topics=None):
+        async def search(self, query_embedding, owner_type, owner_id, k=10, offset=0, filters=None, query_text=None):
             # Return a stable set => novelty becomes 0 after baseline.
-            return [{"id": "f1", "owner_type": owner_type, "owner_id": owner_id, "subject": subject, "predicate": "p", "object": "o"}]
+            return [{"id": "f1", "owner_type": owner_type, "owner_id": owner_id, "subject": "user", "predicate": "p", "object": "o"}]
 
     async def fetch_more_facts(self, user_id, predicate, k=10, offset=0, **kwargs):
         # Same stable set regardless of paging => no novelty.
@@ -47,18 +47,21 @@ class BudgetEnv(DummyEnv):
         def __init__(self, parent):
             self._parent = parent
 
-        async def search(self, subject, query_embedding, owner_type, owner_id, k=10, offset=0, filters=None, query_text=None, allowed_topics=None):
+        async def search(self, query_embedding, owner_type, owner_id, k=10, offset=0, filters=None, query_text=None):
             # Return multiple new facts only once (during the loop), not during baseline.
             if self._parent._returned_once:
                 self._parent._returned_once = False
                 return []
             return [
-                {"id": "f1", "owner_type": owner_type, "owner_id": owner_id, "subject": subject, "predicate": "p", "object": "o"},
-                {"id": "f2", "owner_type": owner_type, "owner_id": owner_id, "subject": subject, "predicate": "p", "object": "o2"},
+                {"id": "f1", "owner_type": owner_type, "owner_id": owner_id, "subject": "user", "predicate": "p", "object": "o"},
+                {"id": "f2", "owner_type": owner_type, "owner_id": owner_id, "subject": "user", "predicate": "p", "object": "o2"},
             ]
 
     async def fetch_more_facts(self, user_id, predicate, k=10, offset=0, **kwargs):
-        return []
+        return [
+            {"id": "f_new_1", "owner_type": kwargs.get("owner_type"), "owner_id": kwargs.get("owner_id"), "subject": "user", "predicate": predicate, "object": "o3"},
+            {"id": "f_new_2", "owner_type": kwargs.get("owner_type"), "owner_id": kwargs.get("owner_id"), "subject": "user", "predicate": predicate, "object": "o4"},
+        ]
 
 
 @pytest.mark.asyncio

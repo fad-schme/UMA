@@ -399,10 +399,11 @@ class SemanticSQLStore(BaseVectorSQLStore):
     async def search(
         self,
         query_embedding: List[float],
-        subject: Optional[str] = None,
-        owner_type: str | None = None,
-        owner_id: str | None = None,
+        *,
+        owner_type: str,
+        owner_id: str,
         k: int = 10,
+        offset: int = 0,
     ) -> List[Fact]:
         """
         Retrieve top-k matching semantic facts.
@@ -413,17 +414,26 @@ class SemanticSQLStore(BaseVectorSQLStore):
             logger.error("SemanticSQLStore.search requires owner_type and owner_id")
             raise ValueError("SemanticSQLStore.search requires owner_type and owner_id")
 
-        filters: dict[str, Any] = {
-            "owner_type": owner_type,
-            "owner_id": owner_id,
-        }
-        if subject:
-            filters["subject"] = subject
+        try:
+            k_i = max(0, int(k))
+        except Exception:
+            k_i = 10
+        try:
+            offset_i = max(0, int(offset))
+        except Exception:
+            offset_i = 0
+
+        if k_i <= 0:
+            return []
+
+        filters: dict[str, Any] = {"owner_type": owner_type, "owner_id": owner_id}
 
         try:
+            # Vector indexes do not (yet) support native offset paging; approximate by retrieving
+            # a larger window and slicing. This preserves deterministic ordering.
             ids = await self._vector_search_ids(
                 query_embedding=query_embedding,
-                k=k,
+                k=k_i + offset_i,
                 filters=filters,
                 log_context="semantic_search",
                 id_prefix="fact_",
@@ -436,26 +446,30 @@ class SemanticSQLStore(BaseVectorSQLStore):
                 )
                 return []
 
+            windowed_ids = ids[offset_i : offset_i + k_i]
+            if not windowed_ids:
+                return []
+
             facts = await self.fetch_by_ids(
-                ids,
+                windowed_ids,
                 owner_type=owner_type,
                 owner_id=owner_id,
                 log_context="semantic_search",
             )
             logger.debug(
                 "SemanticSQLStore.search: vector candidates=%d, sql_fetched=%d, owner=%s:%s",
-                len(ids),
+                len(windowed_ids),
                 len(facts),
                 owner_type,
                 owner_id,
             )
-            if ids and not facts:
+            if windowed_ids and not facts:
                 logger.warning(
                     "SemanticSQLStore.search: vector candidates=%d but SQL returned 0 op=search owner=%s:%s ids=%s",
-                    len(ids),
+                    len(windowed_ids),
                     owner_type,
                     owner_id,
-                    ids[:3],
+                    windowed_ids[:3],
                 )
             return facts
         except Exception:
@@ -465,10 +479,10 @@ class SemanticSQLStore(BaseVectorSQLStore):
     async def search_text(
         self,
         query: str,
-        subject: Optional[str] = None,
+        *,
+        owner_type: str,
+        owner_id: str,
         limit: int = 5,
-        owner_type: Optional[str] = None,
-        owner_id: Optional[str] = None,
     ) -> List[Fact]:
         """
         Fallback lexical search over stored document text.
@@ -490,9 +504,6 @@ class SemanticSQLStore(BaseVectorSQLStore):
         try:
             where = ["predicate='document'"]
             params: List[Any] = []
-            if subject:
-                where.append("subject=?")
-                params.append(subject)
             for term in terms:
                 where.append("LOWER(object) LIKE ?")
                 params.append(f"%{term}%")
