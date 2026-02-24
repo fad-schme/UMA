@@ -22,6 +22,7 @@ import logging
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ...types import Chunk
+from ..retrieval.ranking import fuse_candidates
 from ..utils.dedupe import dedupe_by_id
 
 logger = logging.getLogger(__name__)
@@ -105,16 +106,11 @@ class ChunkCore:
         """
         RLM-friendly chunk retrieval wrapper.
 
-        Centralizes retrieval_cfg defaults (lexical_k, neighbor expansion, shortlist)
+        Centralizes retrieval_cfg defaults (neighbor expansion, shortlist)
         so RLM controller does not need to know chunk retrieval internals.
         """
         memory = getattr(self, "_memory", None)
         retrieval_cfg = getattr(memory, "retrieval_cfg", None) if memory is not None else None
-
-        try:
-            lexical_k = int(getattr(retrieval_cfg, "lexical_chunks_k", 15))
-        except Exception:
-            lexical_k = 15
         try:
             neighbor_window = int(getattr(retrieval_cfg, "neighbor_window", 1))
         except Exception:
@@ -138,7 +134,6 @@ class ChunkCore:
             owner_id=owner_id,
             k=int(k),
             query_text=query_text,
-            lexical_k=lexical_k,
             filter_terms=bool(query_text and str(query_text).strip()),
             expand_neighbors=True,
             neighbor_window=neighbor_window,
@@ -179,7 +174,7 @@ class ChunkCore:
             raise
         return dedupe_by_id(chunks)
 
-    async def _search_text(
+    async def _lexical_search(
         self,
         query_text: str,
         *,
@@ -191,12 +186,12 @@ class ChunkCore:
         Internal lexical-only chunk search (SQL LIKE).
         Used by `search_chunks` as a fallback/merge signal.
         """
-        if self.store is None or not hasattr(self.store, "search_text"):
+        if self.store is None or not hasattr(self.store, "lexical_search"):
             return []
         chunks: List[Chunk] = []
         try:
-            found = await self.store.search_text(
-                query_text,
+            found = await self.store.lexical_search(
+                query_text=query_text,
                 owner_type=owner_type,
                 owner_id=owner_id,
                 k=int(k),
@@ -204,7 +199,7 @@ class ChunkCore:
             if found:
                 chunks.extend(found)
         except Exception:
-            logger.exception("ChunkCore._search_text failed owner=%s:%s", owner_type, owner_id)
+            logger.exception("ChunkCore._lexical_search failed owner=%s:%s", owner_type, owner_id)
             raise
         return dedupe_by_id(chunks)
 
@@ -271,7 +266,6 @@ class ChunkCore:
         k: int = 10,
         query_text: Optional[str] = None,
         doc_id: Optional[str] = None,
-        lexical_k: Optional[int] = None,
         filter_terms: bool = False,
         expand_neighbors: bool = False,
         neighbor_window: int = 1,
@@ -302,12 +296,27 @@ class ChunkCore:
         if k <= 0:
             return []
 
+        memory = getattr(self, "_memory", None)
+        retrieval_cfg = getattr(memory, "retrieval_cfg", None) if memory is not None else None
+        hybrid_cfg = getattr(retrieval_cfg, "hybrid", None) if retrieval_cfg is not None else None
+        hybrid_enabled = bool(getattr(hybrid_cfg, "enabled", True)) if hybrid_cfg is not None else True
+        fusion_strategy = str(getattr(hybrid_cfg, "fusion_strategy", "rrf") or "rrf") if hybrid_cfg is not None else "rrf"
+        try:
+            top_k_dense = int(getattr(hybrid_cfg, "top_k_dense", 0) or 0) if hybrid_cfg is not None else 0
+        except Exception:
+            top_k_dense = 0
+        try:
+            top_k_sparse = int(getattr(hybrid_cfg, "top_k_sparse", 15) or 15) if hybrid_cfg is not None else 15
+        except Exception:
+            top_k_sparse = 15
+        dense_k = top_k_dense if top_k_dense > 0 else k
+
         chunks = await self._search(
             user_id="",
             query_embedding=query_embedding,
             owner_type=owner_type,
             owner_id=owner_id,
-            k=k,
+            k=dense_k,
             doc_id=doc_id,
         )
         if any(isinstance(x, dict) for x in (chunks or [])):
@@ -325,47 +334,48 @@ class ChunkCore:
             doc_id,
         )
 
+        dense_chunks = list(chunks or [])
         lexical_ids: set[str] = set()
-        if query_text and query_text.strip():
-            lk = None
-            try:
-                lk = int(lexical_k) if lexical_k is not None else None
-            except Exception:
-                lk = None
-            if lk is None:
-                lk = k
-            if lk > 0:
-                found: List[Chunk] = []
-                logger.debug(
-                    "ChunkCore.search_chunks lexical=like owner=%s:%s lk=%s query_text=%r",
-                    owner_type,
-                    owner_id,
-                    lk,
-                    query_text,
+        sparse_chunks: List[Chunk] = []
+        if hybrid_enabled and top_k_sparse > 0 and query_text and query_text.strip():
+            found: List[Chunk] = []
+            logger.debug(
+                "ChunkCore.search_chunks lexical=enabled owner=%s:%s k_sparse=%s strategy=%s query_text=%r",
+                owner_type,
+                owner_id,
+                top_k_sparse,
+                fusion_strategy,
+                query_text,
+            )
+            found = await self._lexical_search(
+                query_text=query_text,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                k=int(top_k_sparse),
+            )
+            logger.debug(
+                "ChunkCore.search_chunks lexical results=%d",
+                len(found),
+            )
+            if found:
+                sparse_chunks = list(found or [])
+                for it in found:
+                    if isinstance(it, dict):
+                        logger.error(
+                            "ChunkCore.search_chunks: expected Chunk objects from store.lexical_search; got dict"
+                        )
+                        raise TypeError(
+                            "ChunkCore expected Chunk objects from store.lexical_search(); got dict. "
+                            "Fix the chunk store to return Chunk only."
+                        )
+                    cid = getattr(it, "id", None)
+                    if cid:
+                        lexical_ids.add(str(cid))
+                chunks = fuse_candidates(
+                    dense=dense_chunks,
+                    sparse=sparse_chunks,
+                    strategy=fusion_strategy,
                 )
-                found = await self._search_text(
-                    query_text=query_text,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    k=lk,
-                )
-                logger.debug(
-                    "ChunkCore.search_chunks lexical results=%d",
-                    len(found),
-                )
-                if found:
-                    for it in found:
-                        if isinstance(it, dict):
-                            logger.error("ChunkCore.search_chunks: expected Chunk objects from store.search_text; got dict")
-                            raise TypeError(
-                                "ChunkCore expected Chunk objects from store.search_text(); got dict. "
-                                "Fix the chunk store to return Chunk only."
-                            )
-                        cid = getattr(it, "id", None)
-                        if cid:
-                            lexical_ids.add(str(cid))
-                    merged = list(chunks or []) + list(found or [])
-                    chunks = dedupe_by_id(merged)
         logger.debug(
             "ChunkCore.search_chunks merged_results=%d lexical_ids=%d filter_terms=%s",
             len(chunks),
@@ -385,15 +395,11 @@ class ChunkCore:
                 meta.setdefault("retrieval_stage", "search")
                 if _chunk_id(ch) in lexical_ids:
                     meta.setdefault("retrieval_method", "lexical")
-                    meta.setdefault("lexical_score", 0.2)
+                    meta.setdefault("lexical_score", float(meta.get("lexical_confidence", 0.2) or 0.2))
                 else:
                     meta.setdefault("retrieval_method", "vector")
                 ch.meta = meta
 
-            chunks = sorted(
-                chunks,
-                key=lambda c: (0 if _chunk_id(c) in lexical_ids else 1),
-            )
             for ch in chunks:
                 _apply_meta(ch)
         else:
@@ -485,7 +491,7 @@ class ChunkCore:
         """
         Select a deterministic subset of chunks to serve as neighbor-expansion anchors.
 
-        `chunks` is assumed to already be ranked (lexical-first ordering applied).
+        `chunks` is assumed to already be ranked (canonical Ranker ordering applied).
         """
         try:
             k = int(shortlist_k) if shortlist_k is not None else None

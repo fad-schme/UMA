@@ -23,6 +23,7 @@ from uma.core.utils.dedupe import dedupe_by_id
 from uma.core.utils.accessors import get_attr_or_key
 from uma.core.utils.serialization import chunk_to_dict
 from uma.core.utils.identity import normalize_user_id
+from uma.core.utils.text_bounds import trim_to_sentence_boundary
 
 logger = logging.getLogger(__name__)
 
@@ -357,7 +358,7 @@ class ContextPackBuilder:
                 if not text:
                     continue
                 sn = dict(sn)
-                sn["text"] = _trim_to_sentence_boundary(text, max_chars=int(cfg.snippet_max_chars or 240))
+                sn["text"] = trim_to_sentence_boundary(text, max_chars=int(cfg.snippet_max_chars or 240))
                 bounded.append(sn)
                 if len(bounded) >= int(cfg.max_chunks or 3):
                     break
@@ -519,25 +520,13 @@ def _extract_relevant_excerpt(text: str, query_text: str, max_chars: int = 240) 
             start = max(0, idx - 1)
             end = min(len(sentences), idx + 2)
             excerpt = " ".join(sentences[start:end]).strip()
-            return _trim_to_sentence_boundary(excerpt, max_chars=max_chars)
+            return trim_to_sentence_boundary(excerpt, max_chars=max_chars)
 
     # Fallback: first complete sentences
     # Fallback: first complete sentences that don't look like fragments.
     kept = [s for s in sentences if not _starts_like_fragment(s)]
     excerpt = " ".join((kept or sentences)[:3]).strip()
-    return _trim_to_sentence_boundary(excerpt, max_chars=max_chars)
-
-
-def _trim_to_sentence_boundary(text: str, *, max_chars: int) -> str:
-    if not text:
-        return ""
-    if len(text) <= max_chars:
-        return text.strip()
-    cut = text[:max_chars]
-    m = re.search(r"[.!?](?!.*[.!?])", cut)
-    if m:
-        return cut[: m.end()].strip()
-    return cut.strip()
+    return trim_to_sentence_boundary(excerpt, max_chars=max_chars)
 
 
 def _snippet_quality_ok(snippet: str, terms: List[str], *, require_terms: bool) -> bool:

@@ -98,7 +98,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
             meta = {}
             _debug_once("meta_json", str(chunk_id), "ChunkSQLStore: failed to parse meta JSON id=%s")
 
-        # Preserve lexical confidence score when present (e.g., computed in search_text CTE).
+        # Preserve lexical confidence score when present (e.g., computed in lexical_search CTE).
         try:
             if hasattr(row, "get") and row.get("score") is not None:
                 meta["lexical_confidence"] = float(row.get("score"))  # type: ignore[arg-type]
@@ -186,6 +186,9 @@ class ChunkSQLStore(BaseVectorSQLStore):
             try:
                 vector_meta = {
                     "doc_id": chunk.doc_id,
+                    "position": int(chunk.position),
+                    "page_start": int(chunk.page_range[0]),
+                    "page_end": int(chunk.page_range[1]),
                     "owner_type": chunk.owner_type,
                     "owner_id": chunk.owner_id,
                     "scope_key": f"{chunk.owner_type}:{chunk.owner_id}",
@@ -237,21 +240,23 @@ class ChunkSQLStore(BaseVectorSQLStore):
         filters["owner_type"] = owner_type
         filters["owner_id"] = owner_id
         try:
-            ids = await self._vector_search_ids(
+            id_score_pairs = await self._vector_search_ids(
                 query_embedding=query_embedding,
                 k=k,
                 filters=filters,
                 log_context="chunk_search",
                 id_prefix="chunk_",
             )
-            if not ids:
+            if not id_score_pairs:
                 logger.debug(
                     "ChunkSQLStore.search: vector candidates=0, sql_fetched=0, owner=%s:%s",
                     owner_type,
                     owner_id,
                 )
                 return []
+            ids = [sid for sid, _score in id_score_pairs]
             chunks = await self.fetch_by_ids(ids, owner_type=owner_type, owner_id=owner_id)
+            self._attach_vector_scores(chunks, id_score_pairs)
             logger.debug(
                 "ChunkSQLStore.search: vector candidates=%d, sql_fetched=%d, owner=%s:%s",
                 len(ids),
@@ -272,7 +277,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
             logger.exception("ChunkSQLStore.search failed.")
             raise
 
-    async def search_text(
+    async def lexical_search(
         self,
         query_text: str,
         *,
@@ -285,13 +290,13 @@ class ChunkSQLStore(BaseVectorSQLStore):
         Uses SQL LIKE against chunk text (case-insensitive).
         """
         if logger.isEnabledFor(logging.DEBUG):
-            logger.debug("ChunkSQLStore.search_text STARTED")
+            logger.debug("ChunkSQLStore.lexical_search STARTED")
 
         if not query_text or not isinstance(query_text, str):
             return []
         if not owner_type or not owner_id:
-            logger.error("ChunkSQLStore.search_text requires owner_type and owner_id")
-            raise ValueError("ChunkSQLStore.search_text requires owner_type and owner_id")
+            logger.error("ChunkSQLStore.lexical_search requires owner_type and owner_id")
+            raise ValueError("ChunkSQLStore.lexical_search requires owner_type and owner_id")
 
         from ..core.utils.user_query_helper import build_query_term_set
 
@@ -316,7 +321,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "ChunkSQLStore.search_text terms=%r phrases=%r phrase_primacy=%s",
+                "ChunkSQLStore.lexical_search terms=%r phrases=%r phrase_primacy=%s",
                 terms,
                 phrases,
                 bool(phrases),
@@ -341,7 +346,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
         min_score = 3.0 if phrases else 2.0
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "ChunkSQLStore.search_text weights phrase_weight=%.2f keyword_weight=%.2f min_score=%.2f",
+                "ChunkSQLStore.lexical_search weights phrase_weight=%.2f keyword_weight=%.2f min_score=%.2f",
                 phrase_weight,
                 keyword_weight,
                 min_score,
@@ -390,7 +395,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
 
         conn = self._conn()
         try:
-            rows = self._query_all(conn, sql, params=params, log_context="chunk_search_text")
+            rows = self._query_all(conn, sql, params=params, log_context="chunk_lexical_search")
             if logger.isEnabledFor(logging.INFO):
                 avg_score = 0.0
                 try:
@@ -399,7 +404,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
                 except Exception:
                     avg_score = 0.0
                 logger.info(
-                    "ChunkSQLStore.search_text query_len=%d terms=%d phrases=%d returned=%d avg_score=%.2f top_terms=%r top_phrases=%r",
+                    "ChunkSQLStore.lexical_search query_len=%d terms=%d phrases=%d returned=%d avg_score=%.2f top_terms=%r top_phrases=%r",
                     len(query_text),
                     len(terms),
                     len(phrases),
@@ -410,7 +415,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
                 )
             return [self._row_to_object(r) for r in rows]
         except Exception:
-            logger.exception("ChunkSQLStore.search_text failed.")
+            logger.exception("ChunkSQLStore.lexical_search failed.")
             raise
         finally:
             conn.close()

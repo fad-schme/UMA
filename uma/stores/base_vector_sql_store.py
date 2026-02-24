@@ -27,7 +27,7 @@ Coding agent instructions
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .base_sql_store import BaseSQLStore
 from ..adapters.vector.base import VectorIndex
@@ -102,9 +102,9 @@ class BaseVectorSQLStore(BaseSQLStore):
         log_context: str = "",
         *,
         id_prefix: Optional[str] = None,
-    ) -> List[str]:
+    ) -> List[Tuple[str, float]]:
         """
-        Run a vector search and return a ranked list of IDs.
+        Run a vector search and return a ranked list of (id, score).
 
         Parameters
         ----------
@@ -119,8 +119,8 @@ class BaseVectorSQLStore(BaseSQLStore):
 
         Returns
         -------
-        List[str]
-            Ordered list of object IDs.
+        List[Tuple[str, float]]
+            Ordered list of (id, score) pairs, as returned by the vector backend.
         """
 
         ctx = f" [{log_context}]" if log_context else ""
@@ -157,25 +157,73 @@ class BaseVectorSQLStore(BaseSQLStore):
             return []
 
         # Validate format: [(id, score), ...]
-        valid_ids = []
+        valid: List[Tuple[str, float]] = []
+        seen: set[str] = set()
         for pair in id_score_pairs:
             try:
-                sid, _ = pair
-                if isinstance(sid, str):
-                    if id_prefix is None or sid.startswith(id_prefix):
-                        valid_ids.append(sid)
-                else:
+                sid, raw_score = pair
+                if not isinstance(sid, str):
                     logger.warning(
                         "%s Invalid vector search result element=%r%s",
                         self.__class__.__name__, pair, ctx
                     )
+                    continue
+                if id_prefix is not None and not sid.startswith(id_prefix):
+                    continue
+                if sid in seen:
+                    continue
+                try:
+                    score = float(raw_score)
+                except Exception:
+                    logger.warning(
+                        "%s Invalid vector score element=%r%s",
+                        self.__class__.__name__,
+                        pair,
+                        ctx,
+                    )
+                    continue
+                seen.add(sid)
+                valid.append((sid, score))
             except Exception:
                 logger.exception(
                     "%s Malformed vector search result element=%r%s",
                     self.__class__.__name__, pair, ctx
                 )
 
-        return valid_ids
+        return valid
+
+    def _attach_vector_scores(self, items: Sequence[Any], id_score_pairs: Sequence[Tuple[str, float]]) -> None:
+        """
+        Attach vector backend scores to each item's `.meta` dict under `vector_score`.
+
+        This preserves dense retrieval scores end-to-end without changing the domain model.
+        """
+        if not items or not id_score_pairs:
+            return
+
+        score_by_id: Dict[str, float] = {sid: float(score) for sid, score in id_score_pairs if sid}
+        if not score_by_id:
+            return
+
+        for obj in items:
+            try:
+                sid = getattr(obj, "id", None)
+                if not isinstance(sid, str) or not sid:
+                    continue
+                score = score_by_id.get(sid)
+                if score is None:
+                    continue
+                meta = getattr(obj, "meta", None) or {}
+                if not isinstance(meta, dict):
+                    meta = {}
+                meta["vector_score"] = float(score)
+                obj.meta = meta  # type: ignore[attr-defined]
+            except Exception:
+                logger.exception(
+                    "%s Failed attaching vector_score to object=%r",
+                    self.__class__.__name__,
+                    obj,
+                )
 
     # ------------------------------------------------------------------ #
     # Shared SQL lookup after vector ID retrieval
@@ -267,7 +315,7 @@ class BaseVectorSQLStore(BaseSQLStore):
         List[Any]
             Ranked list of objects.
         """
-        ids = await self._vector_search_ids(
+        id_score_pairs = await self._vector_search_ids(
             query_embedding=query_embedding,
             k=k,
             filters=filters,
@@ -275,15 +323,18 @@ class BaseVectorSQLStore(BaseSQLStore):
             id_prefix=id_prefix,
         )
 
-        if not ids:
+        if not id_score_pairs:
             return []
 
-        return await self._fetch_ranked_rows_by_ids(
+        ids = [sid for sid, _score in id_score_pairs]
+        items = await self._fetch_ranked_rows_by_ids(
             ids=ids,
             log_context=log_context,
             owner_type=filters.get("owner_type") if filters else None,
             owner_id=filters.get("owner_id") if filters else None,
         )
+        self._attach_vector_scores(items, id_score_pairs)
+        return items
 
     # ------------------------------------------------------------------ #
     # Optional "IDs first" public helpers (for hybrid retrieval)
@@ -297,9 +348,9 @@ class BaseVectorSQLStore(BaseSQLStore):
         filters: Optional[Dict[str, Any]] = None,
         log_context: str = "",
         id_prefix: Optional[str] = None,
-    ) -> List[str]:
+    ) -> List[Tuple[str, float]]:
         """
-        Return ranked IDs for a vector query (no SQL fetch).
+        Return ranked (id, score) pairs for a vector query (no SQL fetch).
 
         This is an optional optimization to enable "IDs+scores first" retrieval.
         """

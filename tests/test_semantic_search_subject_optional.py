@@ -13,7 +13,7 @@ class DummyStore:
         # SemanticCore no longer passes/accepts subject-gating; store should treat this as corpus-wide.
         return list(self._facts)
 
-    async def search_text(self, **kwargs):
+    async def lexical_search(self, **kwargs):
         return []
 
 

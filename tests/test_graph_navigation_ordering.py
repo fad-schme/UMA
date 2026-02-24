@@ -23,7 +23,16 @@ class DummyMemory:
     def __init__(self):
         self.embedder = DummyEmbedder()
         self.graph_core = DummyGraphCore()
-        self.retrieval_cfg = type("Cfg", (), {"strict": True, "lexical_chunks_k": 0, "max_evidence_chunks": 0})()
+        hybrid = type(
+            "Hybrid",
+            (),
+            {"enabled": False, "top_k_dense": 0, "top_k_sparse": 0, "fusion_strategy": "rrf"},
+        )()
+        self.retrieval_cfg = type(
+            "Cfg",
+            (),
+            {"strict": True, "hybrid": hybrid, "max_evidence_chunks": 0},
+        )()
 
 
 class DummyRetrievalConfig:

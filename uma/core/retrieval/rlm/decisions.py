@@ -489,12 +489,7 @@ async def execute_action(
             "k": k,
             "query_text": query_text,
         }
-        try:
-            return await search_fn(**kwargs)
-        except TypeError:
-            # Back-compat for adapters that don't accept `query_text`.
-            kwargs.pop("query_text", None)
-            return await search_fn(**kwargs)
+        return await search_fn(**kwargs)
 
     if action.action == "episodic_clusters":
         return await env.episodic_cluster_summaries(

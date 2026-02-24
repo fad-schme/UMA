@@ -1,4 +1,3 @@
-If you can read this file, confirm by quoting the first heading.
 codex.AGENT.md — UMA-RLM (Codex Coding Agent Guide)
 
 Purpose of this file
@@ -64,8 +63,10 @@ UMA-RLM retrieval uses multiple “lanes”:
 	5.	Graph — relationship navigation / predicate-scoped expansion.
 
 Lane responsibilities
-	•	Vector search: candidate discovery (fast recall).
-	•	SQL text search: precision keyword recall, deterministic filtering.
+	•	Vector search: candidate discovery (fast recall). Adapter must return (id, score).
+	•	Lexical search: candidate discovery for exact terms/IDs; implemented as an OPTIONAL capability on the same adapter as vector search.
+	•	Ranking: one canonical module owns hybrid fusion + optional rerank + truncation. No distributed ranking logic.
+	•	SQL: authoritative source of chunk text and metadata; vector DB stores only what’s needed for filtering and id mapping.
 	•	Graph: routing/index for entity/predicate expansion, not primary truth.
 	•	Facts: preferred “truth layer”; chunks are evidence.
 
@@ -111,8 +112,9 @@ Every chunk must carry (at minimum):
 	•	provenance: source_uri/hash if available
 
 Storage semantics
-	•	SQL is authoritative for chunk text.
+	•	SQL is authoritative for chunk text and must always be the source of truth during rendering.
 	•	Vector store is an accelerator and must be rebuildable from SQL.
+	•	Vector store payload must be minimal (ids + filterable metadata). Do not duplicate full chunk text in the vector DB unless explicitly required by a feature.
 
 ⸻
 
@@ -157,6 +159,17 @@ Determinism
 Required policy
 
 There must be one canonical production path from query → context pack → rendered snippet.
+
+Canonical retrieval pipeline
+
+All production callers must follow this sequence:
+	1.	Candidate retrieval: dense vector search (top_k_dense) plus optional lexical search (top_k_sparse), both owner-scoped.
+	2.	Fusion: merge dense + lexical candidates (RRF or simple boost-on-overlap), producing a single candidate pool.
+	3.	Optional rerank: rerank only within the candidate pool. Rerank must never expand the pool.
+	4.	Selection: deterministic truncation to max_chunks/max_facts.
+	5.	Snippet rendering: presentation-only (merge adjacency, bound length, preserve traceability).
+
+Policy: do not implement ranking inside stores, snippet rendering, or controller layers.
 
 Both:
 	•	gold runner
@@ -213,11 +226,11 @@ If a unit test disagrees with baseline design:
 
 When retrieval output looks wrong:
 	1.	Confirm ingestion produced chunks with correct ownership + doc metadata.
-	2.	Confirm embeddings exist and dimension matches index.
+	2.	Confirm vector retrieval returns ids AND scores end-to-end (no score dropped between adapter and selector).
 	3.	Confirm facts were extracted and persisted (counts, thresholds, parse errors).
-	4.	Confirm retrieval searched:
-	•	agent lane + user lane (as designed)
-	•	lexical + vector candidates (as designed)
+	4.	Confirm:
+	    • dense + lexical candidates were both considered when enabled (hybrid)
+	    • fusion + optional rerank ran in the canonical ranking module
 	5.	Confirm snippet refiner removed fragments and short/junk chunks.
 	6.	Confirm final snippets are exactly what the agent sees (not “raw chunks”).
 
@@ -254,18 +267,40 @@ If a component is optional and not initialized:
 
 ⸻
 
-13) What to ask for when you need more context
+13) Lean ranking rules (hybrid + rerank)
+
+Goal
+
+Improve retrieval accuracy without spreading ranking logic across the codebase.
+
+Rules
+	•	One ranking module owns fusion + optional rerank + final score computation.
+	•	Stores/adapters return candidates and raw signals; they do not decide final ranking.
+	•	Vector similarity score is mandatory plumbing (id, score) from adapter → selector.
+	•	Lexical retrieval is optional and implemented as a capability on the SAME adapter as vector search.
+	•	Lexical results must be fused with dense results BEFORE rerank.
+	•	Reranking is optional and must be post-retrieval only (reorder candidates, never expand).
+	•	All ranking must remain owner-scoped; never rerank across mixed owners.
+
+Implementation guidance
+	•	Prefer extending existing scoring helpers (e.g., lexical_score) rather than adding new scoring paths.
+	•	Expose a debug “score card” per candidate (vector_score, lexical_score, rerank_score, final_score) under a flag.
+
+⸻
+
+14) What to ask for when you need more context
 
 If you’re missing necessary files to patch correctly, ask for:
 	•	the exact module that defines the type you’re working with (e.g., Fact, ContextPack)
 	•	the environment API signatures used by the controller
 	•	the retrieval service entry point used by the example app
+	•	the module that currently computes lexical_score / snippet scoring so ranking can be consolidated without duplication
 
 Do not request the whole repo; request only specific files.
 
 ⸻
 
-14) Definition of Done
+15) Definition of Done
 
 A change is “done” only when all of the following are true:
 

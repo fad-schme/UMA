@@ -47,20 +47,13 @@ class SemanticIngestor:
         self.threshold = float(salience_threshold)
         logger.debug("SemanticIngestor initialized (threshold=%.2f).", self.threshold)
 
-    @staticmethod
-    # def _user_fact_subject_label(*, user_id: str) -> str:
-    #     # Fact.subject is an entity label (used for graph navigation and embedding text),
-    #     # NOT an identity key. Keep it stable and human-meaningful for user facts.
-    #     _ = user_id
-    #     return "user"
-
     async def extract(self, user_id: str, text: str, *, extra_meta: dict | None = None) -> List[Fact]:
         if self.extractor is None:
             logger.debug("SemanticIngestor.extract: extractor unavailable; returning [].")
             return []
         try:
             return await self.extractor.extract_user_facts(
-                subject="",
+                subject="user",
                 text=text,
                 owner_type="user",
                 owner_id=user_id,

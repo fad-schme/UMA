@@ -35,4 +35,3 @@ def test_selector_uses_max_chunks_not_max_facts() -> None:
     }
     out = sel.select(raw)
     assert len(out["chunks"]) == 3
-

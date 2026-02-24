@@ -104,8 +104,8 @@ def test_ingest_document_is_idempotent_by_owner_and_hash(tmp_path):
             import json
             meta = json.loads(meta_rows[0]["meta"])
             assert isinstance(meta.get("text_hash"), str) and len(meta["text_hash"]) >= 32
-            assert meta.get("chunk_size_tokens") == 400
-            assert meta.get("overlap_tokens") == 150
+            assert meta.get("chunk_size_tokens") == 450
+            assert meta.get("overlap_tokens") == 100
             assert meta.get("chunker_version") == "doc_chunk_v2"
     finally:
         conn.close()

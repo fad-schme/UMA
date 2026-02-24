@@ -20,7 +20,7 @@ class AssertingCore:
         assert kwargs.get("owner_id") == self.expected_owner_id
         return []
 
-    async def search_text(self, *args, **kwargs):
+    async def lexical_search(self, *args, **kwargs):
         assert kwargs.get("owner_type") == self.expected_owner_type
         assert kwargs.get("owner_id") == self.expected_owner_id
         return []
@@ -35,7 +35,16 @@ class DummyMemory:
     def __init__(self):
         self.embedder = DummyEmbedder()
         # force user scope via retrieval policy by using a recall-ish query text
-        self.retrieval_cfg = type("Cfg", (), {"strict": True, "lexical_chunks_k": 1, "max_evidence_chunks": 0})()
+        hybrid = type(
+            "Hybrid",
+            (),
+            {"enabled": True, "top_k_dense": 0, "top_k_sparse": 1, "fusion_strategy": "rrf"},
+        )()
+        self.retrieval_cfg = type(
+            "Cfg",
+            (),
+            {"strict": True, "hybrid": hybrid, "max_evidence_chunks": 0},
+        )()
         self.episodic_core = AssertingCore("user", "user:u1")
         self.semantic_core = AssertingCore("user", "user:u1")
         self.chunk_core = AssertingCore("user", "user:u1")

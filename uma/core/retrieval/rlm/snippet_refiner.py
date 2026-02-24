@@ -8,8 +8,8 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from uma.core.utils.user_query_helper import extract_keywords_and_phrases
 from uma.core.utils.accessors import get_attr_or_key
+from uma.core.utils.text_bounds import trim_to_sentence_boundary
 from uma.core.llm.controller import LLMCallContext, generate_text
 
 logger = logging.getLogger(__name__)
@@ -69,87 +69,39 @@ class SnippetRefiner:
             logger.debug("SnippetRefiner.refine: no chunks provided")
             return []
 
-        # Step 0 — cheap deterministic prefilter
-        candidates = self._prefilter_chunks(chunks, query_text)
-        if not candidates:
-            logger.debug("SnippetRefiner.refine: prefilter removed all candidates")
-            return []
-
-        # Step 1 — group adjacent chunks
+        # Presentation-only: normalize and group already-retrieved chunks.
+        candidates = [self._normalize_chunk(ch) for ch in (chunks or [])]
+        candidates = [c for c in candidates if (c.get("text") or "").strip()]
         grouped = self._group_chunks(candidates)
         logger.debug(
             "SnippetRefiner.refine: candidates=%d grouped=%d facts=%d",
-            len(candidates),
+            len(candidates or []),
             len(grouped),
             len(facts or []),
         )
 
-        # Step 2 — score + shortlist
-        facts_norm = [self._normalize_fact(f) for f in (facts or [])]
-        scored = self._score_candidates(grouped, query_text, facts_norm)
-        shortlist_k = max(1, int(self.cfg.snippet_refiner_top_k or 6))
-        shortlist = scored[:shortlist_k]
-        logger.debug(
-            "SnippetRefiner.refine: scored=%d shortlist_k=%d kept_for_refine=%d",
-            len(scored),
-            shortlist_k,
-            len(shortlist),
-        )
+        # Keep input ordering: no reranking, no relevance filtering.
+        # Enforce only strict presentation budgets (count + length).
+        max_out = int(getattr(self.cfg, "max_chunks", 3) or 3)
+        max_out = max(0, max_out)
+        max_chars = int(getattr(self.cfg, "snippet_max_chars", 240) or 240)
+        max_chars = max(1, max_chars)
 
-        # Step 3 — keep shortlist deterministically (LLM does not gate selection)
-        kept = shortlist
-
-        # Step 4 — per-snippet refinement (bounded)
-        max_out = int(self.cfg.max_chunks or 3)
-        refined_scored: List[Tuple[float, Dict[str, Any]]] = []
-        for cand in kept[:max(1, shortlist_k)]:
-            refined, score = await self._refine_single(query_text, cand)
-            if refined is not None and score is not None:
-                refined_scored.append((float(score), refined))
-
-        kept_scored = sorted(
-            [(s, snip) for (s, snip) in refined_scored if s >= 0.7],
-            key=lambda x: x[0],
-            reverse=True,
-        )
-
-        if kept_scored:
-            final = [snip for _, snip in kept_scored[:max_out]]
-            logger.debug("SnippetRefiner.refine: final_snippets=%d", len(final))
-            return final
-
-        # Top-K fallback: if everything is below threshold, keep the best N anyway.
-        if refined_scored:
-            refined_scored.sort(key=lambda x: x[0], reverse=True)
-            final = [snip for _, snip in refined_scored[:max_out]]
-            logger.debug(
-                "SnippetRefiner.refine: fallback_keep_top_k=%d best_score=%.2f",
-                len(final),
-                refined_scored[0][0],
-            )
-            return final
-
-        logger.debug("SnippetRefiner.refine: no snippets survived refinement")
-        return []
-
-    # ------------------------------------------------------------------
-    # Step 0 — deterministic prefilter
-    # ------------------------------------------------------------------
-
-    def _prefilter_chunks(self, chunks: List[Any], query_text: str) -> List[Dict[str, Any]]:
-        terms = self._extract_terms(query_text)
         out: List[Dict[str, Any]] = []
-
-        for ch in chunks:
-            norm = self._normalize_chunk(ch)
-            text = (norm.get("text") or "").strip()
+        for cand in grouped:
+            if max_out and len(out) >= max_out:
+                break
+            refined, _score = await self._refine_single(query_text, cand, max_chars=max_chars)
+            if refined is None:
+                continue
+            text = (refined.get("text") or "").strip()
             if not text:
                 continue
-            if not self._contains_terms(text, terms):
-                continue
-            out.append(norm)
-
-        logger.debug("SnippetRefiner.prefilter: %d → %d", len(chunks), len(out))
+            refined = dict(refined)
+            refined["text"] = trim_to_sentence_boundary(text, max_chars=max_chars)
+            if refined["text"]:
+                out.append(refined)
+        logger.debug("SnippetRefiner.refine: final_snippets=%d", len(out))
         return out
 
     # ------------------------------------------------------------------
@@ -168,11 +120,6 @@ class SnippetRefiner:
 
         Groups by doc_id and adjacency (position ±1) among the provided chunks.
         """
-        chunks = sorted(
-            chunks,
-            key=lambda c: (c.get("doc_id"), int(c.get("position", 0))),
-        )
-
         groups: List[List[Dict[str, Any]]] = []
         current: List[Dict[str, Any]] = []
 
@@ -197,6 +144,7 @@ class SnippetRefiner:
         return [self._merge_group(g) for g in groups]
 
     def _merge_group(self, group: List[Dict[str, Any]]) -> Dict[str, Any]:
+        group = sorted(group, key=lambda g: int(g.get("position", 0) or 0))
         texts = [g.get("text", "").strip() for g in group if g.get("text")]
         merged_text = " ".join(texts)
         return {
@@ -220,49 +168,9 @@ class SnippetRefiner:
             "meta": get_attr_or_key(chunk, "meta") or {},
         }
 
-    def _normalize_fact(self, fact: Any) -> Dict[str, Any]:
-        if isinstance(fact, dict):
-            return fact
-        return {
-            "id": get_attr_or_key(fact, "id"),
-            "subject": get_attr_or_key(fact, "subject"),
-            "predicate": get_attr_or_key(fact, "predicate"),
-            "object": get_attr_or_key(fact, "object"),
-            "confidence": get_attr_or_key(fact, "confidence", 0.5),
-            "meta": get_attr_or_key(fact, "meta") or {},
-        }
-
     # ------------------------------------------------------------------
     # Step 2 — scoring
     # ------------------------------------------------------------------
-
-    def _score_candidates(
-        self,
-        candidates: List[Dict[str, Any]],
-        query_text: str,
-        facts: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        terms = self._extract_terms(query_text)
-        if not terms and not facts:
-            return candidates
-        scored: List[Tuple[float, Dict[str, Any]]] = []
-
-        for c in candidates:
-            text = c["text"].lower()
-            relevance = sum(1 for t in terms if t in text)
-            fact_support = sum(
-                1
-                for f in facts
-                if any(x in text for x in self._fact_terms(f))
-            )
-            length_penalty = max(0.0, (len(text) - 1200) / 1200)
-
-            score = relevance * 1.0 + fact_support * 1.5 - length_penalty
-            scored.append((score, c))
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-        kept = [c for score, c in scored if score > 0]
-        return kept or candidates
 
     # ------------------------------------------------------------------
     # Step 4 — per-snippet refinement
@@ -272,8 +180,10 @@ class SnippetRefiner:
         self,
         query_text: str,
         candidate: Dict[str, Any],
+        *,
+        max_chars: int,
     ) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
-        text = candidate["text"]
+        text = trim_to_sentence_boundary(str(candidate.get("text") or ""), max_chars=max_chars)
         if not self.llm:
             return self._build_snippet(candidate, text), 1.0
 
@@ -300,6 +210,7 @@ class SnippetRefiner:
             score = 1.0
 
         refined_text = result.get("rewritten_text") or text
+        refined_text = trim_to_sentence_boundary(str(refined_text or ""), max_chars=max_chars)
         return self._build_snippet(candidate, refined_text), score
 
     # ------------------------------------------------------------------
@@ -323,25 +234,6 @@ class SnippetRefiner:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-
-    def _extract_terms(self, query_text: str) -> List[str]:
-        extracted = extract_keywords_and_phrases(query_text)
-        terms = (extracted.get("keywords") or []) + (extracted.get("keyphrases") or [])
-        return [t.lower() for t in terms if isinstance(t, str) and len(t) > 2]
-
-    def _contains_terms(self, text: str, terms: List[str]) -> bool:
-        if not terms:
-            return True
-        low = text.lower()
-        return any(t in low for t in terms)
-
-    def _fact_terms(self, fact: Any) -> List[str]:
-        out: List[str] = []
-        for k in ("subject", "predicate", "object"):
-            v = get_attr_or_key(fact, k)
-            if isinstance(v, str):
-                out.append(v.lower())
-        return out
 
     def _merge_page_ranges(self, group: List[Dict[str, Any]]) -> Optional[str]:
         pages = [g.get("page_range") for g in group if g.get("page_range")]

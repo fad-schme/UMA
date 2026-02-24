@@ -11,7 +11,7 @@ class _DictChunkStore:
     async def search(self, **_kwargs):
         return [{"id": "chunk_1", "text": "bad", "meta": {}}]
 
-    async def search_text(self, *_args, **_kwargs):
+    async def lexical_search(self, *_args, **_kwargs):
         return [{"id": "chunk_1", "text": "bad", "meta": {}}]
 
 
@@ -34,7 +34,7 @@ class _ObjChunkStore:
             )
         ]
 
-    async def search_text(self, *_args, **_kwargs):
+    async def lexical_search(self, *_args, **_kwargs):
         return await self.search()
 
 

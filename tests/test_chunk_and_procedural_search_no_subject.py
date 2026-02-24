@@ -25,7 +25,7 @@ class DummyChunkStore:
             )
         ]
 
-    async def search_text(self, query_text, **kwargs):
+    async def lexical_search(self, query_text: str, **kwargs):
         return [
             Chunk(
                 id="c2",
@@ -42,6 +42,11 @@ class DummyChunkStore:
                 meta={},
             )
         ]
+
+
+class DenseOnlyChunkStore:
+    async def search(self, **kwargs):
+        return await DummyChunkStore().search(**kwargs)
 
 
 class DummyProceduralStore:
@@ -66,10 +71,21 @@ async def test_chunk_search_does_not_require_subject():
         owner_id="agent-default",
         k=5,
         query_text="hello",
-        lexical_k=5,
         filter_terms=False,
     )
     assert res and res[0].id == "c2"
+
+    # If lexical capability is absent, hybrid degrades to dense-only.
+    core2 = ChunkCore(DenseOnlyChunkStore())
+    res = await core2.search_chunks(
+        query_embedding=[0.0],
+        owner_type="agent",
+        owner_id="agent-default",
+        k=5,
+        query_text="hello",
+        filter_terms=False,
+    )
+    assert res and res[0].id == "c1"
 
 
 @pytest.mark.asyncio

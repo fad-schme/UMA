@@ -98,6 +98,7 @@ class RetrievalService:
         max_chunks = int(getattr(retr_cfg, "max_chunks", max_facts))
         max_skills = int(getattr(retr_cfg, "max_skills"))
         max_graph_items = int(getattr(retr_cfg, "max_graph_items"))
+        debug_scores = bool(getattr(retr_cfg, "debug_scores", False))
 
         self.selector = MemorySelector(
             max_episodes=max_episodes,
@@ -105,6 +106,7 @@ class RetrievalService:
             max_chunks=max_chunks,
             max_skills=max_skills,
             max_graph_items=max_graph_items,
+            debug_scores=debug_scores,
         )
 
         logger.info(
@@ -258,10 +260,6 @@ class RetrievalService:
             max_expanded_chunks = int(getattr(getattr(self.memory, "retrieval_cfg", None), "max_expanded_chunks", 24))
         except Exception:
             max_expanded_chunks = 24
-        try:
-            lexical_k = int(getattr(getattr(self.memory, "retrieval_cfg", None), "lexical_chunks_k", 15))
-        except Exception:
-            lexical_k = 15
         tasks["chunks"] = asyncio.create_task(
             chunk_core.search_chunks(
                 query_embedding=query_embedding,
@@ -269,7 +267,6 @@ class RetrievalService:
                 owner_id=owner_id,
                 k=self.selector.max_chunks,
                 query_text=query_text,
-                lexical_k=lexical_k,
                 filter_terms=bool(query_text and query_text.strip()),
                 expand_neighbors=True,
                 neighbor_window=neighbor_window,

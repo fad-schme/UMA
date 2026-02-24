@@ -20,7 +20,7 @@ class DummyMemory:
 
 
 class DummyChunkStore:
-    async def search_text(self, query_text, *, owner_type=None, owner_id=None, k=10):
+    async def lexical_search(self, query_text, *, owner_type=None, owner_id=None, k=10):
         return [
             Chunk(
                 id="c_text",
@@ -157,7 +157,11 @@ class DummyRetrievalConfig:
     max_facts = 5
     max_skills = 2
     max_graph_items = 2
-    lexical_chunks_k = 10
+    hybrid = type(
+        "Hybrid",
+        (),
+        {"enabled": True, "top_k_dense": 0, "top_k_sparse": 10, "fusion_strategy": "rrf"},
+    )()
     max_evidence_chunks = 3
     strict = True
 

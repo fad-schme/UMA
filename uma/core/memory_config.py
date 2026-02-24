@@ -230,10 +230,8 @@ class UMAConfig(dict):
             self._require_positive_int("retrieval", key)
         if "strict" in self.retrieval and not isinstance(self.retrieval.get("strict"), bool):
             raise ValueError("'retrieval.strict' must be boolean")
-        if "lexical_chunks_k" in self.retrieval:
-            val = self.retrieval.get("lexical_chunks_k")
-            if not isinstance(val, int) or val < 0:
-                raise ValueError("'retrieval.lexical_chunks_k' must be a non-negative integer")
+        if "debug_scores" in self.retrieval and not isinstance(self.retrieval.get("debug_scores"), bool):
+            raise ValueError("'retrieval.debug_scores' must be boolean")
         if "max_evidence_chunks" in self.retrieval:
             val = self.retrieval.get("max_evidence_chunks")
             if not isinstance(val, int) or val < 0:
@@ -254,6 +252,21 @@ class UMAConfig(dict):
             val = self.retrieval.get("chunk_shortlist_max_per_doc")
             if not isinstance(val, int) or val < 0:
                 raise ValueError("'retrieval.chunk_shortlist_max_per_doc' must be a non-negative integer")
+        if "hybrid" in self.retrieval:
+            hybrid = self.retrieval.get("hybrid")
+            if not isinstance(hybrid, dict):
+                raise ValueError("'retrieval.hybrid' must be a mapping")
+            if "enabled" in hybrid and not isinstance(hybrid.get("enabled"), bool):
+                raise ValueError("'retrieval.hybrid.enabled' must be boolean")
+            for key in ("top_k_dense", "top_k_sparse"):
+                if key in hybrid and (not isinstance(hybrid.get(key), int) or int(hybrid.get(key)) < 0):
+                    raise ValueError(f"'retrieval.hybrid.{key}' must be an integer >= 0")
+            if "fusion_strategy" in hybrid:
+                strat = hybrid.get("fusion_strategy")
+                if not isinstance(strat, str) or not strat.strip():
+                    raise ValueError("'retrieval.hybrid.fusion_strategy' must be a non-empty string")
+                if strat.strip().lower() not in ("rrf", "overlap_boost"):
+                    raise ValueError("'retrieval.hybrid.fusion_strategy' must be one of: rrf, overlap_boost")
         context_cfg = self.retrieval.get("context")
         if context_cfg is not None:
             if not isinstance(context_cfg, dict):

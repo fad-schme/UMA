@@ -28,9 +28,9 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from ...types import Fact
+from ..retrieval.ranking import fuse_candidates
 from ..utils.identity import normalize_user_id
 from ..utils.dedupe import dedupe_by_id
-from ..utils.user_query_helper import extract_keywords_and_phrases, build_fact_embedding_text
 from .ingestor import SemanticIngestor
 
 logger = logging.getLogger(__name__)
@@ -55,6 +55,8 @@ class SemanticCore:
         embedder: Any,
         semantic_store: Any,
         salience_threshold: float = 0.3,
+        *,
+        memory: Optional[Any] = None,
     ) -> None:
         self.ingestor = SemanticIngestor(
             llm=llm,
@@ -64,6 +66,7 @@ class SemanticCore:
         )
         logger.debug("SemanticCore initialized.")
 
+        self._memory = memory
         self.store = getattr(self.ingestor, "semantic_store", None)
         if self.store is None:
             logger.error("SemanticCore: store missing or unsupported")
@@ -246,21 +249,87 @@ class SemanticCore:
         if requested_predicate:
             requested_predicate = str(requested_predicate).upper()
 
-        facts: List[Any] = []
+        memory = getattr(self, "_memory", None)
+        retrieval_cfg = getattr(memory, "retrieval_cfg", None) if memory is not None else None
+        hybrid_cfg = getattr(retrieval_cfg, "hybrid", None) if retrieval_cfg is not None else None
+        hybrid_enabled = bool(getattr(hybrid_cfg, "enabled", True)) if hybrid_cfg is not None else True
+        fusion_strategy = str(getattr(hybrid_cfg, "fusion_strategy", "rrf") or "rrf") if hybrid_cfg is not None else "rrf"
+        try:
+            top_k_dense = int(getattr(hybrid_cfg, "top_k_dense", 0) or 0) if hybrid_cfg is not None else 0
+        except Exception:
+            top_k_dense = 0
+        try:
+            top_k_sparse = int(getattr(hybrid_cfg, "top_k_sparse", 15) or 15) if hybrid_cfg is not None else 15
+        except Exception:
+            top_k_sparse = 15
+        dense_k = int(k) if top_k_dense <= 0 else max(0, int(top_k_dense))
+
+        dense_facts: List[Any] = []
         try:
             logger.debug("SemanticCore.search: path=vector owner=%s:%s", owner_type, owner_id)
             found = await self.store.search(
                 query_embedding=query_embedding,
                 owner_type=owner_type,
                 owner_id=owner_id,
-                k=int(k),
+                k=int(dense_k),
                 offset=int(offset),
             )
             if found:
-                facts.extend(found)
+                dense_facts.extend(found)
         except Exception:
             logger.exception("SemanticCore.search failed owner=%s:%s", owner_type, owner_id)
             raise
+
+        sparse_facts: List[Any] = []
+        if (
+            hybrid_enabled
+            and top_k_sparse > 0
+            and query_text
+            and isinstance(query_text, str)
+            and query_text.strip()
+            and hasattr(self.store, "lexical_search")
+        ):
+            try:
+                logger.debug(
+                    "SemanticCore.search: lexical=enabled owner=%s:%s k_sparse=%s strategy=%s",
+                    owner_type,
+                    owner_id,
+                    top_k_sparse,
+                    fusion_strategy,
+                )
+                found = await self.store.lexical_search(
+                    query_text=query_text,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    k=int(top_k_sparse),
+                )
+                if found:
+                    # Feature annotation for downstream ranking (rank-only, provider-agnostic).
+                    for i, f in enumerate(found, start=1):
+                        if isinstance(f, dict):
+                            meta = f.get("meta") or {}
+                            if not isinstance(meta, dict):
+                                meta = {}
+                            meta.setdefault("lexical_score", 1.0 / float(60 + i))
+                            meta.setdefault("retrieval_method", "lexical")
+                            f["meta"] = meta
+                        else:
+                            meta = getattr(f, "meta", None) or {}
+                            if not isinstance(meta, dict):
+                                meta = {}
+                            meta.setdefault("lexical_score", 1.0 / float(60 + i))
+                            meta.setdefault("retrieval_method", "lexical")
+                            f.meta = meta  # type: ignore[attr-defined]
+                    sparse_facts = list(found)
+            except Exception:
+                logger.exception("SemanticCore.search: lexical search failed owner=%s:%s", owner_type, owner_id)
+                raise
+
+        facts: List[Any] = (
+            fuse_candidates(dense=dense_facts, sparse=sparse_facts, strategy=fusion_strategy)
+            if sparse_facts
+            else dense_facts
+        )
 
         # Optional topic filtering (soft)
         if requested_topic:
@@ -271,34 +340,16 @@ class SemanticCore:
         if requested_predicate:
             facts = [f for f in facts if getattr(f, "predicate", "").upper() == requested_predicate]
 
-        # Soft lexical re-rank / filter (ownership-only). This should not hard-gate to zero if vector found good facts.
-        if query_text and isinstance(query_text, str) and query_text.strip():
-            extracted = extract_keywords_and_phrases(query_text)
-            terms = (extracted.get("keywords") or []) + (extracted.get("keyphrases") or [])
-            terms = [t for t in terms if isinstance(t, str) and t]
-            if terms and facts:
-                lowered_terms = [t.lower() for t in terms]
-                original_count = len(facts)
-                filtered = []
-                for fact in facts:
-                    text = build_fact_embedding_text(fact).lower()
-                    if any(t in text for t in lowered_terms):
-                        filtered.append(fact)
-                # Keep if we still have signal; otherwise preserve vector results.
-                if filtered:
-                    facts = filtered
-                    logger.debug("SemanticCore.search: lexical filter kept %d/%d", len(facts), original_count)
-
         # Lexical fallback ONLY if vector yielded nothing.
-        if (not facts) and query_text and hasattr(self.store, "search_text"):
+        if (not facts) and query_text and hasattr(self.store, "lexical_search"):
             try:
                 logger.debug("SemanticCore.search: lexical fallback owner=%s:%s", owner_type, owner_id)
                 # Ownership-only lexical search (no subject param)
-                found = await self.store.search_text(
-                    query_text,
+                found = await self.store.lexical_search(
+                    query_text=query_text,
                     owner_type=owner_type,
                     owner_id=owner_id,
-                    limit=int(k),
+                    k=int(k),
                 )
                 if found:
                     facts = list(found)

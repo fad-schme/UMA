@@ -534,28 +534,30 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             return []
         filters = {"owner_type": owner_type, "owner_id": owner_id}
         try:
-            ids = await self._vector_search_ids(
+            id_score_pairs = await self._vector_search_ids(
                 query_embedding=query_embedding,
                 k=k_i + offset_i,
                 filters=filters,
                 log_context="episodic_search",
                 id_prefix="episode_",
             )
-            if not ids:
+            if not id_score_pairs:
                 logger.debug(
                     "EpisodicSQLStore.search: vector candidates=0, sql_fetched=0, owner=%s:%s",
                     owner_type,
                     owner_id,
                 )
                 return []
-            windowed_ids = ids[offset_i : offset_i + k_i]
-            if not windowed_ids:
+            windowed_pairs = id_score_pairs[offset_i : offset_i + k_i]
+            if not windowed_pairs:
                 return []
+            windowed_ids = [sid for sid, _score in windowed_pairs]
             episodes = await self.fetch_by_ids(
                 windowed_ids,
                 owner_type=owner_type,
                 owner_id=owner_id,
             )
+            self._attach_vector_scores(episodes, windowed_pairs)
             logger.debug(
                 "EpisodicSQLStore.search: vector candidates=%d, sql_fetched=%d, owner=%s:%s",
                 len(windowed_ids),

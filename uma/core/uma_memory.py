@@ -383,6 +383,7 @@ class UMAMemory:
                 embedder=self.embedder,
                 semantic_store=self._stores["semantic"],
                 salience_threshold=sal,
+                memory=self,
             )
             logger.info(
                 "SemanticCore initialized (salience_threshold=%.2f).",

@@ -214,6 +214,45 @@ class WorkingMemorySettings:
 
 
 @dataclass
+class HybridRetrievalConfig:
+    """
+    Hybrid retrieval configuration (dense + lexical) for provider-agnostic core recall.
+
+    Notes
+    -----
+    - `enabled`: toggles lexical retrieval + fusion when `query_text` is present.
+    - `top_k_dense`: if <= 0, uses the call-site `k`.
+    - `top_k_sparse`: lexical candidate pool size (0 disables lexical).
+    - `fusion_strategy`: `rrf` (default) or `overlap_boost`.
+    """
+
+    enabled: bool = True
+    top_k_dense: int = 0
+    top_k_sparse: int = 15
+    fusion_strategy: str = "rrf"
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any] | None) -> "HybridRetrievalConfig":
+        d = d or {}
+        enabled = bool(d.get("enabled", True))
+        top_k_dense = int(d.get("top_k_dense", 0))
+        top_k_sparse = int(d.get("top_k_sparse", 15))
+        if top_k_dense < 0:
+            raise ValueError("'retrieval.hybrid.top_k_dense' must be >= 0")
+        if top_k_sparse < 0:
+            raise ValueError("'retrieval.hybrid.top_k_sparse' must be >= 0")
+        strategy = str(d.get("fusion_strategy", "rrf") or "rrf").strip().lower()
+        if strategy not in ("rrf", "overlap_boost"):
+            raise ValueError("'retrieval.hybrid.fusion_strategy' must be one of: rrf, overlap_boost")
+        return cls(
+            enabled=enabled,
+            top_k_dense=top_k_dense,
+            top_k_sparse=top_k_sparse,
+            fusion_strategy=strategy,
+        )
+
+
+@dataclass
 class RetrievalConfig:
     max_episodes: int
     max_facts: int
@@ -221,7 +260,8 @@ class RetrievalConfig:
     max_graph_items: int
     context: "RetrievalContextConfig"
     strict: bool = True
-    lexical_chunks_k: int = 15
+    debug_scores: bool = False
+    hybrid: HybridRetrievalConfig = field(default_factory=HybridRetrievalConfig)
     max_evidence_chunks: int = 6
     neighbor_window: int = 1
     max_expanded_chunks: int = 24
@@ -234,9 +274,7 @@ class RetrievalConfig:
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "RetrievalConfig":
         strict_mode = bool(d.get("strict", True))
-        lexical_chunks_k = int(d.get("lexical_chunks_k", 15))
-        if lexical_chunks_k < 0:
-            raise ValueError("'retrieval.lexical_chunks_k' must be a non-negative integer")
+        debug_scores = bool(d.get("debug_scores", False))
         max_evidence_chunks = int(d.get("max_evidence_chunks", 6))
         if max_evidence_chunks < 0:
             raise ValueError("'retrieval.max_evidence_chunks' must be a non-negative integer")
@@ -252,6 +290,8 @@ class RetrievalConfig:
         chunk_shortlist_max_per_doc = int(d.get("chunk_shortlist_max_per_doc", 3))
         if chunk_shortlist_max_per_doc < 0:
             raise ValueError("'retrieval.chunk_shortlist_max_per_doc' must be a non-negative integer")
+        hybrid_cfg = d.get("hybrid")
+        hybrid_obj = HybridRetrievalConfig.from_dict(hybrid_cfg if isinstance(hybrid_cfg, dict) else None)
         rlm_cfg = d.get("rlm")
         rlm_obj: Optional[RLMConfig] = None
         if isinstance(rlm_cfg, dict):
@@ -292,7 +332,7 @@ class RetrievalConfig:
             max_facts=int(d["max_facts"]),
             max_skills=int(d["max_skills"]),
             max_graph_items=int(d["max_graph_items"]),
-            lexical_chunks_k=lexical_chunks_k,
+            hybrid=hybrid_obj,
             max_evidence_chunks=max_evidence_chunks,
             neighbor_window=neighbor_window,
             max_expanded_chunks=max_expanded_chunks,
@@ -300,6 +340,7 @@ class RetrievalConfig:
             chunk_shortlist_max_per_doc=chunk_shortlist_max_per_doc,
             context=RetrievalContextConfig.from_dict(d.get("context") or {}),
             strict=strict_mode,
+            debug_scores=debug_scores,
             rlm=rlm_obj,
         )
 

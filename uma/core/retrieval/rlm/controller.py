@@ -21,6 +21,7 @@ from ...semantic.query_pruner import prune_facts_for_query
 from .evidence import expand_evidence_chunks_from_facts
 
 from ...utils.user_query_helper import extract_keywords_and_phrases
+from ..ranking import Ranker
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +51,15 @@ class RLMController:
         self.env = env
 
         rlm_cfg = None
+        debug_scores = False
         try:
             memory = getattr(env, "_memory", None)
             retrieval_cfg = getattr(memory, "retrieval_cfg", None)
             rlm_cfg = getattr(retrieval_cfg, "rlm", None) if retrieval_cfg else None
+            debug_scores = bool(getattr(retrieval_cfg, "debug_scores", False)) if retrieval_cfg else False
         except Exception:
             rlm_cfg = None
+            debug_scores = False
 
         self.timeout_s = float(getattr(rlm_cfg, "timeout_s", 20.0))
 
@@ -74,6 +78,7 @@ class RLMController:
         self.predicate_weights = self._normalize_predicate_weights(
             getattr(rlm_cfg, "predicate_weights", None)
         )
+        self.ranker = Ranker(debug_scores=debug_scores)
 
         self.novelty_window = max(1, int(getattr(rlm_cfg, "novelty_window", 2)))
         self.min_recent_novelty = max(0, int(getattr(rlm_cfg, "min_recent_novelty", 1)))
@@ -545,6 +550,7 @@ class RLMController:
                 owner_id=owner_id,
                 filters=None,
             )
+            results = self.ranker.rank_facts(results or [], query_text=pack.query_text)
             pack.facts = _merge_unique(
                 pack.facts,
                 results,
@@ -577,12 +583,8 @@ class RLMController:
                             "k": self.max_items_per_type,
                             "query_text": pack.query_text,
                         }
-                        try:
-                            chunks = await search_fn(**kwargs)
-                        except TypeError:
-                            # Back-compat for adapters that don't accept `query_text`.
-                            kwargs.pop("query_text", None)
-                            chunks = await search_fn(**kwargs)
+                        chunks = await search_fn(**kwargs)
+                    chunks = self.ranker.rank_chunks(chunks or [], query_text=pack.query_text)
                     # Neighbor expansion happens inside ChunkCore.search_chunks(expand_neighbors=True).
                     pack.chunks = _merge_unique(
                         getattr(pack, "chunks", []),
@@ -607,19 +609,22 @@ class RLMController:
                 owner_type=owner_type,
                 owner_id=owner_id,
             )
+            skills = self.ranker.rank_skills(skills or [], query_text=pack.query_text)
             pack.skills = _merge_unique(pack.skills, skills, self.max_items_per_type)
         except Exception:
             logger.exception("RLMController: search_procedural failed")
 
+        episodes = await self.env.episodic_cluster_summaries(
+            pack.user_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            k=self.cluster_k,
+            max_episodes=self.max_items_per_type,
+        )
+        episodes = self.ranker.rank_episodes(episodes or [], query_text=pack.query_text)
         pack.episodes = _merge_unique(
             pack.episodes,
-            await self.env.episodic_cluster_summaries(
-                pack.user_id,
-                owner_type=owner_type,
-                owner_id=owner_id,
-                k=self.cluster_k,
-                max_episodes=self.max_items_per_type,
-            ),
+            episodes,
             self.max_items_per_type,
         )
 
@@ -884,7 +889,7 @@ class RLMController:
                 owner_id=lane_owner_id,
             )
             logger.debug("RLMController: search_semantic returned %d", len(results or []))
-            return results
+            return self.ranker.rank_facts(results or [], query_text=query_text or "")
 
         if action.action == "search_episodic":
             results = await self._search_episodic_core(
@@ -896,7 +901,7 @@ class RLMController:
                 owner_id=lane_owner_id,
             )
             logger.debug("RLMController: search_episodic returned %d", len(results or []))
-            return results
+            return self.ranker.rank_episodes(results or [], query_text=query_text or "")
 
         if action.action == "search_procedural":
             results = await self._search_procedural_core(
@@ -907,7 +912,7 @@ class RLMController:
                 owner_id=lane_owner_id,
             )
             logger.debug("RLMController: search_procedural returned %d", len(results or []))
-            return results
+            return self.ranker.rank_skills(results or [], query_text=query_text or "")
 
         try:
             user_subject = normalize_user_id(user_id)
@@ -926,6 +931,15 @@ class RLMController:
             trace_id=trace_id,
         )
         logger.debug("RLMController: %s returned %d", getattr(action, "action", "action"), len(results or []))
+        a = str(getattr(action, "action", "") or "")
+        if a in {"fetch_more_facts", "fetch_facts"}:
+            return self.ranker.rank_facts(results or [], query_text=query_text or "")
+        if a in {"fetch_chunks", "search_chunks"}:
+            return self.ranker.rank_chunks(results or [], query_text=query_text or "")
+        if a in {"episodic_clusters", "fetch_episode_clusters"}:
+            return self.ranker.rank_episodes(results or [], query_text=query_text or "")
+        if a in {"search_procedural"}:
+            return self.ranker.rank_skills(results or [], query_text=query_text or "")
         return results
 
         # (Unreachable)
