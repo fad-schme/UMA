@@ -46,9 +46,7 @@ def test_rlm_deterministic_decision_does_not_inject_subject_filter():
     [
         "uma/core/retrieval/rlm/controller.py",
         "uma/core/retrieval/rlm/environment.py",
-        "uma/core/retrieval/service.py",
     ],
 )
 def test_no_subject_keyword_in_search_calls(relpath: str):
     _assert_no_subject_keyword_in_search_calls(Path(relpath))
-

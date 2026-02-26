@@ -2,24 +2,12 @@
 uma.core.retrieval
 ===================
 
-Core retrieval subsystem for UMA.
-
-This package provides deterministic, single-shot retrieval (RetrievalService)
-and its supporting components (MemorySelector).
+Retrieval utilities for UMA.
 
 RLM (recursive retrieval) lives under:
     uma.core.retrieval.rlm
 
-Public exports
---------------
-- RetrievalService: developer-facing retrieval API (single-shot)
-- MemorySelector: deterministic ranking + truncation
+This package intentionally does not expose developer-facing APIs.
+The only supported public interface is `UMAMemory`.
 """
-
-from .service import RetrievalService
-from .selector import MemorySelector
-
-__all__ = [
-    "RetrievalService",
-    "MemorySelector",
-]
+__all__: list[str] = []

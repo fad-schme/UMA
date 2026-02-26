@@ -187,7 +187,7 @@ class UMAMemoryEnvironment:
             if owner_type == "agent":
                 resolved_owner_id = owner_id or self._agent_id
                 if not resolved_owner_id:
-                    return []
+                    raise RuntimeError("Environment.fetch_chunks: missing agent_id for agent scope")
             else:
                 resolved_owner_id = owner_id or normalized_user_id
             if not owner_type or not resolved_owner_id:
@@ -216,7 +216,7 @@ class UMAMemoryEnvironment:
             return chunks
         except Exception:
             logger.exception("Environment.fetch_chunks failed")
-            return []
+            raise
 
     async def fetch_facts_by_ids(
         self,
@@ -244,12 +244,11 @@ class UMAMemoryEnvironment:
             if owner_type == "agent":
                 resolved_owner_id = owner_id or self._agent_id
                 if not resolved_owner_id:
-                    return []
+                    raise RuntimeError("Environment.fetch_facts_by_ids: missing agent_id for agent scope")
             elif owner_type == "user":
                 resolved_owner_id = owner_id or normalized_user_id
             else:
-                logger.warning("Environment.fetch_facts_by_ids: invalid owner_type=%r", owner_type)
-                return []
+                raise ValueError(f"Environment.fetch_facts_by_ids: invalid owner_type={owner_type!r}")
             facts = await semantic_core.fetch_by_ids(
                 ids,
                 owner_type=owner_type,
@@ -259,7 +258,7 @@ class UMAMemoryEnvironment:
             return facts or []
         except Exception:
             logger.exception("Environment.fetch_facts_by_ids failed")
-            return []
+            raise
 
 
     async def fetch_more_facts(
@@ -283,12 +282,11 @@ class UMAMemoryEnvironment:
             if owner_type == "agent":
                 resolved_owner_id = owner_id or self._agent_id
                 if not resolved_owner_id:
-                    return []
+                    raise RuntimeError("Environment.fetch_more_facts: missing agent_id for agent scope")
             elif owner_type == "user":
                 resolved_owner_id = owner_id or normalized_user_id
             else:
-                logger.warning("Environment.fetch_more_facts: invalid owner_type=%r", owner_type)
-                return []
+                raise ValueError(f"Environment.fetch_more_facts: invalid owner_type={owner_type!r}")
 
             # Ownership-only: subject must not be used for semantic retrieval.
             return await semantic_core.fetch_more_facts(
@@ -300,7 +298,7 @@ class UMAMemoryEnvironment:
             )
         except Exception:
             logger.exception("Environment.fetch_more_facts failed")
-            return []
+            raise
 
     # ------------------------------------------------------------------
     # Episodic
@@ -334,7 +332,7 @@ class UMAMemoryEnvironment:
             if owner_type == "agent":
                 resolved_owner_id = owner_id or self._agent_id
                 if not resolved_owner_id:
-                    return []
+                    raise RuntimeError("Environment.episodic_cluster_summaries: missing agent_id for agent scope")
             else:
                 resolved_owner_id = owner_id or normalized_user_id
             clusters = await episodic_core.list_cluster_summaries(
@@ -349,7 +347,7 @@ class UMAMemoryEnvironment:
             return clusters
         except Exception:
             logger.exception("Environment.episodic_cluster_summaries failed")
-            return []
+            raise
 
     async def fetch_episode_clusters(
         self,
@@ -417,15 +415,12 @@ class UMAMemoryEnvironment:
             raise RuntimeError("Environment.graph_resolve_nodes: graph_core is None")
 
         limit_i = max(1, min(50, int(limit)))
-        try:
-            normalized_user_id = normalize_user_id(user_id)
-        except Exception:
-            normalized_user_id = user_id
+        normalized_user_id = normalize_user_id(user_id)
 
         if owner_type == "agent":
             resolved_owner_id = owner_id or self._agent_id
             if not resolved_owner_id:
-                return []
+                raise RuntimeError("Environment.graph_resolve_nodes: missing agent_id for agent scope")
         else:
             resolved_owner_id = owner_id or normalized_user_id
 
@@ -482,7 +477,7 @@ class UMAMemoryEnvironment:
             )
         except Exception:
             logger.exception("Environment.graph_resolve_nodes failed")
-            return []
+            raise
 
         out: List[str] = []
         seen_ids = set()
@@ -532,24 +527,24 @@ class UMAMemoryEnvironment:
         try:
             normalized_user_id = normalize_user_id(user_id)
             if not node_id:
-                return []
+                raise ValueError("Environment.graph_neighbors: node_id must be non-empty")
 
             if owner_type == "agent":
                 resolved_owner_id = owner_id or self._agent_id
                 if not resolved_owner_id:
-                    return []
+                    raise RuntimeError("Environment.graph_neighbors: missing agent_id for agent scope")
             else:
                 resolved_owner_id = owner_id or normalized_user_id
             results = await _maybe_await(
                 graph_core.neighbors(
-                user_id=normalized_user_id,
-                node_id=node_id,
-                predicate_scope=predicate_scope,
-                domain_scope=domain_scope,
-                depth=depth_i,
-                k=k,
-                owner_type=owner_type,
-                owner_id=resolved_owner_id,
+                    user_id=normalized_user_id,
+                    node_id=node_id,
+                    predicate_scope=predicate_scope,
+                    domain_scope=domain_scope,
+                    depth=depth_i,
+                    k=k,
+                    owner_type=owner_type,
+                    owner_id=resolved_owner_id,
                 )
             )
             logger.debug("Environment.graph_neighbors: returned %d", len(results or []))
@@ -557,7 +552,7 @@ class UMAMemoryEnvironment:
 
         except Exception:
             logger.exception("Environment.graph_neighbors failed")
-            return []
+            raise
         
 
     async def expand_graph(
@@ -650,7 +645,7 @@ class UMAMemoryEnvironment:
             return merged
         except Exception:
             logger.exception("Environment.expand_graph failed")
-            return []
+            raise
 
     def _cluster_salience(self, cluster: Dict[str, Any]) -> Optional[float]:
         if not isinstance(cluster, dict):
@@ -837,4 +832,4 @@ class UMAMemoryEnvironment:
                 k=k,
             )
 
-        return []
+        raise ValueError(f"Environment.execute_action: unknown action={a!r}")

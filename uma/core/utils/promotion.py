@@ -134,8 +134,7 @@ class PromotionPolicy:
             meta = {}
         src_type = str(meta.get("source_type") or "").strip().lower()
         if self.require_source_chunk:
-            src_chunk = meta.get("source_chunk_id") or (fact.source_ids[0] if fact.source_ids else None)
-            if not src_chunk:
+            if not (isinstance(getattr(fact, "source_ids", None), list) and fact.source_ids and fact.source_ids[0]):
                 return False
         if src_type and src_type in self.blocked_source_types:
             return False
@@ -232,7 +231,7 @@ class PromotionPolicy:
                 object=promoted.object,
                 owner_type=promoted.owner_type,
                 owner_id=promoted.owner_id,
-                source_chunk_id=promoted.meta.get("source_chunk_id"),
+                source_chunk_id=(promoted.source_ids[0] if promoted.source_ids else None),
                 created_at=promoted.created_at,
                 updated_at=promoted.updated_at,
                 domain=(promoted.meta.get("domain") if isinstance(getattr(promoted, "meta", None), dict) else None),

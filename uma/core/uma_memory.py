@@ -5,8 +5,8 @@ r"""
   \___/|_|  |_/_/ \_\  |_|_\____|_|  |_|
                                         
 
-UMAMemory — Core UMA Memory Runtime
-=====================================
+	UMAMemory — Core UMA Memory Runtime
+	=====================================
 
 UMA is a **memory SDK**, not an autonomous agent.
 
@@ -14,10 +14,9 @@ This class owns and orchestrates all UMA memory subsystems:
 
     • Working Memory (short-term conversational state)
     • Episodic Memory (indexed event history)
-    • Fact Memory (facts, preferences, domain knowledge)
-    • Skill Memory (skills, routines)
-    • Temporal Graph (optional knowledge graph)
-    • RetrievalService (developer-facing recall API)
+	    • Fact Memory (facts, preferences, domain knowledge)
+	    • Skill Memory (skills, routines)
+	    • Temporal Graph (optional knowledge graph)
 
 UMA does **not** generate assistant replies and does **not** perform
 agent reasoning. Developers bring their own LLM or agent loop and use
@@ -74,11 +73,11 @@ Internal retrieval components
         This provides a safe, read-only retrieval environment
         used exclusively by the RLMController.
 
-    • rlm_controller
-        An optional RLMController instance.
-        When enabled via configuration, it performs bounded, recursive
-        memory retrieval using the configured LLM as a control model.
-        When disabled or unavailable, UMA falls back to classic retrieval.
+	    • rlm_controller
+	        An optional RLMController instance.
+	        When enabled via configuration, it performs bounded, recursive
+	        memory retrieval using the configured LLM as a control model.
+	        Retrieval uses RLM exclusively.
 
     These components:
     • Are not part of the public API
@@ -112,7 +111,6 @@ from .episodic.policies import EpisodicRetentionPolicy
 from .semantic.core import SemanticCore
 from .procedural.core import ProceduralCore
 from .chunk.core import ChunkCore
-from .retrieval.service import RetrievalService
 from .graph import TemporalGraphCore
 
 # Stores
@@ -238,7 +236,6 @@ class UMAMemory:
         self.working_memory: Optional[WorkingMemoryCore] = None
         self.semantic_core: Optional[SemanticCore] = None
         self.episodic_core: Optional[EpisodicCore] = None
-        self.retrieval_service: Optional[RetrievalService] = None
         self.graph_core: Optional[TemporalGraphCore] = None
         self.procedural_core: Optional[ProceduralCore] = None
         self.chunk_core: Optional[ChunkCore] = None
@@ -277,17 +274,13 @@ class UMAMemory:
             init_retrieval_ready(self)
         self.initialized = True
 
-
     def _ensure_retrieval_ready(self) -> None:
         """
         Retrieval readiness (automatic lazy init).
 
-        RLM is the default retrieval mode when enabled AND LLM is available.
-        Classic retrieval is ALWAYS wired as fallback and used when LLM/RLM unavailable.
-
         Must remain lean:
-        - stores + embedder + RetrievalService (+ graph if enabled)
-        - MUST NOT initialize ingestion cores/pipeline/features
+        - stores + LLM + embedder + retrieval cores (+ graph if enabled)
+        - MUST NOT initialize ingestion pipeline/features
         """
         # Retrieval must be ready immediately after from_yaml().
         # Keep a defensive guard for non-standard construction paths.
@@ -597,7 +590,7 @@ class UMAMemory:
             include_procedural=include_procedural,
             batch_size=batch_size,
         )
-    
+
     # ----------------------------------------------------------------------
     # PUBLIC DEVELOPER API — Unified User Context (WM + LT Retrieval)
     # ----------------------------------------------------------------------
@@ -613,9 +606,7 @@ class UMAMemory:
         Retrieval path
         --------------
         - Always includes stored Working Memory (WM).
-        - Long-term retrieval is performed using:
-            1) RLMController (recursive retrieval) if enabled, else
-            2) RetrievalService (classic retrieval).
+        - Long-term retrieval is performed using RLMController (recursive retrieval).
 
         Returns
         -------
@@ -631,7 +622,7 @@ class UMAMemory:
         from ..adapters.observability.metrics import increment, timed
 
         self._ensure_retrieval_ready()
-        
+
         if not user_id or not isinstance(user_id, str):
             raise ValueError("UMAMemory.get_structured_context: user_id must be a non-empty string.")
         if not query_text or not isinstance(query_text, str):
@@ -653,64 +644,27 @@ class UMAMemory:
                 )
                 wm_stored = []
 
-            # 2) Prefer RLM retrieval
-            if getattr(self, "_rlm_controller", None) is not None:
-                try:
-                    pack = await self._rlm_controller.retrieve_context(
-                        user_id=normalized_user_id,
-                        query_text=query_text,
-                    )
-                    increment("uma.get_structured_context.calls", tags={"path": "rlm"})
-                    coverage = getattr(pack, "coverage", None)
-                    from .retrieval.rlm.coverage import compute_confidence
-                    return {
-                        "working_memory": wm_stored,
-                        "episodic": pack.episodes,
-                        "facts": pack.facts or [],
-                        "chunks": getattr(pack, "chunks", []),
-                        "skills": pack.skills,
-                        "graph": pack.graph,
-                        "trace": pack.steps,
-                        "confidence": compute_confidence(coverage) if coverage is not None else {},
-                    }
-                except Exception:
-                    logger.exception(
-                        "UMAMemory.get_structured_context: RLM failed",
-                        extra={"user": normalized_user_id},
-                    )
-                    if bool(getattr(self, "retrieval_cfg", None) and self.retrieval_cfg.strict):
-                        raise
-                    logger.warning(
-                        "UMAMemory.get_structured_context: falling back to classic user=%s",
-                        normalized_user_id,
-                    )
+            controller = getattr(self, "_rlm_controller", None)
+            if controller is None:
+                raise RuntimeError("UMAMemory.get_structured_context: RLM controller not initialized.")
 
-            # 3) Classic fallback
-            try:
-                retrieved = await self.retrieval_service.retrieve(
-                    user_id=normalized_user_id,
-                    memory_type="all",
-                    query_text_or_embedding=query_text,
-                    agent_id=getattr(self, "agent_id", None),
-                )
-            except Exception:
-                logger.exception(
-                    "UMAMemory.get_structured_context: classic retrieval failed user=%s",
-                    normalized_user_id,
-                )
-                retrieved = {}
-
-            increment("uma.get_structured_context.calls", tags={"path": "classic"})
-        return {
-            "working_memory": wm_stored,
-            "episodic": retrieved.get("episodes", []) or [],
-            "facts": retrieved.get("facts", []) or [],
-            "chunks": retrieved.get("chunks", []) or [],
-            "skills": retrieved.get("skills", []) or [],
-            "graph": retrieved.get("graph", []) or [],
-            "trace": retrieved.get("trace", []) or [],
-            "confidence": {},
-        }
+            pack = await controller.retrieve_context(
+                user_id=normalized_user_id,
+                query_text=query_text,
+            )
+            increment("uma.get_structured_context.calls", tags={"path": "rlm"})
+            coverage = getattr(pack, "coverage", None)
+            from .retrieval.rlm.coverage import compute_confidence
+            return {
+                "working_memory": wm_stored,
+                "episodic": pack.episodes,
+                "facts": pack.facts or [],
+                "chunks": getattr(pack, "chunks", []),
+                "skills": pack.skills,
+                "graph": pack.graph,
+                "trace": pack.steps,
+                "confidence": compute_confidence(coverage) if coverage is not None else {},
+            }
 
     async def process_turn(
         self,

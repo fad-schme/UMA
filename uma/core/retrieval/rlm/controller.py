@@ -434,6 +434,9 @@ class RLMController:
                 ):
                     logger.debug("RLMController: skipping %s (no graph domain active)", action.action)
                     continue
+                if action.action in {"graph_neighbors", "expand_graph"} and getattr(getattr(self.env, "_memory", None), "graph_core", None) is None:
+                    logger.debug("RLMController: skipping %s (graph_core not available)", action.action)
+                    continue
                 logger.debug(
                     "RLMController: executing action=%s k=%s",
                     action.action,
@@ -456,16 +459,25 @@ class RLMController:
                         pack.owner_id or owner_id,
                         action.k,
                     )
-                items = await self._execute_action(
-                    user_id=user_id,
+                items = await self.env.execute_action(
+                    user_subject=normalized_user_id,
                     action=action,
-                    query_embedding=query_embedding,
+                    query_embedding=list(query_embedding),
                     query_text=pack.query_text,
-                    trace_id=trace_id,
-                    step=step,
                     owner_type=str(pack.owner_type or owner_type),
                     owner_id=pack.owner_id or owner_id,
+                    default_k=self.max_items_per_type,
+                    trace_id=trace_id,
                 )
+                a = str(getattr(action, "action", "") or "")
+                if a in {"search_semantic", "fetch_more_facts", "fetch_facts"}:
+                    items = self.ranker.rank_facts(items or [], query_text=pack.query_text)
+                elif a in {"fetch_chunks", "search_chunks"}:
+                    items = self.ranker.rank_chunks(items or [], query_text=pack.query_text)
+                elif a in {"episodic_clusters", "search_episodic", "fetch_episode_clusters"}:
+                    items = self.ranker.rank_episodes(items or [], query_text=pack.query_text)
+                elif a in {"search_procedural"}:
+                    items = self.ranker.rank_skills(items or [], query_text=pack.query_text)
                 elapsed_ms = int((time.time() - action_start) * 1000)
                 items = self._truncate_items(items)
                 if action.action in {"search_semantic", "fetch_more_facts", "fetch_facts"}:
@@ -655,14 +667,15 @@ class RLMController:
         start_episodes = len(pack.episodes)
         start_graph = len(pack.graph)
         if query_embedding:
-            results = await self._search_semantic_core(
-                user_id=pack.user_id,
-                query_embedding=query_embedding,
-                k=self.max_items_per_type,
+            results = await self.env.execute_action(
+                user_subject=normalize_user_id(pack.user_id),
+                action=RetrievalAction(action="search_semantic", k=self.max_items_per_type, reason="baseline"),
+                query_embedding=list(query_embedding),
                 query_text=pack.query_text,
                 owner_type=owner_type,
                 owner_id=owner_id,
-                filters=None,
+                default_k=self.max_items_per_type,
+                trace_id=trace_id,
             )
             results = self.ranker.rank_facts(results or [], query_text=pack.query_text)
             # Ensure + filter by active domains (defaults domain for older data).
@@ -682,78 +695,66 @@ class RLMController:
                 owner_type,
                 owner_id,
             )
-            # Optional chunk retrieval via centralized ChunkCore search (kb_doc only).
-            chunk_core = getattr(getattr(self.env, "_memory", None), "chunk_core", None)
-            if chunk_core is None:
-                chunk_core = getattr(self.env, "_chunk_core", None)
-            if chunk_core is None:
-                logger.debug("RLMController._baseline_retrieval: chunk_core missing on env; skipping chunk search")
-            elif "kb_doc" not in set(getattr(pack, "active_domains", []) or []):
+            if "kb_doc" not in set(getattr(pack, "active_domains", []) or []):
                 logger.debug("RLMController._baseline_retrieval: kb_doc not active; skipping chunk search")
             else:
-                try:
-                    search_fn = getattr(chunk_core, "search_chunks_for_rlm", None) or getattr(
-                        chunk_core, "search_chunks", None
-                    )
-                    if search_fn is None:
-                        chunks = []
-                    else:
-                        kwargs = {
-                            "query_embedding": list(query_embedding),
-                            "owner_type": owner_type,
-                            "owner_id": owner_id,
-                            "k": self.max_items_per_type,
-                            "query_text": pack.query_text,
-                        }
-                        chunks = await search_fn(**kwargs)
-
-                    chunks = self.ranker.rank_chunks(chunks or [], query_text=pack.query_text)
-                    # Neighbor expansion happens inside ChunkCore.search_chunks(expand_neighbors=True).
-                    try:
-                        ensure_domains_for_chunks(list(chunks or []))
-                    except Exception:
-                        pass
-                    pack.chunks = _merge_unique(
-                        getattr(pack, "chunks", []),
-                        chunks,
-                        self.max_items_per_type,
-                    )
-                    self._rebuild_chunk_buckets(pack)
-                    logger.debug(
-                        "RLMController._baseline_retrieval: chunk search returned=%d merged_chunks=%d",
-                        len(chunks or []),
-                        len(getattr(pack, "chunks", [])),
-                    )
-                except Exception:
-                    logger.exception("RLMController: chunk_core.search_chunks failed")
-
-        # Procedural baseline (skills)
-        try:
-            if "procedural" not in set(getattr(pack, "active_domains", []) or []):
-                skills = []
-            else:
-                skills = await self._search_procedural_core(
-                    user_id=pack.user_id,
-                    query_embedding=query_embedding,
-                    k=self.max_items_per_type,
+                chunks = await self.env.execute_action(
+                    user_subject=normalize_user_id(pack.user_id),
+                    action=RetrievalAction(action="search_chunks", k=self.max_items_per_type, reason="baseline"),
+                    query_embedding=list(query_embedding),
+                    query_text=pack.query_text,
                     owner_type=owner_type,
                     owner_id=owner_id,
+                    default_k=self.max_items_per_type,
+                    trace_id=trace_id,
                 )
-            skills = self.ranker.rank_skills(skills or [], query_text=pack.query_text)
-            try:
-                ensure_domains_for_skills(list(skills or []))
-            except Exception:
-                pass
-            pack.skills = _merge_unique(pack.skills, skills, self.max_items_per_type)
-        except Exception:
-            logger.exception("RLMController: search_procedural failed")
+                chunks = self.ranker.rank_chunks(chunks or [], query_text=pack.query_text)
+                try:
+                    ensure_domains_for_chunks(list(chunks or []))
+                except Exception:
+                    pass
+                pack.chunks = _merge_unique(
+                    getattr(pack, "chunks", []),
+                    chunks,
+                    self.max_items_per_type,
+                )
+                self._rebuild_chunk_buckets(pack)
+                logger.debug(
+                    "RLMController._baseline_retrieval: chunk search returned=%d merged_chunks=%d",
+                    len(chunks or []),
+                    len(getattr(pack, "chunks", [])),
+                )
 
-        episodes = await self.env.episodic_cluster_summaries(
-            pack.user_id,
+        # Procedural baseline (skills)
+        if "procedural" not in set(getattr(pack, "active_domains", []) or []):
+            skills = []
+        else:
+            skills = await self.env.execute_action(
+                user_subject=normalize_user_id(pack.user_id),
+                action=RetrievalAction(action="search_procedural", k=self.max_items_per_type, reason="baseline"),
+                query_embedding=list(query_embedding),
+                query_text=pack.query_text,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                default_k=self.max_items_per_type,
+                trace_id=trace_id,
+            )
+        skills = self.ranker.rank_skills(skills or [], query_text=pack.query_text)
+        try:
+            ensure_domains_for_skills(list(skills or []))
+        except Exception:
+            pass
+        pack.skills = _merge_unique(pack.skills, skills, self.max_items_per_type)
+
+        episodes = await self.env.execute_action(
+            user_subject=normalize_user_id(pack.user_id),
+            action=RetrievalAction(action="episodic_clusters", k=self.cluster_k, reason="baseline"),
+            query_embedding=list(query_embedding),
+            query_text=pack.query_text,
             owner_type=owner_type,
             owner_id=owner_id,
-            k=self.cluster_k,
-            max_episodes=self.max_items_per_type,
+            default_k=self.max_items_per_type,
+            trace_id=trace_id,
         )
         episodes = self.ranker.rank_episodes(episodes or [], query_text=pack.query_text)
         pack.episodes = _merge_unique(
@@ -767,6 +768,7 @@ class RLMController:
             owner_type == "user"
             and getattr(pack, "intent", None) == "personal"
             and "user_profile" in set(getattr(pack, "active_domains", []) or [])
+            and getattr(getattr(self.env, "_memory", None), "graph_core", None) is not None
         ):
             pack.graph = _merge_unique(
                 pack.graph,
@@ -821,179 +823,7 @@ class RLMController:
             preds = [p for p in preds if p not in PREFERENCE_PREDICATES]
         return preds
 
-    # ------------------------------------------------------------------
-    # DECISION LOGIC
-    # ------------------------------------------------------------------
-    async def _search_semantic_core(
-        self,
-        *,
-        user_id: str,
-        query_embedding: List[float],
-        k: int,
-        filters: Optional[Dict[str, Any]] = None,
-        query_text: Optional[str] = None,
-        owner_type: str,
-        owner_id: Optional[str],
-    ) -> List[Any]:
-        """
-        Centralized semantic retrieval via SemanticCore (no environment wrapper).
-        Resolves owner scope and passes through filters.
-
-        IMPORTANT
-        ---------
-        Retrieval is ownership-scoped only via (owner_type, owner_id). Fact.subject
-        is metadata and must not gate retrieval.
-        """
-        semantic_core = getattr(getattr(self.env, "_memory", None), "semantic_core", None)
-        if semantic_core is None:
-            semantic_core = getattr(self.env, "_semantic_core", None)
-        if semantic_core is None:
-            return []
-
-        try:
-            k = self.env._validate_k("RLMController._search_semantic_core", k)
-        except Exception:
-            k = max(1, int(k)) if k else 1
-        try:
-            offset = self.env._safe_offset(filters.get("offset") if isinstance(filters, dict) else None)
-        except Exception:
-            offset = max(0, int(filters.get("offset", 0))) if isinstance(filters, dict) else 0
-        try:
-            normalized_user_id = normalize_user_id(user_id)
-        except Exception:
-            logger.exception("RLMController._search_semantic_core: invalid subject=%r", user_id)
-            return []
-
-        retrieval_cfg = getattr(self.env, "_memory", None)
-        retrieval_cfg = getattr(retrieval_cfg, "retrieval_cfg", None)
-       #ctx_cfg = getattr(retrieval_cfg, "context", None) if retrieval_cfg else None
-
-        if owner_type == "agent":
-            resolved_owner_id = owner_id or getattr(self.env, "_agent_id", None)
-            if not resolved_owner_id:
-                logger.warning("RLMController._search_semantic_core: missing agent_id for agent scope")
-                return []
-        elif owner_type == "user":
-            resolved_owner_id = owner_id or normalized_user_id
-        else:
-            logger.warning("RLMController._search_semantic_core: invalid owner_type=%r", owner_type)
-            return []
-
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                "RLMController._search_semantic_core: owner_type=%s owner_id=%s k=%d offset=%d",
-                owner_type,
-                resolved_owner_id,
-                k,
-                offset,
-            )
-        return await semantic_core.search(
-            query_embedding=list(query_embedding),
-            owner_type=owner_type,
-            owner_id=resolved_owner_id,
-            k=int(k),
-            offset=int(offset),
-            filters=filters,
-            query_text=query_text,
-        )
-
-    async def _search_episodic_core(
-        self,
-        *,
-        user_id: str,
-        query_embedding: List[float],
-        k: int,
-        time_range: Optional[Dict[str, Any]] = None,
-        owner_type: str,
-        owner_id: Optional[str],
-    ) -> List[Any]:
-        """
-        Centralized episodic retrieval via EpisodicCore (no environment wrapper).
-        Resolves owner scope and applies time_range filtering.
-        """
-        episodic_core = getattr(getattr(self.env, "_memory", None), "episodic_core", None)
-        if episodic_core is None:
-            return []
-        try:
-            normalized_user_id = normalize_user_id(user_id)
-        except Exception:
-            logger.exception("RLMController._search_episodic_core: invalid subject=%r", user_id)
-            return []
-
-        try:
-            k = self.env._validate_k("RLMController._search_episodic_core", k)
-        except Exception:
-            k = max(1, int(k)) if k else 1
-        try:
-            offset = self.env._safe_offset(time_range.get("offset") if isinstance(time_range, dict) else None)
-        except Exception:
-            offset = max(0, int(time_range.get("offset", 0))) if isinstance(time_range, dict) else 0
-
-        if owner_type == "agent":
-            resolved_owner_id = owner_id or getattr(self.env, "_agent_id", None)
-            if not resolved_owner_id:
-                logger.warning("RLMController._search_episodic_core: missing agent_id for agent scope")
-                return []
-        else:
-            resolved_owner_id = owner_id or normalized_user_id
-
-        episodes = await episodic_core.search(
-            user_id=normalized_user_id,
-            query_embedding=list(query_embedding),
-            owner_type=owner_type,
-            owner_id=resolved_owner_id,
-            k=int(k),
-            offset=int(offset),
-        )
-        try:
-            episodes = self.env._filter_time_range(episodes or [], time_range)
-        except Exception:
-            logger.exception("RLMController._search_episodic_core: failed to filter time range")
-            raise
-        return episodes
-
-    async def _search_procedural_core(
-        self,
-        *,
-        user_id: str,
-        query_embedding: List[float],
-        k: int,
-        owner_type: str,
-        owner_id: Optional[str],
-    ) -> List[Any]:
-        """
-        Centralized procedural retrieval via ProceduralCore (no environment wrapper).
-        Resolves owner scope and returns raw procedural matches.
-        """
-        procedural_core = getattr(getattr(self.env, "_memory", None), "procedural_core", None)
-        if procedural_core is None:
-            return []
-        try:
-            normalized_user_id = normalize_user_id(user_id)
-        except Exception:
-            logger.exception("RLMController._search_procedural_core: invalid subject=%r", user_id)
-            return []
-
-        try:
-            k = self.env._validate_k("RLMController._search_procedural_core", k)
-        except Exception:
-            k = max(1, int(k)) if k else 1
-
-        if owner_type == "agent":
-            resolved_owner_id = owner_id or getattr(self.env, "_agent_id", None)
-            if not resolved_owner_id:
-                logger.warning("RLMController._search_procedural_core: missing agent_id for agent scope")
-                return []
-        else:
-            resolved_owner_id = owner_id or normalized_user_id
-
-        return await procedural_core.search(
-            user_id=normalized_user_id,
-            query_embedding=list(query_embedding),
-            owner_type=owner_type,
-            owner_id=resolved_owner_id,
-            k=int(k),
-        )
+    # Retrieval execution is centralized in UMAMemoryEnvironment.execute_action.
 
     def _assess_coverage(self, pack: ContextPack):
         return assess_coverage(
@@ -1010,94 +840,6 @@ class RLMController:
             novelty_window=self.novelty_window,
             min_recent_novelty=self.min_recent_novelty,
         )
-
-    # ------------------------------------------------------------------
-    # ACTION EXECUTION
-    # ------------------------------------------------------------------
-
-    async def _execute_action(
-        self,
-        *,
-        user_id: str,
-        action: RetrievalAction,
-        query_embedding: List[float],
-        query_text: Optional[str] = None,
-        trace_id: str = None,
-        step: int = None,
-        owner_type: str,
-        owner_id: Optional[str],
-    ) -> List[Any]:
-        k = int(action.k) if action.k else self.max_items_per_type
-        lane_owner_type = action.owner_type or owner_type
-        lane_owner_id = owner_id
-        if lane_owner_type == "agent":
-            lane_owner_id = getattr(self.env, "_agent_id", None) if lane_owner_id is None else lane_owner_id
-
-        if action.action == "search_semantic":
-            results = await self._search_semantic_core(
-                user_id=user_id,
-                query_embedding=query_embedding,
-                k=k,
-                filters=action.filters,
-                query_text=query_text,
-                owner_type=lane_owner_type,
-                owner_id=lane_owner_id,
-            )
-            logger.debug("RLMController: search_semantic returned %d", len(results or []))
-            return self.ranker.rank_facts(results or [], query_text=query_text or "")
-
-        if action.action == "search_episodic":
-            results = await self._search_episodic_core(
-                user_id=user_id,
-                query_embedding=query_embedding,
-                k=k,
-                time_range=action.time_range,
-                owner_type=lane_owner_type,
-                owner_id=lane_owner_id,
-            )
-            logger.debug("RLMController: search_episodic returned %d", len(results or []))
-            return self.ranker.rank_episodes(results or [], query_text=query_text or "")
-
-        if action.action == "search_procedural":
-            results = await self._search_procedural_core(
-                user_id=user_id,
-                query_embedding=query_embedding,
-                k=k,
-                owner_type=lane_owner_type,
-                owner_id=lane_owner_id,
-            )
-            logger.debug("RLMController: search_procedural returned %d", len(results or []))
-            return self.ranker.rank_skills(results or [], query_text=query_text or "")
-
-        try:
-            user_subject = normalize_user_id(user_id)
-        except Exception:
-            user_subject = user_id
-
-        results = await decisions.execute_action(
-            env=self.env,
-            user_subject=user_subject,
-            action=action,
-            query_embedding=list(query_embedding),
-            query_text=query_text,
-            owner_type=lane_owner_type,
-            owner_id=lane_owner_id,
-            default_k=self.max_items_per_type,
-            trace_id=trace_id,
-        )
-        logger.debug("RLMController: %s returned %d", getattr(action, "action", "action"), len(results or []))
-        a = str(getattr(action, "action", "") or "")
-        if a in {"fetch_more_facts", "fetch_facts"}:
-            return self.ranker.rank_facts(results or [], query_text=query_text or "")
-        if a in {"fetch_chunks", "search_chunks"}:
-            return self.ranker.rank_chunks(results or [], query_text=query_text or "")
-        if a in {"episodic_clusters", "fetch_episode_clusters"}:
-            return self.ranker.rank_episodes(results or [], query_text=query_text or "")
-        if a in {"search_procedural"}:
-            return self.ranker.rank_skills(results or [], query_text=query_text or "")
-        return results
-
-        # (Unreachable)
 
     # ------------------------------------------------------------------
     # HELPERS

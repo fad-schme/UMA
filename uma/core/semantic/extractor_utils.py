@@ -155,7 +155,6 @@ def _fallback_fact_for_chunk_as_fact(
         meta={
             "source_type": "pdf",
             "domain": "kb_doc",
-            "source_chunk_id": src_chunk_id,
             "doc_id": doc_id,
             "source_path": source_path,
             "source_hash": source_hash,
@@ -738,7 +737,6 @@ def parse_facts_list_into_facts(
             meta = {
                 "source_type": "pdf",
                 "domain": "kb_doc",
-                "source_chunk_id": src_chunk_id,
                 "doc_id": doc_id,
                 "source_path": source_path,
                 "source_hash": source_hash,

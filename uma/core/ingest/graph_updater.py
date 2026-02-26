@@ -15,21 +15,8 @@ logger = logging.getLogger(__name__)
 def _get_source_chunk_id(fact: Fact) -> Optional[str]:
     """Best-effort extraction of a single source chunk id from a Fact.
 
-    We prefer (in order):
-      1) fact.meta["source_chunk_id"]
-      2) first element of fact.source_ids if present
-
-    Returns None if unavailable.
+    Returns the first element of fact.source_ids if present, else None.
     """
-    try:
-        if isinstance(getattr(fact, "meta", None), dict):
-            scid = fact.meta.get("source_chunk_id")
-            if isinstance(scid, str) and scid.strip():
-                return scid.strip()
-    except Exception:
-        logger.exception("_get_source_chunk_id: failed to read fact.meta")
-        raise
-
     try:
         src_ids = getattr(fact, "source_ids", None)
         if isinstance(src_ids, list) and src_ids:

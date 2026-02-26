@@ -22,7 +22,6 @@ from typing import TYPE_CHECKING
 
 from .providers import ensure_embedder, ensure_llm
 from .stores import initialize_stores
-from ..retrieval.service import RetrievalService
 
 if TYPE_CHECKING:
     from ..uma_memory import UMAMemory
@@ -107,31 +106,17 @@ def ensure_pipeline(memory: "UMAMemory") -> None:
         )
 
 
-# ---------------------------------------------------------------------
-# Retrieval (classic fallback) + RLM wiring
-# ---------------------------------------------------------------------
-def ensure_retrieval(memory: "UMAMemory") -> None:
-    # Classic deterministic retrieval is always wired as fallback.
-    if memory.retrieval_service is None:
-        memory.retrieval_service = RetrievalService(
-            memory=memory,
-            retr_cfg=memory.retrieval_cfg,
-        )
-
-
 def ensure_rlm(memory: "UMAMemory") -> None:
     """
-    Wire UMA-RLM controller (preferred retrieval mode) when enabled and possible.
-    Classic retrieval remains the ONLY fallback.
+    Wire UMA-RLM controller (the only supported retrieval mode).
     """
     rlm_cfg = memory.retrieval_cfg.rlm
     if rlm_cfg is None or not rlm_cfg.enabled:
-        return
+        raise RuntimeError("RLM retrieval is required (retrieval.rlm.enabled must be true).")
     if getattr(memory, "_rlm_controller", None) is not None:
         return
     if memory.llm is None:
-        # No LLM => cannot use RLM.
-        return
+        raise RuntimeError("RLM retrieval requires an LLM (memory.llm is None).")
 
     try:
         from ..retrieval.rlm.environment import UMAMemoryEnvironment
@@ -144,8 +129,8 @@ def ensure_rlm(memory: "UMAMemory") -> None:
         )
         logger.info("RLMController enabled and wired.")
     except Exception:
-        logger.exception("Failed to initialize RLMController; falling back to classic retrieval.")
-        memory._rlm_controller = None
+        logger.exception("Failed to initialize RLMController.")
+        raise
 
 
 # ---------------------------------------------------------------------
@@ -157,16 +142,18 @@ def init_retrieval_ready(memory: "UMAMemory") -> None:
 
     Guarantees:
       - stores wired (SQL + vector)
+      - LLM initialized
       - embedder initialized
-      - classic RetrievalService initialized (always)
+      - retrieval cores initialized (episodic/semantic/procedural/chunk + WM)
       - graph initialized if enabled (best-effort)
-      - RLM wired if enabled AND LLM available (best-effort)
+      - RLM wired (required)
 
-    MUST NOT initialize ingestion cores/pipeline/features.
+    MUST NOT initialize ingestion pipeline/features.
     """
     ensure_stores(memory)
+    ensure_llm(memory)
     ensure_embedder(memory)
-    ensure_retrieval(memory)
+    ensure_cores(memory)
 
     # Graph is optional; never fail retrieval startup because of graph.
     try:
@@ -175,12 +162,7 @@ def init_retrieval_ready(memory: "UMAMemory") -> None:
         logger.exception("Graph init failed during retrieval startup (non-fatal).")
         memory.graph_core = None
 
-    # RLM is best-effort at startup.
-    llm_ok = ensure_llm(memory, required=False)
-    if llm_ok:
-        ensure_rlm(memory)
-    else:
-        memory._rlm_controller = None
+    ensure_rlm(memory)
 
     memory._retrieval_ready = True
 
@@ -201,7 +183,7 @@ def init_ingestion_ready(memory: "UMAMemory") -> None:
     Safe to call multiple times.
     """
     ensure_stores(memory)
-    ensure_llm(memory, required=True)
+    ensure_llm(memory)
     ensure_embedder(memory)
 
     ensure_cores(memory)

@@ -666,22 +666,3 @@ class ChunkCore:
                 seen.add(cid)
 
         return out
-
-    async def fetch_by_ids(
-        self,
-        ids: Sequence[str],
-        *,
-        owner_type: str,
-        owner_id: str,
-        log_context: str = "ChunkCore.fetch_by_ids",
-    ) -> List[Chunk]:
-        """
-        Deprecated public wrapper for ID fetch (kept for compatibility).
-        Prefer `_fetch_by_ids` in internal call sites.
-        """
-        return await self._fetch_by_ids(
-            ids=ids,
-            owner_type=owner_type,
-            owner_id=owner_id,
-            log_context=log_context,
-        )

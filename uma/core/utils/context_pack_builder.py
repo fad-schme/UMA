@@ -301,33 +301,15 @@ class ContextPackBuilder:
         """
         Async variant that can optionally refine snippets with an LLM.
         """
-        # --------------------------------------------------
-        # Normalize pack to dict if a ContextPack object was passed
-        # RLMController returns a ContextPack instance, while this
-        # builder operates on dict-like structures.
-        # --------------------------------------------------
-        orig_pack = pack
-        owner_type = None
-        owner_id = None
+        owner_type = pack.get("owner_type")
+        owner_id = pack.get("owner_id")
         trace_id = None
-        if not isinstance(pack, dict):
-            try:
-                pack = pack.__dict__
-            except Exception:
-                logger.exception(
-                    "ContextPackBuilder.render_snippet_async: failed to normalize pack object"
-                )
-                return ""
-
-        if isinstance(pack, dict):
-            owner_type = pack.get("owner_type")
-            owner_id = pack.get("owner_id")
-            trace = pack.get("trace")
-            if isinstance(trace, list):
-                for item in trace:
-                    if isinstance(item, dict) and item.get("trace_id"):
-                        trace_id = item.get("trace_id")
-                        break
+        trace = pack.get("trace")
+        if isinstance(trace, list):
+            for item in trace:
+                if isinstance(item, dict) and item.get("trace_id"):
+                    trace_id = item.get("trace_id")
+                    break
 
         cfg = context_cfg or RetrievalContextConfig()
         query_text = (pack.get("query") or "").lower()
@@ -385,21 +367,7 @@ class ContextPackBuilder:
                 if text:
                     lines.append(f"- {text}")
 
-        # Attach final_snippets to pack for downstream use (gold runner expects this field)
-        try:
-            if isinstance(pack, dict):
-                pack["final_snippets"] = final_snippets
-            else:
-                setattr(pack, "final_snippets", final_snippets)
-            if orig_pack is not pack and not isinstance(orig_pack, dict):
-                setattr(orig_pack, "final_snippets", final_snippets)
-        except Exception:
-            logger.exception(
-                "ContextPackBuilder: failed to attach final_snippets owner_type=%s owner_id=%s trace_id=%s",
-                owner_type,
-                owner_id,
-                trace_id,
-            )
+        pack["final_snippets"] = final_snippets
         
         sources = _collect_source_filenames(pack, final_snippets=final_snippets)
         if sources:
@@ -423,19 +391,11 @@ async def get_rendered_context(
 
     This path is shared by the app and tests to avoid divergence.
     """
-    if not getattr(memory, "_rlm_controller", None):
-        pack = await build_context_pack(memory, user_id=user_id, query_text=query_text)
-        ctx_cfg = getattr(getattr(memory, "retrieval_cfg", None), "context", None)
-        if getattr(ctx_cfg, "snippet_refiner_enabled", False):
-            return await ContextPackBuilder.render_snippet_async(pack, ctx_cfg, llm=getattr(memory, "llm", None))
-        return ContextPackBuilder.render_snippet(pack, ctx_cfg)
-
-    pack = await memory._rlm_controller.retrieve_context(
-        user_id=normalize_user_id(user_id),
-        query_text=query_text,
-    )
+    pack = await build_context_pack(memory, user_id=user_id, query_text=query_text)
     ctx_cfg = getattr(getattr(memory, "retrieval_cfg", None), "context", None)
-    return await ContextPackBuilder.render_snippet_async(pack, ctx_cfg, llm=getattr(memory, "llm", None))
+    if getattr(ctx_cfg, "snippet_refiner_enabled", False):
+        return await ContextPackBuilder.render_snippet_async(pack, ctx_cfg, llm=getattr(memory, "llm", None))
+    return ContextPackBuilder.render_snippet(pack, ctx_cfg)
 
 
 async def build_context_pack(

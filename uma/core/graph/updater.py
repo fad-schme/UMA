@@ -160,7 +160,7 @@ class GraphUpdater:
                 )
                 return
 
-            # Provenance: prefer Fact.source_ids[0], then meta["source_chunk_id"], else "".
+            # Provenance: use Fact.source_ids[0] when present.
             meta = getattr(fact, "meta", {}) or {}
             source_chunk_id = ""
             try:
@@ -169,12 +169,6 @@ class GraphUpdater:
                     source_chunk_id = str(source_ids[0] or "")
             except Exception:
                 source_chunk_id = ""
-
-            if not source_chunk_id and isinstance(meta, dict):
-                try:
-                    source_chunk_id = str(meta.get("source_chunk_id") or "")
-                except Exception:
-                    source_chunk_id = ""
 
             # Timestamps must be strings (TemporalGraphCore.insert_fact_triplet expects str).
             def _to_iso(x: Any) -> str:

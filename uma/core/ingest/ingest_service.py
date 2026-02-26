@@ -423,9 +423,6 @@ async def ingest_document(
             f.meta = {}
         f.meta.setdefault("domain", "kb_doc")
         f.meta.setdefault("source_type", "pdf")
-        # Keep both keys for compatibility with any downstream readers.
-        if f.source_ids:
-            f.meta.setdefault("source_chunk_id", f.source_ids[0])
         f.meta.setdefault("doc_id", parsed.doc_id)
         f.meta.setdefault("source_path", parsed.source_path)
         f.meta.setdefault("source_hash", parsed.source_hash)

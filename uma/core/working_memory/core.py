@@ -22,9 +22,7 @@ WorkingMemoryCore does NOT:
 - generate assistant replies
 
 Long-term memory retrieval is handled by UMAMemory.get_structured_context(...)
-via either:
-- RLMController (preferred), or
-- RetrievalService (classic fallback).
+via RLMController.
 """
 
 from __future__ import annotations

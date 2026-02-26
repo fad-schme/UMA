@@ -30,14 +30,13 @@ async def test_rlm_lane_recall_scopes_user_only(uma_memory, tmp_path):
     await memory.ingest_document(str(agent_doc), owner_type="agent", owner_id=memory.agent_id)
     await memory.ingest_document(str(user_doc), owner_type="user", owner_id="user:u1")
 
-    pack = await memory._rlm_controller.retrieve_context("user:u1", "remember last time hello world")
-    assert pack.owner_type == "user"
-    assert pack.owner_id == "user:u1"
-
-    assert all(getattr(f, "owner_type", None) == "user" for f in (pack.facts or []))
-    assert all(getattr(f, "owner_id", None) == "user:u1" for f in (pack.facts or []))
-    assert all(getattr(c, "owner_type", None) == "user" for c in (getattr(pack, "chunks", []) or []))
-    assert all(getattr(c, "owner_id", None) == "user:u1" for c in (getattr(pack, "chunks", []) or []))
+    ctx = await memory.get_structured_context("user:u1", "remember last time hello world")
+    facts = ctx.get("facts") or []
+    chunks = ctx.get("chunks") or []
+    assert all(getattr(f, "owner_type", None) == "user" for f in facts)
+    assert all(getattr(f, "owner_id", None) == "user:u1" for f in facts)
+    assert all(getattr(c, "owner_type", None) == "user" for c in chunks)
+    assert all(getattr(c, "owner_id", None) == "user:u1" for c in chunks)
 
 
 @pytest.mark.asyncio
@@ -67,10 +66,7 @@ async def test_rlm_lane_kb_scopes_agent_and_user(uma_memory, tmp_path):
     await memory.ingest_document(str(agent_doc), owner_type="agent", owner_id=memory.agent_id)
     await memory.ingest_document(str(user_doc), owner_type="user", owner_id="user:u1")
 
-    pack = await memory._rlm_controller.retrieve_context("user:u1", "hello world")
-    assert pack.owner_type == "agent"
-    assert pack.owner_id == memory.agent_id
-
-    chunks = list(getattr(pack, "chunks", []) or [])
+    ctx = await memory.get_structured_context("user:u1", "hello world")
+    chunks = list(ctx.get("chunks") or [])
     assert any(getattr(c, "owner_type", None) == "agent" for c in chunks)
     assert any(getattr(c, "owner_type", None) == "user" for c in chunks)
