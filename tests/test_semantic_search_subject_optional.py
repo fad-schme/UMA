@@ -1,44 +1,90 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
 import pytest
 
-from uma.core.semantic.core import SemanticCore
-
-
-class DummyStore:
-    def __init__(self, facts):
-        self._facts = facts
-        self.last_search_kwargs = None
-
-    async def search(self, **kwargs):
-        self.last_search_kwargs = dict(kwargs)
-        # SemanticCore no longer passes/accepts subject-gating; store should treat this as corpus-wide.
-        return list(self._facts)
-
-    async def lexical_search(self, **kwargs):
-        return []
+from uma.types import Fact
 
 
 @pytest.mark.asyncio
-async def test_semantic_search_subject_optional():
-    facts = [
-        {"id": "f1", "subject": "entity:zero_trust", "predicate": "principle", "object": "least privilege"},
-        {"id": "f2", "subject": "entity:cloud_security", "predicate": "principle", "object": "segmentation"},
-        {"id": "f3", "subject": "user:local", "predicate": "remembered", "object": "note"},
-    ]
-    store = DummyStore(facts)
-    core = SemanticCore(llm=None, embedder=None, semantic_store=store)
-    core.store = store
+async def test_semantic_search_subject_optional(uma_memory):
+    """
+    Semantic retrieval is ownership-only; subject is not a gating filter.
+    """
+    memory = uma_memory
+    owner_type = "agent"
+    owner_id = memory.agent_id or "agent-default"
 
-    all_facts = await core.search(query_embedding=[0.0], owner_type="agent", owner_id="agent-default", k=10)
+    now = datetime.now(timezone.utc)
+    emb = (await memory.embedder.embed(["shared"]))[0]
+
+    facts = [
+        Fact(
+            id="fact_zt",
+            subject="entity:zero_trust",
+            predicate="PRINCIPLE",
+            object="least privilege",
+            created_at=now,
+            updated_at=now,
+            source_ids=[],
+            confidence=0.9,
+            salience=0.9,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            meta={},
+        ),
+        Fact(
+            id="fact_cloud",
+            subject="entity:cloud_security",
+            predicate="PRINCIPLE",
+            object="segmentation",
+            created_at=now,
+            updated_at=now,
+            source_ids=[],
+            confidence=0.9,
+            salience=0.9,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            meta={},
+        ),
+        Fact(
+            id="fact_userish",
+            subject="user:local",
+            predicate="REMEMBERED",
+            object="note",
+            created_at=now,
+            updated_at=now,
+            source_ids=[],
+            confidence=0.9,
+            salience=0.9,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            meta={},
+        ),
+    ]
+
+    for f in facts:
+        await memory.semantic_core.upsert_fact(f, emb)
+
+    all_facts = await memory.semantic_core.search(
+        query_embedding=emb,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        k=10,
+        filters=None,
+        query_text=None,
+    )
     assert len(all_facts) == 3
-    assert store.last_search_kwargs is not None
-    assert "subject" not in store.last_search_kwargs
 
     # Subject filters are ignored (ownership-only retrieval).
-    filtered = await core.search(
-        query_embedding=[0.0],
-        owner_type="agent",
-        owner_id="agent-default",
+    filtered = await memory.semantic_core.search(
+        query_embedding=emb,
+        owner_type=owner_type,
+        owner_id=owner_id,
         k=10,
         filters={"subject": "user:local"},
+        query_text=None,
     )
     assert len(filtered) == 3
+

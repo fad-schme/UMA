@@ -20,7 +20,7 @@ Coding agent instructions
 
 from __future__ import annotations
 
-from typing import Awaitable, Callable, Dict, List
+from typing import Awaitable, Callable, List
 
 
 AsyncHook = Callable[..., Awaitable[None]]

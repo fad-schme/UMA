@@ -30,7 +30,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Optional
 
 try:
     import aiohttp

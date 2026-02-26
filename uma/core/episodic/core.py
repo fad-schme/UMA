@@ -33,7 +33,6 @@ from .mapper import EpisodeMapper
 from .policies import EpisodicRetentionPolicy
 from ...types import Episode
 from ..utils.dedupe import dedupe_by_id
-from ..utils.identity import normalize_user_id
 
 logger = logging.getLogger(__name__)
 

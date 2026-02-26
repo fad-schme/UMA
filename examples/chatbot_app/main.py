@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Optional
+from typing import Any, Dict, Optional, Tuple
 
 from uma.core.uma_memory import UMAMemory
 from uma.adapters.llm.base import LLMInterface
@@ -16,6 +16,135 @@ SYSTEM_PROMPT_DEFAULT = (
     "Do not answer user questions. "
     "Only evaluate the snippet for relevance, completeness, and gaps."
 )
+
+
+# ==== External store reset helpers (Qdrant, Neo4j) ====
+
+def _load_yaml_config(path: str) -> Dict[str, Any]:
+    """Load UMA YAML config as a plain dict.
+
+    We intentionally avoid constructing UMAMemory here so that `--clear-all` can
+    still work even if runtime adapters fail to initialize.
+    """
+    try:
+        import yaml  # type: ignore
+    except Exception as exc:
+        raise RuntimeError(
+            "PyYAML is required for --clear-all to reset external stores. Install with `pip install pyyaml`."
+        ) from exc
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Invalid YAML config format in {path}")
+    return data
+
+
+def _find_neo4j_config(cfg: Any) -> Optional[Dict[str, Any]]:
+    """Best-effort recursive search for a Neo4j connection block."""
+    if isinstance(cfg, dict):
+        # Common shapes: {uri,user,password} or {url,username,password}
+        keys = {k.lower() for k in cfg.keys() if isinstance(k, str)}
+        if ("uri" in keys or "url" in keys) and ("user" in keys or "username" in keys) and "password" in keys:
+            return cfg
+        for v in cfg.values():
+            found = _find_neo4j_config(v)
+            if found:
+                return found
+    elif isinstance(cfg, list):
+        for item in cfg:
+            found = _find_neo4j_config(item)
+            if found:
+                return found
+    return None
+
+
+def _reset_qdrant_from_config(cfg: Dict[str, Any]) -> Tuple[bool, str]:
+    """Delete the configured Qdrant collection if present.
+
+    Returns (success, message). This is best-effort and will never raise.
+    """
+    try:
+        storage = cfg.get("storage") if isinstance(cfg.get("storage"), dict) else {}
+        vector_backend = storage.get("vector_backend")
+        vcfg = storage.get("vector_config") if isinstance(storage.get("vector_config"), dict) else {}
+
+        # Only attempt if the backend looks like Qdrant
+        vb = str(vector_backend or "").lower()
+        if "qdrant" not in vb:
+            return False, "Qdrant backend not configured; skipping."
+
+        collection = vcfg.get("collection")
+        url = vcfg.get("url")
+        api_key = vcfg.get("api_key")
+        path = vcfg.get("path")
+
+        if not collection:
+            return False, "Qdrant collection not set; skipping."
+
+        try:
+            from qdrant_client import QdrantClient  # type: ignore
+        except Exception as exc:
+            return False, f"qdrant-client not installed; cannot reset Qdrant ({exc})."
+
+        client = None
+        if url:
+            client = QdrantClient(url=url, api_key=api_key, timeout=10.0)
+        elif path:
+            client = QdrantClient(path=path, timeout=10.0)
+        else:
+            return False, "Qdrant vector_config must include either url or path; skipping."
+
+        try:
+            if client.collection_exists(collection):
+                client.delete_collection(collection_name=str(collection))
+                return True, f"Deleted Qdrant collection '{collection}'."
+            return True, f"Qdrant collection '{collection}' does not exist; nothing to delete."
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+    except Exception as exc:
+        return False, f"Failed to reset Qdrant (best-effort): {exc}"
+
+
+def _reset_neo4j_from_config(cfg: Dict[str, Any]) -> Tuple[bool, str]:
+    """Wipe all nodes/relationships from configured Neo4j database (best-effort).
+
+    Returns (success, message). This is best-effort and will never raise.
+    """
+    try:
+        neo = _find_neo4j_config(cfg)
+        if not neo:
+            return False, "Neo4j config not found; skipping graph reset."
+
+        # Normalize common keys
+        uri = neo.get("uri") or neo.get("url")
+        user = neo.get("user") or neo.get("username")
+        password = neo.get("password")
+        database = neo.get("database") or neo.get("db") or "neo4j"
+
+        if not (uri and user and password):
+            return False, "Neo4j config incomplete (need uri/url, user/username, password); skipping."
+
+        try:
+            from neo4j import GraphDatabase  # type: ignore
+        except Exception as exc:
+            return False, f"neo4j driver not installed; cannot reset graph DB ({exc})."
+
+        driver = GraphDatabase.driver(uri, auth=(user, password))
+        try:
+            with driver.session(database=database) as session:
+                session.run("MATCH (n) DETACH DELETE n")
+            return True, "Cleared Neo4j graph (MATCH (n) DETACH DELETE n)."
+        finally:
+            try:
+                driver.close()
+            except Exception:
+                pass
+    except Exception as exc:
+        return False, f"Failed to reset Neo4j (best-effort): {exc}"
 
 
 async def agent_generate(messages: list, llm: Optional[LLMInterface] = None) -> str:
@@ -116,14 +245,24 @@ async def interactive_chat(
                 snippet = await memory.get_rendered_context(
                     user_id=user_id, query_text=user_message
                 )
+                #snippet = await memory.get_structured_context(user_id=user_id, query_text=user_message)
                 if not snippet:
                     context_messages = [{"role": "user", "content": user_message}]
                     reply = "No memory snippet available to evaluate."
                 else:
                     user_content = (
-                        "You are evaluating UMA memory. Do NOT answer the user question.\n"
-                        "Return ONLY a brief evaluation of the snippet quality and relevance.\n"
-                        "Focus on: relevance to the question, completeness, and any gaps.\n\n"
+
+                        "You are evaluating a retrieved UMA memory snippet for use as LLM context.\n"
+                        "Do NOT answer the user’s question.\n"
+                        "Do NOT add new facts or suggestions beyond what is in the snippet.\n"
+                        "Return ONLY a brief evaluation of whether the snippet is good supporting context for answering the question.\n"
+                        "Focus on:\n"
+                        "- Relevance to the question\n"
+                        "- Coverage/completeness (what important info is missing)\n"
+                        "- Specificity/grounding (is it concrete, attributable, unambiguous?)\n"
+                        "- Noise/irrelevance (what should be removed)\n"
+                        "- Risks (stale info, contradictions, PII/sensitive data)\n\n"
+
                         f"User question:\n{user_message}\n\n"
                         f"Snippet to evaluate:\n{snippet}\n"
                     )
@@ -177,12 +316,29 @@ def main():
         cfg_dir = os.path.dirname(cfg_path)
         project_root = os.path.dirname(cfg_dir)  # sibling of config/
         abs_root = os.path.join(project_root, "data")
+
+        # Best-effort reset of external/vector/graph stores based on config.
+        try:
+            cfg = _load_yaml_config(cfg_path)
+        except Exception as exc:
+            logging.warning("Failed to load YAML config for external reset: %s", exc)
+            cfg = {}
+
+        ok, msg = _reset_qdrant_from_config(cfg)
+        logging.info("Qdrant reset: %s", msg)
+        ok2, msg2 = _reset_neo4j_from_config(cfg)
+        logging.info("Graph reset: %s", msg2)
+
         if abs_root in {"/", ""}:
             raise RuntimeError(f"Refusing to clear unsafe db_root path: {abs_root}")
         if os.path.exists(abs_root):
             shutil.rmtree(abs_root)
         os.makedirs(abs_root, exist_ok=True)
         print(f"Cleared UMA storage at {abs_root}")
+        if msg:
+            print(f"External reset: {msg}")
+        if msg2:
+            print(f"Graph reset: {msg2}")
         asyncio.run(
             interactive_chat(
                 config_path=args.config,

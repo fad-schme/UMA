@@ -104,7 +104,6 @@ def retryable(
     def decorator(func: Callable[..., Awaitable[Any]]):
 
         async def wrapper(*args, **kwargs):
-            name = getattr(func, "__name__", "unknown")
             delay = initial_delay
             attempt = 1
 

@@ -31,7 +31,6 @@ from .matcher import SkillMatcher
 if TYPE_CHECKING:
     from ...core.procedural.core import ProceduralCore
     from ...adapters.llm.base import EmbeddingInterface
-    from ...core.uma_memory import UMAMemory
 
 logger = logging.getLogger(__name__)
 

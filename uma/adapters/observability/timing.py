@@ -17,7 +17,7 @@ import time
 import asyncio
 from contextlib import contextmanager, asynccontextmanager
 from functools import wraps
-from typing import Callable, Any
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 

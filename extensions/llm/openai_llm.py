@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import List, Dict, Any
+from typing import List, Dict
 
 from openai import AsyncOpenAI
 from uma.adapters.llm.base import LLMInterface

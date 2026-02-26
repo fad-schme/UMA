@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import logging
 from typing import List, Dict, Tuple, Optional
-import os
 
 import weaviate
 from uma.adapters.vector.base import VectorIndex

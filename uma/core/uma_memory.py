@@ -96,9 +96,7 @@ Design Philosophy
 
 from __future__ import annotations
 
-import inspect
 import logging
-import os
 from typing import Any, Dict, Optional
 
 from .memory_config import UMAConfig  # YAML loader + validation (dict-like)

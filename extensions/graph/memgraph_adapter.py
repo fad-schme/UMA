@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from neo4j import GraphDatabase, basic_auth, Driver, Session
+from neo4j import GraphDatabase, basic_auth, Driver
 from neo4j.graph import Node, Relationship, Path
 
 from uma.adapters.graph.base import GraphAdapter

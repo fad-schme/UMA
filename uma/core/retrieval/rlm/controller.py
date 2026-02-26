@@ -2,25 +2,21 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import re
 import time
 from typing import Any, Dict, List, Optional
 
 from .context_pack import ContextPack
-from .decisions import ControllerDecision, RetrievalAction
+from .decisions import RetrievalAction
 from . import decisions
 from .coverage import assess_coverage, compute_confidence
 from ..policy import RetrievalPolicy, should_stop
 from ...utils.identity import normalize_user_id
-from ...utils.accessors import get_attr_or_key
 from ...chunk.core import merge_chunks_with_precedence, partition_chunks_by_route
 from ...semantic.query_pruner import prune_facts_for_query
 from .evidence import expand_evidence_chunks_from_facts
 
-from ...utils.user_query_helper import extract_keywords_and_phrases
 from ..ranking import Ranker
 
 logger = logging.getLogger(__name__)
@@ -711,7 +707,7 @@ class RLMController:
 
         retrieval_cfg = getattr(self.env, "_memory", None)
         retrieval_cfg = getattr(retrieval_cfg, "retrieval_cfg", None)
-        ctx_cfg = getattr(retrieval_cfg, "context", None) if retrieval_cfg else None
+       #ctx_cfg = getattr(retrieval_cfg, "context", None) if retrieval_cfg else None
 
         if owner_type == "agent":
             resolved_owner_id = owner_id or getattr(self.env, "_agent_id", None)
@@ -780,10 +776,10 @@ class RLMController:
                 logger.warning("RLMController._search_episodic_core: missing agent_id for agent scope")
                 return []
         else:
-            resolved_owner_id = owner_id or user_id
+            resolved_owner_id = owner_id or normalized_user_id
 
         episodes = await episodic_core.search(
-            user_id=user_id,
+            user_id=normalized_user_id,
             query_embedding=list(query_embedding),
             owner_type=owner_type,
             owner_id=resolved_owner_id,
@@ -830,10 +826,10 @@ class RLMController:
                 logger.warning("RLMController._search_procedural_core: missing agent_id for agent scope")
                 return []
         else:
-            resolved_owner_id = owner_id or user_id
+            resolved_owner_id = owner_id or normalized_user_id
 
         return await procedural_core.search(
-            user_id=user_id,
+            user_id=normalized_user_id,
             query_embedding=list(query_embedding),
             owner_type=owner_type,
             owner_id=resolved_owner_id,

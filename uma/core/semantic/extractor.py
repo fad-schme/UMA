@@ -44,7 +44,6 @@ Implementation notes
 """
 
 import logging
-import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 

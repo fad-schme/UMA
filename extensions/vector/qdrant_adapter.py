@@ -22,9 +22,10 @@ Qdrant payload minimal (no chunk text duplication).
 Dependencies
 ------------
 - qdrant-client
-- fastembed (BM25 sparse embeddings)
+- fastembed (optional; enables BM25 sparse vectors)
 
-    pip install qdrant-client fastembed
+    pip install qdrant-client
+    pip install fastembed
 
 Design goals
 ------------
@@ -58,7 +59,7 @@ try:
     from fastembed import SparseTextEmbedding  # type: ignore
 except Exception as exc:  # pragma: no cover
     SparseTextEmbedding = None  # type: ignore
-    logger.error("Failed to import fastembed (required for BM25 sparse vectors): %s", exc)
+    logger.warning("fastembed not installed; BM25 sparse vectors will be unavailable: %s", exc)
 
 
 class QdrantIndex(VectorIndex):
@@ -89,6 +90,8 @@ class QdrantIndex(VectorIndex):
         Name for dense vector in a multi-vector collection.
     sparse_vector_name:
         Name for sparse BM25 vector in a multi-vector collection.
+    bm25_enabled:
+        Whether to enable BM25 sparse vectors (default True). If fastembed is not installed, BM25 will be auto-disabled.
     bm25_model_name:
         FastEmbed BM25 model name (default "Qdrant/bm25").
     metadata_text_key:
@@ -118,20 +121,23 @@ class QdrantIndex(VectorIndex):
         on_disk_payload: bool = False,
         dense_vector_name: str = "dense",
         sparse_vector_name: str = "sparse",
+        bm25_enabled: bool = True,
         bm25_model_name: str = "Qdrant/bm25",
         metadata_text_key: str = "__text",
         query_text_filter_key: str = "__query_text",
         prefetch_multiplier: int = 4,
         min_prefetch: int = 50,
         rrf_k: int = 60,
+        **_: Any,
     ) -> None:
         if QdrantClient is None or qmodels is None:
             raise RuntimeError("qdrant-client is not installed. Install it with `pip install qdrant-client`.")
-        if SparseTextEmbedding is None:
-            raise RuntimeError(
-                "fastembed is not installed. Install it with `pip install fastembed` "
-                "(required for BM25 sparse vectors)."
+        if bm25_enabled and SparseTextEmbedding is None:
+            logger.warning(
+                "fastembed is not installed; BM25 hybrid search will be disabled and QdrantIndex will run dense-only. "
+                "Install with `pip install fastembed` to enable BM25 sparse vectors."
             )
+            bm25_enabled = False
 
         if not isinstance(dim, int) or dim <= 0:
             raise ValueError("QdrantIndex: dim must be a positive integer.")
@@ -161,8 +167,9 @@ class QdrantIndex(VectorIndex):
         self._min_prefetch = min_prefetch
         self._rrf_k = rrf_k
 
-        # Sparse BM25 embedding generator
-        self._bm25 = SparseTextEmbedding(model_name=bm25_model_name)
+        # Sparse BM25 embedding generator (optional)
+        self._bm25_enabled = bool(bm25_enabled)
+        self._bm25 = SparseTextEmbedding(model_name=bm25_model_name) if self._bm25_enabled else None
 
         try:
             if url:
@@ -247,7 +254,7 @@ class QdrantIndex(VectorIndex):
             payloads.append(payload)
             sparse_vectors.append(qmodels.SparseVector(indices=[], values=[]))
 
-        if texts_for_bm25:
+        if texts_for_bm25 and self._bm25 is not None:
             try:
                 sparse_embeddings = list(self._bm25.embed(texts_for_bm25))
             except Exception as exc:
@@ -262,6 +269,10 @@ class QdrantIndex(VectorIndex):
 
             for sparse_emb, pos in zip(sparse_embeddings, text_positions):
                 sparse_vectors[pos] = self._to_sparse_vector(sparse_emb)
+        elif texts_for_bm25 and self._bm25 is None:
+            logger.debug(
+                "QdrantIndex.upsert: text provided for BM25 but BM25 is disabled; storing empty sparse vectors (dense-only mode)."
+            )
 
         points: List[qmodels.PointStruct] = []
         for pid, dense_vec, payload, sparse_vec in zip(ids, vectors, payloads, sparse_vectors):
@@ -330,12 +341,19 @@ class QdrantIndex(VectorIndex):
         if query_text is None:
             return self._dense_search(vector=vector, k=k, qfilter=qfilter)
 
+        if self._bm25 is None:
+            logger.debug(
+                "QdrantIndex.query: query text provided but BM25 is disabled; falling back to dense-only."
+            )
+            return self._dense_search(vector=vector, k=k, qfilter=qfilter)
+
         # Build sparse query vector (BM25). If it fails, fallback to dense-only.
         try:
             sparse_query_emb = next(iter(self._bm25.embed([query_text])))
             sparse_query_vec = self._to_sparse_vector(sparse_query_emb)
         except Exception as exc:
-            logger.exception("QdrantIndex.query: BM25 sparse query embedding failed. Falling back to dense-only.")
+            logger.exception("QdrantIndex.query: BM25 sparse query embedding failed. Falling back to dense-only.",
+                exc,)
             return self._dense_search(vector=vector, k=k, qfilter=qfilter)
 
         # 1) Try server-side RRF fusion (best case).
@@ -486,7 +504,7 @@ class QdrantIndex(VectorIndex):
         return self._extract_id_score(points)
 
     @staticmethod
-    def _rrf_fuse(
+    def _rrf_fuse_lists(
         *,
         dense: List[Tuple[str, float]],
         sparse: List[Tuple[str, float]],
@@ -494,7 +512,7 @@ class QdrantIndex(VectorIndex):
         rrf_k: int = 60,
     ) -> List[Tuple[str, float]]:
         """
-        Reciprocal Rank Fusion over two ranked lists.
+        _rrf_fuse_lists: Reciprocal Rank Fusion over two ranked lists.
         Returns (id, fused_score) sorted descending, truncated to k.
 
         We ignore modality raw scores and fuse by rank position (classic RRF).
@@ -512,7 +530,7 @@ class QdrantIndex(VectorIndex):
         return fused[:k]
 
     def _rrf_fuse(self, *, dense: List[Tuple[str, float]], sparse: List[Tuple[str, float]], k: int) -> List[Tuple[str, float]]:
-        return self.__class__._rrf_fuse(dense=dense, sparse=sparse, k=k, rrf_k=self._rrf_k)
+        return self.__class__._rrf_fuse_lists(dense=dense, sparse=sparse, k=k, rrf_k=self._rrf_k)
 
     # ---------------------------------------------------------------------
     # Collection/schema helpers

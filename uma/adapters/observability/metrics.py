@@ -7,7 +7,7 @@ from __future__ import annotations
 import threading
 import time
 from contextlib import contextmanager
-from typing import Dict, Iterable, Iterator, Tuple
+from typing import Dict, Iterator, Tuple
 
 _lock = threading.Lock()
 _counters: Dict[Tuple[str, Tuple[Tuple[str, str], ...]], int] = {}

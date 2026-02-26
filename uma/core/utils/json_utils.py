@@ -6,6 +6,7 @@ Centralizes best-effort JSON salvage to avoid drift across modules.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any, Dict, List, Optional
 
@@ -28,10 +29,8 @@ def try_parse_json_object(raw: str) -> Optional[Dict[str, Any]]:
         obj = json.loads(raw)
         return obj if isinstance(obj, dict) else None
     except Exception:
-        # Best-effort parse failure: log and raise for callers to handle explicitly.
-        import logging
-        logging.getLogger(__name__).exception("try_parse_json_object: strict json.loads failed")
-        raise
+        # Best-effort parse failure: log and continue to salvage below.
+        logging.getLogger(__name__).exception("try_parse_json_object: strict json.loads failed; attempting salvage")
 
     m = _JSON_OBJECT_RE.search(raw)
     if not m:
@@ -58,9 +57,8 @@ def try_parse_json_list(raw: str) -> Optional[List[Any]]:
         obj = json.loads(raw)
         return obj if isinstance(obj, list) else None
     except Exception:
-        import logging
-        logging.getLogger(__name__).exception("try_parse_json_list: strict json.loads failed")
-        raise
+        # Best-effort parse failure: log and continue to salvage below.
+        logging.getLogger(__name__).exception("try_parse_json_list: strict json.loads failed; attempting salvage")
 
     m = _JSON_LIST_RE.search(raw)
     if not m:

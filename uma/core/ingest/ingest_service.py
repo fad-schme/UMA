@@ -4,12 +4,11 @@ import logging
 import hashlib
 from datetime import datetime, timezone
 from typing import Any, Dict, List
-from uuid import uuid4
 
 from .types import IngestConfig, IngestReport
 from .parser import parse_file
 from .normalizer import normalize_document
-from .chunker import chunk_sections, finalize_chunks, validate_chunks, validate_docchunk_structure
+from .chunker import chunk_sections, finalize_chunks
 from .embedder import embed_chunks
 from ..semantic import extractor as semantic_extractor
 from .graph_updater import update_graph

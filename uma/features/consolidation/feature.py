@@ -20,14 +20,12 @@ Coding Agent Instructions
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from ...core.utils.registry import FeatureContext, FeatureHandle, FeatureResult, UMAFeature
-from ...types import Fact
 from .consolidator import Consolidator
 
 if TYPE_CHECKING:
-    from ...core.uma_memory import UMAMemory
     from ...core.episodic.core import EpisodicCore
     from ...core.semantic.core import SemanticCore
     from ...adapters.llm.base import LLMInterface, EmbeddingInterface

@@ -14,8 +14,8 @@ machine-readable artifacts for:
 """
 
 from __future__ import annotations
+import os
 from typing import Any, Dict, List, Optional
-import json
 import re
 import logging
 
@@ -181,6 +181,7 @@ class ContextPackBuilder:
                     {
                         "id": get_attr_or_key(chunk, "id"),
                         "doc_id": get_attr_or_key(chunk, "doc_id"),
+                        "source_path": get_attr_or_key(chunk, "source_path"),
                         "text": get_attr_or_key(chunk, "text", ""),
                         "page_range": get_attr_or_key(chunk, "page_range"),
                         "position": get_attr_or_key(chunk, "position", 0),
@@ -281,6 +282,13 @@ class ContextPackBuilder:
 
         lines, facts = _render_common_sections(pack, cfg, query_text)
         _append_chunk_snippets(lines, pack, cfg, query_text, facts, heading="Document chunks:")
+
+        sources = _collect_source_filenames(pack, final_snippets=pack.get("final_snippets"))
+        if sources:
+            lines.append("\nSources:")
+            for i, s in enumerate(sources, start=1):
+                lines.append(f"{i}. {s}")
+
         _append_skills_and_graph(lines, pack, cfg)
         return "\n".join(lines).strip()
 
@@ -392,6 +400,12 @@ class ContextPackBuilder:
                 owner_id,
                 trace_id,
             )
+        
+        sources = _collect_source_filenames(pack, final_snippets=final_snippets)
+        if sources:
+            lines.append("\nSources:")
+            for i, s in enumerate(sources, start=1):
+                lines.append(f"{i}. {s}")
 
         _append_skills_and_graph(lines, pack, cfg)
 
@@ -441,54 +455,53 @@ async def build_context_pack(
     return ContextPackBuilder.build(query_text, ctx)
 
 
-async def build_prompt_messages(
-    memory: Any,
-    *,
-    user_id: str,
-    query_text: str,
-) -> list:
+def _basename(path: Any) -> str:
+    if isinstance(path, str) and path.strip():
+        return os.path.basename(path.strip())
+    return ""
+
+
+def _collect_source_filenames(pack: Dict[str, Any], final_snippets: Optional[List[Dict[str, Any]]] = None) -> List[str]:
     """
-    Backward-compatible prompt helper (deprecated): wraps retrieval + formatting
-    into a single LLM-style messages array.
+    Collect unique source filenames (basenames only) in stable order.
+    Preference:
+      1) snippet_refiner output (final_snippets[*].source.file_name / source_path)
+      2) pack chunks (chunks[*].source_path)
     """
-    pack = await build_context_pack(memory, user_id=user_id, query_text=query_text)
-    ctx_cfg = getattr(getattr(memory, "retrieval_cfg", None), "context", None)
-    if getattr(ctx_cfg, "snippet_refiner_enabled", False):
-        snippet = await ContextPackBuilder.render_snippet_async(pack, ctx_cfg, llm=getattr(memory, "llm", None))
-    else:
-        snippet = ContextPackBuilder.render_snippet(pack, ctx_cfg)
+    seen: set[str] = set()
+    out: List[str] = []
 
-    user_content = f"{query_text}\n\nRelevant memory:\n{snippet}" if snippet else query_text
-    return [{"role": "user", "content": user_content}]
+    # 1) from refined snippets (most accurate)
+    for sn in final_snippets or []:
+        if not isinstance(sn, dict):
+            continue
+        src = sn.get("source")
+        if not isinstance(src, dict):
+            continue
 
+        name = src.get("file_name")
+        if not (isinstance(name, str) and name.strip()):
+            name = _basename(src.get("source_path"))
 
-def _filter_facts_by_query(facts: List[Dict[str, Any]], query_text: str) -> List[Dict[str, Any]]:
-    if not facts or not query_text:
-        return facts
-    extracted = extract_keywords_and_phrases(query_text)
-    terms = (extracted.get("keywords") or []) + (extracted.get("keyphrases") or [])
-    terms = [t for t in terms if isinstance(t, str) and t]
-    if not terms:
-        return facts
-    scored: List[tuple[int, Dict[str, Any]]] = []
-    for fact in facts:
-        obj = get_attr_or_key(fact, "object")
-        haystack = ""
-        if isinstance(obj, dict):
-            haystack = " ".join(
-                str(v) for v in (obj.get("title"), obj.get("text"), obj.get("path")) if v
-            )
-        else:
-            haystack = str(obj or "")
-        haystack = f"{get_attr_or_key(fact,'subject','')} {get_attr_or_key(fact,'predicate','')} {haystack}".lower()
-        score = sum(1 for t in terms if t in haystack)
-        if score:
-            scored.append((score, fact))
-    if not scored:
-        return facts
-    scored.sort(key=lambda item: item[0], reverse=True)
-    return [fact for _, fact in scored]
+        if isinstance(name, str) and name.strip():
+            key = name.lower()
+            if key not in seen:
+                seen.add(key)
+                out.append(name)
 
+    # 2) fallback from chunks
+    if not out:
+        for ch in pack.get("chunks", []) or []:
+            if not isinstance(ch, dict):
+                continue
+            name = _basename(ch.get("source_path"))
+            if name:
+                key = name.lower()
+                if key not in seen:
+                    seen.add(key)
+                    out.append(name)
+
+    return out
 
 def _extract_relevant_excerpt(text: str, query_text: str, max_chars: int = 240) -> str:
     if not text:

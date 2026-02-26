@@ -10,7 +10,7 @@ This configuration format uses:
 from __future__ import annotations
 import logging
 import os
-from typing import Any, Dict
+from typing import Any
 
 import yaml
 from .initializers.runtime import init_runtime_env
@@ -81,7 +81,6 @@ class UMAConfig(dict):
 
     def _warn_on_secrets(self) -> None:
         sensitive_keys = ("api_key", "apikey", "secret", "token", "password", "passwd", "pwd")
-        placeholders = ("YOUR_", "CHANGEME", "REPLACE", "INSERT", "<", "...")
 
         def _is_placeholder(value: str) -> bool:
             upper = value.strip().upper()

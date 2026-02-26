@@ -1,53 +1,15 @@
-import asyncio
-import yaml
+from __future__ import annotations
 
-from uma.core.uma_memory import UMAMemory
-
-
-def _good_embedder(texts=None, **kwargs):
-    texts = texts or []
-    return [[0.0, 0.0, 0.0] for _ in texts]
+import pytest
 
 
-def _good_llm(messages=None, **kwargs):
-    # Return minimal valid JSON for Semantic FactExtractor.
-    return '{"facts":[{"predicate":"LIKES","object":"coffee","confidence":0.9,"source_ids":[]}]}'
+@pytest.mark.asyncio
+async def test_process_turn_is_idempotent_by_turn_id(uma_memory):
+    mem = uma_memory
 
-
-def test_process_turn_is_idempotent_by_turn_id(tmp_path):
-    cfg = {
-        "storage": {
-            "db_root": str(tmp_path),
-            "sql_backend": "sqlite",
-            "vector_backend": "inmemory",
-            "graph_backend": "disabled",
-        },
-        "working_memory": {"max_tokens": 100, "warning_ratio": 0.7, "hard_limit_ratio": 0.95, "chunk_size": 10},
-        "embedding": {
-            "provider": "tests.test_turn_ingest_idempotent:_good_embedder",
-            "model": "x",
-            "dimension": 3,
-            "config": {"preflight": False},
-        },
-        "llm": {
-            "provider": "tests.test_turn_ingest_idempotent:_good_llm",
-            "model": "x",
-            "config": {"preflight": False},
-        },
-        "retrieval": {"max_episodes": 1, "max_facts": 1, "max_skills": 1, "max_graph_items": 1},
-        "consolidation": {"enabled": False, "cluster_similarity": 0.75, "max_episodes_per_cycle": 10, "prune_min_fact_salience": 0.2},
-        "features": {"load": [], "policy": {"on_attach_error": "log_and_skip", "allow_method_override": False}},
-    }
-
-    cfg_path = tmp_path / "uma_test.yaml"
-    cfg_path.write_text(yaml.safe_dump(cfg))
-    mem = UMAMemory.from_yaml(str(cfg_path))
-
-    async def run():
-        await mem.process_turn(user_id="user:u1", user_msg="hello", assistant_reply="hi")
-        await mem.process_turn(user_id="user:u1", user_msg="hello", assistant_reply="hi")
-
-    asyncio.run(run())
+    # Use an assistant reply that triggers deterministic fact extraction.
+    await mem.process_turn(user_id="user:u1", user_msg="hello", assistant_reply="user likes coffee.")
+    await mem.process_turn(user_id="user:u1", user_msg="hello", assistant_reply="user likes coffee.")
 
     # Expect only one episode row due to turn_id idempotency guard.
     conn = mem._stores["episodic"]._conn()

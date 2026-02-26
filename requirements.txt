@@ -11,6 +11,7 @@ PyPDF2
 neo4j           #graph db
 sqlite          #sql db
 qdrant-client   #vector db
+fastembed # for qdrant bm25
 #faiss-cpu    #vector db --- IGNORE ---
 
 # LLM integrations 

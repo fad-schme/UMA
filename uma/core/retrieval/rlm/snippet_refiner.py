@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -219,6 +220,11 @@ class SnippetRefiner:
 
     def _build_snippet(self, candidate: Dict[str, Any], text: str) -> Dict[str, Any]:
         sid = hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+        source_path = candidate.get("source_path")
+        file_name = ""
+        if isinstance(source_path, str) and source_path.strip():
+            file_name = os.path.basename(source_path.strip())
+
         return {
             "id": f"snippet:{sid}",
             "source": {
@@ -226,7 +232,8 @@ class SnippetRefiner:
                 "doc_id": candidate.get("doc_id"),
                 "chunk_ids": candidate.get("chunk_ids", []),
                 "page_range": candidate.get("page_range"),
-                "source_path": candidate.get("source_path"),
+                "source_path": source_path,
+                "file_name": file_name,  # <-- added (basename only)
             },
             "text": text.strip(),
         }

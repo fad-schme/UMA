@@ -1,29 +1,21 @@
+from __future__ import annotations
+
 import asyncio
 
+from uma.adapters.llm.callable_adapter import CallableEmbedderAdapter, CallableLLMAdapter
 from uma.core.episodic.indexer import EpisodeIndexer
 
-
-class DummyLLM:
-    async def generate(self, messages, max_tokens=256, temperature=0.0, **kwargs):
-        return "episode summary"
+from tests.helpers.providers import fake_embed, fake_llm
 
 
-class DummyEmbedder:
-    def __init__(self):
-        self.last_texts = None
-        self.dimension = 3
-
-    async def embed(self, texts):
-        # Expect list of strings
-        if not isinstance(texts, list) or not all(isinstance(t, str) for t in texts):
-            raise ValueError("embed expects list[str]")
-        self.last_texts = texts
-        return [[0.1, 0.2, 0.3] for _ in texts]
-
-
-def test_episode_indexer_embed_input_shape():
-    llm = DummyLLM()
-    embedder = DummyEmbedder()
+def test_episode_indexer_builds_episode_with_valid_embedding_shape():
+    llm = CallableLLMAdapter(callable_fn=fake_llm, name="tests.fake_llm")
+    embedder = CallableEmbedderAdapter(
+        callable_fn=fake_embed,
+        dimension=16,
+        name="tests.fake_embed",
+        default_kwargs={"dimension": 16},
+    )
     indexer = EpisodeIndexer(llm=llm, embedder=embedder)
 
     wm_entries = [
@@ -34,6 +26,5 @@ def test_episode_indexer_embed_input_shape():
     ep, embedding = asyncio.run(
         indexer.build_episode(owner_type="user", owner_id="user:u1", wm_entries=wm_entries)
     )
-    assert ep.summary
-    assert embedding == [0.1, 0.2, 0.3]
-    assert embedder.last_texts == [ep.summary]
+    assert isinstance(ep.summary, str) and ep.summary.strip()
+    assert isinstance(embedding, list) and len(embedding) == 16

@@ -1,33 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List
 
-from uma.adapters.graph.base import GraphAdapter
 from uma.core.graph.core import TemporalGraphCore
 from uma.core.graph.updater import GraphUpdater
 from uma.types import Episode
 
-
-class RecordingAdapter(GraphAdapter):
-    """
-    Records Cypher queries and parameters for assertions.
-    This adapter does NOT execute against a real graph backend.
-    """
-
-    def __init__(self):
-        self.queries: List[tuple[str, Dict[str, Any]]] = []
-
-    def run_query(self, cypher: str, params: Dict[str, Any] | None = None):
-        self.queries.append((cypher, params or {}))
-        return []
-
-    def close(self):
-        pass
+from tests.helpers.graph_adapter import RecordingGraphAdapter
 
 
 def test_insert_fact_triplet_sanitizes_predicate_and_stamps_owner():
-    adapter = RecordingAdapter()
+    adapter = RecordingGraphAdapter()
     core = TemporalGraphCore(adapter)
 
     core.insert_fact_triplet(
@@ -57,7 +40,7 @@ def test_insert_fact_triplet_sanitizes_predicate_and_stamps_owner():
 
 
 def test_episode_edges_have_ownership():
-    adapter = RecordingAdapter()
+    adapter = RecordingGraphAdapter()
     graph_core = TemporalGraphCore(adapter)
     updater = GraphUpdater(graph_core)
 

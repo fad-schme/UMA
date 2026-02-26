@@ -24,7 +24,7 @@ from importlib import import_module
 from importlib import metadata
 import inspect
 import logging
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Type, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Type, Union
 
 
 # ======================================================================

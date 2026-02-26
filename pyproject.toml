@@ -15,16 +15,19 @@ dynamic = ["version"]
 dependencies = [
   "pyyaml",
   "numpy",
-  "scikit-learn",
   "aiohttp",
-  "openai",
+  "charset-normalizer",
+  "pydantic>=2",
+  "openai>=1.0.0",
 ]
 
 [project.optional-dependencies]
-vector = ["faiss-cpu", "weaviate-client", "pinecone-client"]
+vector = ["faiss-cpu", "weaviate-client", "pinecone-client", "qdrant-client", "fastembed"]
 graph = ["neo4j"]
 postgres = ["psycopg2-binary>=2.9"]
 dev = ["pytest", "matplotlib", "PyPDF2", "pytest-asyncio"]
+ollama = ["ollama"]
+parsers = ["PyPDF2", "beautifulsoup4", "markdown", "pandas"]
 
 [tool.setuptools.dynamic]
 version = {attr = "uma.version.__version__"}

@@ -5,7 +5,7 @@ import asyncio
 import inspect
 import logging
 import json
-from typing import Any, Iterable, List, Optional
+from typing import Any, List, Optional
 
 from ...types import Fact
 

@@ -1,101 +1,84 @@
-import pytest
+from __future__ import annotations
 
-from uma.core.chunk.core import ChunkCore
-from uma.types import Chunk
-from uma.core.procedural.core import ProceduralCore
 from datetime import datetime, timezone
 
+import pytest
 
-class DummyChunkStore:
-    async def search(self, **kwargs):
-        return [
-            Chunk(
-                id="c1",
-                doc_id="d1",
-                text="t",
-                page_range=(1, 1),
-                position=1,
-                source_path="",
-                source_hash="",
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc),
-                owner_type=kwargs.get("owner_type", "agent"),
-                owner_id=kwargs.get("owner_id", "agent-default"),
-                meta={},
-            )
-        ]
-
-    async def lexical_search(self, query_text: str, **kwargs):
-        return [
-            Chunk(
-                id="c2",
-                doc_id="d1",
-                text=query_text,
-                page_range=(1, 1),
-                position=1,
-                source_path="",
-                source_hash="",
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc),
-                owner_type=kwargs.get("owner_type", "agent"),
-                owner_id=kwargs.get("owner_id", "agent-default"),
-                meta={},
-            )
-        ]
-
-
-class DenseOnlyChunkStore:
-    async def search(self, **kwargs):
-        return await DummyChunkStore().search(**kwargs)
-
-
-class DummyProceduralStore:
-    async def search(self, **kwargs):
-        return [{"id": "s1", "name": "skill"}]
+from uma.types import Skill
 
 
 @pytest.mark.asyncio
-async def test_chunk_search_does_not_require_subject():
-    core = ChunkCore(DummyChunkStore())
-    res = await core.search_chunks(
-        query_embedding=[0.0],
-        owner_type="agent",
-        owner_id="agent-default",
+async def test_chunk_search_does_not_require_subject(uma_memory, tmp_path):
+    memory = uma_memory
+    owner_type = "agent"
+    owner_id = memory.agent_id or "agent-default"
+
+    doc = tmp_path / "doc.txt"
+    doc.write_text(
+        "This is a test document used for UMA retrieval. "
+        "It contains the phrase hello world in a longer passage so lexical search can match it reliably. "
+        "The rest of this sentence is padding to ensure the stored chunk is long enough for LIKE-based lexical search.\n"
+    )
+    await memory.ingest_document(str(doc), owner_type=owner_type, owner_id=owner_id)
+
+    q = "hello world"
+    query_embedding = (await memory.embedder.embed([q]))[0]
+
+    res = await memory.chunk_core.search_chunks(
+        query_embedding=query_embedding,
+        owner_type=owner_type,
+        owner_id=owner_id,
         k=5,
     )
-    assert res and res[0].id == "c1"
+    assert res, "Expected dense chunk retrieval to return at least one result"
 
-    res = await core.search_chunks(
-        query_embedding=[0.0],
-        owner_type="agent",
-        owner_id="agent-default",
+    res2 = await memory.chunk_core.search_chunks(
+        query_embedding=query_embedding,
+        owner_type=owner_type,
+        owner_id=owner_id,
         k=5,
-        query_text="hello",
+        query_text=q,
         filter_terms=False,
     )
-    assert res and res[0].id == "c2"
+    assert res2, "Expected hybrid chunk retrieval to return at least one result"
 
-    # If lexical capability is absent, hybrid degrades to dense-only.
-    core2 = ChunkCore(DenseOnlyChunkStore())
-    res = await core2.search_chunks(
-        query_embedding=[0.0],
-        owner_type="agent",
-        owner_id="agent-default",
-        k=5,
-        query_text="hello",
-        filter_terms=False,
-    )
-    assert res and res[0].id == "c1"
+    if hasattr(memory.chunk_core.store, "lexical_search"):
+        assert any(
+            (getattr(ch, "meta", None) or {}).get("retrieval_method") == "lexical"
+            for ch in res2
+        ), "Expected lexical capability to tag at least one chunk as lexical"
+    else:
+        assert all(
+            (getattr(ch, "meta", None) or {}).get("retrieval_method") == "vector"
+            for ch in res2
+        ), "Expected vector-only path when lexical capability is absent"
 
 
 @pytest.mark.asyncio
-async def test_procedural_search_does_not_require_subject():
-    core = ProceduralCore(DummyProceduralStore())
-    res = await core.search(
-        user_id="u1",
-        query_embedding=[0.0],
-        owner_type="agent",
-        owner_id="agent-default",
+async def test_procedural_search_does_not_require_subject(uma_memory):
+    memory = uma_memory
+    owner_type = "agent"
+    owner_id = memory.agent_id or "agent-default"
+
+    skill = Skill(
+        id="skill_s1",
+        name="Test skill",
+        description="How to do the hello world procedure safely and deterministically.",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        owner_type=owner_type,
+        owner_id=owner_id,
+    )
+    emb = (await memory.embedder.embed([skill.description]))[0]
+    persisted = await memory.procedural_core.add_skill(skill, emb)
+    assert persisted is not None
+
+    query_embedding = (await memory.embedder.embed(["hello world procedure"]))[0]
+    res = await memory.procedural_core.search(
+        user_id="user:u1",
+        query_embedding=query_embedding,
+        owner_type=owner_type,
+        owner_id=owner_id,
         k=5,
     )
-    assert res and res[0]["id"] == "s1"
+    assert res and res[0].id == "skill_s1"

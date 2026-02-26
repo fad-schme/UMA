@@ -1,9 +1,5 @@
 from uma.stores.base_sql_store import BaseSQLStore
-
-
-class _DummyAdapter:
-    def get_connection(self):
-        raise RuntimeError("not used")
+from uma.adapters.db.sqlite_adapter import SQLiteAdapter
 
 
 class _FailingConn:
@@ -19,13 +15,13 @@ class _OkConn:
         self.called = True
 
 
-def test_safe_rollback_swallows_errors():
-    store = BaseSQLStore(_DummyAdapter())
+def test_safe_rollback_swallows_errors(tmp_path):
+    store = BaseSQLStore(SQLiteAdapter(str(tmp_path / "t.db")))
     store._safe_rollback(_FailingConn(), "test")
 
 
-def test_safe_rollback_calls_connection():
-    store = BaseSQLStore(_DummyAdapter())
+def test_safe_rollback_calls_connection(tmp_path):
+    store = BaseSQLStore(SQLiteAdapter(str(tmp_path / "t.db")))
     conn = _OkConn()
     store._safe_rollback(conn, "test")
     assert conn.called is True

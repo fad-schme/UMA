@@ -23,30 +23,23 @@ class _Cfg:
     allowed_topics = None
 
 
-class _DummyRefiner:
-    def __init__(self, llm=None, cfg=None):
-        self.cfg = cfg
-
-    async def refine(self, *, query_text, facts, chunks):
-        # Return 3 snippets that exceed both max_chunks and snippet_max_chars.
-        base = (
-            "This is a very long snippet sentence that should be trimmed at a sentence boundary. "
-            "Second sentence."
-        )
-        return [
-            {"text": base},
-            {"text": base + " Extra."},
-            {"text": base + " Extra extra."},
-        ]
-
-
 @pytest.mark.asyncio
-async def test_render_snippet_async_enforces_snippet_budgets(monkeypatch):
-    import uma.core.utils.context_pack_builder as mod
-
-    monkeypatch.setattr(mod, "SnippetRefiner", _DummyRefiner)
-    pack = {"query": "q", "facts": [], "chunks": [{"id": "c1", "text": "x", "position": 1}]}
-    out = await ContextPackBuilder.render_snippet_async(pack=pack, context_cfg=_Cfg(), llm=None)
+async def test_render_snippet_async_enforces_snippet_budgets(uma_memory):
+    base = (
+        "This is a very long snippet sentence that should be trimmed at a sentence boundary. "
+        "Second sentence."
+    )
+    pack = {
+        "query": "q",
+        "facts": [],
+        "chunks": [
+            # Use non-adjacent positions so SnippetRefiner grouping yields multiple snippet candidates.
+            {"id": "c1", "doc_id": "d1", "text": base, "position": 1},
+            {"id": "c2", "doc_id": "d1", "text": base + " Extra.", "position": 10},
+            {"id": "c3", "doc_id": "d1", "text": base + " Extra extra.", "position": 20},
+        ],
+    }
+    out = await ContextPackBuilder.render_snippet_async(pack=pack, context_cfg=_Cfg(), llm=uma_memory.llm)
     assert "Document snippets:" in out
     in_snips = False
     lines = []

@@ -21,7 +21,7 @@ Integration
 from __future__ import annotations
 
 import logging
-from typing import List, Iterable, Dict, Any
+from typing import List, Iterable, Dict
 
 from ...adapters.llm.base import LLMInterface  # you must implement this
 from ..llm.controller import LLMCallContext, generate_text
