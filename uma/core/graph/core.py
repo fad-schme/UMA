@@ -97,6 +97,7 @@ class TemporalGraphCore:
         created_at: str,
         updated_at: str,
         meta_json: str | None = None,
+        domain: str | None = None,
     ) -> bool:
         """
         Persist a fact triplet (subject, predicate, object) into Neo4j with full provenance.
@@ -125,6 +126,7 @@ class TemporalGraphCore:
                 r.source_chunk_id = $source_chunk_id,
                 r.created_at = $created_at,
                 r.updated_at = $updated_at,
+                r.domain = $domain,
                 r.meta_json = $meta_json
 
             MERGE (f:Fact {{id: $fact_id}})
@@ -137,6 +139,7 @@ class TemporalGraphCore:
                 f.source_chunk_id = $source_chunk_id,
                 f.created_at = $created_at,
                 f.updated_at = $updated_at,
+                f.domain = $domain,
                 f.meta_json = $meta_json
 
             MERGE (f)-[:SUBJECT]->(subj)
@@ -155,6 +158,7 @@ class TemporalGraphCore:
                 "created_at": created_at,
                 "updated_at": updated_at,
                 "meta_json": meta_json,
+                "domain": domain,
             }
 
             self.adapter.run_query(cypher, params=params)
@@ -185,6 +189,7 @@ class TemporalGraphCore:
         owner_type: str,
         owner_id: str,
         predicate_scope: Optional[List[str]] = None,
+        domain_scope: Optional[List[str]] = None,
         depth: int = 1,
         k: int = 10,
     ) -> List[dict]:
@@ -245,10 +250,16 @@ class TemporalGraphCore:
             preds = [self._sanitize_predicate(p) for p in predicate_scope if p]
             preds = [p for p in preds if p]
 
+        domains = None
+        if domain_scope:
+            domains = [str(d).strip().lower() for d in domain_scope if d]
+            domains = [d for d in domains if d]
+
         cypher = f"""
         MATCH (n {{id: $node_id}})-[rs*1..{depth_i}]-(m)
         WHERE ALL(r IN rs WHERE r.owner_type = $owner_type AND r.owner_id = $owner_id)
         AND ($preds IS NULL OR ALL(r IN rs WHERE type(r) IN $preds))
+        AND ($domains IS NULL OR ALL(r IN rs WHERE toLower(coalesce(r.domain, "")) IN $domains))
         RETURN DISTINCT m AS node, labels(m) AS labels, properties(m) AS properties
         LIMIT $limit
         """
@@ -257,6 +268,7 @@ class TemporalGraphCore:
             "owner_type": owner_type,
             "owner_id": owner_id,
             "preds": preds,
+            "domains": domains,
             "limit": limit,
         }
 

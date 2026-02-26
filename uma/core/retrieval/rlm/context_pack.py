@@ -32,6 +32,10 @@ class ContextPack:
     owner_type: Optional[str] = None
     owner_id: Optional[str] = None
     agent_id: Optional[str] = None
+
+    # Query routing (deterministic; for logging and decisions only)
+    intent: Optional[str] = None
+    active_domains: List[str] = field(default_factory=list)
     
 
     # Memory layers
@@ -65,6 +69,8 @@ class ContextPack:
         return {
             "user_id": self.user_id,
             "query": self.query_text,
+            "intent": self.intent,
+            "active_domains": list(self.active_domains or []),
             "counts": {
                 "wm": len(self.working_memory),
                 "episodes": len(self.episodes),

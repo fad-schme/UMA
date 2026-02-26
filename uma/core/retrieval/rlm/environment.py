@@ -394,11 +394,120 @@ class UMAMemoryEnvironment:
     # Graph
     # ------------------------------------------------------------------
 
+    async def graph_resolve_nodes(
+        self,
+        user_id: str,
+        *,
+        names: List[str],
+        domain_scope: Optional[List[str]] = None,
+        owner_type: str = "agent",
+        owner_id: Optional[str] = None,
+        limit: int = 8,
+    ) -> List[str]:
+        """
+        Best-effort node resolution: map human strings -> graph node ids.
+
+        Bounded and ownership-scoped:
+        - Only returns nodes that have at least one relationship with (owner_type, owner_id)
+        - Matches against common string properties (id/name/value/text)
+        """
+        graph_core = getattr(self._memory, "graph_core", None)
+        if graph_core is None:
+            logger.error("Environment.graph_resolve_nodes: graph_core is None")
+            raise RuntimeError("Environment.graph_resolve_nodes: graph_core is None")
+
+        limit_i = max(1, min(50, int(limit)))
+        try:
+            normalized_user_id = normalize_user_id(user_id)
+        except Exception:
+            normalized_user_id = user_id
+
+        if owner_type == "agent":
+            resolved_owner_id = owner_id or self._agent_id
+            if not resolved_owner_id:
+                return []
+        else:
+            resolved_owner_id = owner_id or normalized_user_id
+
+        cleaned: List[str] = []
+        seen = set()
+        for n in names or []:
+            s = str(n or "").strip().lower()
+            if not s:
+                continue
+            if s in seen:
+                continue
+            seen.add(s)
+            cleaned.append(s)
+            if len(cleaned) >= 20:
+                break
+        if not cleaned:
+            return []
+
+        adapter = getattr(graph_core, "adapter", None)
+        run_query = getattr(adapter, "run_query", None)
+        if not callable(run_query):
+            return []
+
+        domains = None
+        if domain_scope:
+            try:
+                domains = [str(d).strip().lower() for d in (domain_scope or []) if d]
+                domains = [d for d in domains if d]
+            except Exception:
+                domains = None
+
+        try:
+            rows = run_query(
+                """
+                MATCH (n)-[r]-()
+                WHERE r.owner_type = $owner_type AND r.owner_id = $owner_id
+                  AND ($domains IS NULL OR toLower(coalesce(r.domain, "")) IN $domains)
+                  AND (
+                    toLower(coalesce(n.name, "")) IN $names
+                    OR toLower(coalesce(n.id, "")) IN $names
+                    OR toLower(coalesce(n.value, "")) IN $names
+                    OR toLower(coalesce(n.text, "")) IN $names
+                  )
+                RETURN DISTINCT n.id AS node_id
+                LIMIT $limit
+                """,
+                params={
+                    "names": cleaned,
+                    "domains": domains,
+                    "owner_type": owner_type,
+                    "owner_id": resolved_owner_id,
+                    "limit": limit_i,
+                },
+            )
+        except Exception:
+            logger.exception("Environment.graph_resolve_nodes failed")
+            return []
+
+        out: List[str] = []
+        seen_ids = set()
+        for row in rows or []:
+            try:
+                node_id = row.get("node_id") if isinstance(row, dict) else None
+                s = str(node_id or "").strip()
+                if not s:
+                    continue
+                if s in seen_ids:
+                    continue
+                seen_ids.add(s)
+                out.append(s)
+                if len(out) >= limit_i:
+                    break
+            except Exception:
+                continue
+        return out
+
     async def graph_neighbors(
         self,
         user_id: str,
         node_id: str,
         predicate_scope: Optional[List[str]] = None,
+        domain_scope: Optional[List[str]] = None,
         depth: int = 1,
         k: int = 10,
         owner_type: str = "agent",
@@ -436,6 +545,7 @@ class UMAMemoryEnvironment:
                 user_id=normalized_user_id,
                 node_id=node_id,
                 predicate_scope=predicate_scope,
+                domain_scope=domain_scope,
                 depth=depth_i,
                 k=k,
                 owner_type=owner_type,
@@ -459,6 +569,7 @@ class UMAMemoryEnvironment:
         direction: Optional[Literal["inbound", "outbound", "both"]] = None,
         k: int = 10,
         *,
+        domain_scope: Optional[List[str]] = None,
         owner_type: str = "agent",
         owner_id: Optional[str] = None,
     ) -> List[Any]:
@@ -498,15 +609,45 @@ class UMAMemoryEnvironment:
                     "Environment.expand_graph: direction=%s currently treated as both", dir_val
                 )
 
-            return await self.graph_neighbors(
+            # Best-effort: treat subject as a "name" and resolve to node ids first.
+            resolved = await self.graph_resolve_nodes(
                 user_id=normalized_user_id,
-                node_id=subject,
-                predicate_scope=predicate_scope,
-                depth=depth,
-                k=k,
+                names=[subject],
+                domain_scope=domain_scope,
                 owner_type=owner_type,
                 owner_id=owner_id,
+                limit=4,
             )
+            node_ids = resolved or [subject]
+
+            merged: List[Any] = []
+            seen = set()
+            for node_id in node_ids[:4]:
+                items = await self.graph_neighbors(
+                    user_id=normalized_user_id,
+                    node_id=node_id,
+                    predicate_scope=predicate_scope,
+                    domain_scope=domain_scope,
+                    depth=depth,
+                    k=k,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                )
+                for it in items or []:
+                    try:
+                        if isinstance(it, dict):
+                            props = it.get("properties") or {}
+                            key = str(props.get("id") or it.get("id") or "") or str(it)
+                        else:
+                            key = str(it)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        merged.append(it)
+                    except Exception:
+                        merged.append(it)
+
+            return merged
         except Exception:
             logger.exception("Environment.expand_graph failed")
             return []

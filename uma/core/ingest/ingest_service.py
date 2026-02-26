@@ -342,6 +342,7 @@ async def ingest_document(
             owner_id=owner_id,
             meta={
                 "source_type": "pdf",
+                "domain": "kb_doc",
                 "text_hash": text_hash,
                 "chunk_size_tokens": config.chunk_size_tokens,
                 "overlap_tokens": config.overlap_tokens,
@@ -420,6 +421,7 @@ async def ingest_document(
             f.owner_id = owner_id
         if f.meta is None:
             f.meta = {}
+        f.meta.setdefault("domain", "kb_doc")
         f.meta.setdefault("source_type", "pdf")
         # Keep both keys for compatibility with any downstream readers.
         if f.source_ids:

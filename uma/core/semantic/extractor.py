@@ -202,7 +202,7 @@ class FactExtractor:
                 salience=0.0,
                 owner_type=owner_type,
                 owner_id=owner_id,
-                meta={},
+                meta={"domain": "user_profile"},
             )
             if turn_id:
                 fact.meta["turn_id"] = turn_id

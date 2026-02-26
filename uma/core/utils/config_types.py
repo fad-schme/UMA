@@ -295,6 +295,8 @@ class RetrievalConfig:
         rlm_cfg = d.get("rlm")
         rlm_obj: Optional[RLMConfig] = None
         if isinstance(rlm_cfg, dict):
+            allowlist = rlm_cfg.get("predicate_allowlist")
+            predicate_allowlist = allowlist if isinstance(allowlist, dict) else None
             rlm_obj = RLMConfig(
                 enabled=True,
                 test_mode=bool(rlm_cfg.get("test_mode", False)),
@@ -318,6 +320,7 @@ class RetrievalConfig:
                     if isinstance(rlm_cfg.get("predicate_weights"), dict)
                     else None
                 ),
+                predicate_allowlist=predicate_allowlist,
                 max_new_facts_per_step=int(rlm_cfg.get("max_new_facts_per_step", 12)),
                 max_new_chunks_per_step=int(rlm_cfg.get("max_new_chunks_per_step", 8)),
                 max_graph_expansions_per_step=int(rlm_cfg.get("max_graph_expansions_per_step", 1)),
@@ -363,6 +366,7 @@ class RLMConfig:
     cluster_k: int = 3
     graph_predicate_limit: int = 2
     predicate_weights: Optional[Dict[str, float]] = None
+    predicate_allowlist: Optional[Dict[str, List[str]]] = None
     novelty_window: int = 2
     min_recent_novelty: int = 1
 

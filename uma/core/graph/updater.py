@@ -198,6 +198,15 @@ class GraphUpdater:
                 except Exception:
                     meta_json = None
 
+            domain = None
+            try:
+                if isinstance(meta, dict):
+                    d = meta.get("domain")
+                    if isinstance(d, str) and d.strip():
+                        domain = d.strip().lower()
+            except Exception:
+                domain = None
+
             insert(
                 fact_id=str(getattr(fact, "id", "")),
                 subject=subj,
@@ -209,6 +218,7 @@ class GraphUpdater:
                 created_at=created_at_s,
                 updated_at=updated_at_s,
                 meta_json=meta_json,
+                domain=domain,
             )
 
         except Exception:

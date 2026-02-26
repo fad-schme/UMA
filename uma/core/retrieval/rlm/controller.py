@@ -10,6 +10,14 @@ from typing import Any, Dict, List, Optional
 from .context_pack import ContextPack
 from .decisions import RetrievalAction
 from . import decisions
+from .intent import QueryIntent, classify_query_intent
+from .domain import (
+    PREFERENCE_PREDICATES,
+    ensure_domains_for_chunks,
+    ensure_domains_for_facts,
+    ensure_domains_for_skills,
+    filter_facts_by_domains,
+)
 from .coverage import assess_coverage, compute_confidence
 from ..policy import RetrievalPolicy, should_stop
 from ...utils.identity import normalize_user_id
@@ -74,6 +82,7 @@ class RLMController:
         self.predicate_weights = self._normalize_predicate_weights(
             getattr(rlm_cfg, "predicate_weights", None)
         )
+        self.predicate_allowlist = getattr(rlm_cfg, "predicate_allowlist", None)
         self.ranker = Ranker(debug_scores=debug_scores)
 
         self.novelty_window = max(1, int(getattr(rlm_cfg, "novelty_window", 2)))
@@ -103,6 +112,7 @@ class RLMController:
             raise ValueError("query_text must be a non-empty string")
 
         policy = RetrievalPolicy(query_text)
+        intent = classify_query_intent(query_text)
         logger.info(
             "RLMController.retrieve_context: start user_id=%s query=%r",
             user_id,
@@ -119,14 +129,23 @@ class RLMController:
             user_id,
             any(k in query_text.lower() for k in ["remember", "recall", "previous", "earlier", "last time"]),
         )
+        logger.info("RLM_INTENT trace_id=%s intent=%s", trace_id, intent.value)
 
         agent_id = getattr(self.env, "_agent_id", None)
+        if intent == QueryIntent.PERSONAL:
+            active_domains = ["user_profile", "procedural"]
+        elif intent == QueryIntent.MIXED:
+            active_domains = ["kb_doc", "user_profile", "procedural"]
+        else:
+            active_domains = ["kb_doc", "procedural"]
         pack = ContextPack(
             user_id=user_id,
             query_text=query_text,
             owner_type=None,
             owner_id=None,
             agent_id=agent_id,
+            intent=intent.value,
+            active_domains=list(active_domains),
         )
 
         pack.working_memory = []
@@ -153,6 +172,7 @@ class RLMController:
         # Keep these fields for telemetry/back-compat; primary execution uses `scopes`.
         pack.owner_type, pack.owner_id = scopes[0]
         logger.info("RLM_LANE scopes=%s", scopes)
+        logger.info("RLM_DOMAINS trace_id=%s active_domains=%s", trace_id, pack.active_domains)
 
         # Baseline retrieval per-scope, then merge into the pack.
         for idx, (owner_type, owner_id) in enumerate(scopes):
@@ -190,6 +210,27 @@ class RLMController:
                 pack.graph = _dedupe_by_id(getattr(pack, "graph", []) or [])
             except Exception:
                 pass
+
+        # Phase 0: default domain when missing (metadata-only; no migrations).
+        try:
+            ensure_domains_for_facts(getattr(pack, "facts", []) or [])
+        except Exception:
+            pass
+        try:
+            ensure_domains_for_chunks(getattr(pack, "chunks", []) or [])
+        except Exception:
+            pass
+        try:
+            ensure_domains_for_skills(getattr(pack, "skills", []) or [])
+        except Exception:
+            pass
+
+        # Apply domain routing: filter out disallowed fact domains for this query intent.
+        allowed_fact_domains = set(pack.active_domains or [])
+        try:
+            pack.facts = filter_facts_by_domains(getattr(pack, "facts", []) or [], allowed_fact_domains)
+        except Exception:
+            pass
 
 
         # Tighten evidence expansion: prune facts before expanding cited chunks.
@@ -333,29 +374,39 @@ class RLMController:
                 break
 
             if coverage.diminishing_returns:
-                pack.warnings.append("stop:diminishing_returns")
+                if _two_distinct_zero_yield_lanes(getattr(pack, "steps", []) or []):
+                    pack.warnings.append("stop:diminishing_returns")
+                    logger.info(
+                        "RLMController: stop step=%d reason=diminishing_returns novelty_recent_sum=%d window=%d",
+                        step,
+                        coverage.novelty_recent_sum,
+                        self.novelty_window,
+                    )
+                    break
                 logger.info(
-                    "RLMController: stop step=%d reason=diminishing_returns novelty_recent_sum=%d window=%d",
+                    "RLMController: diminishing_returns at step=%d but continuing (fallback ladder not exhausted)",
                     step,
-                    coverage.novelty_recent_sum,
-                    self.novelty_window,
                 )
-                break
 
             decision = decisions.deterministic_decision(
                 pack,
                 coverage,
                 cfg={
+                    "trace_id": trace_id,
                     "max_items_per_type": self.max_items_per_type,
                     "cluster_k": self.cluster_k,
                     "salience_threshold": self.salience_threshold,
                     "graph_predicate_limit": self.graph_predicate_limit,
                     "chunk_fallback_enabled": self.chunk_fallback_enabled,
                     "chunk_fallback_k_multiplier": self.chunk_fallback_k_multiplier,
-                    "next_predicate_scope": lambda p, limit: decisions.next_predicate_scope(
-                        facts=getattr(p, "facts", []) or [],
-                        predicate_weights=getattr(self, "predicate_weights", None),
-                        graph_predicate_limit=getattr(self, "graph_predicate_limit", 2),
+                    "predicate_allowlist": self.predicate_allowlist,
+                    "next_predicate_scope": lambda p, limit: _filter_predicates_for_domains(
+                        decisions.next_predicate_scope(
+                            facts=getattr(p, "facts", []) or [],
+                            predicate_weights=getattr(self, "predicate_weights", None),
+                            graph_predicate_limit=getattr(self, "graph_predicate_limit", 2),
+                        ),
+                        active_domains=set(getattr(p, "active_domains", []) or []),
                     ),
                 },
             )
@@ -373,6 +424,16 @@ class RLMController:
             step_new_chunks = 0
             step_graph_expansions = 0
             for action in decision.actions[: self.max_actions_per_step]:
+                # Domain routing gates: keep behavior topic/data agnostic by intent.
+                active = set(getattr(pack, "active_domains", []) or [])
+                if action.action in {"search_chunks", "fetch_chunks"} and "kb_doc" not in active:
+                    logger.debug("RLMController: skipping %s (kb_doc not active)", action.action)
+                    continue
+                if action.action in {"graph_neighbors", "expand_graph"} and not (
+                    ("kb_doc" in active) or ("user_profile" in active)
+                ):
+                    logger.debug("RLMController: skipping %s (no graph domain active)", action.action)
+                    continue
                 logger.debug(
                     "RLMController: executing action=%s k=%s",
                     action.action,
@@ -386,6 +447,7 @@ class RLMController:
                     action.action,
                     action.k,
                 )
+                action_start = time.time()
                 if action.action == "search_chunks":
                     logger.debug(
                         "RLMController: dispatching search_chunks step=%d owner=%s:%s k=%s",
@@ -404,14 +466,46 @@ class RLMController:
                     owner_type=str(pack.owner_type or owner_type),
                     owner_id=pack.owner_id or owner_id,
                 )
+                elapsed_ms = int((time.time() - action_start) * 1000)
                 items = self._truncate_items(items)
+                if action.action in {"search_semantic", "fetch_more_facts", "fetch_facts"}:
+                    try:
+                        items = filter_facts_by_domains(list(items or []), set(getattr(pack, "active_domains", []) or []))
+                    except Exception:
+                        pass
+                if action.action in {"search_chunks", "fetch_chunks"}:
+                    try:
+                        ensure_domains_for_chunks(list(items or []))
+                    except Exception:
+                        pass
+                if action.action in {"search_procedural"}:
+                    try:
+                        ensure_domains_for_skills(list(items or []))
+                    except Exception:
+                        pass
+                store = _store_for_action(action.action)
+                returned = len(items or [])
+                novelty = 0
+                if store:
+                    try:
+                        novelty = pack.compute_novelty(items, store)
+                    except Exception:
+                        novelty = 0
                 # --- ACTION RESULT TELEMETRY ---
                 logger.info(
-                    "RLM_ACTION_RESULT trace_id=%s step=%d action=%s returned=%d",
+                    "RLM_ACTION_RESULT trace_id=%s step=%d action=%s k=%s predicate=%s offset=%s owner=%s:%s action_owner_type=%s result_count=%d novelty=%d elapsed_ms=%d",
                     trace_id,
                     step,
                     action.action,
-                    len(items or []),
+                    action.k,
+                    getattr(action, "predicate", None),
+                    (action.filters or {}).get("offset") if getattr(action, "filters", None) else None,
+                    str(getattr(pack, "owner_type", None) or owner_type),
+                    getattr(pack, "owner_id", None) or owner_id,
+                    getattr(action, "owner_type", None),
+                    returned,
+                    novelty,
+                    elapsed_ms,
                 )
 
                 if action.action in {
@@ -419,7 +513,6 @@ class RLMController:
                     "fetch_more_facts",
                     "fetch_facts",
                 }:
-                    novelty = pack.compute_novelty(items, "facts")
                     pack.facts = _merge_unique(pack.facts, items, self.max_items_per_type)
                     pack.apply_novelty(items, "facts")
                     step_new_facts += novelty
@@ -438,11 +531,36 @@ class RLMController:
                     step_graph_expansions += 1
 
                 elif action.action in {"search_chunks", "fetch_chunks"}:
-                    novelty = pack.compute_novelty(items, "chunks")
                     pack.chunks = _merge_unique(getattr(pack, "chunks", []), items, self.max_items_per_type)
                     pack.apply_novelty(items, "chunks")
                     step_new_chunks += novelty
                     self._rebuild_chunk_buckets(pack)
+
+                elif action.action in {"search_procedural"}:
+                    pack.skills = _merge_unique(getattr(pack, "skills", []), items, self.max_items_per_type)
+                    pack.apply_novelty(items, "skills")
+
+                if store:
+                    pack.steps.append(
+                        {
+                            "step": step,
+                            "phase": "loop",
+                            "event": "action_result",
+                            "action": action.action,
+                            "store": store,
+                            "returned": returned,
+                            "novelty": novelty,
+                            "predicate": getattr(action, "predicate", None),
+                            "subject": getattr(action, "subject", None),
+                            "node_id": getattr(action, "node_id", None),
+                            "filters": getattr(action, "filters", None),
+                            "intent": getattr(pack, "intent", None),
+                            "active_domains": list(getattr(pack, "active_domains", []) or []),
+                            "lane_owner_type": str(getattr(pack, "owner_type", None) or owner_type),
+                            "lane_owner_id": getattr(pack, "owner_id", None) or owner_id,
+                            "action_owner_type": getattr(action, "owner_type", None),
+                        }
+                    )
 
                 total_env_calls += 1
                 if total_env_calls >= self.max_env_calls:
@@ -547,6 +665,12 @@ class RLMController:
                 filters=None,
             )
             results = self.ranker.rank_facts(results or [], query_text=pack.query_text)
+            # Ensure + filter by active domains (defaults domain for older data).
+            try:
+                ensure_domains_for_facts(list(results or []))
+                results = filter_facts_by_domains(list(results or []), set(getattr(pack, "active_domains", []) or []))
+            except Exception:
+                pass
             pack.facts = _merge_unique(
                 pack.facts,
                 results,
@@ -558,12 +682,14 @@ class RLMController:
                 owner_type,
                 owner_id,
             )
-            # Optional chunk retrieval via centralized ChunkCore search.
+            # Optional chunk retrieval via centralized ChunkCore search (kb_doc only).
             chunk_core = getattr(getattr(self.env, "_memory", None), "chunk_core", None)
             if chunk_core is None:
                 chunk_core = getattr(self.env, "_chunk_core", None)
             if chunk_core is None:
                 logger.debug("RLMController._baseline_retrieval: chunk_core missing on env; skipping chunk search")
+            elif "kb_doc" not in set(getattr(pack, "active_domains", []) or []):
+                logger.debug("RLMController._baseline_retrieval: kb_doc not active; skipping chunk search")
             else:
                 try:
                     search_fn = getattr(chunk_core, "search_chunks_for_rlm", None) or getattr(
@@ -580,8 +706,13 @@ class RLMController:
                             "query_text": pack.query_text,
                         }
                         chunks = await search_fn(**kwargs)
+
                     chunks = self.ranker.rank_chunks(chunks or [], query_text=pack.query_text)
                     # Neighbor expansion happens inside ChunkCore.search_chunks(expand_neighbors=True).
+                    try:
+                        ensure_domains_for_chunks(list(chunks or []))
+                    except Exception:
+                        pass
                     pack.chunks = _merge_unique(
                         getattr(pack, "chunks", []),
                         chunks,
@@ -598,14 +729,21 @@ class RLMController:
 
         # Procedural baseline (skills)
         try:
-            skills = await self._search_procedural_core(
-                user_id=pack.user_id,
-                query_embedding=query_embedding,
-                k=self.max_items_per_type,
-                owner_type=owner_type,
-                owner_id=owner_id,
-            )
+            if "procedural" not in set(getattr(pack, "active_domains", []) or []):
+                skills = []
+            else:
+                skills = await self._search_procedural_core(
+                    user_id=pack.user_id,
+                    query_embedding=query_embedding,
+                    k=self.max_items_per_type,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                )
             skills = self.ranker.rank_skills(skills or [], query_text=pack.query_text)
+            try:
+                ensure_domains_for_skills(list(skills or []))
+            except Exception:
+                pass
             pack.skills = _merge_unique(pack.skills, skills, self.max_items_per_type)
         except Exception:
             logger.exception("RLMController: search_procedural failed")
@@ -624,17 +762,26 @@ class RLMController:
             self.max_items_per_type,
         )
 
-        if owner_type == "user":
+        # User-profile graph baseline: only for PERSONAL intent.
+        if (
+            owner_type == "user"
+            and getattr(pack, "intent", None) == "personal"
+            and "user_profile" in set(getattr(pack, "active_domains", []) or [])
+        ):
             pack.graph = _merge_unique(
                 pack.graph,
                 await self.env.graph_neighbors(
                     user_id=pack.user_id,
                     node_id=pack.user_id,
-                    predicate_scope=decisions.next_predicate_scope(
-                        facts=getattr(pack, "facts", []) or [],
-                        predicate_weights=getattr(self, "predicate_weights", None),
-                        graph_predicate_limit=getattr(self, "graph_predicate_limit", 2),
+                    predicate_scope=_filter_predicates_for_domains(
+                        decisions.next_predicate_scope(
+                            facts=getattr(pack, "facts", []) or [],
+                            predicate_weights=getattr(self, "predicate_weights", None),
+                            graph_predicate_limit=getattr(self, "graph_predicate_limit", 2),
+                        ),
+                        active_domains=set(getattr(pack, "active_domains", []) or []),
                     ),
+                    domain_scope=["user_profile"],
                     depth=1,
                     k=self.max_items_per_type,
                     owner_type=owner_type,
@@ -661,6 +808,18 @@ class RLMController:
                 len(pack.episodes),
                 len(pack.graph),
             )
+
+
+    def _filter_predicates_for_domains(predicates: List[str], *, active_domains: set[str]) -> List[str]:
+        """
+        Deterministically filter predicate candidates based on active domains.
+
+        Phase 0/1 scope: prevent user_profile predicates from entering topical scope.
+        """
+        preds = [str(p).upper() for p in (predicates or []) if p]
+        if "user_profile" not in (active_domains or set()):
+            preds = [p for p in preds if p not in PREFERENCE_PREDICATES]
+        return preds
 
     # ------------------------------------------------------------------
     # DECISION LOGIC
@@ -1025,3 +1184,42 @@ def _get_owner_type(item: Any) -> str:
 
 def _is_user_owned(item: Any) -> bool:
     return _get_owner_type(item) == "user"
+
+
+def _store_for_action(action_name: str) -> Optional[str]:
+    a = str(action_name or "").strip()
+    if a in {"search_semantic", "fetch_more_facts", "fetch_facts"}:
+        return "facts"
+    if a in {"search_chunks", "fetch_chunks"}:
+        return "chunks"
+    if a in {"episodic_clusters", "search_episodic", "fetch_episode_clusters"}:
+        return "episodes"
+    if a in {"graph_neighbors", "expand_graph"}:
+        return "graph"
+    if a in {"search_procedural"}:
+        return "skills"
+    return None
+
+
+def _two_distinct_zero_yield_lanes(steps: List[Dict[str, Any]]) -> bool:
+    """
+    Only stop when two distinct stores have yielded 0 novelty consecutively.
+    """
+    last: List[tuple[str, int]] = []
+    for s in reversed(steps or []):
+        if not isinstance(s, dict) or s.get("event") != "action_result":
+            continue
+        store = str(s.get("store") or "").strip()
+        if not store:
+            continue
+        try:
+            novelty = int(s.get("novelty") or 0)
+        except Exception:
+            novelty = 0
+        last.append((store, novelty))
+        if len(last) >= 2:
+            break
+    if len(last) < 2:
+        return False
+    (s1, n1), (s2, n2) = last[0], last[1]
+    return n1 == 0 and n2 == 0 and s1 != s2

@@ -215,6 +215,14 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         conn = self._conn()
         now = datetime.utcnow().isoformat()
 
+        # Phase 6: procedural skills must be explicitly tagged as procedural domain.
+        try:
+            if not isinstance(skill.meta, dict):
+                skill.meta = {}
+            skill.meta.setdefault("domain", "procedural")
+        except Exception:
+            pass
+
         try:
             payload = {
                 "id": skill.id,

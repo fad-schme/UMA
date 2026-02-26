@@ -235,6 +235,7 @@ class PromotionPolicy:
                 source_chunk_id=promoted.meta.get("source_chunk_id"),
                 created_at=promoted.created_at,
                 updated_at=promoted.updated_at,
+                domain=(promoted.meta.get("domain") if isinstance(getattr(promoted, "meta", None), dict) else None),
             )
         except Exception:
             logger.exception(

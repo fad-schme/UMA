@@ -86,6 +86,11 @@ class SkillIndexer:
         -------
         (skill, embedding) : Tuple[Skill, List[float]]
         """
+        if not isinstance(meta, dict):
+            meta = {}
+        meta = dict(meta)
+        meta.setdefault("domain", "procedural")
+
         skill = Skill(
             id=str(uuid.uuid4()),
             name=name,

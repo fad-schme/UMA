@@ -305,6 +305,18 @@ class UMAConfig(dict):
                 if not isinstance(val, int) or val <= 0:
                     raise ValueError("'retrieval.rlm.chunk_fallback_k_multiplier' must be a positive integer")
 
+            if "predicate_allowlist" in rlm:
+                pal = rlm.get("predicate_allowlist")
+                if not isinstance(pal, dict):
+                    raise ValueError("'retrieval.rlm.predicate_allowlist' must be a mapping")
+                for dom, preds in pal.items():
+                    if not isinstance(dom, str) or not dom.strip():
+                        raise ValueError("'retrieval.rlm.predicate_allowlist' keys must be non-empty strings")
+                    if not isinstance(preds, list) or not all(isinstance(p, str) and p.strip() for p in preds):
+                        raise ValueError(
+                            f"'retrieval.rlm.predicate_allowlist.{dom}' must be a list of non-empty strings"
+                        )
+
         # -----------------------
         # CONSOLIDATION
         # -----------------------

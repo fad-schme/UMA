@@ -151,6 +151,15 @@ async def update_graph(
                 except Exception:
                     meta_json = None
 
+                domain = None
+                try:
+                    if isinstance(getattr(fact, "meta", None), dict):
+                        d = fact.meta.get("domain")
+                        if isinstance(d, str) and d.strip():
+                            domain = d.strip().lower()
+                except Exception:
+                    domain = None
+
                 res = graph_core.insert_fact_triplet(
                     fact_id=str(fact.id),
                     subject=str(fact.subject),
@@ -162,6 +171,7 @@ async def update_graph(
                     created_at=getattr(fact, "created_at", None),
                     updated_at=getattr(fact, "updated_at", None),
                     meta_json=meta_json,
+                    domain=domain,
                 )
                 await _maybe_await(res)
                 attempted += 1
