@@ -89,6 +89,7 @@ class SnippetRefiner:
         max_chars = max(1, max_chars)
 
         out: List[Dict[str, Any]] = []
+        seen_text: set[str] = set()
         for cand in grouped:
             if max_out and len(out) >= max_out:
                 break
@@ -100,8 +101,14 @@ class SnippetRefiner:
                 continue
             refined = dict(refined)
             refined["text"] = trim_to_sentence_boundary(text, max_chars=max_chars)
-            if refined["text"]:
-                out.append(refined)
+            final_text = (refined.get("text") or "").strip()
+            if not final_text:
+                continue
+            key = " ".join(final_text.lower().split())
+            if key in seen_text:
+                continue
+            seen_text.add(key)
+            out.append(refined)
         logger.debug("SnippetRefiner.refine: final_snippets=%d", len(out))
         return out
 

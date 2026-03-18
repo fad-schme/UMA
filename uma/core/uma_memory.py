@@ -96,7 +96,7 @@ Design Philosophy
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .memory_config import UMAConfig  # YAML loader + validation (dict-like)
 from .utils.config_types import RuntimeConfig
@@ -594,6 +594,115 @@ class UMAMemory:
     # ----------------------------------------------------------------------
     # PUBLIC DEVELOPER API — Unified User Context (WM + LT Retrieval)
     # ----------------------------------------------------------------------
+    from typing import Any, Dict, List, Optional
+
+    async def get_context_messages(
+        self,
+        *,
+        user_id: str,
+        query_text: str,
+        agent_id: Optional[str] = None,
+        render_mode: str = "openclaw_v1",
+    ) -> Dict[str, Any]:
+        """
+        Return UMA retrieval output as a message-list payload for agent runtimes.
+
+        This is a presentation-layer helper for external runtimes such as OpenClaw.
+        UMA remains the owner of retrieval and rendering; this method only packages
+        the rendered result into a stable message-oriented contract.
+
+        Parameters
+        ----------
+        user_id : str
+            Canonical user identifier.
+        query_text : str
+            User query / latest user message used for retrieval.
+        agent_id : Optional[str]
+            Optional agent scope hint for future use.
+        project_id : Optional[str]
+            Optional project scope hint for future use.
+        render_mode : str
+            Rendering mode for runtime-facing output. Current supported values:
+            - "openclaw_v1"
+            - "raw_rendered"
+
+        Returns
+        -------
+        Dict[str, Any]
+            {
+                "messages": [
+                    {"role": "system", "content": "..."}
+                ],
+                "meta": {
+                    "provider": "uma",
+                    "format": "message_list",
+                    "render_mode": "openclaw_v1",
+                    "message_count": 1,
+                    "agent_id": ...,
+                    "project_id": ...,
+                }
+            }
+
+        Notes
+        -----
+        - Returns an empty message list if no rendered context is available.
+        - Does not expose structured retrieval internals.
+        - Safe for transport over an external service boundary.
+        """
+        if not user_id or not isinstance(user_id, str):
+            raise ValueError("UMAMemory.get_context_messages: user_id must be a non-empty string.")
+        if not query_text or not isinstance(query_text, str):
+            raise ValueError("UMAMemory.get_context_messages: query_text must be a non-empty string.")
+        if agent_id is not None and (not isinstance(agent_id, str) or not agent_id.strip()):
+            raise ValueError("UMAMemory.get_context_messages: agent_id must be a non-empty string or None.")
+        if not isinstance(render_mode, str) or not render_mode.strip():
+            raise ValueError("UMAMemory.get_context_messages: render_mode must be a non-empty string.")
+
+        render_mode = render_mode.strip()
+
+        if render_mode not in {"openclaw_v1", "raw_rendered"}:
+            raise ValueError(
+                f"UMAMemory.get_context_messages: unsupported render_mode={render_mode!r}. "
+                "Supported modes: 'openclaw_v1', 'raw_rendered'."
+            )
+
+        rendered = await self.get_rendered_context(user_id=user_id, query_text=query_text)
+        rendered = (rendered or "").strip()
+
+        messages: List[Dict[str, str]] = []
+
+        if rendered:
+            if render_mode == "openclaw_v1":
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Relevant memory context from UMA follows. "
+                            "Use it only as supporting context; prefer direct task instructions "
+                            "and the current conversation when they conflict.\n\n"
+                            f"{rendered}"
+                        ),
+                    }
+                )
+            elif render_mode == "raw_rendered":
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": rendered,
+                    }
+                )
+
+        return {
+            "messages": messages,
+            "meta": {
+                "provider": "uma",
+                "format": "message_list",
+                "render_mode": render_mode,
+                "message_count": len(messages)
+            },
+        }
+
+
     async def get_structured_context(self, user_id: str, query_text: str) -> Dict[str, list]:
         """
         Return a unified, developer-facing context pack for retrieval-augmented agents.
@@ -715,46 +824,20 @@ class UMAMemory:
     async def get_rendered_context(self, user_id: str, query_text: str) -> str:
         """
         Render a production-ready snippet directly from RLM retrieval.
-        This path is shared by the app and gold tests to avoid divergence.
+
+        Configuration is internal to UMA (via memory.retrieval_cfg.context). Callers should not
+        inspect config or select rendering modes.
         """
-        from .utils.context_pack_builder import get_rendered_context
+        from .utils.context_pack_builder import ContextPackBuilder
 
-        return await get_rendered_context(self, user_id=user_id, query_text=query_text)
-
-
-    # ----------------------------------------------------------------------
-    # OPTIONAL UTILITIES — Structured CoT Memory Builder
-    # ----------------------------------------------------------------------
-
-    async def build_cot_memory(self, user_id: str, query_text: str) -> dict:
-        """
-        Build a structured chain-of-thought (CoT) knowledge scaffold from UMA.
-
-        This is NOT an LLM-generated chain-of-thought.
-        Instead, it is a deterministic, structured template created from:
-            - semantic facts
-            - episodic summaries
-            - procedural skills
-            - graph nodes
-
-        Example:
-            cot = await memory.build_cot_memory(user, query)
-
-        Returns
-        -------
-        dict
-            {
-                "reasoning_goals": [...],
-                "known_facts": [...],
-                "relevant_events": [...],
-                "available_skills": [...],
-                "graph_context": [...],
-                "planning_scaffold": [...],
-            }
-        """
-        from .utils.cot_memory_builder import build_cot_memory
-
-        return await build_cot_memory(self, user_id=user_id, query_text=query_text)
+        ctx = await self.get_structured_context(user_id=user_id, query_text=query_text)
+        pack = ContextPackBuilder.build(query_text, ctx)
+        ctx_cfg = getattr(getattr(self, "retrieval_cfg", None), "context", None)
+        if getattr(ctx_cfg, "snippet_refiner_enabled", False):
+            return await ContextPackBuilder.render_snippet_async(
+                pack, ctx_cfg, llm=getattr(self, "llm", None)
+            )
+        return ContextPackBuilder.render_snippet(pack, ctx_cfg)
 
     # ----------------------------------------------------------------------
     # Shutdown

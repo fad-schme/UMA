@@ -380,41 +380,6 @@ class ContextPackBuilder:
         return "\n".join(lines).strip()
 
 
-async def get_rendered_context(
-    memory: Any,
-    *,
-    user_id: str,
-    query_text: str,
-) -> str:
-    """
-    Retrieve context and render a production-ready snippet.
-
-    This path is shared by the app and tests to avoid divergence.
-    """
-    pack = await build_context_pack(memory, user_id=user_id, query_text=query_text)
-    ctx_cfg = getattr(getattr(memory, "retrieval_cfg", None), "context", None)
-    if getattr(ctx_cfg, "snippet_refiner_enabled", False):
-        return await ContextPackBuilder.render_snippet_async(pack, ctx_cfg, llm=getattr(memory, "llm", None))
-    return ContextPackBuilder.render_snippet(pack, ctx_cfg)
-
-
-async def build_context_pack(
-    memory: Any,
-    *,
-    user_id: str,
-    query_text: str,
-) -> Dict[str, Any]:
-    """
-    Build a RAG-ready structured context pack using UMA memory.
-
-    Convenience wrapper around:
-    - UMAMemory.get_structured_context()
-    - ContextPackBuilder.build()
-    """
-    ctx = await memory.get_structured_context(user_id, query_text)
-    return ContextPackBuilder.build(query_text, ctx)
-
-
 def _basename(path: Any) -> str:
     if isinstance(path, str) and path.strip():
         return os.path.basename(path.strip())

@@ -241,11 +241,9 @@ async def interactive_chat(
             # Normal chat: retrieve context only; agent behavior is developer-owned
             try:
                 user_message = user
-                # One-liner to get a rendered snippet
                 snippet = await memory.get_rendered_context(
                     user_id=user_id, query_text=user_message
                 )
-                #snippet = await memory.get_structured_context(user_id=user_id, query_text=user_message)
                 if not snippet:
                     context_messages = [{"role": "user", "content": user_message}]
                     reply = "No memory snippet available to evaluate."
@@ -258,10 +256,10 @@ async def interactive_chat(
                         "Return ONLY a brief evaluation of whether the snippet is good supporting context for answering the question.\n"
                         "Focus on:\n"
                         "- Relevance to the question\n"
-                        "- Coverage/completeness (what important info is missing)\n"
-                        "- Specificity/grounding (is it concrete, attributable, unambiguous?)\n"
+                        # "- Coverage/completeness (what important info is missing)\n"
+                        # "- Specificity/grounding (is it concrete, attributable, unambiguous?)\n"
                         "- Noise/irrelevance (what should be removed)\n"
-                        "- Risks (stale info, contradictions, PII/sensitive data)\n\n"
+                       #"- Risks (stale info, contradictions, PII/sensitive data)\n\n"
 
                         f"User question:\n{user_message}\n\n"
                         f"Snippet to evaluate:\n{snippet}\n"

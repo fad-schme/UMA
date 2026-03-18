@@ -526,6 +526,7 @@ class RLMController:
                     "fetch_facts",
                 }:
                     pack.facts = _merge_unique(pack.facts, items, self.max_items_per_type)
+                    pack.facts = self._dedupe_facts_by_signature(pack.facts)
                     pack.apply_novelty(items, "facts")
                     step_new_facts += novelty
 
@@ -689,6 +690,7 @@ class RLMController:
                 results,
                 self.max_items_per_type,
             )
+            pack.facts = self._dedupe_facts_by_signature(pack.facts)
             logger.debug(
                 "RLMController._baseline_retrieval: semantic facts=%d owner=%s:%s",
                 len(pack.facts),
@@ -861,6 +863,8 @@ class RLMController:
         ]
 
     async def _prune_facts_with_llm(self, pack: ContextPack) -> None:
+        if pack.facts:
+            pack.facts = self._dedupe_facts_by_signature(pack.facts)
         if not self.llm or not pack.facts:
             logger.debug("RLMController: prune skipped (llm=%s facts=%d)", bool(self.llm), len(pack.facts))
             return
@@ -874,7 +878,119 @@ class RLMController:
             max_keep=12,
             max_candidates=20,
         )
+        pack.facts = self._dedupe_facts_by_signature(pack.facts)
         logger.info("RLMController: prune kept %d facts", len(pack.facts))
+
+    @staticmethod
+    def _dedupe_facts_by_signature(facts: List[Any]) -> List[Any]:
+        """
+        Deduplicate Fact-like objects by semantic signature while preserving grounding.
+
+        Signature: (owner_type, owner_id, subject, predicate, object_text)
+        Merge: union `source_ids`, keep max(confidence/salience).
+        """
+        from ...utils.accessors import get_attr_or_key
+
+        def _norm_text(x: Any) -> str:
+            """
+            Normalize text for dedupe keys.
+
+            Intentionally slightly lossy to collapse near-identical facts extracted
+            from adjacent chunks (e.g. "defines X" vs "defines the X").
+            """
+            import re
+
+            s = str(x or "").strip().lower()
+            # Drop punctuation to avoid PDF/tokenization artifacts affecting keys.
+            s = re.sub(r"[^a-z0-9]+", " ", s)
+            # Drop common determiners that frequently vary across chunk boundaries.
+            s = re.sub(r"\b(the|a|an)\b", " ", s)
+            return " ".join(s.split()).strip()
+
+        def _object_text(obj: Any) -> str:
+            if isinstance(obj, dict):
+                for k in ("text", "value", "name", "id"):
+                    v = obj.get(k)
+                    if isinstance(v, str) and v.strip():
+                        return v
+                try:
+                    import json
+
+                    return json.dumps(obj, sort_keys=True, ensure_ascii=False)
+                except Exception:
+                    return str(obj)
+            return str(obj or "")
+
+        def _get_source_ids(f: Any) -> List[str]:
+            src = get_attr_or_key(f, "source_ids", []) or []
+            if isinstance(src, list):
+                return [str(x) for x in src if x]
+            return []
+
+        def _set_source_ids(f: Any, ids: List[str]) -> None:
+            if isinstance(f, dict):
+                f["source_ids"] = ids
+            else:
+                try:
+                    setattr(f, "source_ids", ids)
+                except Exception:
+                    pass
+
+        def _get_num(f: Any, field: str) -> Optional[float]:
+            v = get_attr_or_key(f, field, None)
+            if v is None:
+                return None
+            try:
+                return float(v)
+            except Exception:
+                return None
+
+        def _set_num_max(dst: Any, src: Any, field: str) -> None:
+            a = _get_num(dst, field)
+            b = _get_num(src, field)
+            if b is None:
+                return
+            val = b if a is None else max(a, b)
+            if isinstance(dst, dict):
+                dst[field] = val
+            else:
+                try:
+                    setattr(dst, field, val)
+                except Exception:
+                    pass
+
+        if not facts:
+            return []
+
+        seen: dict[tuple[str, str, str, str, str], Any] = {}
+        out: List[Any] = []
+        for f in list(facts or []):
+            owner_type = _norm_text(get_attr_or_key(f, "owner_type", "") or "")
+            owner_id = _norm_text(get_attr_or_key(f, "owner_id", "") or "")
+            subj = _norm_text(get_attr_or_key(f, "subject", "") or "")
+            pred = _norm_text(get_attr_or_key(f, "predicate", "") or "")
+            obj = _norm_text(_object_text(get_attr_or_key(f, "object", "") or ""))
+            key = (owner_type, owner_id, subj, pred, obj)
+
+            if key not in seen:
+                seen[key] = f
+                out.append(f)
+                continue
+
+            keep = seen[key]
+            merged_ids: List[str] = []
+            seen_ids: set[str] = set()
+            for sid in _get_source_ids(keep) + _get_source_ids(f):
+                if sid and sid not in seen_ids:
+                    seen_ids.add(sid)
+                    merged_ids.append(sid)
+            if merged_ids:
+                _set_source_ids(keep, merged_ids)
+
+            _set_num_max(keep, f, "confidence")
+            _set_num_max(keep, f, "salience")
+
+        return out
 
     async def _expand_evidence_chunks_from_facts(
         self,
@@ -897,14 +1013,23 @@ class RLMController:
     def _rebuild_chunk_buckets(pack: ContextPack) -> None:
         """
         Separate chunk roles into conceptual buckets and rebuild `pack.chunks`
-        with deterministic precedence:
-        1) evidence, 2) query hits, 3) neighbors.
+        with lane-aware deterministic precedence.
+
+        Lane strategy:
+        - KB lane (agent scope): query hits first (topical Q&A: most relevant doc wins).
+        - User lane (user scope): evidence first (recall/grounding: citations win).
         """
+        from uma.core.utils.dedupe import dedupe_by_id
+
         evidence, query_hits, neighbors = partition_chunks_by_route(getattr(pack, "chunks", []) or [])
         pack.evidence_chunks = evidence
         pack.query_chunks = query_hits
         pack.neighbor_chunks = neighbors
-        pack.chunks = merge_chunks_with_precedence(evidence, query_hits, neighbors)
+        lane = str(getattr(pack, "owner_type", "") or "").strip().lower()
+        if lane == "agent":
+            pack.chunks = dedupe_by_id(list(query_hits or []) + list(evidence or []) + list(neighbors or []))
+        else:
+            pack.chunks = merge_chunks_with_precedence(evidence, query_hits, neighbors)
 
     # Fact description / parsing helpers live in semantic.query_pruner.
 

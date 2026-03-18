@@ -138,14 +138,8 @@ class CoTMemoryBuilder:
         return cot
 
 
-async def build_cot_memory(
-    memory: Any,
-    *,
-    user_id: str,
-    query_text: str,
-) -> Dict[str, Any]:
-    """
-    Convenience wrapper: fetch structured context from UMA and build a CoT scaffold.
-    """
-    ctx = await memory.get_structured_context(user_id, query_text)
-    return CoTMemoryBuilder.build(ctx)
+#
+# No convenience wrappers: callers should explicitly:
+#   1) await UMAMemory.get_structured_context(...)
+#   2) CoTMemoryBuilder.build(ctx)
+#

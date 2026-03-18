@@ -13,8 +13,8 @@ Retrieval MUST be ownership-scoped ONLY via (owner_type, owner_id).
 
 Fact.subject is treated as OPTIONAL metadata and MUST NOT gate retrieval.
 
-Ingestion/extract APIs still accept a `subject`/user_id string for backward compatibility,
-but persisted facts MUST have explicit ownership (owner_type/owner_id).
+Ingestion/extract APIs accept a `user_id` string and normalize it, but persisted facts
+MUST have explicit ownership (owner_type/owner_id).
 
 Coding Agent Instructions
 -------------------------
@@ -124,7 +124,7 @@ class SemanticCore:
     ) -> List[Fact]:
         """
         Extract semantic facts (not persisted).
-        Kept for back-compat: accepts raw user_id or canonical "user:<id>".
+        Normalizes user_id to the canonical identity format.
         """
         try:
             normalized_user_id = normalize_user_id(user_id)

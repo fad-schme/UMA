@@ -116,13 +116,16 @@ await memory.process_turn(
 ```
 
 ### Context pack vs snippet (important)
-`build_context_pack()` returns a **structured data product** (facts, episodes, chunks, graph).
-`build_context_snippet(pack)` is a **presentation layer** that formats that data
-into a string. Keeping them separate lets developers:
-- use `get_rendered_context(user_id, query_text)` as a one‑liner when they only need a rendered snippet
+UMA retrieval returns a **structured data product** (facts, episodes, chunks, graph).
+Snippet rendering is a **presentation layer** that formats that data into a string.
+Keeping them separate lets developers:
+- explicitly control rendering (no hidden wrappers)
 - feed structured context to their own ranking/routing logic
 - render different prompt styles
 - log/debug retrieval results without string parsing
+
+If you want UMA to render a string snippet using its configured context settings,
+use `UMAMemory.get_rendered_context(user_id, query_text)`.
 
 
 
