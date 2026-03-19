@@ -106,7 +106,11 @@ from .utils.config_types import RuntimeConfig
 from .utils.hooks import UMAHooks
 from .utils.identity import normalize_user_id
 from .utils.logging_setup import logger as uma_logger  # noqa: F401 (init side-effect)
-from .working_memory.core import WorkingMemoryCore
+from .working_memory.core import (
+    WorkingMemoryCore,
+    legacy_session_scope_for_user,
+    session_scope_from_runtime_context,
+)
 from .episodic.core import EpisodicCore
 from .episodic.indexer import EpisodeIndexer
 from .episodic.policies import EpisodicRetentionPolicy
@@ -122,7 +126,7 @@ from .initializers.runtime import init_retrieval_ready, init_ingestion_ready, sc
 # Optional Features
 from .utils.registry import FeatureLoader, FeaturePolicy, default_feature_registry
 from ..stores.base_sql_store import DEFAULT_TENANT_ID
-from ..types import RuntimeContext
+from ..types import RuntimeContext, SessionScope
 from .runtime import UMARuntime
 from .retrieval.rlm.request import RetrievalRequest
 
@@ -327,11 +331,18 @@ class UMAMemory:
         if not agent_id or not isinstance(agent_id, str) or not agent_id.strip():
             raise ValueError("UMAMemory retrieval requires agent_id to be a non-empty string.")
 
+        normalized_user_id = normalize_user_id(user_id)
+        legacy_scope = legacy_session_scope_for_user(
+            tenant_id=DEFAULT_TENANT_ID,
+            agent_id=agent_id,
+            user_id=normalized_user_id,
+        )
         return RuntimeContext(
             tenant_id=DEFAULT_TENANT_ID,
             agent_id=agent_id,
             request_id=f"uma-retrieval:{uuid.uuid4()}",
-            user_id=user_id,
+            user_id=normalized_user_id,
+            session_id=legacy_scope.session_id,
         )
 
     def _build_retrieval_request(self, context: RuntimeContext) -> RetrievalRequest:
@@ -339,6 +350,9 @@ class UMAMemory:
             context,
             trace_id=context.request_id,
         )
+
+    def _working_memory_scope_for_context(self, context: RuntimeContext) -> Optional[SessionScope]:
+        return session_scope_from_runtime_context(context)
 
     async def _retrieve_structured_context_for_context(
         self,
@@ -361,15 +375,18 @@ class UMAMemory:
 
         with timed("uma.get_structured_context.latency"):
             try:
+                wm_scope = self._working_memory_scope_for_context(context)
                 wm_stored = (
-                    self.working_memory.get_context(normalized_user_id)
-                    if self.working_memory
+                    self.working_memory.get_context(wm_scope)
+                    if self.working_memory and wm_scope is not None
                     else []
                 )
             except Exception:
                 logger.exception(
-                    "UMAMemory.get_structured_context: failed to load WM user=%s",
-                    normalized_user_id,
+                    "UMAMemory.get_structured_context: failed to load WM tenant=%s agent=%s session=%s",
+                    context.tenant_id,
+                    context.agent_id,
+                    context.session_id,
                 )
                 wm_stored = []
 
@@ -872,6 +889,7 @@ class UMAMemory:
         user_id: str,
         user_msg: str,
         assistant_reply: str,
+        extra_meta: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Ingest a full conversation turn into UMA memory.
@@ -888,6 +906,7 @@ class UMAMemory:
             user_id=normalized_user_id,
             user_msg=user_msg,
             assistant_reply=assistant_reply,
+            extra_meta=extra_meta,
         )
 
     async def ingest_document(

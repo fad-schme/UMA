@@ -4,13 +4,13 @@ uma.core.working_memory.core
 
 WorkingMemoryCore — short-term, mutable working context (MemGPT-style RAM).
 
-Scope (v1)
+Scope (v2)
 ----------
 This component manages only *working memory*:
 - append(): add messages
 - get_context(): read WM
 - compact(): summarize older content when near capacity
-- reset(): hard wipe WM for a user
+- reset(): hard wipe WM for a session scope
 - total_tokens(): approximate budget tracking
 
 Non-goals (v1)
@@ -30,12 +30,45 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from ...types import RuntimeContext, SessionScope
+from ..utils.identity import normalize_user_id
 from .buffer import WorkingMemoryBuffer, WorkingMemoryMessage
 from .queue_manager import QueueManager, QueuePolicy
 from .summarizer import WorkingMemorySummarizer
 from ...adapters.llm.base import LLMInterface
 
 logger = logging.getLogger(__name__)
+
+_LEGACY_WM_SESSION_PREFIX = "legacy-user:"
+
+
+def legacy_session_scope_for_user(
+    *,
+    tenant_id: str,
+    agent_id: str,
+    user_id: str,
+) -> SessionScope:
+    normalized_user_id = normalize_user_id(user_id)
+    return SessionScope(
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+        session_id=f"{_LEGACY_WM_SESSION_PREFIX}{normalized_user_id}",
+        user_id=normalized_user_id,
+    )
+
+
+def session_scope_from_runtime_context(context: RuntimeContext) -> Optional[SessionScope]:
+    if not isinstance(context, RuntimeContext):
+        raise TypeError("context must be a RuntimeContext")
+    if not context.session_id:
+        return None
+    return SessionScope(
+        tenant_id=context.tenant_id,
+        agent_id=context.agent_id,
+        session_id=context.session_id,
+        user_id=context.user_id,
+        workspace_id=context.workspace_id,
+    )
 
 
 class WorkingMemoryCore:
@@ -100,7 +133,7 @@ class WorkingMemoryCore:
 
     def append(
         self,
-        user_id: str,
+        scope: SessionScope,
         role: str,
         content: str,
         metadata: Optional[Dict[str, Any]] = None,
@@ -110,49 +143,68 @@ class WorkingMemoryCore:
 
         This does NOT trigger retrieval or LLM calls.
         """
-        if not user_id:
-            raise ValueError("WorkingMemoryCore.append: user_id must not be empty.")
+        if not isinstance(scope, SessionScope):
+            raise TypeError("WorkingMemoryCore.append: scope must be a SessionScope.")
         if not role:
             raise ValueError("WorkingMemoryCore.append: role must not be empty.")
         if content is None:
             raise ValueError("WorkingMemoryCore.append: content must not be None.")
 
-        msg = self._buffer.append(user_id, role, content, metadata=metadata)
+        msg = self._buffer.append(scope, role, content, metadata=metadata)
 
-        used = self._buffer.total_tokens(user_id)
+        used = self._buffer.total_tokens(scope)
         max_t = self._buffer.max_tokens
 
         if self._queue.should_summarize(used, max_t):
-            logger.info("WM nearing capacity user=%s used=%d/%d", user_id, used, max_t)
+            logger.info(
+                "WM nearing capacity tenant=%s agent=%s session=%s used=%d/%d",
+                scope.tenant_id,
+                scope.agent_id,
+                scope.session_id,
+                used,
+                max_t,
+            )
 
         if self._queue.must_evict(used, max_t):
-            logger.warning("WM exceeded hard limit user=%s used=%d/%d", user_id, used, max_t)
+            logger.warning(
+                "WM exceeded hard limit tenant=%s agent=%s session=%s used=%d/%d",
+                scope.tenant_id,
+                scope.agent_id,
+                scope.session_id,
+                used,
+                max_t,
+            )
 
         return msg
 
-    def get_context(self, user_id: str, last_n: Optional[int] = None) -> List[WorkingMemoryMessage]:
+    def get_context(self, scope: SessionScope, last_n: Optional[int] = None) -> List[WorkingMemoryMessage]:
         """Return the working memory message list (optionally last N)."""
-        if not user_id:
-            raise ValueError("WorkingMemoryCore.get_context: user_id must not be empty.")
+        if not isinstance(scope, SessionScope):
+            raise TypeError("WorkingMemoryCore.get_context: scope must be a SessionScope.")
 
-        ctx = self._buffer.get_context(user_id)
+        ctx = self._buffer.get_context(scope)
         return ctx if last_n is None else ctx[-int(last_n) :]
 
-    def total_tokens(self, user_id: str) -> int:
-        """Return approximate token usage for the user WM."""
-        if not user_id:
-            raise ValueError("WorkingMemoryCore.total_tokens: user_id must not be empty.")
-        return self._buffer.total_tokens(user_id)
+    def total_tokens(self, scope: SessionScope) -> int:
+        """Return approximate token usage for the session-scoped WM."""
+        if not isinstance(scope, SessionScope):
+            raise TypeError("WorkingMemoryCore.total_tokens: scope must be a SessionScope.")
+        return self._buffer.total_tokens(scope)
 
-    def reset(self, user_id: str) -> None:
-        """Hard wipe working memory for a user."""
-        if not user_id:
-            raise ValueError("WorkingMemoryCore.reset: user_id must not be empty.")
+    def reset(self, scope: SessionScope) -> None:
+        """Hard wipe working memory for a session scope."""
+        if not isinstance(scope, SessionScope):
+            raise TypeError("WorkingMemoryCore.reset: scope must be a SessionScope.")
 
-        self._buffer.replace_messages(user_id, [])
-        logger.info("WM reset user=%s", user_id)
+        self._buffer.replace_messages(scope, [])
+        logger.info(
+            "WM reset tenant=%s agent=%s session=%s",
+            scope.tenant_id,
+            scope.agent_id,
+            scope.session_id,
+        )
 
-    async def compact(self, user_id: str, extra_instructions: Optional[str] = None) -> None:
+    async def compact(self, scope: SessionScope, extra_instructions: Optional[str] = None) -> None:
         """
         Compact WM by summarizing older messages into a single summary node.
 
@@ -160,25 +212,27 @@ class WorkingMemoryCore:
         - If summarization fails, WM remains unchanged.
         - If WM grows beyond 2x max_tokens, apply emergency prune.
         """
-        if not user_id:
-            raise ValueError("WorkingMemoryCore.compact: user_id must not be empty.")
+        if not isinstance(scope, SessionScope):
+            raise TypeError("WorkingMemoryCore.compact: scope must be a SessionScope.")
 
-        messages = self._buffer.get_context(user_id)
+        messages = self._buffer.get_context(scope)
         if not messages:
             return
 
-        used = self._buffer.total_tokens(user_id)
+        used = self._buffer.total_tokens(scope)
         max_t = self._buffer.max_tokens
 
         # Emergency prune if summarizer repeatedly fails and WM grows without bound.
         if used > 2 * max_t:
             logger.warning(
-                "WM emergency prune user=%s used=%d > 2*max=%d",
-                user_id,
+                "WM emergency prune tenant=%s agent=%s session=%s used=%d > 2*max=%d",
+                scope.tenant_id,
+                scope.agent_id,
+                scope.session_id,
                 used,
                 2 * max_t,
             )
-            self._buffer.replace_messages(user_id, messages[-10:])
+            self._buffer.replace_messages(scope, messages[-10:])
             return
 
         if not self._queue.should_summarize(used, max_t):
@@ -217,7 +271,7 @@ class WorkingMemoryCore:
                         chunk_summaries.append(chunk_summary)
 
                 if not chunk_summaries:
-                    logger.warning("WM compact produced no chunk summaries user=%s", user_id)
+                    logger.warning("WM compact produced no chunk summaries session=%s", scope.session_id)
                     return
 
                 if len(chunk_summaries) == 1:
@@ -236,12 +290,12 @@ class WorkingMemoryCore:
                     extra_instructions=extra_instructions,
                 )
         except Exception:
-            logger.exception("WM compact summarization failed user=%s", user_id)
+            logger.exception("WM compact summarization failed session=%s", scope.session_id)
             return
 
         summary = (summary or "").strip()
         if not summary:
-            logger.warning("WM compact returned empty summary user=%s", user_id)
+            logger.warning("WM compact returned empty summary session=%s", scope.session_id)
             return
 
         summary_tokens = self._buffer._estimate_tokens(summary)
@@ -252,10 +306,12 @@ class WorkingMemoryCore:
             metadata={"summary_of_indices": list(range(len(old_msgs)))},
         )
 
-        self._buffer.replace_messages(user_id, [summary_msg] + recent_msgs)
+        self._buffer.replace_messages(scope, [summary_msg] + recent_msgs)
         logger.info(
-            "WM compacted user=%s old_len=%d new_len=%d",
-            user_id,
+            "WM compacted tenant=%s agent=%s session=%s old_len=%d new_len=%d",
+            scope.tenant_id,
+            scope.agent_id,
+            scope.session_id,
             len(messages),
             1 + len(recent_msgs),
         )

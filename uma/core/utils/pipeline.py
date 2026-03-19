@@ -33,6 +33,10 @@ from typing import Any, Dict, Optional, List
 from .promotion import PromotionPolicy
 from ...adapters.observability.context import request_context
 from ...adapters.observability.metrics import increment, timed
+from ...stores.base_sql_store import DEFAULT_TENANT_ID
+from ...types import SessionScope
+from ..working_memory.core import legacy_session_scope_for_user
+from .identity import normalize_user_id
 logger = logging.getLogger(__name__)
 
 def _get_fact_embedding(fact: Any) -> Optional[List[float]]:
@@ -94,6 +98,7 @@ class MemoryPipeline:
         self.hooks = hooks
         self.promotion_policy = promotion_policy
         self._post_turn_queue: List[Dict[str, Any]] = []
+        self._warned_legacy_wm_scope = False
         if promotion_policy is None:
             logger.info("PromotionPolicy disabled (none provided).")
         else:
@@ -234,18 +239,28 @@ class MemoryPipeline:
                     assistant_reply=assistant_reply,
                     request_id=str(request_id) if request_id else None,
                 )
+                wm_scope = self._resolve_working_memory_scope(
+                    user_id=user_id,
+                    extra_meta=extra_meta,
+                )
 
                 # 1) Hooks
                 await self._run_before_turn_hooks(user_id, user_msg)
 
                 # 2) Working memory update
-                self._update_working_memory(user_id, user_msg, assistant_reply, turn_id=turn_id)
+                self._update_working_memory(wm_scope, user_msg, assistant_reply, turn_id=turn_id)
 
                 # 3) WM compaction
-                await self._maybe_compact_working_memory(user_id)
+                await self._maybe_compact_working_memory(wm_scope)
 
                 # 4) Episodic storage
-                episode = await self._store_episode(user_id, user_msg, assistant_reply, turn_id=turn_id)
+                episode = await self._store_episode(
+                    user_id,
+                    user_msg,
+                    assistant_reply,
+                    turn_id=turn_id,
+                    working_memory_scope=wm_scope,
+                )
 
                 if self._post_turn_defer_enabled():
                     enqueued = self._enqueue_post_turn(
@@ -419,9 +434,45 @@ class MemoryPipeline:
     # WORKING MEMORY
     # ------------------------------------------------------------------
 
+    def _resolve_working_memory_scope(
+        self,
+        *,
+        user_id: str,
+        extra_meta: Optional[Dict[str, Any]] = None,
+    ) -> Optional[SessionScope]:
+        agent_id = getattr(self.mem, "agent_id", None)
+        if not agent_id:
+            logger.warning("WorkingMemory requires agent_id; skipping WM for this turn.")
+            return None
+
+        normalized_user_id = normalize_user_id(user_id)
+        meta = extra_meta or {}
+        tenant_id = str(meta.get("tenant_id") or DEFAULT_TENANT_ID)
+        session_id = meta.get("session_id")
+        if session_id:
+            return SessionScope(
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                session_id=str(session_id),
+                user_id=normalized_user_id,
+                workspace_id=(str(meta["workspace_id"]) if meta.get("workspace_id") else None),
+            )
+
+        if not self._warned_legacy_wm_scope:
+            logger.warning(
+                "MemoryPipeline: using legacy working-memory scope bridge without explicit session_id. "
+                "Pass extra_meta['session_id'] to isolate WM per session."
+            )
+            self._warned_legacy_wm_scope = True
+        return legacy_session_scope_for_user(
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            user_id=normalized_user_id,
+        )
+
     def _update_working_memory(
         self,
-        user_id: str,
+        scope: Optional[SessionScope],
         user_msg: str,
         assistant_reply: str,
         *,
@@ -431,17 +482,19 @@ class MemoryPipeline:
         if wm is None:
             logger.warning("WorkingMemoryCore not initialized; skipping WM updates.")
             return
+        if scope is None:
+            return
 
         try:
             wm.append(
-                user_id=user_id,
+                scope=scope,
                 role="user",
                 content=user_msg,
                 metadata={"source": "user", "turn_id": turn_id},
             )
             if assistant_reply and assistant_reply.strip():
                 wm.append(
-                    user_id=user_id,
+                    scope=scope,
                     role="assistant",
                     content=assistant_reply,
                     metadata={"source": "assistant", "turn_id": turn_id},
@@ -449,12 +502,12 @@ class MemoryPipeline:
         except Exception:
             logger.exception("Failed to append messages to WorkingMemory; continuing.")
 
-    async def _maybe_compact_working_memory(self, user_id: str) -> None:
+    async def _maybe_compact_working_memory(self, scope: Optional[SessionScope]) -> None:
         wm = getattr(self.mem, "working_memory", None)
-        if wm is None:
+        if wm is None or scope is None:
             return
         try:
-            await wm.compact(user_id=user_id)
+            await wm.compact(scope=scope)
         except Exception:
             logger.exception("WorkingMemory compact failed; continuing.")
 
@@ -469,6 +522,7 @@ class MemoryPipeline:
         assistant_reply: str,
         *,
         turn_id: str,
+        working_memory_scope: Optional[SessionScope],
     ) -> Any:
         epi = getattr(self.mem, "episodic_core", None)
         wm = getattr(self.mem, "working_memory", None)
@@ -478,7 +532,7 @@ class MemoryPipeline:
             return None
 
         try:
-            wm_context = wm.get_context(user_id) if wm else []
+            wm_context = wm.get_context(working_memory_scope) if wm and working_memory_scope else []
         except Exception:
             logger.exception("Failed to get WM context for episodic store.")
             wm_context = []

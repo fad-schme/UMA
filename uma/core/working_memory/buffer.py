@@ -1,10 +1,10 @@
 """
 Working memory buffer for UMA.
 
-This module implements an in-memory, per-user working memory buffer that stores
+This module implements an in-memory, session-scoped working memory buffer that stores
 recent conversation turns (user + assistant messages). It is responsible for:
 
-- Keeping an ordered list of messages per user/session.
+- Keeping an ordered list of messages per session scope.
 - Providing an estimated token usage (for context window management).
 - Exposing safe methods to append messages and retrieve the current context.
 
@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, Tuple
+
+from ...types import SessionScope
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +63,7 @@ class WorkingMemoryMessage:
 
 class WorkingMemoryBuffer:
     """
-    Per-user working memory buffer.
+    Session-scoped working memory buffer.
 
     This class is intentionally simple and generic. It does not depend on any
     specific LLM or store implementation.
@@ -89,7 +91,7 @@ class WorkingMemoryBuffer:
             only exposes the current usage.
         """
         self._max_tokens = max_tokens
-        self._store: Dict[str, List[WorkingMemoryMessage]] = {}
+        self._store: Dict[Tuple[str, str, str], List[WorkingMemoryMessage]] = {}
         logger.debug("Initialized WorkingMemoryBuffer with max_tokens=%d", max_tokens)
 
     @property
@@ -116,21 +118,26 @@ class WorkingMemoryBuffer:
         word_count = len(text.split())
         return max(1, int(word_count * 1.3))
 
+    def _key_for_scope(self, scope: SessionScope) -> Tuple[str, str, str]:
+        if not isinstance(scope, SessionScope):
+            raise TypeError("WorkingMemoryBuffer requires a SessionScope.")
+        return (scope.tenant_id, scope.agent_id, scope.session_id)
+
     def append(
         self,
-        user_id: str,
+        scope: SessionScope,
         role: Role,
         content: str,
         metadata: Optional[dict] = None,
         token_estimate: Optional[int] = None,
     ) -> WorkingMemoryMessage:
         """
-        Append a message to a user's working memory.
+        Append a message to a session's working memory.
 
         Parameters
         ----------
-        user_id:
-            Identifier for the user/session.
+        scope:
+            Explicit working-memory session scope.
         role:
             One of "user", "assistant", "system", "summary".
         content:
@@ -167,20 +174,23 @@ class WorkingMemoryBuffer:
             metadata=metadata,
         )
 
-        self._store.setdefault(user_id, []).append(msg)
+        key = self._key_for_scope(scope)
+        self._store.setdefault(key, []).append(msg)
 
         logger.debug(
-            "Appended message to working memory: user_id=%s role=%s tokens=%d",
-            user_id,
+            "Appended message to working memory: tenant=%s agent=%s session=%s role=%s tokens=%d",
+            scope.tenant_id,
+            scope.agent_id,
+            scope.session_id,
             role,
             token_estimate,
         )
 
         return msg
 
-    def get_context(self, user_id: str) -> List[WorkingMemoryMessage]:
+    def get_context(self, scope: SessionScope) -> List[WorkingMemoryMessage]:
         """
-        Return the current working memory messages for a user.
+        Return the current working memory messages for a session scope.
 
         Notes
         -----
@@ -191,36 +201,38 @@ class WorkingMemoryBuffer:
         Returns
         -------
         list[WorkingMemoryMessage]
-            List of messages in insertion order for this user.
+            List of messages in insertion order for this session scope.
         """
-        messages = self._store.get(user_id, [])
+        messages = self._store.get(self._key_for_scope(scope), [])
         # Return a copy to avoid accidental external mutation.
         return list(messages)
 
-    def total_tokens(self, user_id: str) -> int:
+    def total_tokens(self, scope: SessionScope) -> int:
         """
-        Compute approximate total token usage for a user's working memory.
+        Compute approximate total token usage for a session's working memory.
 
         Returns
         -------
         int
             Sum of token_estimate for all messages for the user.
         """
-        total = sum(msg.token_estimate for msg in self._store.get(user_id, []))
+        total = sum(msg.token_estimate for msg in self._store.get(self._key_for_scope(scope), []))
         logger.debug(
-            "Total tokens for user_id=%s in working memory: %d",
-            user_id,
+            "Total tokens for working memory tenant=%s agent=%s session=%s: %d",
+            scope.tenant_id,
+            scope.agent_id,
+            scope.session_id,
             total,
         )
         return total
 
     def replace_messages(
         self,
-        user_id: str,
+        scope: SessionScope,
         new_messages: List[WorkingMemoryMessage],
     ) -> None:
         """
-        Replace the entire message list for a user.
+        Replace the entire message list for a session scope.
 
         This is primarily used by summarization logic:
         - Summarizer may collapse older messages into a single summary message.
@@ -228,8 +240,8 @@ class WorkingMemoryBuffer:
 
         Parameters
         ----------
-        user_id:
-            User/session identifier.
+        scope:
+            Explicit working-memory session scope.
         new_messages:
             New ordered message list to store for this user.
 
@@ -238,9 +250,11 @@ class WorkingMemoryBuffer:
         - This method overwrites the previous list completely.
         - Callers must ensure new_messages is consistent and valid.
         """
-        self._store[user_id] = list(new_messages)
+        self._store[self._key_for_scope(scope)] = list(new_messages)
         logger.info(
-            "Replaced working memory messages for user_id=%s; new_len=%d",
-            user_id,
+            "Replaced working memory messages for tenant=%s agent=%s session=%s; new_len=%d",
+            scope.tenant_id,
+            scope.agent_id,
+            scope.session_id,
             len(new_messages),
         )

@@ -26,6 +26,7 @@ from .evidence import expand_evidence_chunks_from_facts
 
 from ..ranking import Ranker
 from .request import RetrievalRequest, RetrievalScope
+from ...working_memory.core import session_scope_from_runtime_context
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +153,9 @@ class RLMController:
         if hasattr(self.env, "_memory"):
             wm = getattr(getattr(self.env, "_memory", None), "working_memory", None)
             if wm is not None:
-                pack.working_memory = wm.get_context(normalized_user_id)
+                session_scope = session_scope_from_runtime_context(request.context)
+                if session_scope is not None:
+                    pack.working_memory = wm.get_context(session_scope)
         query_embedding = await self.env.get_query_embedding(query_text)
 
         # Lane decision: recall = user-only; KB = agent KB + user-owned KB docs.

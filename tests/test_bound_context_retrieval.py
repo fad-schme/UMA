@@ -115,6 +115,7 @@ async def test_umamemory_retrieval_shims_delegate_through_request_handle(uma_mem
         assert context.agent_id == memory.agent_id
         assert context.tenant_id == DEFAULT_TENANT_ID
         assert context.request_id.startswith("uma-retrieval:")
+        assert context.session_id == "legacy-user:user:u1"
 
 
 @pytest.mark.asyncio
