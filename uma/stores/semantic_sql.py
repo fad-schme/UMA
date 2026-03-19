@@ -264,6 +264,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
             owner_type_in = getattr(fact, "owner_type", "user") or "user"
             owner_id_in = getattr(fact, "owner_id", "") or ""
             tenant_id_in = getattr(fact, "tenant_id", None) or DEFAULT_TENANT_ID
+            session_id_in = getattr(fact, "session_id", None)
             if not owner_id_in:
                 raise ValueError("SemanticSQLStore.upsert_fact: owner_id must be set")
 
@@ -276,18 +277,22 @@ class SemanticSQLStore(BaseVectorSQLStore):
                         conn,
                         """
                         SELECT id FROM facts
-                        WHERE owner_type = ? AND owner_id = ?
+                        WHERE tenant_id = ? AND owner_type = ? AND owner_id = ?
                           AND subject = ? AND predicate = ?
                           AND object = ?
+                          AND ((session_id IS NULL AND ? IS NULL) OR session_id = ?)
                           AND json_extract(meta, '$.turn_id') = ?
                         LIMIT 1
                         """,
                         params=[
+                            tenant_id_in,
                             owner_type_in,
                             owner_id_in,
                             fact.subject,
                             fact.predicate,
                             json.dumps(fact.object),
+                            session_id_in,
+                            session_id_in,
                             str(turn_id),
                         ],
                         log_context="semantic_idempotency",
@@ -310,8 +315,21 @@ class SemanticSQLStore(BaseVectorSQLStore):
             object_json = json.dumps(fact.object)
             rows = self._query_all(
                 conn,
-                "SELECT * FROM facts WHERE owner_type=? AND owner_id=? AND subject=? AND predicate=? AND object=?",
-                params=[owner_type_in, owner_id_in, fact.subject, fact.predicate, object_json],
+                """
+                SELECT * FROM facts
+                WHERE tenant_id=? AND owner_type=? AND owner_id=? AND subject=? AND predicate=? AND object=?
+                  AND ((session_id IS NULL AND ? IS NULL) OR session_id=?)
+                """,
+                params=[
+                    tenant_id_in,
+                    owner_type_in,
+                    owner_id_in,
+                    fact.subject,
+                    fact.predicate,
+                    object_json,
+                    session_id_in,
+                    session_id_in,
+                ],
                 log_context="fetch_conflicts",
             )
             existing = [self._row_to_object(r) for r in rows]

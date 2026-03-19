@@ -377,8 +377,11 @@ class MemoryPipeline:
             try:
                 if not policy.is_eligible(fact):
                     continue
+                target_owner = policy.select_target_owner(fact)
+                if target_owner is None:
+                    continue
             except Exception:
-                logger.exception("PromotionPolicy.is_eligible failed; skipping fact.")
+                logger.exception("PromotionPolicy target selection failed; skipping fact.")
                 continue
 
             # Require embedding to keep the agent KB searchable. If absent, skip.
@@ -391,7 +394,11 @@ class MemoryPipeline:
                 continue
 
             try:
-                promoted = policy.promote(fact)
+                promoted = policy.promote(
+                    fact,
+                    target_owner=target_owner,
+                    reason="pipeline_policy",
+                )
             except Exception:
                 logger.exception("PromotionPolicy.promote failed; skipping fact.")
                 continue
