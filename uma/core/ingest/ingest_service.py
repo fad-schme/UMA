@@ -15,9 +15,9 @@ from .graph_updater import update_graph
 from .episodic_writer import write_document_episode
 from .consolidation_trigger import maybe_trigger_consolidation
 
-from ...types import Fact
-from ...types import Chunk
+from ...types import Chunk, Fact, TargetOwner, make_target_owner
 from ...stores.document_sql import DocumentRecord
+from ...stores.base_sql_store import DEFAULT_TENANT_ID
 from ..utils.identity import normalize_user_id
 
 logger = logging.getLogger(__name__)
@@ -28,14 +28,14 @@ _SPLITTER_VERSION = "doc_normalize_v1"
 _CHUNKER_VERSION = "doc_chunk_v2"
 
 
-def _validate_owner(owner_type: str, owner_id: str) -> tuple[str, str]:
-    if owner_type not in ("user", "agent"):
-        raise ValueError(f"Invalid owner_type={owner_type!r}")
-    if not owner_id or not isinstance(owner_id, str):
-        raise ValueError("owner_id must be a non-empty string")
-    if owner_type == "user":
-        return "user", normalize_user_id(owner_id)
-    return owner_type, owner_id
+def _coerce_ingest_target_owner(owner_type: str, owner_id: str) -> TargetOwner:
+    normalized_owner_id = normalize_user_id(owner_id) if owner_type == "user" else owner_id
+    return make_target_owner(
+        tenant_id=DEFAULT_TENANT_ID,
+        owner_type=owner_type,
+        owner_id=normalized_owner_id,
+        allowed_owner_types=("agent", "user"),
+    )
 
 
 def _merge_manifest_meta(
@@ -136,7 +136,11 @@ async def ingest_document(
         document_store = document_store or getattr(memory, "document_store", None)
         graph_core = graph_core or getattr(memory, "graph_core", None)
 
-    owner_type, owner_id = _validate_owner(owner_type, owner_id)
+    target_owner = _coerce_ingest_target_owner(owner_type, owner_id)
+    owner_type = target_owner.owner_type
+    owner_id = target_owner.owner_id
+    tenant_id = target_owner.tenant_id
+    workspace_id = target_owner.workspace_id
 
     if not pdf_path or not isinstance(pdf_path, str):
         raise ValueError("ingest_document: pdf_path must be a non-empty string")
@@ -212,8 +216,10 @@ async def ingest_document(
                         source_path=parsed.source_path,
                         source_hash=parsed.source_hash,
                         ingested_at=now_refresh,
+                        tenant_id=tenant_id,
                         owner_type=owner_type,
                         owner_id=owner_id,
+                        workspace_id=workspace_id,
                         meta=refreshed_meta,
                     )
                 )
@@ -247,8 +253,10 @@ async def ingest_document(
                         source_path=parsed.source_path,
                         source_hash=parsed.source_hash,
                         ingested_at=now_refresh,
+                        tenant_id=tenant_id,
                         owner_type=owner_type,
                         owner_id=owner_id,
+                        workspace_id=workspace_id,
                         meta=refreshed_meta,
                     )
                 )
@@ -312,8 +320,10 @@ async def ingest_document(
                 source_path=parsed.source_path,
                 source_hash=parsed.source_hash,
                 ingested_at=parsed.extracted_at,
+                tenant_id=tenant_id,
                 owner_type=owner_type,
                 owner_id=owner_id,
+                workspace_id=workspace_id,
                 meta=merged_meta,
             )
         )
@@ -338,8 +348,10 @@ async def ingest_document(
             source_hash=parsed.source_hash,
             created_at=now,
             updated_at=now,
+            tenant_id=tenant_id,
             owner_type=owner_type,
             owner_id=owner_id,
+            workspace_id=workspace_id,
             meta={
                 "source_type": "pdf",
                 "domain": "kb_doc",
@@ -419,6 +431,8 @@ async def ingest_document(
             f.owner_type = owner_type
         if f.owner_id != owner_id:
             f.owner_id = owner_id
+        f.tenant_id = tenant_id
+        f.workspace_id = workspace_id
         if f.meta is None:
             f.meta = {}
         f.meta.setdefault("domain", "kb_doc")

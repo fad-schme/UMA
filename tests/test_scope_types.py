@@ -14,6 +14,7 @@ from uma.types import (
     TargetOwner,
 )
 from uma.types.types_scope import (
+    make_target_owner,
     validate_agent_id,
     validate_owner_type,
     validate_request_id,
@@ -80,6 +81,16 @@ def test_target_owner_accepts_supported_owner_types(owner_type: str) -> None:
     assert target.owner_type == owner_type
 
 
+def test_target_owner_accepts_optional_workspace_id() -> None:
+    target = TargetOwner(
+        tenant_id="tenant-1",
+        owner_type="workspace",
+        owner_id="workspace:alpha",
+        workspace_id="workspace:alpha",
+    )
+    assert target.workspace_id == "workspace:alpha"
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
@@ -137,6 +148,11 @@ def test_session_scope_rejects_invalid_values(kwargs: dict[str, str], message: s
         (TargetOwner, {"tenant_id": "", "owner_type": "user", "owner_id": "owner-1"}, "tenant_id"),
         (TargetOwner, {"tenant_id": "tenant-1", "owner_type": "invalid", "owner_id": "owner-1"}, "owner_type"),
         (TargetOwner, {"tenant_id": "tenant-1", "owner_type": "user", "owner_id": ""}, "owner_id"),
+        (
+            TargetOwner,
+            {"tenant_id": "tenant-1", "owner_type": "workspace", "owner_id": "workspace:alpha", "workspace_id": ""},
+            "workspace_id",
+        ),
     ],
 )
 def test_ownership_types_reject_invalid_values(factory, kwargs: dict[str, str], message: str) -> None:
@@ -204,3 +220,13 @@ def test_new_types_are_exported_from_uma_types() -> None:
     assert SessionScope.__module__ == "uma.types.types_scope"
     assert OwnershipRef.__module__ == "uma.types.types_scope"
     assert TargetOwner.__module__ == "uma.types.types_scope"
+
+
+def test_make_target_owner_rejects_disallowed_owner_types() -> None:
+    with pytest.raises(ValueError, match="owner_type"):
+        make_target_owner(
+            tenant_id="tenant-1",
+            owner_type="system",
+            owner_id="system:ops",
+            allowed_owner_types=("agent", "user", "workspace"),
+        )

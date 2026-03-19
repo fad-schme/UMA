@@ -13,10 +13,11 @@ Responsibilities
 
 from __future__ import annotations
 
+from dataclasses import replace
 import logging
 from typing import Any, List, Optional
 
-from ...types import Skill
+from ...types import Skill, TargetOwner, make_target_owner
 from ..utils.dedupe import dedupe_by_id
 
 logger = logging.getLogger(__name__)
@@ -35,11 +36,50 @@ class ProceduralCore:
     # PUBLIC API — ingest / CRUD
     # ------------------------------------------------------------------
 
+    def _target_owner_from_skill(self, skill: Skill) -> TargetOwner:
+        return make_target_owner(
+            tenant_id=getattr(skill, "tenant_id", None) or "default",
+            owner_type=getattr(skill, "owner_type", None) or "user",
+            owner_id=getattr(skill, "owner_id", None) or "",
+            workspace_id=getattr(skill, "workspace_id", None),
+            allowed_owner_types=("agent", "user", "workspace"),
+        )
+
+    async def add_skill_for_owner(
+        self,
+        skill: Skill,
+        embedding: List[float],
+        *,
+        target_owner: TargetOwner,
+    ) -> Optional[Skill]:
+        if self.store is None:
+            return None
+        try:
+            normalized_owner = make_target_owner(
+                tenant_id=target_owner.tenant_id,
+                owner_type=target_owner.owner_type,
+                owner_id=target_owner.owner_id,
+                workspace_id=target_owner.workspace_id,
+                allowed_owner_types=("agent", "user", "workspace"),
+            )
+            normalized_skill = replace(
+                skill,
+                tenant_id=normalized_owner.tenant_id,
+                owner_type=normalized_owner.owner_type,
+                owner_id=normalized_owner.owner_id,
+                workspace_id=normalized_owner.workspace_id,
+            )
+            return await self.store.add_skill(normalized_skill, embedding)
+        except Exception:
+            logger.exception("ProceduralCore.add_skill failed for id=%s", getattr(skill, "id", None))
+            return None
+
     async def add_skill(self, skill: Skill, embedding: List[float]) -> Optional[Skill]:
         if self.store is None:
             return None
         try:
-            return await self.store.add_skill(skill, embedding)
+            target_owner = self._target_owner_from_skill(skill)
+            return await self.add_skill_for_owner(skill, embedding, target_owner=target_owner)
         except Exception:
             logger.exception("ProceduralCore.add_skill failed for id=%s", getattr(skill, "id", None))
             return None

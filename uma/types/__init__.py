@@ -4,6 +4,7 @@ UMA type definitions.
 
 from .types_owner import OwnerType
 from .types_scope import (
+    make_target_owner,
     OwnershipRef,
     RuntimeContext,
     SCOPE_MODEL_VERSION,
@@ -22,6 +23,7 @@ __all__ = [
     "SessionScope",
     "OwnershipRef",
     "TargetOwner",
+    "make_target_owner",
     "Chunk",
     "Fact",
     "Episode",

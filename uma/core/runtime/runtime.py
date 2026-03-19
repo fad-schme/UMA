@@ -54,6 +54,41 @@ class UMARequestHandle:
     def session_id(self) -> Optional[str]:
         return self.context.session_id
 
+    def _require_memory_bridge(self) -> Any:
+        memory = getattr(self.runtime, "memory_bridge", None)
+        if memory is None:
+            raise RuntimeError(
+                "UMARequestHandle retrieval requires a runtime with a memory_bridge."
+            )
+        return memory
+
+    async def retrieve_structured_context(self, query_text: str) -> Dict[str, list]:
+        memory = self._require_memory_bridge()
+        return await memory._retrieve_structured_context_for_context(
+            self.context,
+            query_text=query_text,
+        )
+
+    async def retrieve_rendered_context(self, query_text: str) -> str:
+        memory = self._require_memory_bridge()
+        return await memory._retrieve_rendered_context_for_context(
+            self.context,
+            query_text=query_text,
+        )
+
+    async def get_context_messages(
+        self,
+        query_text: str,
+        *,
+        render_mode: str = "openclaw_v1",
+    ) -> Dict[str, Any]:
+        memory = self._require_memory_bridge()
+        return await memory._get_context_messages_for_context(
+            self.context,
+            query_text=query_text,
+            render_mode=render_mode,
+        )
+
 
 class UMARuntime:
     """

@@ -96,6 +96,7 @@ Design Philosophy
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any, Dict, List, Optional
 
 from .memory_config import UMAConfig  # YAML loader + validation (dict-like)
@@ -119,6 +120,9 @@ from .initializers.runtime import init_retrieval_ready, init_ingestion_ready, sc
 
 # Optional Features
 from .utils.registry import FeatureLoader, FeaturePolicy, default_feature_registry
+from ..stores.base_sql_store import DEFAULT_TENANT_ID
+from ..types import RuntimeContext
+from .runtime import UMARuntime
 
 logger = logging.getLogger(__name__)
 
@@ -308,6 +312,153 @@ class UMAMemory:
     # ----------------------------------------------------------------------
     # Core Subsystems (WM, Episodic, Semantic, Procedural, Chunk — Retrieval wired lazily)
     # ----------------------------------------------------------------------
+
+    def _build_runtime_context_for_retrieval(self, *, user_id: str) -> RuntimeContext:
+        if not user_id or not isinstance(user_id, str):
+            raise ValueError("UMAMemory retrieval requires user_id to be a non-empty string.")
+
+        agent_id = getattr(self, "agent_id", None)
+        if not agent_id or not isinstance(agent_id, str) or not agent_id.strip():
+            raise ValueError("UMAMemory retrieval requires agent_id to be a non-empty string.")
+
+        return RuntimeContext(
+            tenant_id=DEFAULT_TENANT_ID,
+            agent_id=agent_id,
+            request_id=f"uma-retrieval:{uuid.uuid4()}",
+            user_id=user_id,
+        )
+
+    async def _retrieve_structured_context_for_context(
+        self,
+        context: RuntimeContext,
+        *,
+        query_text: str,
+    ) -> Dict[str, list]:
+        from ..adapters.observability.metrics import increment, timed
+
+        self._ensure_retrieval_ready()
+
+        if not isinstance(context, RuntimeContext):
+            raise TypeError("UMAMemory retrieval requires a RuntimeContext instance.")
+        if not context.user_id:
+            raise ValueError("UMAMemory retrieval requires RuntimeContext.user_id.")
+        if not query_text or not isinstance(query_text, str):
+            raise ValueError("UMAMemory.get_structured_context: query_text must be a non-empty string.")
+
+        normalized_user_id = normalize_user_id(context.user_id)
+
+        with timed("uma.get_structured_context.latency"):
+            try:
+                wm_stored = (
+                    self.working_memory.get_context(normalized_user_id)
+                    if self.working_memory
+                    else []
+                )
+            except Exception:
+                logger.exception(
+                    "UMAMemory.get_structured_context: failed to load WM user=%s",
+                    normalized_user_id,
+                )
+                wm_stored = []
+
+            controller = getattr(self, "_rlm_controller", None)
+            if controller is None:
+                raise RuntimeError("UMAMemory.get_structured_context: RLM controller not initialized.")
+
+            pack = await controller.retrieve_context(
+                user_id=normalized_user_id,
+                query_text=query_text,
+            )
+            increment("uma.get_structured_context.calls", tags={"path": "rlm"})
+            coverage = getattr(pack, "coverage", None)
+            from .retrieval.rlm.coverage import compute_confidence
+            return {
+                "working_memory": wm_stored,
+                "episodic": pack.episodes,
+                "facts": pack.facts or [],
+                "chunks": getattr(pack, "chunks", []),
+                "skills": pack.skills,
+                "graph": pack.graph,
+                "trace": pack.steps,
+                "confidence": compute_confidence(coverage) if coverage is not None else {},
+            }
+
+    async def _retrieve_rendered_context_for_context(
+        self,
+        context: RuntimeContext,
+        *,
+        query_text: str,
+    ) -> str:
+        from .utils.context_pack_builder import ContextPackBuilder
+
+        ctx = await self._retrieve_structured_context_for_context(context, query_text=query_text)
+        pack = ContextPackBuilder.build(query_text, ctx)
+        ctx_cfg = getattr(getattr(self, "retrieval_cfg", None), "context", None)
+        if getattr(ctx_cfg, "snippet_refiner_enabled", False):
+            return await ContextPackBuilder.render_snippet_async(
+                pack, ctx_cfg, llm=getattr(self, "llm", None)
+            )
+        return ContextPackBuilder.render_snippet(pack, ctx_cfg)
+
+    async def _get_context_messages_for_context(
+        self,
+        context: RuntimeContext,
+        *,
+        query_text: str,
+        render_mode: str = "openclaw_v1",
+    ) -> Dict[str, Any]:
+        if not isinstance(context, RuntimeContext):
+            raise TypeError("UMAMemory retrieval requires a RuntimeContext instance.")
+        if not context.user_id:
+            raise ValueError("UMAMemory.get_context_messages: RuntimeContext.user_id is required.")
+        if not query_text or not isinstance(query_text, str):
+            raise ValueError("UMAMemory.get_context_messages: query_text must be a non-empty string.")
+        if not isinstance(render_mode, str) or not render_mode.strip():
+            raise ValueError("UMAMemory.get_context_messages: render_mode must be a non-empty string.")
+
+        render_mode = render_mode.strip()
+
+        if render_mode not in {"openclaw_v1", "raw_rendered"}:
+            raise ValueError(
+                f"UMAMemory.get_context_messages: unsupported render_mode={render_mode!r}. "
+                "Supported modes: 'openclaw_v1', 'raw_rendered'."
+            )
+
+        rendered = await self._retrieve_rendered_context_for_context(context, query_text=query_text)
+        rendered = (rendered or "").strip()
+
+        messages: List[Dict[str, str]] = []
+
+        if rendered:
+            if render_mode == "openclaw_v1":
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Relevant memory context from UMA follows. "
+                            "Use it only as supporting context; prefer direct task instructions "
+                            "and the current conversation when they conflict.\n\n"
+                            f"{rendered}"
+                        ),
+                    }
+                )
+            elif render_mode == "raw_rendered":
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": rendered,
+                    }
+                )
+
+        return {
+            "messages": messages,
+            "meta": {
+                "provider": "uma",
+                "format": "message_list",
+                "render_mode": render_mode,
+                "message_count": len(messages)
+            },
+        }
 
     def _init_core_subsystems(self) -> None:
         """
@@ -665,42 +816,10 @@ class UMAMemory:
                 f"UMAMemory.get_context_messages: unsupported render_mode={render_mode!r}. "
                 "Supported modes: 'openclaw_v1', 'raw_rendered'."
             )
-
-        rendered = await self.get_rendered_context(user_id=user_id, query_text=query_text)
-        rendered = (rendered or "").strip()
-
-        messages: List[Dict[str, str]] = []
-
-        if rendered:
-            if render_mode == "openclaw_v1":
-                messages.append(
-                    {
-                        "role": "system",
-                        "content": (
-                            "Relevant memory context from UMA follows. "
-                            "Use it only as supporting context; prefer direct task instructions "
-                            "and the current conversation when they conflict.\n\n"
-                            f"{rendered}"
-                        ),
-                    }
-                )
-            elif render_mode == "raw_rendered":
-                messages.append(
-                    {
-                        "role": "system",
-                        "content": rendered,
-                    }
-                )
-
-        return {
-            "messages": messages,
-            "meta": {
-                "provider": "uma",
-                "format": "message_list",
-                "render_mode": render_mode,
-                "message_count": len(messages)
-            },
-        }
+        handle = UMARuntime.from_memory(self).bind(
+            self._build_runtime_context_for_retrieval(user_id=user_id)
+        )
+        return await handle.get_context_messages(query_text=query_text, render_mode=render_mode)
 
 
     async def get_structured_context(self, user_id: str, query_text: str) -> Dict[str, list]:
@@ -728,52 +847,12 @@ class UMAMemory:
                 "graph": [...],
             }
         """
-        from ..adapters.observability.metrics import increment, timed
-
-        self._ensure_retrieval_ready()
-
         if not user_id or not isinstance(user_id, str):
             raise ValueError("UMAMemory.get_structured_context: user_id must be a non-empty string.")
-        if not query_text or not isinstance(query_text, str):
-            raise ValueError("UMAMemory.get_structured_context: query_text must be a non-empty string.")
-        normalized_user_id = normalize_user_id(user_id)
-
-        with timed("uma.get_structured_context.latency"):
-            # 1) Stored WM
-            try:
-                wm_stored = (
-                    self.working_memory.get_context(normalized_user_id)
-                    if self.working_memory
-                    else []
-                )
-            except Exception:
-                logger.exception(
-                    "UMAMemory.get_structured_context: failed to load WM user=%s",
-                    normalized_user_id,
-                )
-                wm_stored = []
-
-            controller = getattr(self, "_rlm_controller", None)
-            if controller is None:
-                raise RuntimeError("UMAMemory.get_structured_context: RLM controller not initialized.")
-
-            pack = await controller.retrieve_context(
-                user_id=normalized_user_id,
-                query_text=query_text,
-            )
-            increment("uma.get_structured_context.calls", tags={"path": "rlm"})
-            coverage = getattr(pack, "coverage", None)
-            from .retrieval.rlm.coverage import compute_confidence
-            return {
-                "working_memory": wm_stored,
-                "episodic": pack.episodes,
-                "facts": pack.facts or [],
-                "chunks": getattr(pack, "chunks", []),
-                "skills": pack.skills,
-                "graph": pack.graph,
-                "trace": pack.steps,
-                "confidence": compute_confidence(coverage) if coverage is not None else {},
-            }
+        handle = UMARuntime.from_memory(self).bind(
+            self._build_runtime_context_for_retrieval(user_id=user_id)
+        )
+        return await handle.retrieve_structured_context(query_text=query_text)
 
     async def process_turn(
         self,
@@ -828,16 +907,10 @@ class UMAMemory:
         Configuration is internal to UMA (via memory.retrieval_cfg.context). Callers should not
         inspect config or select rendering modes.
         """
-        from .utils.context_pack_builder import ContextPackBuilder
-
-        ctx = await self.get_structured_context(user_id=user_id, query_text=query_text)
-        pack = ContextPackBuilder.build(query_text, ctx)
-        ctx_cfg = getattr(getattr(self, "retrieval_cfg", None), "context", None)
-        if getattr(ctx_cfg, "snippet_refiner_enabled", False):
-            return await ContextPackBuilder.render_snippet_async(
-                pack, ctx_cfg, llm=getattr(self, "llm", None)
-            )
-        return ContextPackBuilder.render_snippet(pack, ctx_cfg)
+        handle = UMARuntime.from_memory(self).bind(
+            self._build_runtime_context_for_retrieval(user_id=user_id)
+        )
+        return await handle.retrieve_rendered_context(query_text=query_text)
 
     # ----------------------------------------------------------------------
     # Shutdown
