@@ -9,6 +9,8 @@ Notes
 Episodes are scoped by ownership:
 - owner_type="user"/owner_id="user:<user_id>" for user-level logs
 - owner_type="agent"/owner_id=agent_id for agent-global episodes (rare but possible)
+- owner_type="workspace"/owner_id=<workspace_id> for shared workspace logs
+- owner_type="system"/owner_id=<system_id> for operational records
 
 Coding agent instructions:
 --------------------------
@@ -90,7 +92,7 @@ class Episode:
         if not self.user_id or not isinstance(self.user_id, str):
             raise ValueError("Episode.user_id must be a non-empty string")
 
-        if self.owner_type not in ("agent", "user"):
+        if self.owner_type not in ("agent", "user", "workspace", "system"):
             raise ValueError(f"Invalid owner_type: {self.owner_type!r}")
 
         if not isinstance(self.owner_id, str) or not self.owner_id.strip():

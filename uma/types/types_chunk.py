@@ -35,5 +35,5 @@ class Chunk:
             raise ValueError("Chunk.doc_id must be non-empty")
         if not isinstance(self.page_range, tuple) or len(self.page_range) != 2:
             raise ValueError("Chunk.page_range must be (start, end)")
-        if self.owner_type not in ("agent", "user"):
+        if self.owner_type not in ("agent", "user", "workspace", "system"):
             raise ValueError(f"Invalid owner_type: {self.owner_type!r}")

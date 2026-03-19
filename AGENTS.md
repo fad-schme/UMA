@@ -35,8 +35,10 @@ RLM is always enabled. Retrieval is LLM-controlled search for context, not answe
 DAT invariants (must hold end-to-end)
 
 Every stored/retrieved memory artifact must be owner-scoped.
-	•	owner_type ∈ {agent, user, project}
+	•	owner_type ∈ {agent, user, workspace, system}
 	•	owner_id is required and consistent with the lane
+	•	tenant_id is required for durable artifacts and must be preserved end-to-end
+	•	session-local artifacts must also carry session_id and agent_id, and user_id when applicable
 	•	Applies to: chunks, facts, episodes, graph nodes/edges, promotions
 
 Graph must preserve provenance and ownership:
@@ -44,12 +46,33 @@ Graph must preserve provenance and ownership:
 	•	episode → fact edges must also carry ownership
 
 No unscoped reads:
-	•	Any read path that returns memory must require ownership filters (or derive them deterministically from the request context).
+	•	Any read path that returns memory must require ownership filters or derive them deterministically from an explicit immutable runtime context.
+	•	Runtime scope and persistent ownership are different concepts and must not be conflated.
 	•	If an internal “unsafe query” exists, it must be strongly gated (private, explicit name, logs) — otherwise remove.
 
 Practical rule
 
 If you can’t answer: “which user/agent/project is allowed to see this row/edge?” then the design is wrong.
+
+Runtime scope invariants (must hold end-to-end)
+
+No shared mutable object may store current request scope.
+	•	Do not implement or preserve runtime paths that depend on ambient mutable state such as memory.agent_id, memory.user_id, controller.current_scope, or equivalent patterns.
+	•	Shared services must be stateless with respect to request identity.
+
+Every runtime entry point must operate from explicit immutable context.
+	•	Required runtime fields are context-dependent, but the canonical model includes: tenant_id, agent_id, request_id, optional user_id, optional workspace_id, optional session_id, and optional trace/policy metadata.
+	•	Request scope must never be inferred from prior calls or stored mutable fields on shared objects.
+
+Turn-derived memory defaults.
+	•	Working memory is session-local by default.
+	•	Episodic turn memory is session-local by default.
+	•	Semantic facts extracted from turns are session-local by default and must be explicitly promoted to become durable user/workspace/agent memory.
+
+Cross-scope behavior.
+	•	Cross-tenant access must be impossible by construction.
+	•	Cross-agent sharing is denied by default unless the artifact owner is intentionally broader than agent scope.
+	•	Any scope widening must be explicit, auditable, and provenance-preserving.
 
 ⸻
 
@@ -83,11 +106,30 @@ Code style
 	•	Avoid over-abstraction; prefer small helpers
 	•	Prefer explicitness over cleverness
 	•	Add logs only where they pay for themselves (start/end of operations, error context, key counters)
+	•	Do not overbuild, plugin systems, adapters, or abstractions.
 
 Error handling
-	•	Never swallow exceptions silently in core flows
-	•	Always log with enough context to debug (owner scope, ids, counts)
-	•	Prefer “safe empty” returns only when explicitly intended by design
+	•	Never swallow exceptions silently in core flows.
+	•	Always log with enough context to debug safely: tenant_id, owner scope, relevant ids, counts, and operation name.
+	•	Prefer “safe empty” returns only when explicitly intended by design.
+	•	Keep error handling close to the boundary where recovery is meaningful; otherwise fail clearly and preserve context.
+	•	Do not add defensive catch-all logic that hides broken invariants.
+
+Comments and logging
+	•	Keep comments high-signal and durable. Explain invariants, contracts, and non-obvious reasoning, not line-by-line mechanics.
+	•	Do not add redundant comments that merely restate the code.
+	•	Use logging to capture state transitions, scope decisions, counts, and failures that are operationally useful.
+	•	Do not log huge payloads, full prompts, or large text blobs in normal flows.
+	•	When adding logs, keep field naming consistent across modules.
+
+Implementation rules for redesign work
+	•	Every change must include or update tests when behavior, contracts, or storage semantics change.
+	•	Do not merge changes that leave the codebase in a partially migrated or internally inconsistent state.
+	•	Keep the implementation lean: do not add abstractions, layers, or helper types unless they remove real duplication or make a core contract clearer.
+	•	Do not duplicate functionality across runtime, controller, store, feature, or helper layers.
+	•	Prefer extending canonical paths over creating alternate execution paths.
+	•	Ensure new code does not increase accidental complexity or overengineering.
+	•	Keep compatibility wrappers thin, temporary, and only at boundary layers.
 
 ⸻
 
@@ -244,6 +286,8 @@ When gold runner and app differ:
 11) Naming conventions & consistency rules
 	•	Prefer object over obj everywhere.
 	•	Prefer owner_type/owner_id over ad-hoc user_id gating.
+	•	Prefer workspace over project in new code and docs unless you are editing a legacy compatibility surface.
+	•	Prefer explicit runtime context objects over loose parameter bundles when request scope is required.
 	•	Use doc_id consistently for document provenance.
 	•	Use chunk_id for chunk identity (don’t alias multiple fields).
 
@@ -309,12 +353,16 @@ Quality & correctness
 	•	✅ gold runner and example app follow the same canonical pipeline
 	•	✅ snippet output is coherent (no fragments, no 1-line junk)
 	•	✅ ownership scoping enforced across all reads
+	•	✅ tests added or updated for every behavior, contract, storage, or migration change
+	•	✅ no ambient mutable request scope remains in the changed execution path
+	•	✅ code stays lean, avoids duplication, and does not introduce unnecessary abstractions
 	•	✅ no obsolete fallback/legacy paths remain
 	•	✅ logs show counts and decisions (without dumping large text)
 
 Reuse & consistency
 	•	✅ changes reuse existing functionality when it exists (no duplicate implementations)
 	•	✅ fixes/changes are end-to-end complete, never partial (all call sites updated, all return types consistent)
+	•	✅ comments, logging, and error handling follow the repo rules and remain production-appropriate
 	•	✅ code remains production-ready: consistent interfaces, clear contracts, and stable behavior
 
 Robustness
