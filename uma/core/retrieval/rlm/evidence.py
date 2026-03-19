@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, List, Optional
+from typing import Any, List
 
 from uma.core.retrieval.rlm.context_pack import ContextPack
+from uma.core.retrieval.rlm.request import RetrievalRequest
 
 logger = logging.getLogger(__name__)
 
@@ -11,9 +12,8 @@ logger = logging.getLogger(__name__)
 async def expand_evidence_chunks_from_facts(
     *,
     env: Any,
+    request: RetrievalRequest,
     pack: ContextPack,
-    owner_type: str,
-    owner_id: Optional[str],
     max_items_per_type: int,
 ) -> List[Any]:
     """Evidence expansion: fetch chunks referenced by fact.source_ids (bounded).
@@ -57,16 +57,15 @@ async def expand_evidence_chunks_from_facts(
         return []
 
     # Build a bounded, deterministic list of cited (scope, chunk_id) pairs.
-    # Scope defaults to (owner_type, owner_id) passed by the controller.
-    cited_pairs: List[tuple[tuple[str, Optional[str]], str]] = []
+    cited_pairs: List[tuple[tuple[str, str], str]] = []
     seen_global: set[str] = set()
 
     for f in pack.facts:
         f_owner_type, f_owner_id = _get_fact_owner(f)
-        scope = (
-            str(f_owner_type or owner_type),
-            str(f_owner_id or owner_id) if (f_owner_id or owner_id) is not None else None,
-        )
+        if not f_owner_type or not f_owner_id:
+            logger.debug("expand_evidence_chunks_from_facts: skipped fact without explicit owner scope")
+            continue
+        scope = (str(f_owner_type), str(f_owner_id))
         for sid in _get_source_ids(f):
             # Global dedupe by chunk id to keep bounded.
             if sid in seen_global:
@@ -83,8 +82,8 @@ async def expand_evidence_chunks_from_facts(
         return []
 
     # Group by scope while preserving first-seen order of scopes.
-    scope_order: List[tuple[str, Optional[str]]] = []
-    by_scope: dict[tuple[str, Optional[str]], List[str]] = {}
+    scope_order: List[tuple[str, str]] = []
+    by_scope: dict[tuple[str, str], List[str]] = {}
     for scope, sid in cited_pairs:
         if scope not in by_scope:
             by_scope[scope] = []
@@ -112,7 +111,7 @@ async def expand_evidence_chunks_from_facts(
         )
         try:
             got = await env.fetch_chunks(
-                user_id=pack.user_id,
+                request=request,
                 ids=ids,
                 owner_type=s_owner_type,
                 owner_id=s_owner_id,

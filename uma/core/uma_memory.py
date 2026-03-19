@@ -124,6 +124,7 @@ from .utils.registry import FeatureLoader, FeaturePolicy, default_feature_regist
 from ..stores.base_sql_store import DEFAULT_TENANT_ID
 from ..types import RuntimeContext
 from .runtime import UMARuntime
+from .retrieval.rlm.request import RetrievalRequest
 
 logger = logging.getLogger(__name__)
 
@@ -269,9 +270,6 @@ class UMAMemory:
                 stacklevel=2,
             )
         self._agent_id = value
-        # Keep RLM environment in sync with the canonical agent_id.
-        if getattr(self, "memory_env", None) is not None:
-            self.memory_env._agent_id = value
 
     def _ensure_base_ready(self) -> None:
         """
@@ -336,6 +334,12 @@ class UMAMemory:
             user_id=user_id,
         )
 
+    def _build_retrieval_request(self, context: RuntimeContext) -> RetrievalRequest:
+        return RetrievalRequest.from_runtime_context(
+            context,
+            trace_id=context.request_id,
+        )
+
     async def _retrieve_structured_context_for_context(
         self,
         context: RuntimeContext,
@@ -374,7 +378,7 @@ class UMAMemory:
                 raise RuntimeError("UMAMemory.get_structured_context: RLM controller not initialized.")
 
             pack = await controller.retrieve_context(
-                user_id=normalized_user_id,
+                request=self._build_retrieval_request(context),
                 query_text=query_text,
             )
             increment("uma.get_structured_context.calls", tags={"path": "rlm"})

@@ -50,3 +50,16 @@ def test_rlm_deterministic_decision_does_not_inject_subject_filter():
 )
 def test_no_subject_keyword_in_search_calls(relpath: str):
     _assert_no_subject_keyword_in_search_calls(Path(relpath))
+
+
+@pytest.mark.parametrize(
+    ("relpath", "forbidden"),
+    [
+        ("uma/core/retrieval/rlm/environment.py", "_agent_id"),
+        ("uma/core/retrieval/rlm/environment.py", "owner_id or self._agent_id"),
+        ("uma/core/retrieval/rlm/controller.py", "env._agent_id"),
+    ],
+)
+def test_no_ambient_agent_scope_fallback_in_retrieval_internals(relpath: str, forbidden: str):
+    src = Path(relpath).read_text(encoding="utf-8")
+    assert forbidden not in src

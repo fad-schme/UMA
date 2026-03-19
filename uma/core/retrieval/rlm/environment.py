@@ -6,7 +6,7 @@ import inspect
 import logging
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from ...utils.identity import normalize_user_id
+from .request import RetrievalRequest, ScopedOwnerType
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,6 @@ class UMAMemoryEnvironment:
 
     def __init__(self, memory: Any) -> None:
         self._memory = memory
-        self._agent_id = getattr(memory, "agent_id", None)
 
         if getattr(memory, "embedder", None) is None:
             raise ValueError("UMAMemoryEnvironment requires an embedder to operate")
@@ -136,6 +135,27 @@ class UMAMemoryEnvironment:
     def _max_predicate_scope() -> int:
         return 20
 
+    @staticmethod
+    def _require_request(request: RetrievalRequest) -> RetrievalRequest:
+        if not isinstance(request, RetrievalRequest):
+            raise TypeError("Environment requires a RetrievalRequest instance")
+        return request
+
+    @staticmethod
+    def _require_owner_scope(
+        *,
+        owner_type: str,
+        owner_id: Optional[str],
+        context_label: str,
+    ) -> tuple[ScopedOwnerType, str]:
+        normalized_owner_type = str(owner_type or "").strip().lower()
+        if normalized_owner_type not in {"agent", "user"}:
+            raise ValueError(f"{context_label}: invalid owner_type={owner_type!r}")
+        resolved_owner_id = str(owner_id or "").strip()
+        if not resolved_owner_id:
+            raise ValueError(f"{context_label}: owner_id is required")
+        return normalized_owner_type, resolved_owner_id  # type: ignore[return-value]
+
 
     # ------------------------------------------------------------------
     # Semantic
@@ -165,7 +185,7 @@ class UMAMemoryEnvironment:
 
     async def fetch_chunks(
         self,
-        user_id: str,
+        request: RetrievalRequest,
         *,
         ids: List[str],
         owner_type: str = "agent",
@@ -183,16 +203,12 @@ class UMAMemoryEnvironment:
         if len(ids) > 50:
             ids = ids[:50]
         try:
-            normalized_user_id = normalize_user_id(user_id)
-            if owner_type == "agent":
-                resolved_owner_id = owner_id or self._agent_id
-                if not resolved_owner_id:
-                    raise RuntimeError("Environment.fetch_chunks: missing agent_id for agent scope")
-            else:
-                resolved_owner_id = owner_id or normalized_user_id
-            if not owner_type or not resolved_owner_id:
-                logger.error("Environment.fetch_chunks requires owner_type and owner_id")
-                raise ValueError("Environment.fetch_chunks requires owner_type and owner_id")
+            self._require_request(request)
+            owner_type, resolved_owner_id = self._require_owner_scope(
+                owner_type=owner_type,
+                owner_id=owner_id,
+                context_label="Environment.fetch_chunks",
+            )
             clean_ids = [str(x) for x in ids if x]
             logger.debug(
                 "Environment.fetch_chunks: ids_count=%d owner=%s:%s",
@@ -220,7 +236,7 @@ class UMAMemoryEnvironment:
 
     async def fetch_facts_by_ids(
         self,
-        user_id: str,
+        request: RetrievalRequest,
         ids: List[str],
         *,
         owner_type: str = "agent",
@@ -240,15 +256,12 @@ class UMAMemoryEnvironment:
         if not ids:
             return []
         try:
-            normalized_user_id = normalize_user_id(user_id)  # ensures caller isn't passing garbage
-            if owner_type == "agent":
-                resolved_owner_id = owner_id or self._agent_id
-                if not resolved_owner_id:
-                    raise RuntimeError("Environment.fetch_facts_by_ids: missing agent_id for agent scope")
-            elif owner_type == "user":
-                resolved_owner_id = owner_id or normalized_user_id
-            else:
-                raise ValueError(f"Environment.fetch_facts_by_ids: invalid owner_type={owner_type!r}")
+            self._require_request(request)
+            owner_type, resolved_owner_id = self._require_owner_scope(
+                owner_type=owner_type,
+                owner_id=owner_id,
+                context_label="Environment.fetch_facts_by_ids",
+            )
             facts = await semantic_core.fetch_by_ids(
                 ids,
                 owner_type=owner_type,
@@ -263,7 +276,7 @@ class UMAMemoryEnvironment:
 
     async def fetch_more_facts(
         self,
-        user_id: str,
+        request: RetrievalRequest,
         predicate: str,
         k: int,
         offset: int = 0,
@@ -275,18 +288,15 @@ class UMAMemoryEnvironment:
             logger.error("Environment.fetch_more_facts: semantic_core is None")
             raise RuntimeError("Environment.fetch_more_facts: semantic_core is None")
         try:
-            normalized_user_id = normalize_user_id(user_id)
+            self._require_request(request)
             k = self._validate_k("Environment.fetch_more_facts", k)
             offset = self._safe_offset(offset)
 
-            if owner_type == "agent":
-                resolved_owner_id = owner_id or self._agent_id
-                if not resolved_owner_id:
-                    raise RuntimeError("Environment.fetch_more_facts: missing agent_id for agent scope")
-            elif owner_type == "user":
-                resolved_owner_id = owner_id or normalized_user_id
-            else:
-                raise ValueError(f"Environment.fetch_more_facts: invalid owner_type={owner_type!r}")
+            owner_type, resolved_owner_id = self._require_owner_scope(
+                owner_type=owner_type,
+                owner_id=owner_id,
+                context_label="Environment.fetch_more_facts",
+            )
 
             # Ownership-only: subject must not be used for semantic retrieval.
             return await semantic_core.fetch_more_facts(
@@ -306,7 +316,7 @@ class UMAMemoryEnvironment:
 
     async def episodic_cluster_summaries(
         self,
-        user_id: str,
+        request: RetrievalRequest,
         k: int = 5,
         max_episodes: int = 50,
         time_range: Optional[Dict[str, Any]] = None,
@@ -328,15 +338,14 @@ class UMAMemoryEnvironment:
         k = self._validate_k("Environment.episodic_cluster_summaries", k)
 
         try:
-            normalized_user_id = normalize_user_id(user_id)
-            if owner_type == "agent":
-                resolved_owner_id = owner_id or self._agent_id
-                if not resolved_owner_id:
-                    raise RuntimeError("Environment.episodic_cluster_summaries: missing agent_id for agent scope")
-            else:
-                resolved_owner_id = owner_id or normalized_user_id
+            self._require_request(request)
+            owner_type, resolved_owner_id = self._require_owner_scope(
+                owner_type=owner_type,
+                owner_id=owner_id,
+                context_label="Environment.episodic_cluster_summaries",
+            )
             clusters = await episodic_core.list_cluster_summaries(
-                user_id=user_id,
+                user_id=request.normalized_user_id,
                 owner_type=owner_type,
                 owner_id=resolved_owner_id,
                 k=int(k),
@@ -351,7 +360,7 @@ class UMAMemoryEnvironment:
 
     async def fetch_episode_clusters(
         self,
-        user_id: str,
+        request: RetrievalRequest,
         k: int = 5,
         max_episodes: int = 50,
         time_range: Optional[Dict[str, Any]] = None,
@@ -368,7 +377,7 @@ class UMAMemoryEnvironment:
         )
         sanitized_time_range = self._sanitize_time_range(time_range)
         clusters = await self.episodic_cluster_summaries(
-            user_id=user_id,
+            request=request,
             k=k,
             max_episodes=max_episodes,
             time_range=sanitized_time_range,
@@ -394,7 +403,7 @@ class UMAMemoryEnvironment:
 
     async def graph_resolve_nodes(
         self,
-        user_id: str,
+        request: RetrievalRequest,
         *,
         names: List[str],
         domain_scope: Optional[List[str]] = None,
@@ -415,14 +424,12 @@ class UMAMemoryEnvironment:
             raise RuntimeError("Environment.graph_resolve_nodes: graph_core is None")
 
         limit_i = max(1, min(50, int(limit)))
-        normalized_user_id = normalize_user_id(user_id)
-
-        if owner_type == "agent":
-            resolved_owner_id = owner_id or self._agent_id
-            if not resolved_owner_id:
-                raise RuntimeError("Environment.graph_resolve_nodes: missing agent_id for agent scope")
-        else:
-            resolved_owner_id = owner_id or normalized_user_id
+        self._require_request(request)
+        owner_type, resolved_owner_id = self._require_owner_scope(
+            owner_type=owner_type,
+            owner_id=owner_id,
+            context_label="Environment.graph_resolve_nodes",
+        )
 
         cleaned: List[str] = []
         seen = set()
@@ -499,7 +506,7 @@ class UMAMemoryEnvironment:
 
     async def graph_neighbors(
         self,
-        user_id: str,
+        request: RetrievalRequest,
         node_id: str,
         predicate_scope: Optional[List[str]] = None,
         domain_scope: Optional[List[str]] = None,
@@ -525,19 +532,18 @@ class UMAMemoryEnvironment:
         depth_i = self._safe_depth(depth)
 
         try:
-            normalized_user_id = normalize_user_id(user_id)
+            self._require_request(request)
             if not node_id:
                 raise ValueError("Environment.graph_neighbors: node_id must be non-empty")
 
-            if owner_type == "agent":
-                resolved_owner_id = owner_id or self._agent_id
-                if not resolved_owner_id:
-                    raise RuntimeError("Environment.graph_neighbors: missing agent_id for agent scope")
-            else:
-                resolved_owner_id = owner_id or normalized_user_id
+            owner_type, resolved_owner_id = self._require_owner_scope(
+                owner_type=owner_type,
+                owner_id=owner_id,
+                context_label="Environment.graph_neighbors",
+            )
             results = await _maybe_await(
                 graph_core.neighbors(
-                    user_id=normalized_user_id,
+                    user_id=request.normalized_user_id,
                     node_id=node_id,
                     predicate_scope=predicate_scope,
                     domain_scope=domain_scope,
@@ -557,7 +563,7 @@ class UMAMemoryEnvironment:
 
     async def expand_graph(
         self,
-        user_id: str,
+        request: RetrievalRequest,
         subject: str,
         predicate: Optional[str] = None,
         hops: int = 1,
@@ -598,7 +604,7 @@ class UMAMemoryEnvironment:
             return []
 
         try:
-            normalized_user_id = normalize_user_id(user_id)
+            self._require_request(request)
             if dir_val and dir_val != "both":
                 logger.debug(
                     "Environment.expand_graph: direction=%s currently treated as both", dir_val
@@ -606,7 +612,7 @@ class UMAMemoryEnvironment:
 
             # Best-effort: treat subject as a "name" and resolve to node ids first.
             resolved = await self.graph_resolve_nodes(
-                user_id=normalized_user_id,
+                request=request,
                 names=[subject],
                 domain_scope=domain_scope,
                 owner_type=owner_type,
@@ -619,7 +625,7 @@ class UMAMemoryEnvironment:
             seen = set()
             for node_id in node_ids[:4]:
                 items = await self.graph_neighbors(
-                    user_id=normalized_user_id,
+                    request=request,
                     node_id=node_id,
                     predicate_scope=predicate_scope,
                     domain_scope=domain_scope,
@@ -671,7 +677,7 @@ class UMAMemoryEnvironment:
     async def execute_action(
         self,
         *,
-        user_subject: str,
+        request: RetrievalRequest,
         action: Any,
         query_embedding: NumericVector,
         query_text: Optional[str],
@@ -694,10 +700,12 @@ class UMAMemoryEnvironment:
         except Exception:
             k = int(default_k)
 
-        lane_owner_type = getattr(action, "owner_type", None) or owner_type
-        lane_owner_id = owner_id
-        if lane_owner_type == "agent":
-            lane_owner_id = self._agent_id if lane_owner_id is None else lane_owner_id
+        self._require_request(request)
+        lane_owner_type, lane_owner_id = self._require_owner_scope(
+            owner_type=getattr(action, "owner_type", None) or owner_type,
+            owner_id=owner_id,
+            context_label="Environment.execute_action",
+        )
 
         a = getattr(action, "action", None)
 
@@ -726,7 +734,7 @@ class UMAMemoryEnvironment:
                 except Exception:
                     offset = 0
             return await self.fetch_more_facts(
-                user_id=user_subject,
+                request=request,
                 predicate=getattr(action, "predicate", None),
                 k=k,
                 offset=offset,
@@ -736,7 +744,7 @@ class UMAMemoryEnvironment:
 
         if a == "fetch_facts":
             return await self.fetch_facts_by_ids(
-                user_id=user_subject,
+                request=request,
                 ids=getattr(action, "ids", None) or [],
                 owner_type=lane_owner_type,
                 owner_id=lane_owner_id,
@@ -744,7 +752,7 @@ class UMAMemoryEnvironment:
 
         if a == "fetch_chunks":
             return await self.fetch_chunks(
-                user_id=user_subject,
+                request=request,
                 ids=getattr(action, "ids", None) or [],
                 owner_type=lane_owner_type,
                 owner_id=lane_owner_id,
@@ -769,7 +777,7 @@ class UMAMemoryEnvironment:
                 logger.error("Environment.execute_action: episodic_core is None")
                 raise RuntimeError("Environment.execute_action: episodic_core is None")
             return await episodic_core.search(
-                user_id=user_subject,
+                user_id=request.normalized_user_id,
                 query_embedding=[float(x) for x in query_embedding],
                 owner_type=lane_owner_type,
                 owner_id=lane_owner_id,
@@ -778,7 +786,7 @@ class UMAMemoryEnvironment:
 
         if a == "episodic_clusters":
             return await self.episodic_cluster_summaries(
-                user_id=user_subject,
+                request=request,
                 k=k,
                 max_episodes=int(default_k),
                 owner_type=lane_owner_type,
@@ -787,7 +795,7 @@ class UMAMemoryEnvironment:
 
         if a == "fetch_episode_clusters":
             return await self.fetch_episode_clusters(
-                user_id=user_subject,
+                request=request,
                 k=k,
                 max_episodes=int(default_k),
                 time_range=getattr(action, "time_range", None),
@@ -798,7 +806,7 @@ class UMAMemoryEnvironment:
 
         if a == "graph_neighbors":
             return await self.graph_neighbors(
-                user_id=user_subject,
+                request=request,
                 node_id=getattr(action, "node_id", None),
                 predicate_scope=getattr(action, "predicate_scope", None),
                 depth=int(getattr(action, "depth", 1) or 1),
@@ -809,7 +817,7 @@ class UMAMemoryEnvironment:
 
         if a == "expand_graph":
             return await self.expand_graph(
-                user_id=user_subject,
+                request=request,
                 subject=getattr(action, "subject", None),
                 predicate=getattr(action, "predicate", None),
                 hops=int(getattr(action, "hops", 1) or 1),

@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from uma.core.retrieval.rlm.environment import UMAMemoryEnvironment
+from uma.core.retrieval.rlm.request import RetrievalRequest
+from uma.types import RuntimeContext
 from uma.types import Episode, Fact
 
 
@@ -20,6 +22,14 @@ async def test_environment_get_query_embedding_shape(uma_memory):
 async def test_environment_fetch_facts_by_ids_is_owner_scoped(uma_memory):
     memory = uma_memory
     env = UMAMemoryEnvironment(memory)
+    request = RetrievalRequest.from_runtime_context(
+        RuntimeContext(
+            tenant_id="tenant-test",
+            agent_id=memory.agent_id or "agent-default",
+            request_id="req-env-facts",
+            user_id="user:u1",
+        )
+    )
 
     now = datetime.now(timezone.utc)
     owner_type = "user"
@@ -42,18 +52,39 @@ async def test_environment_fetch_facts_by_ids_is_owner_scoped(uma_memory):
     )
     await memory.semantic_core.upsert_fact(fact, emb)
 
-    facts = await env.fetch_facts_by_ids("user:u1", ["fact_1"], owner_type=owner_type, owner_id=owner_id)
+    facts = await env.fetch_facts_by_ids(request, ["fact_1"], owner_type=owner_type, owner_id=owner_id)
     assert facts and getattr(facts[0], "id", None) == "fact_1"
 
     # Wrong scope => no results.
-    wrong = await env.fetch_facts_by_ids("user:u1", ["fact_1"], owner_type="agent", owner_id=memory.agent_id)
+    wrong = await env.fetch_facts_by_ids(
+        request,
+        ["fact_1"],
+        owner_type="agent",
+        owner_id=memory.agent_id,
+    )
     assert wrong == []
 
 
 @pytest.mark.asyncio
 async def test_environment_graph_neighbors_returns_empty_when_no_edges(uma_memory):
     env = UMAMemoryEnvironment(uma_memory)
-    out = await env.graph_neighbors("user:u1", "node1", predicate_scope=["LIKES"], depth=2, k=5)
+    request = RetrievalRequest.from_runtime_context(
+        RuntimeContext(
+            tenant_id="tenant-test",
+            agent_id=uma_memory.agent_id or "agent-default",
+            request_id="req-env-graph",
+            user_id="user:u1",
+        )
+    )
+    out = await env.graph_neighbors(
+        request,
+        "node1",
+        predicate_scope=["LIKES"],
+        depth=2,
+        k=5,
+        owner_type="agent",
+        owner_id=uma_memory.agent_id,
+    )
     assert out == []
 
 

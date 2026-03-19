@@ -20,12 +20,12 @@ from .domain import (
 )
 from .coverage import assess_coverage, compute_confidence
 from ..policy import RetrievalPolicy, should_stop
-from ...utils.identity import normalize_user_id
 from ...chunk.core import merge_chunks_with_precedence, partition_chunks_by_route
 from ...semantic.query_pruner import prune_facts_for_query
 from .evidence import expand_evidence_chunks_from_facts
 
 from ..ranking import Ranker
+from .request import RetrievalRequest, RetrievalScope
 
 logger = logging.getLogger(__name__)
 
@@ -103,10 +103,10 @@ class RLMController:
     # PUBLIC API
     # ------------------------------------------------------------------
 
-    async def retrieve_context(self, user_id: str, query_text: str) -> ContextPack:
-        if not user_id or not isinstance(user_id, str):
-            logger.error("RLMController.retrieve_context: user_id must be a non-empty string")
-            raise ValueError("user_id must be a non-empty string")
+    async def retrieve_context(self, request: RetrievalRequest, query_text: str) -> ContextPack:
+        if not isinstance(request, RetrievalRequest):
+            logger.error("RLMController.retrieve_context: request must be a RetrievalRequest")
+            raise TypeError("request must be a RetrievalRequest")
         if not query_text or not isinstance(query_text, str):
             logger.error("RLMController.retrieve_context: query_text must be a non-empty string")
             raise ValueError("query_text must be a non-empty string")
@@ -115,23 +115,23 @@ class RLMController:
         intent = classify_query_intent(query_text)
         logger.info(
             "RLMController.retrieve_context: start user_id=%s query=%r",
-            user_id,
+            request.normalized_user_id,
             query_text,
         )
         start = time.time()
-        normalized_user_id = normalize_user_id(user_id)
+        normalized_user_id = request.normalized_user_id
 
         # --- TRACE CONTEXT ---
-        trace_id = f"rlm:{user_id}:{int(time.time()*1000)}"
+        trace_root = request.trace_id or request.context.request_id or normalized_user_id
+        trace_id = f"rlm:{trace_root}:{int(time.time()*1000)}"
         logger.info(
             "RLM_START trace_id=%s user=%s recall_query=%s",
             trace_id,
-            user_id,
+            normalized_user_id,
             any(k in query_text.lower() for k in ["remember", "recall", "previous", "earlier", "last time"]),
         )
         logger.info("RLM_INTENT trace_id=%s intent=%s", trace_id, intent.value)
 
-        agent_id = getattr(self.env, "_agent_id", None)
         if intent == QueryIntent.PERSONAL:
             active_domains = ["user_profile", "procedural"]
         elif intent == QueryIntent.MIXED:
@@ -139,11 +139,11 @@ class RLMController:
         else:
             active_domains = ["kb_doc", "procedural"]
         pack = ContextPack(
-            user_id=user_id,
+            user_id=normalized_user_id,
             query_text=query_text,
             owner_type=None,
             owner_id=None,
-            agent_id=agent_id,
+            agent_id=request.context.agent_id,
             intent=intent.value,
             active_domains=list(active_domains),
         )
@@ -152,40 +152,38 @@ class RLMController:
         if hasattr(self.env, "_memory"):
             wm = getattr(getattr(self.env, "_memory", None), "working_memory", None)
             if wm is not None:
-                pack.working_memory = wm.get_context(user_id)
+                pack.working_memory = wm.get_context(normalized_user_id)
         query_embedding = await self.env.get_query_embedding(query_text)
 
         # Lane decision: recall = user-only; KB = agent KB + user-owned KB docs.
         is_recall = policy.recall_score >= 0.75
 
-        agent_id = getattr(self.env, "_agent_id", None)
-        if not agent_id:
-            logger.error("RLMController.retrieve_context: agent_id is required")
-            raise ValueError("RLMController.retrieve_context: agent_id is required")
-
         if is_recall:
-            scopes = [("user", normalized_user_id)]
+            scopes = list(request.scopes_for_owner_type("user"))
         else:
-            # KB lane must include BOTH agent scope and user-owned documents scope.
-            scopes = [("agent", agent_id), ("user", normalized_user_id)]
+            scopes = list(request.scopes)
+        if not scopes:
+            logger.error("RLMController.retrieve_context: no retrieval scopes available")
+            raise ValueError("RLMController.retrieve_context: no retrieval scopes available")
 
         # Keep these fields for telemetry/back-compat; primary execution uses `scopes`.
-        pack.owner_type, pack.owner_id = scopes[0]
-        logger.info("RLM_LANE scopes=%s", scopes)
+        pack.owner_type, pack.owner_id = scopes[0].owner_type, scopes[0].owner_id
+        logger.info("RLM_LANE scopes=%s", [(scope.owner_type, scope.owner_id) for scope in scopes])
         logger.info("RLM_DOMAINS trace_id=%s active_domains=%s", trace_id, pack.active_domains)
 
         # Baseline retrieval per-scope, then merge into the pack.
-        for idx, (owner_type, owner_id) in enumerate(scopes):
+        for idx, scope in enumerate(scopes):
             await self._baseline_retrieval(
-                pack,
-                query_embedding,
+                request=request,
+                pack=pack,
+                query_embedding=query_embedding,
                 trace_id=f"{trace_id}:{idx}",
-                owner_type=owner_type,
-                owner_id=owner_id,
+                owner_type=scope.owner_type,
+                owner_id=scope.owner_id,
             )
             if idx == 0:
                 # Preserve first-scope telemetry for tests and downstream expectations.
-                pack.owner_type, pack.owner_id = owner_type, owner_id
+                pack.owner_type, pack.owner_id = scope.owner_type, scope.owner_id
 
         # Deterministic merge cleanup after multi-scope baseline.
         try:
@@ -236,9 +234,8 @@ class RLMController:
         # Tighten evidence expansion: prune facts before expanding cited chunks.
         await self._prune_facts_with_llm(pack)
         await self._expand_evidence_chunks_from_facts(
-            pack,
-            owner_type=str(pack.owner_type or scopes[0][0]),
-            owner_id=pack.owner_id or scopes[0][1],
+            request=request,
+            pack=pack,
         )
         self._rebuild_chunk_buckets(pack)
         pack.record_seen()
@@ -453,22 +450,26 @@ class RLMController:
                 action_start = time.time()
                 if action.action == "search_chunks":
                     logger.debug(
-                        "RLMController: dispatching search_chunks step=%d owner=%s:%s k=%s",
+                        "RLMController: dispatching search_chunks step=%d scopes=%s k=%s",
                         step,
-                        str(pack.owner_type or owner_type),
-                        pack.owner_id or owner_id,
+                        [(scope.owner_type, scope.owner_id) for scope in self._scopes_for_action(scopes, action)],
                         action.k,
                     )
-                items = await self.env.execute_action(
-                    user_subject=normalized_user_id,
-                    action=action,
-                    query_embedding=list(query_embedding),
-                    query_text=pack.query_text,
-                    owner_type=str(pack.owner_type or owner_type),
-                    owner_id=pack.owner_id or owner_id,
-                    default_k=self.max_items_per_type,
-                    trace_id=trace_id,
-                )
+                scope_results: List[Any] = []
+                action_scopes = self._scopes_for_action(scopes, action)
+                for scope in action_scopes:
+                    scope_items = await self.env.execute_action(
+                        request=request,
+                        action=action,
+                        query_embedding=list(query_embedding),
+                        query_text=pack.query_text,
+                        owner_type=scope.owner_type,
+                        owner_id=scope.owner_id,
+                        default_k=self.max_items_per_type,
+                        trace_id=trace_id,
+                    )
+                    scope_results.extend(list(scope_items or []))
+                items = scope_results
                 a = str(getattr(action, "action", "") or "")
                 if a in {"search_semantic", "fetch_more_facts", "fetch_facts"}:
                     items = self.ranker.rank_facts(items or [], query_text=pack.query_text)
@@ -512,8 +513,8 @@ class RLMController:
                     action.k,
                     getattr(action, "predicate", None),
                     (action.filters or {}).get("offset") if getattr(action, "filters", None) else None,
-                    str(getattr(pack, "owner_type", None) or owner_type),
-                    getattr(pack, "owner_id", None) or owner_id,
+                    str(getattr(pack, "owner_type", None) or scopes[0].owner_type),
+                    getattr(pack, "owner_id", None) or scopes[0].owner_id,
                     getattr(action, "owner_type", None),
                     returned,
                     novelty,
@@ -569,8 +570,9 @@ class RLMController:
                             "filters": getattr(action, "filters", None),
                             "intent": getattr(pack, "intent", None),
                             "active_domains": list(getattr(pack, "active_domains", []) or []),
-                            "lane_owner_type": str(getattr(pack, "owner_type", None) or owner_type),
-                            "lane_owner_id": getattr(pack, "owner_id", None) or owner_id,
+                            "lane_scopes": [(scope.owner_type, scope.owner_id) for scope in action_scopes],
+                            "lane_owner_type": str(getattr(pack, "owner_type", None) or scopes[0].owner_type),
+                            "lane_owner_id": getattr(pack, "owner_id", None) or scopes[0].owner_id,
                             "action_owner_type": getattr(action, "owner_type", None),
                         }
                     )
@@ -626,9 +628,8 @@ class RLMController:
         # new facts added during the loop, then expand evidence based on the final set.
         await self._prune_facts_with_llm(pack)
         await self._expand_evidence_chunks_from_facts(
-            pack,
-            owner_type=str(pack.owner_type or scopes[0][0]),
-            owner_id=pack.owner_id or scopes[0][1],
+            request=request,
+            pack=pack,
         )
         self._rebuild_chunk_buckets(pack)
         logger.info(
@@ -657,6 +658,7 @@ class RLMController:
 
     async def _baseline_retrieval(
         self,
+        request: RetrievalRequest,
         pack: ContextPack,
         query_embedding: List[float],
         trace_id: str = None,
@@ -669,7 +671,7 @@ class RLMController:
         start_graph = len(pack.graph)
         if query_embedding:
             results = await self.env.execute_action(
-                user_subject=normalize_user_id(pack.user_id),
+                request=request,
                 action=RetrievalAction(action="search_semantic", k=self.max_items_per_type, reason="baseline"),
                 query_embedding=list(query_embedding),
                 query_text=pack.query_text,
@@ -701,7 +703,7 @@ class RLMController:
                 logger.debug("RLMController._baseline_retrieval: kb_doc not active; skipping chunk search")
             else:
                 chunks = await self.env.execute_action(
-                    user_subject=normalize_user_id(pack.user_id),
+                    request=request,
                     action=RetrievalAction(action="search_chunks", k=self.max_items_per_type, reason="baseline"),
                     query_embedding=list(query_embedding),
                     query_text=pack.query_text,
@@ -732,7 +734,7 @@ class RLMController:
             skills = []
         else:
             skills = await self.env.execute_action(
-                user_subject=normalize_user_id(pack.user_id),
+                request=request,
                 action=RetrievalAction(action="search_procedural", k=self.max_items_per_type, reason="baseline"),
                 query_embedding=list(query_embedding),
                 query_text=pack.query_text,
@@ -749,7 +751,7 @@ class RLMController:
         pack.skills = _merge_unique(pack.skills, skills, self.max_items_per_type)
 
         episodes = await self.env.execute_action(
-            user_subject=normalize_user_id(pack.user_id),
+            request=request,
             action=RetrievalAction(action="episodic_clusters", k=self.cluster_k, reason="baseline"),
             query_embedding=list(query_embedding),
             query_text=pack.query_text,
@@ -775,7 +777,7 @@ class RLMController:
             pack.graph = _merge_unique(
                 pack.graph,
                 await self.env.graph_neighbors(
-                    user_id=pack.user_id,
+                    request=request,
                     node_id=pack.user_id,
                     predicate_scope=_filter_predicates_for_domains(
                         decisions.next_predicate_scope(
@@ -994,20 +996,28 @@ class RLMController:
 
     async def _expand_evidence_chunks_from_facts(
         self,
+        request: RetrievalRequest,
         pack: ContextPack,
-        *,
-        owner_type: str,
-        owner_id: Optional[str],
     ) -> None:
         chunks_ev = await expand_evidence_chunks_from_facts(
             env=self.env,
+            request=request,
             pack=pack,
-            owner_type=owner_type,
-            owner_id=owner_id,
             max_items_per_type=self.max_items_per_type,
         )
         if chunks_ev:
             self._rebuild_chunk_buckets(pack)
+
+    @staticmethod
+    def _scopes_for_action(
+        scopes: List[RetrievalScope],
+        action: RetrievalAction,
+    ) -> List[RetrievalScope]:
+        requested_owner_type = getattr(action, "owner_type", None)
+        if not requested_owner_type:
+            return list(scopes)
+        filtered = [scope for scope in scopes if scope.owner_type == requested_owner_type]
+        return filtered or []
 
     @staticmethod
     def _rebuild_chunk_buckets(pack: ContextPack) -> None:
