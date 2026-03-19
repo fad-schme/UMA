@@ -65,6 +65,13 @@ class Episode:
     # -------------------------
     owner_type: OwnerType = "user"
     owner_id: str = ""
+    tenant_id: str = "default"
+    workspace_id: Optional[str] = None
+    session_id: Optional[str] = None
+    origin_agent_id: Optional[str] = None
+    origin_user_id: Optional[str] = None
+    origin_session_id: Optional[str] = None
+    scope_model_version: Optional[str] = "v2"
 
     # -------------------------
     # Additional fields already referenced in design (optional)

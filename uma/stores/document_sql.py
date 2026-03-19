@@ -7,10 +7,12 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Optional
 
-from .base_sql_store import BaseSQLStore
+from .base_sql_store import BaseSQLStore, DEFAULT_TENANT_ID
 from ..adapters.db.base import DBAdapter
 from ..core.utils.store_metadata import ensure_store_metadata
+from ..types import SCOPE_MODEL_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,12 @@ class DocumentRecord:
     owner_type: str
     owner_id: str
     meta: dict
+    tenant_id: str = DEFAULT_TENANT_ID
+    workspace_id: Optional[str] = None
+    origin_agent_id: Optional[str] = None
+    origin_user_id: Optional[str] = None
+    origin_session_id: Optional[str] = None
+    scope_model_version: Optional[str] = None
 
 
 class DocumentSQLStore(BaseSQLStore):
@@ -42,13 +50,31 @@ class DocumentSQLStore(BaseSQLStore):
                     source_path TEXT NOT NULL,
                     source_hash TEXT NOT NULL,
                     ingested_at TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL DEFAULT 'default',
                     owner_type TEXT NOT NULL,
                     owner_id TEXT NOT NULL,
+                    workspace_id TEXT,
+                    origin_agent_id TEXT,
+                    origin_user_id TEXT,
+                    origin_session_id TEXT,
+                    scope_model_version TEXT,
                     meta TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_documents_owner ON documents(owner_type, owner_id);
                 CREATE INDEX IF NOT EXISTS idx_documents_owner_hash ON documents(owner_type, owner_id, source_hash);
                 """
+            )
+            self._ensure_column(conn, "documents", "tenant_id", "TEXT NOT NULL DEFAULT 'default'")
+            self._ensure_column(conn, "documents", "workspace_id", "TEXT")
+            self._ensure_column(conn, "documents", "origin_agent_id", "TEXT")
+            self._ensure_column(conn, "documents", "origin_user_id", "TEXT")
+            self._ensure_column(conn, "documents", "origin_session_id", "TEXT")
+            self._ensure_column(conn, "documents", "scope_model_version", "TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_documents_tenant_owner ON documents(tenant_id, owner_type, owner_id);"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_documents_tenant_owner_hash ON documents(tenant_id, owner_type, owner_id, source_hash);"
             )
             ensure_store_metadata(self, conn, store_name="documents")
             conn.commit()
@@ -79,7 +105,20 @@ class DocumentSQLStore(BaseSQLStore):
             row = self._query_one(
                 conn,
                 """
-                SELECT doc_id, source_path, source_hash, ingested_at, owner_type, owner_id, meta
+                SELECT
+                    doc_id,
+                    source_path,
+                    source_hash,
+                    ingested_at,
+                    tenant_id,
+                    owner_type,
+                    owner_id,
+                    workspace_id,
+                    origin_agent_id,
+                    origin_user_id,
+                    origin_session_id,
+                    scope_model_version,
+                    meta
                 FROM documents
                 WHERE owner_type = ? AND owner_id = ? AND source_hash = ?
                 ORDER BY ingested_at DESC
@@ -112,8 +151,14 @@ class DocumentSQLStore(BaseSQLStore):
                 source_path=str((row.get("source_path") if hasattr(row, "get") else row["source_path"]) or ""),
                 source_hash=str((row.get("source_hash") if hasattr(row, "get") else row["source_hash"]) or ""),
                 ingested_at=ingested_at,
+                tenant_id=str((row.get("tenant_id") if hasattr(row, "get") else row["tenant_id"]) or DEFAULT_TENANT_ID),
                 owner_type=str((row.get("owner_type") if hasattr(row, "get") else row["owner_type"]) or ""),
                 owner_id=str((row.get("owner_id") if hasattr(row, "get") else row["owner_id"]) or ""),
+                workspace_id=(row.get("workspace_id") if hasattr(row, "get") else row["workspace_id"]),
+                origin_agent_id=(row.get("origin_agent_id") if hasattr(row, "get") else row["origin_agent_id"]),
+                origin_user_id=(row.get("origin_user_id") if hasattr(row, "get") else row["origin_user_id"]),
+                origin_session_id=(row.get("origin_session_id") if hasattr(row, "get") else row["origin_session_id"]),
+                scope_model_version=(row.get("scope_model_version") if hasattr(row, "get") else row["scope_model_version"]),
                 meta=meta,
             )
         except Exception:
@@ -134,24 +179,40 @@ class DocumentSQLStore(BaseSQLStore):
                 "source_path": record.source_path,
                 "source_hash": record.source_hash,
                 "ingested_at": record.ingested_at.isoformat(),
+                "tenant_id": getattr(record, "tenant_id", None) or DEFAULT_TENANT_ID,
                 "owner_type": record.owner_type,
                 "owner_id": record.owner_id,
+                "workspace_id": getattr(record, "workspace_id", None),
+                "origin_agent_id": getattr(record, "origin_agent_id", None),
+                "origin_user_id": getattr(record, "origin_user_id", None),
+                "origin_session_id": getattr(record, "origin_session_id", None),
+                "scope_model_version": getattr(record, "scope_model_version", None) or SCOPE_MODEL_VERSION,
                 "meta": json.dumps(record.meta or {}),
             }
             self._execute(
                 conn,
                 """
                 INSERT INTO documents (
-                    doc_id, source_path, source_hash, ingested_at, owner_type, owner_id, meta
+                    doc_id, source_path, source_hash, ingested_at, tenant_id,
+                    owner_type, owner_id, workspace_id, origin_agent_id,
+                    origin_user_id, origin_session_id, scope_model_version, meta
                 ) VALUES (
-                    :doc_id, :source_path, :source_hash, :ingested_at, :owner_type, :owner_id, :meta
+                    :doc_id, :source_path, :source_hash, :ingested_at, :tenant_id,
+                    :owner_type, :owner_id, :workspace_id, :origin_agent_id,
+                    :origin_user_id, :origin_session_id, :scope_model_version, :meta
                 )
                 ON CONFLICT(doc_id) DO UPDATE SET
                     source_path=excluded.source_path,
                     source_hash=excluded.source_hash,
                     ingested_at=excluded.ingested_at,
+                    tenant_id=excluded.tenant_id,
                     owner_type=excluded.owner_type,
                     owner_id=excluded.owner_id,
+                    workspace_id=excluded.workspace_id,
+                    origin_agent_id=excluded.origin_agent_id,
+                    origin_user_id=excluded.origin_user_id,
+                    origin_session_id=excluded.origin_session_id,
+                    scope_model_version=excluded.scope_model_version,
                     meta=excluded.meta
                 """,
                 params=payload,

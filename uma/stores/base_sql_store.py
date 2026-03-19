@@ -36,6 +36,7 @@ from typing import Any, Iterable, List, Optional, Sequence
 from ..adapters.db.base import DBAdapter, DBConnection
 
 logger = logging.getLogger(__name__)
+DEFAULT_TENANT_ID = "default"
 
 
 class BaseSQLStore:
@@ -276,6 +277,41 @@ class BaseSQLStore:
                 params,
             )
             raise
+
+    # ------------------------------------------------------------------ #
+    # Lightweight schema helpers
+    # ------------------------------------------------------------------ #
+
+    def _table_columns(self, conn: DBConnection, table_name: str) -> set[str]:
+        rows = self._query_all(
+            conn,
+            f"PRAGMA table_info({table_name})",
+            log_context=f"schema_info_{table_name}",
+        )
+        columns: set[str] = set()
+        for row in rows:
+            if hasattr(row, "get"):
+                name = row.get("name")
+            else:
+                name = row["name"] if "name" in row.keys() else None
+            if isinstance(name, str) and name:
+                columns.add(name)
+        return columns
+
+    def _ensure_column(
+        self,
+        conn: DBConnection,
+        table_name: str,
+        column_name: str,
+        column_sql: str,
+    ) -> None:
+        if column_name in self._table_columns(conn, table_name):
+            return
+        self._execute(
+            conn,
+            f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}",
+            log_context=f"schema_add_column_{table_name}_{column_name}",
+        )
 
     def _query_one(
         self,

@@ -11,10 +11,11 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .base_vector_sql_store import BaseVectorSQLStore
+from .base_sql_store import DEFAULT_TENANT_ID
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from ..core.utils.store_metadata import ensure_store_metadata
-from ..types import Chunk
+from ..types import Chunk, SCOPE_MODEL_VERSION
 
 logger = logging.getLogger(__name__)
 _DEBUG_LOGGED_PARSE_FAILURES: set[tuple[str, str]] = set()
@@ -54,14 +55,32 @@ class ChunkSQLStore(BaseVectorSQLStore):
                     source_hash TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL DEFAULT 'default',
                     owner_type TEXT NOT NULL,
                     owner_id TEXT NOT NULL,
+                    workspace_id TEXT,
+                    origin_agent_id TEXT,
+                    origin_user_id TEXT,
+                    origin_session_id TEXT,
+                    scope_model_version TEXT,
                     meta TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id);
                 CREATE INDEX IF NOT EXISTS idx_chunks_owner ON chunks(owner_type, owner_id);
                 CREATE INDEX IF NOT EXISTS idx_chunks_scope_doc_pos ON chunks(owner_type, owner_id, doc_id, position);
                 """
+            )
+            self._ensure_column(conn, "chunks", "tenant_id", "TEXT NOT NULL DEFAULT 'default'")
+            self._ensure_column(conn, "chunks", "workspace_id", "TEXT")
+            self._ensure_column(conn, "chunks", "origin_agent_id", "TEXT")
+            self._ensure_column(conn, "chunks", "origin_user_id", "TEXT")
+            self._ensure_column(conn, "chunks", "origin_session_id", "TEXT")
+            self._ensure_column(conn, "chunks", "scope_model_version", "TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chunks_tenant_owner ON chunks(tenant_id, owner_type, owner_id);"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chunks_tenant_scope_doc_pos ON chunks(tenant_id, owner_type, owner_id, doc_id, position);"
             )
             ensure_store_metadata(self, conn, store_name="chunks")
             conn.commit()
@@ -117,8 +136,14 @@ class ChunkSQLStore(BaseVectorSQLStore):
             source_hash=row["source_hash"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
+            tenant_id=(row["tenant_id"] if "tenant_id" in row.keys() else DEFAULT_TENANT_ID),
             owner_type=row["owner_type"],
             owner_id=row["owner_id"],
+            workspace_id=(row["workspace_id"] if "workspace_id" in row.keys() else None),
+            origin_agent_id=(row["origin_agent_id"] if "origin_agent_id" in row.keys() else None),
+            origin_user_id=(row["origin_user_id"] if "origin_user_id" in row.keys() else None),
+            origin_session_id=(row["origin_session_id"] if "origin_session_id" in row.keys() else None),
+            scope_model_version=(row["scope_model_version"] if "scope_model_version" in row.keys() else None),
             meta=meta,
         )
 
@@ -147,8 +172,14 @@ class ChunkSQLStore(BaseVectorSQLStore):
                 "source_hash": chunk.source_hash,
                 "created_at": chunk.created_at.isoformat(),
                 "updated_at": chunk.updated_at.isoformat(),
+                "tenant_id": getattr(chunk, "tenant_id", None) or DEFAULT_TENANT_ID,
                 "owner_type": chunk.owner_type,
                 "owner_id": chunk.owner_id,
+                "workspace_id": getattr(chunk, "workspace_id", None),
+                "origin_agent_id": getattr(chunk, "origin_agent_id", None),
+                "origin_user_id": getattr(chunk, "origin_user_id", None),
+                "origin_session_id": getattr(chunk, "origin_session_id", None),
+                "scope_model_version": getattr(chunk, "scope_model_version", None) or SCOPE_MODEL_VERSION,
                 "meta": json.dumps(chunk.meta or {}),
             }
 
@@ -158,11 +189,15 @@ class ChunkSQLStore(BaseVectorSQLStore):
                 INSERT INTO chunks (
                     id, doc_id, text, page_start, page_end, position,
                     source_path, source_hash, created_at, updated_at,
-                    owner_type, owner_id, meta
+                    tenant_id, owner_type, owner_id, workspace_id,
+                    origin_agent_id, origin_user_id, origin_session_id,
+                    scope_model_version, meta
                 ) VALUES (
                     :id, :doc_id, :text, :page_start, :page_end, :position,
                     :source_path, :source_hash, :created_at, :updated_at,
-                    :owner_type, :owner_id, :meta
+                    :tenant_id, :owner_type, :owner_id, :workspace_id,
+                    :origin_agent_id, :origin_user_id, :origin_session_id,
+                    :scope_model_version, :meta
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     doc_id=excluded.doc_id,
@@ -174,8 +209,14 @@ class ChunkSQLStore(BaseVectorSQLStore):
                     source_hash=excluded.source_hash,
                     created_at=excluded.created_at,
                     updated_at=excluded.updated_at,
+                    tenant_id=excluded.tenant_id,
                     owner_type=excluded.owner_type,
                     owner_id=excluded.owner_id,
+                    workspace_id=excluded.workspace_id,
+                    origin_agent_id=excluded.origin_agent_id,
+                    origin_user_id=excluded.origin_user_id,
+                    origin_session_id=excluded.origin_session_id,
+                    scope_model_version=excluded.scope_model_version,
                     meta=excluded.meta
                 """,
                 params=payload,

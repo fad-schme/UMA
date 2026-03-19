@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from .types_owner import OwnerType
 
@@ -26,6 +26,12 @@ class Chunk:
 
     owner_type: OwnerType = "user"
     owner_id: str = ""
+    tenant_id: str = "default"
+    workspace_id: Optional[str] = None
+    origin_agent_id: Optional[str] = None
+    origin_user_id: Optional[str] = None
+    origin_session_id: Optional[str] = None
+    scope_model_version: Optional[str] = "v2"
     meta: Dict[str, Any] = field(default_factory=dict)
 
     def validate(self) -> None:

@@ -23,10 +23,11 @@ from datetime import datetime
 from typing import List, Optional, Any
 
 from .base_vector_sql_store import BaseVectorSQLStore
+from .base_sql_store import DEFAULT_TENANT_ID
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from ..core.utils.store_metadata import ensure_store_metadata
-from ..types import Skill
+from ..types import Skill, SCOPE_MODEL_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -79,12 +80,25 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                     meta TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL DEFAULT 'default',
                     owner_type TEXT NOT NULL,
-                    owner_id TEXT NOT NULL
+                    owner_id TEXT NOT NULL,
+                    workspace_id TEXT,
+                    origin_agent_id TEXT,
+                    origin_user_id TEXT,
+                    origin_session_id TEXT,
+                    scope_model_version TEXT
                 );
                 """
             )
+            self._ensure_column(conn, "skills", "tenant_id", "TEXT NOT NULL DEFAULT 'default'")
+            self._ensure_column(conn, "skills", "workspace_id", "TEXT")
+            self._ensure_column(conn, "skills", "origin_agent_id", "TEXT")
+            self._ensure_column(conn, "skills", "origin_user_id", "TEXT")
+            self._ensure_column(conn, "skills", "origin_session_id", "TEXT")
+            self._ensure_column(conn, "skills", "scope_model_version", "TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_owner ON skills(owner_type, owner_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_tenant_owner ON skills(tenant_id, owner_type, owner_id);")
 
             conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_name ON skills(name);")
             ensure_store_metadata(self, conn, store_name="procedural")
@@ -159,8 +173,14 @@ class ProceduralSQLStore(BaseVectorSQLStore):
             description="",
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
+            tenant_id=(row["tenant_id"] if "tenant_id" in row.keys() else DEFAULT_TENANT_ID),
             owner_type=owner_type,
             owner_id=owner_id,
+            workspace_id=(row["workspace_id"] if "workspace_id" in row.keys() else None),
+            origin_agent_id=(row["origin_agent_id"] if "origin_agent_id" in row.keys() else None),
+            origin_user_id=(row["origin_user_id"] if "origin_user_id" in row.keys() else None),
+            origin_session_id=(row["origin_session_id"] if "origin_session_id" in row.keys() else None),
+            scope_model_version=(row["scope_model_version"] if "scope_model_version" in row.keys() else None),
             trigger_phrases=trigger_phrases,
             trigger_patterns=trigger_patterns,
             plan=plan,
@@ -232,8 +252,14 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                 "meta": json.dumps(skill.meta),
                 "created_at": now,
                 "updated_at": now,
+                "tenant_id": getattr(skill, "tenant_id", None) or DEFAULT_TENANT_ID,
                 "owner_type": skill.owner_type or "user",
                 "owner_id": skill.owner_id or "",
+                "workspace_id": getattr(skill, "workspace_id", None),
+                "origin_agent_id": getattr(skill, "origin_agent_id", None),
+                "origin_user_id": getattr(skill, "origin_user_id", None),
+                "origin_session_id": getattr(skill, "origin_session_id", None),
+                "scope_model_version": getattr(skill, "scope_model_version", None) or SCOPE_MODEL_VERSION,
             }
 
             self._execute(
@@ -241,11 +267,15 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                 """
                 INSERT INTO skills (
                     id, name, trigger_phrases, trigger_patterns, plan,
-                    tools, example, meta, created_at, updated_at, owner_type, owner_id
+                    tools, example, meta, created_at, updated_at, tenant_id,
+                    owner_type, owner_id, workspace_id, origin_agent_id,
+                    origin_user_id, origin_session_id, scope_model_version
                 )
                 VALUES (
                     :id, :name, :trigger_phrases, :trigger_patterns, :plan,
-                    :tools, :example, :meta, :created_at, :updated_at, :owner_type, :owner_id
+                    :tools, :example, :meta, :created_at, :updated_at, :tenant_id,
+                    :owner_type, :owner_id, :workspace_id, :origin_agent_id,
+                    :origin_user_id, :origin_session_id, :scope_model_version
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name,
@@ -255,7 +285,15 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                     tools=excluded.tools,
                     example=excluded.example,
                     meta=excluded.meta,
-                    updated_at=excluded.updated_at
+                    updated_at=excluded.updated_at,
+                    tenant_id=excluded.tenant_id,
+                    owner_type=excluded.owner_type,
+                    owner_id=excluded.owner_id,
+                    workspace_id=excluded.workspace_id,
+                    origin_agent_id=excluded.origin_agent_id,
+                    origin_user_id=excluded.origin_user_id,
+                    origin_session_id=excluded.origin_session_id,
+                    scope_model_version=excluded.scope_model_version
                 """,
                 params=payload,
                 log_context="add_skill",

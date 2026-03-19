@@ -13,10 +13,11 @@ from datetime import datetime
 from typing import Any, List, Optional
 
 from .base_vector_sql_store import BaseVectorSQLStore
+from .base_sql_store import DEFAULT_TENANT_ID
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from ..core.utils.store_metadata import ensure_store_metadata
-from ..types import Episode
+from ..types import Episode, SCOPE_MODEL_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -56,21 +57,36 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 """
                 CREATE TABLE IF NOT EXISTS episodes (
                     id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL DEFAULT 'default',
                     owner_type TEXT NOT NULL,
                     owner_id TEXT NOT NULL,
+                    workspace_id TEXT,
+                    session_id TEXT,
                     user_id TEXT NOT NULL,
                     timestamp TEXT NOT NULL,
                     summary TEXT NOT NULL,
                     raw TEXT,
                     tags TEXT NOT NULL,
+                    origin_agent_id TEXT,
+                    origin_user_id TEXT,
+                    origin_session_id TEXT,
+                    scope_model_version TEXT,
                     meta TEXT NOT NULL,
                     embedding TEXT
                 );
                 """
             )
+            self._ensure_column(conn, "episodes", "tenant_id", "TEXT NOT NULL DEFAULT 'default'")
+            self._ensure_column(conn, "episodes", "workspace_id", "TEXT")
+            self._ensure_column(conn, "episodes", "session_id", "TEXT")
+            self._ensure_column(conn, "episodes", "origin_agent_id", "TEXT")
+            self._ensure_column(conn, "episodes", "origin_user_id", "TEXT")
+            self._ensure_column(conn, "episodes", "origin_session_id", "TEXT")
+            self._ensure_column(conn, "episodes", "scope_model_version", "TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_user ON episodes(user_id);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_timestamp ON episodes(timestamp);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_owner ON episodes(owner_type, owner_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_tenant_owner ON episodes(tenant_id, owner_type, owner_id);")
 
             # Cluster tables (keep existing schema, add owner columns)
             conn.execute(
@@ -79,16 +95,33 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                     id TEXT PRIMARY KEY,
                     summary TEXT NOT NULL,
                     episode_ids TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL DEFAULT 'default',
                     owner_type TEXT NOT NULL,
                     owner_id TEXT NOT NULL,
+                    workspace_id TEXT,
+                    session_id TEXT,
                     user_id TEXT NOT NULL,
+                    origin_agent_id TEXT,
+                    origin_user_id TEXT,
+                    origin_session_id TEXT,
+                    scope_model_version TEXT,
                     latest_timestamp TEXT NOT NULL
                 );
                 """
             )
+            self._ensure_column(conn, "episode_clusters", "tenant_id", "TEXT NOT NULL DEFAULT 'default'")
+            self._ensure_column(conn, "episode_clusters", "workspace_id", "TEXT")
+            self._ensure_column(conn, "episode_clusters", "session_id", "TEXT")
+            self._ensure_column(conn, "episode_clusters", "origin_agent_id", "TEXT")
+            self._ensure_column(conn, "episode_clusters", "origin_user_id", "TEXT")
+            self._ensure_column(conn, "episode_clusters", "origin_session_id", "TEXT")
+            self._ensure_column(conn, "episode_clusters", "scope_model_version", "TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_episode_clusters_user ON episode_clusters(user_id);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_episode_clusters_ts ON episode_clusters(latest_timestamp);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_episode_clusters_owner ON episode_clusters(owner_type, owner_id);")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_episode_clusters_tenant_owner ON episode_clusters(tenant_id, owner_type, owner_id);"
+            )
 
             conn.execute(
                 """
@@ -147,8 +180,15 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             tags=json.loads(row["tags"]),
             embedding=embedding,
             meta=json.loads(row["meta"]),
+            tenant_id=(row["tenant_id"] if "tenant_id" in row.keys() else DEFAULT_TENANT_ID),
             owner_type=owner_type,
             owner_id=owner_id,
+            workspace_id=(row["workspace_id"] if "workspace_id" in row.keys() else None),
+            session_id=(row["session_id"] if "session_id" in row.keys() else None),
+            origin_agent_id=(row["origin_agent_id"] if "origin_agent_id" in row.keys() else None),
+            origin_user_id=(row["origin_user_id"] if "origin_user_id" in row.keys() else None),
+            origin_session_id=(row["origin_session_id"] if "origin_session_id" in row.keys() else None),
+            scope_model_version=(row["scope_model_version"] if "scope_model_version" in row.keys() else None),
             user_id=user_id,
         )
 
@@ -205,13 +245,20 @@ class EpisodicSQLStore(BaseVectorSQLStore):
 
             payload = {
                 "id": ep.id,
+                "tenant_id": getattr(ep, "tenant_id", None) or DEFAULT_TENANT_ID,
                 "owner_type": owner_type,
                 "owner_id": owner_id,
+                "workspace_id": getattr(ep, "workspace_id", None),
+                "session_id": getattr(ep, "session_id", None),
                 "user_id": ep.user_id,
                 "timestamp": ep.timestamp.isoformat(),
                 "summary": ep.summary,
                 "raw": ep.raw,
                 "tags": json.dumps(ep.tags),
+                "origin_agent_id": getattr(ep, "origin_agent_id", None),
+                "origin_user_id": getattr(ep, "origin_user_id", None),
+                "origin_session_id": getattr(ep, "origin_session_id", None),
+                "scope_model_version": getattr(ep, "scope_model_version", None) or SCOPE_MODEL_VERSION,
                 "embedding": json.dumps(embedding),
                 "meta": json.dumps(ep.meta),
             }
@@ -220,19 +267,30 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 conn,
                 """
                 INSERT INTO episodes (
-                    id, owner_type, owner_id, user_id, timestamp, summary, raw, tags, embedding, meta
+                    id, tenant_id, owner_type, owner_id, workspace_id, session_id,
+                    user_id, timestamp, summary, raw, tags, origin_agent_id,
+                    origin_user_id, origin_session_id, scope_model_version, embedding, meta
                 )
                 VALUES (
-                    :id, :owner_type, :owner_id, :user_id, :timestamp, :summary, :raw, :tags, :embedding, :meta
+                    :id, :tenant_id, :owner_type, :owner_id, :workspace_id, :session_id,
+                    :user_id, :timestamp, :summary, :raw, :tags, :origin_agent_id,
+                    :origin_user_id, :origin_session_id, :scope_model_version, :embedding, :meta
                 )
                 ON CONFLICT(id) DO UPDATE SET
+                    tenant_id=excluded.tenant_id,
                     owner_type=excluded.owner_type,
                     owner_id=excluded.owner_id,
+                    workspace_id=excluded.workspace_id,
+                    session_id=excluded.session_id,
                     user_id=excluded.user_id,
                     timestamp=excluded.timestamp,
                     summary=excluded.summary,
                     raw=excluded.raw,
                     tags=excluded.tags,
+                    origin_agent_id=excluded.origin_agent_id,
+                    origin_user_id=excluded.origin_user_id,
+                    origin_session_id=excluded.origin_session_id,
+                    scope_model_version=excluded.scope_model_version,
                     embedding=excluded.embedding,
                     meta=excluded.meta
                 """,
@@ -646,25 +704,43 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 "id": f"cluster:{owner_type}:{owner_id}:{user_id}:{latest_timestamp}",
                 "summary": summary,
                 "episode_ids": json.dumps(episode_ids or []),
+                "tenant_id": DEFAULT_TENANT_ID,
                 "owner_type": owner_type,
                 "owner_id": owner_id,
+                "workspace_id": None,
+                "session_id": None,
                 "user_id": user_id,
+                "origin_agent_id": None,
+                "origin_user_id": user_id,
+                "origin_session_id": None,
+                "scope_model_version": SCOPE_MODEL_VERSION,
                 "latest_timestamp": latest_timestamp,
             }
             self._execute(
                 conn,
                 """
                 INSERT INTO episode_clusters (
-                    id, summary, episode_ids, owner_type, owner_id, user_id, latest_timestamp
+                    id, summary, episode_ids, tenant_id, owner_type, owner_id,
+                    workspace_id, session_id, user_id, origin_agent_id, origin_user_id,
+                    origin_session_id, scope_model_version, latest_timestamp
                 ) VALUES (
-                    :id, :summary, :episode_ids, :owner_type, :owner_id, :user_id, :latest_timestamp
+                    :id, :summary, :episode_ids, :tenant_id, :owner_type, :owner_id,
+                    :workspace_id, :session_id, :user_id, :origin_agent_id, :origin_user_id,
+                    :origin_session_id, :scope_model_version, :latest_timestamp
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     summary=excluded.summary,
                     episode_ids=excluded.episode_ids,
+                    tenant_id=excluded.tenant_id,
                     owner_type=excluded.owner_type,
                     owner_id=excluded.owner_id,
+                    workspace_id=excluded.workspace_id,
+                    session_id=excluded.session_id,
                     user_id=excluded.user_id,
+                    origin_agent_id=excluded.origin_agent_id,
+                    origin_user_id=excluded.origin_user_id,
+                    origin_session_id=excluded.origin_session_id,
+                    scope_model_version=excluded.scope_model_version,
                     latest_timestamp=excluded.latest_timestamp
                 """,
                 params=payload,

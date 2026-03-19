@@ -36,6 +36,12 @@ class Skill:
     # Ownership (NEW, safe defaults so old code doesn't break)
     owner_type: OwnerType = "user"
     owner_id: str = ""
+    tenant_id: str = "default"
+    workspace_id: Optional[str] = None
+    origin_agent_id: Optional[str] = None
+    origin_user_id: Optional[str] = None
+    origin_session_id: Optional[str] = None
+    scope_model_version: Optional[str] = "v2"
 
     salience: float = 0.0
     tags: Dict[str, Any] = field(default_factory=dict)

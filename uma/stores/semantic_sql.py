@@ -38,12 +38,13 @@ from datetime import datetime
 from typing import List, Optional, Any
 
 from .base_vector_sql_store import BaseVectorSQLStore
+from .base_sql_store import DEFAULT_TENANT_ID
 from ..core.utils.user_query_helper import extract_keywords_and_phrases
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from ..core.utils.conflict import FactResolver, LatestWinsFactResolver
 from ..core.utils.store_metadata import ensure_store_metadata
-from ..types import Fact
+from ..types import Fact, SCOPE_MODEL_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -105,8 +106,11 @@ class SemanticSQLStore(BaseVectorSQLStore):
                 """
                 CREATE TABLE IF NOT EXISTS facts (
                     id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL DEFAULT 'default',
                     owner_type TEXT NOT NULL,
                     owner_id TEXT NOT NULL,
+                    workspace_id TEXT,
+                    session_id TEXT,
                     subject TEXT NOT NULL,
                     predicate TEXT NOT NULL,
                     object TEXT NOT NULL,
@@ -114,6 +118,10 @@ class SemanticSQLStore(BaseVectorSQLStore):
                     updated_at TEXT NOT NULL,
                     source_ids TEXT NOT NULL,
                     source TEXT,
+                    origin_agent_id TEXT,
+                    origin_user_id TEXT,
+                    origin_session_id TEXT,
+                    scope_model_version TEXT,
                     salience REAL NOT NULL,
                     confidence REAL NULL,
                     meta TEXT NOT NULL
@@ -122,12 +130,21 @@ class SemanticSQLStore(BaseVectorSQLStore):
                 CREATE INDEX IF NOT EXISTS idx_facts_spo ON facts(subject, predicate);
                 """
             )
+            self._ensure_column(conn, "facts", "tenant_id", "TEXT NOT NULL DEFAULT 'default'")
+            self._ensure_column(conn, "facts", "workspace_id", "TEXT")
+            self._ensure_column(conn, "facts", "session_id", "TEXT")
+            self._ensure_column(conn, "facts", "origin_agent_id", "TEXT")
+            self._ensure_column(conn, "facts", "origin_user_id", "TEXT")
+            self._ensure_column(conn, "facts", "origin_session_id", "TEXT")
+            self._ensure_column(conn, "facts", "scope_model_version", "TEXT")
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_facts_sub_pred
                 ON facts(subject, predicate);
                 """
             )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_facts_tenant_owner ON facts(tenant_id, owner_type, owner_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_facts_tenant_sub_pred ON facts(tenant_id, subject, predicate);")
             ensure_store_metadata(self, conn, store_name="semantic")
             conn.commit()
         except Exception:
@@ -203,8 +220,15 @@ class SemanticSQLStore(BaseVectorSQLStore):
             confidence=confidence_val,
             meta=meta,
             salience=salience_val or 0.0,
+            tenant_id=(row["tenant_id"] if "tenant_id" in row.keys() else DEFAULT_TENANT_ID),
             owner_type=owner_type,
             owner_id=owner_id,
+            workspace_id=(row["workspace_id"] if "workspace_id" in row.keys() else None),
+            session_id=(row["session_id"] if "session_id" in row.keys() else None),
+            origin_agent_id=(row["origin_agent_id"] if "origin_agent_id" in row.keys() else None),
+            origin_user_id=(row["origin_user_id"] if "origin_user_id" in row.keys() else None),
+            origin_session_id=(row["origin_session_id"] if "origin_session_id" in row.keys() else None),
+            scope_model_version=(row["scope_model_version"] if "scope_model_version" in row.keys() else None),
         )
     # ------------------------------------------------------------------ #
     # Upsert Fact
@@ -239,6 +263,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
         try:
             owner_type_in = getattr(fact, "owner_type", "user") or "user"
             owner_id_in = getattr(fact, "owner_id", "") or ""
+            tenant_id_in = getattr(fact, "tenant_id", None) or DEFAULT_TENANT_ID
             if not owner_id_in:
                 raise ValueError("SemanticSQLStore.upsert_fact: owner_id must be set")
 
@@ -295,14 +320,22 @@ class SemanticSQLStore(BaseVectorSQLStore):
 
             payload = {
                 "id": canonical.id,
+                "tenant_id": getattr(canonical, "tenant_id", None) or tenant_id_in,
                 "subject": canonical.subject,
                 "predicate": canonical.predicate,
                 "owner_type": canonical.owner_type or owner_type_in,
                 "owner_id": canonical.owner_id or owner_id_in,
+                "workspace_id": getattr(canonical, "workspace_id", None),
+                "session_id": getattr(canonical, "session_id", None),
                 "object": json.dumps(canonical.object),
                 "created_at": canonical.created_at.isoformat(),
                 "updated_at": canonical.updated_at.isoformat(),
                 "source_ids": json.dumps(canonical.source_ids),
+                "source": getattr(canonical, "source", None),
+                "origin_agent_id": getattr(canonical, "origin_agent_id", None),
+                "origin_user_id": getattr(canonical, "origin_user_id", None),
+                "origin_session_id": getattr(canonical, "origin_session_id", None),
+                "scope_model_version": getattr(canonical, "scope_model_version", None) or SCOPE_MODEL_VERSION,
                 "salience": canonical.salience,
                 "confidence": (
                     float(canonical.confidence)
@@ -317,20 +350,32 @@ class SemanticSQLStore(BaseVectorSQLStore):
                 conn,
                 """
                 INSERT INTO facts (
-                    id, subject, predicate, object,
-                    created_at, updated_at, source_ids,
-                    confidence, meta, owner_type, owner_id, salience
+                    id, tenant_id, subject, predicate, object,
+                    created_at, updated_at, source_ids, source,
+                    confidence, meta, owner_type, owner_id, workspace_id,
+                    session_id, origin_agent_id, origin_user_id,
+                    origin_session_id, scope_model_version, salience
                 ) VALUES (
-                    :id, :subject, :predicate, :object,
-                    :created_at, :updated_at, :source_ids,
-                    :confidence, :meta, :owner_type, :owner_id, :salience
+                    :id, :tenant_id, :subject, :predicate, :object,
+                    :created_at, :updated_at, :source_ids, :source,
+                    :confidence, :meta, :owner_type, :owner_id, :workspace_id,
+                    :session_id, :origin_agent_id, :origin_user_id,
+                    :origin_session_id, :scope_model_version, :salience
                 )
                 ON CONFLICT(id) DO UPDATE SET
+                    tenant_id=excluded.tenant_id,
                     subject=excluded.subject,
                     predicate=excluded.predicate,
                     object=excluded.object,
                     owner_type=excluded.owner_type,
                     owner_id=excluded.owner_id,
+                    workspace_id=excluded.workspace_id,
+                    session_id=excluded.session_id,
+                    source=excluded.source,
+                    origin_agent_id=excluded.origin_agent_id,
+                    origin_user_id=excluded.origin_user_id,
+                    origin_session_id=excluded.origin_session_id,
+                    scope_model_version=excluded.scope_model_version,
                     salience=excluded.salience,
                     created_at=excluded.created_at,
                     updated_at=excluded.updated_at,
