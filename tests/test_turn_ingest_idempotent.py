@@ -8,8 +8,18 @@ async def test_process_turn_is_idempotent_by_turn_id(uma_memory):
     mem = uma_memory
 
     # Use an assistant reply that triggers deterministic fact extraction.
-    await mem.process_turn(user_id="user:u1", user_msg="hello", assistant_reply="user likes coffee.")
-    await mem.process_turn(user_id="user:u1", user_msg="hello", assistant_reply="user likes coffee.")
+    await mem.process_turn(
+        user_id="user:u1",
+        user_msg="hello",
+        assistant_reply="user likes coffee.",
+        extra_meta={"session_id": "session-a"},
+    )
+    await mem.process_turn(
+        user_id="user:u1",
+        user_msg="hello",
+        assistant_reply="user likes coffee.",
+        extra_meta={"session_id": "session-a"},
+    )
 
     # Expect only one episode row due to turn_id idempotency guard.
     conn = mem._stores["episodic"]._conn()

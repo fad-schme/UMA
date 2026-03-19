@@ -127,6 +127,7 @@ async def test_process_turn_without_session_id_uses_explicit_legacy_wm_bridge_on
             user_id="user:u1",
             user_msg="legacy first",
             assistant_reply="legacy reply",
+            extra_meta={"legacy_turn_write_mode": True},
         )
 
         assert memory.working_memory is not None

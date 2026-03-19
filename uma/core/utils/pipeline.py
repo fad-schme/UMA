@@ -34,7 +34,7 @@ from .promotion import PromotionPolicy
 from ...adapters.observability.context import request_context
 from ...adapters.observability.metrics import increment, timed
 from ...stores.base_sql_store import DEFAULT_TENANT_ID
-from ...types import SessionScope
+from ...types import RuntimeContext, SessionScope
 from ..working_memory.core import legacy_session_scope_for_user
 from .identity import normalize_user_id
 logger = logging.getLogger(__name__)
@@ -98,7 +98,6 @@ class MemoryPipeline:
         self.hooks = hooks
         self.promotion_policy = promotion_policy
         self._post_turn_queue: List[Dict[str, Any]] = []
-        self._warned_legacy_wm_scope = False
         if promotion_policy is None:
             logger.info("PromotionPolicy disabled (none provided).")
         else:
@@ -174,6 +173,7 @@ class MemoryPipeline:
         assistant_reply: str,
         episode: Any,
         facts: Any,
+        turn_context: RuntimeContext,
         extra_meta: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
@@ -183,7 +183,12 @@ class MemoryPipeline:
         - graph updates
         - after_turn hooks
         """
-        facts = facts or await self._semantic_ingest(user_id, assistant_reply, turn_id=None)
+        facts = facts or await self._semantic_ingest(
+            user_id,
+            assistant_reply,
+            turn_id=None,
+            turn_context=turn_context,
+        )
         if episode is not None and facts:
             for f in facts:
                 try:
@@ -194,7 +199,7 @@ class MemoryPipeline:
                     continue
 
         await self._maybe_promote_facts(user_id=user_id, facts=facts)
-        await self._update_graph(user_id, episode, facts)
+        await self._update_graph(user_id, episode, facts, turn_context=turn_context)
         await self._run_after_turn_hooks(
             user_id=user_id,
             user_msg=user_msg,
@@ -239,10 +244,12 @@ class MemoryPipeline:
                     assistant_reply=assistant_reply,
                     request_id=str(request_id) if request_id else None,
                 )
-                wm_scope = self._resolve_working_memory_scope(
+                turn_context = self._resolve_turn_context(
                     user_id=user_id,
+                    turn_id=turn_id,
                     extra_meta=extra_meta,
                 )
+                wm_scope = self._resolve_working_memory_scope(turn_context=turn_context)
 
                 # 1) Hooks
                 await self._run_before_turn_hooks(user_id, user_msg)
@@ -260,6 +267,7 @@ class MemoryPipeline:
                     assistant_reply,
                     turn_id=turn_id,
                     working_memory_scope=wm_scope,
+                    turn_context=turn_context,
                 )
 
                 if self._post_turn_defer_enabled():
@@ -270,6 +278,7 @@ class MemoryPipeline:
                             "assistant_reply": assistant_reply,
                             "episode": episode,
                             "facts": None,
+                            "turn_context": turn_context,
                             "extra_meta": extra_meta or {},
                         }
                     )
@@ -277,7 +286,12 @@ class MemoryPipeline:
                         logger.info("MemoryPipeline: deferred post-turn tasks queued.")
                 else:
                     # 5) Semantic ingestion
-                    facts = await self._semantic_ingest(user_id, assistant_reply, turn_id=turn_id)
+                    facts = await self._semantic_ingest(
+                        user_id,
+                        assistant_reply,
+                        turn_id=turn_id,
+                        turn_context=turn_context,
+                    )
                     if episode is not None and facts:
                         for f in facts:
                             try:
@@ -291,7 +305,7 @@ class MemoryPipeline:
                     await self._maybe_promote_facts(user_id=user_id, facts=facts)
 
                     # 6) Graph update
-                    await self._update_graph(user_id, episode, facts)
+                    await self._update_graph(user_id, episode, facts, turn_context=turn_context)
 
                     # 7) Hooks
                     await self._run_after_turn_hooks(
@@ -434,40 +448,66 @@ class MemoryPipeline:
     # WORKING MEMORY
     # ------------------------------------------------------------------
 
-    def _resolve_working_memory_scope(
+    def _resolve_turn_context(
         self,
         *,
         user_id: str,
+        turn_id: str,
         extra_meta: Optional[Dict[str, Any]] = None,
-    ) -> Optional[SessionScope]:
+    ) -> RuntimeContext:
         agent_id = getattr(self.mem, "agent_id", None)
         if not agent_id:
-            logger.warning("WorkingMemory requires agent_id; skipping WM for this turn.")
-            return None
+            raise ValueError("MemoryPipeline.process_turn requires agent_id for scoped turn processing.")
 
         normalized_user_id = normalize_user_id(user_id)
         meta = extra_meta or {}
         tenant_id = str(meta.get("tenant_id") or DEFAULT_TENANT_ID)
         session_id = meta.get("session_id")
         if session_id:
-            return SessionScope(
+            return RuntimeContext(
                 tenant_id=tenant_id,
                 agent_id=agent_id,
-                session_id=str(session_id),
+                request_id=str(meta.get("request_id") or turn_id),
                 user_id=normalized_user_id,
                 workspace_id=(str(meta["workspace_id"]) if meta.get("workspace_id") else None),
+                session_id=str(session_id),
             )
 
-        if not self._warned_legacy_wm_scope:
-            logger.warning(
-                "MemoryPipeline: using legacy working-memory scope bridge without explicit session_id. "
-                "Pass extra_meta['session_id'] to isolate WM per session."
+        if not bool(meta.get("legacy_turn_write_mode", False)):
+            raise ValueError(
+                "MemoryPipeline.process_turn requires extra_meta['session_id'] for canonical turn writes. "
+                "Use extra_meta['legacy_turn_write_mode']=True only for explicit transitional compatibility."
             )
-            self._warned_legacy_wm_scope = True
-        return legacy_session_scope_for_user(
+
+        legacy_scope = legacy_session_scope_for_user(
             tenant_id=tenant_id,
             agent_id=agent_id,
             user_id=normalized_user_id,
+        )
+        logger.warning(
+            "MemoryPipeline: using explicit legacy turn write mode without session_id. "
+            "This compatibility path is non-canonical and should be removed after migration."
+        )
+        return RuntimeContext(
+            tenant_id=legacy_scope.tenant_id,
+            agent_id=legacy_scope.agent_id,
+            request_id=str(meta.get("request_id") or turn_id),
+            user_id=legacy_scope.user_id,
+            workspace_id=legacy_scope.workspace_id,
+            session_id=legacy_scope.session_id,
+        )
+
+    def _resolve_working_memory_scope(
+        self,
+        *,
+        turn_context: RuntimeContext,
+    ) -> SessionScope:
+        return SessionScope(
+            tenant_id=turn_context.tenant_id,
+            agent_id=turn_context.agent_id,
+            session_id=str(turn_context.session_id),
+            user_id=turn_context.user_id,
+            workspace_id=turn_context.workspace_id,
         )
 
     def _update_working_memory(
@@ -523,6 +563,7 @@ class MemoryPipeline:
         *,
         turn_id: str,
         working_memory_scope: Optional[SessionScope],
+        turn_context: RuntimeContext,
     ) -> Any:
         epi = getattr(self.mem, "episodic_core", None)
         wm = getattr(self.mem, "working_memory", None)
@@ -546,6 +587,7 @@ class MemoryPipeline:
                 user_message=user_msg,
                 assistant_reply=assistant_reply,
                 working_memory_context=wm_context,
+                turn_context=turn_context,
             )
         except Exception:
             logger.exception("EpisodicCore.store_episode failed.")
@@ -555,7 +597,14 @@ class MemoryPipeline:
     # SEMANTIC INGESTION
     # ------------------------------------------------------------------
 
-    async def _semantic_ingest(self, user_id: str, reply: str, *, turn_id: str) -> Any:
+    async def _semantic_ingest(
+        self,
+        user_id: str,
+        reply: str,
+        *,
+        turn_id: str,
+        turn_context: RuntimeContext,
+    ) -> Any:
         sem = getattr(self.mem, "semantic_core", None)
         if sem is None:
             logger.warning("SemanticCore not initialized; skipping fact ingestion.")
@@ -570,7 +619,12 @@ class MemoryPipeline:
             return []
 
         try:
-            return await sem.ingest(user_subject, reply, extra_meta={"turn_id": turn_id})
+            return await sem.ingest(
+                user_subject,
+                reply,
+                extra_meta={"turn_id": turn_id},
+                turn_context=turn_context,
+            )
         except Exception:
             logger.exception("SemanticCore.ingest failed; continuing.")
             return []
@@ -579,7 +633,7 @@ class MemoryPipeline:
     # GRAPH UPDATE
     # ------------------------------------------------------------------
 
-    async def _update_graph(self, user_id: str, episode: Any, facts: Any) -> None:
+    async def _update_graph(self, user_id: str, episode: Any, facts: Any, *, turn_context: RuntimeContext) -> None:
         graph = getattr(self.mem, "graph_core", None)
         if graph is None or episode is None:
             return
@@ -602,9 +656,14 @@ class MemoryPipeline:
                 return
             from .identity import normalize_user_id
             normalized_user_id = normalize_user_id(user_id)
-            recent = await core.list_recent(owner_type="user", owner_id=normalized_user_id, n=2)
-            if len(recent) >= 2:
-                prev = recent[1]
+            recent = await core.list_recent(owner_type="user", owner_id=normalized_user_id, n=20)
+            scoped_recent = [
+                ep for ep in (recent or [])
+                if getattr(ep, "session_id", None) == turn_context.session_id
+                and getattr(ep, "origin_agent_id", None) == turn_context.agent_id
+            ]
+            if len(scoped_recent) >= 2:
+                prev = scoped_recent[1]
                 graph.link_temporal(prev, episode)
         except Exception:
             logger.exception("GraphCore temporal link failed; continuing.")

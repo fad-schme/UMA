@@ -13,7 +13,7 @@ Safety guarantees
 from __future__ import annotations
 
 import logging
-from typing import Any, List
+from typing import Any, Callable, List, Optional
 
 from ...types import Fact
 from ..utils.user_query_helper import build_fact_embedding_text
@@ -63,7 +63,14 @@ class SemanticIngestor:
             logger.exception("SemanticIngestor.extract failed.")
             return []
 
-    async def ingest(self, user_id: str, text: str, *, extra_meta: dict | None = None) -> List[Fact]:
+    async def ingest(
+        self,
+        user_id: str,
+        text: str,
+        *,
+        extra_meta: dict | None = None,
+        fact_transform: Optional[Callable[[Fact], None]] = None,
+    ) -> List[Fact]:
         if self.embedder is None:
             logger.debug("SemanticIngestor.ingest: embedder unavailable; returning [].")
             return []
@@ -100,6 +107,8 @@ class SemanticIngestor:
         persisted: List[Fact] = []
         for fact, vec in zip(selected, vectors):
             try:
+                if fact_transform is not None:
+                    fact_transform(fact)
                 # Enforce owner scoping at write-time so stores can safely filter by owner_id.
                 if not getattr(fact, "owner_type", None):
                     fact.owner_type = "user"

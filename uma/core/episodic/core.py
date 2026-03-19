@@ -32,6 +32,7 @@ from .archive import EpisodicArchive
 from .mapper import EpisodeMapper
 from .policies import EpisodicRetentionPolicy
 from ...types import Episode
+from ...types import RuntimeContext, SCOPE_MODEL_VERSION
 from ..utils.dedupe import dedupe_by_id
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,7 @@ class EpisodicCore:
         user_message: str,
         assistant_reply: str,
         working_memory_context: List[Any],
+        turn_context: RuntimeContext,
     ) -> Optional[Episode]:
         """
         Build and persist an Episode from a conversation turn.
@@ -98,6 +100,13 @@ class EpisodicCore:
                 owner_id=owner_id,
                 wm_entries=all_entries,
             )
+            episode.tenant_id = turn_context.tenant_id
+            episode.workspace_id = turn_context.workspace_id
+            episode.session_id = turn_context.session_id
+            episode.origin_agent_id = turn_context.agent_id
+            episode.origin_user_id = turn_context.user_id
+            episode.origin_session_id = turn_context.session_id
+            episode.scope_model_version = SCOPE_MODEL_VERSION
 
             # ------------------------------
             # 3. Store in episodic DB

@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from ...types import Fact
+from ...types import Fact, RuntimeContext, SCOPE_MODEL_VERSION
 from ..retrieval.ranking import fuse_candidates
 from ..utils.identity import normalize_user_id
 from ..utils.dedupe import dedupe_by_id
@@ -140,6 +140,7 @@ class SemanticCore:
         text: str,
         *,
         extra_meta: dict | None = None,
+        turn_context: Optional[RuntimeContext] = None,
     ) -> List[Fact]:
         """
         Extract + ingest facts into the semantic self.store.
@@ -154,16 +155,28 @@ class SemanticCore:
             logger.exception("SemanticCore.ingest: invalid user_id=%r", user_id)
             raise
 
-        facts = await self.ingestor.ingest(normalized_user_id, text, extra_meta=extra_meta)
-
-        # Explicitly set ownership (never infer from "subject" fields)
-        for f in facts or []:
+        def _apply_turn_scope(f: Fact) -> None:
             try:
                 f.owner_type = "user"
                 f.owner_id = normalized_user_id
+                if turn_context is not None:
+                    f.tenant_id = turn_context.tenant_id
+                    f.workspace_id = turn_context.workspace_id
+                    f.session_id = turn_context.session_id
+                    f.origin_agent_id = turn_context.agent_id
+                    f.origin_user_id = normalized_user_id
+                    f.origin_session_id = turn_context.session_id
+                    f.scope_model_version = SCOPE_MODEL_VERSION
             except Exception:
                 logger.exception("SemanticCore.ingest: failed to set owner on fact id=%s", getattr(f, "id", None))
                 raise
+
+        facts = await self.ingestor.ingest(
+            normalized_user_id,
+            text,
+            extra_meta=extra_meta,
+            fact_transform=_apply_turn_scope,
+        )
 
         return self._dedup_facts(facts)
 

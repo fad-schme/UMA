@@ -156,6 +156,31 @@ class UMAMemoryEnvironment:
             raise ValueError(f"{context_label}: owner_id is required")
         return normalized_owner_type, resolved_owner_id  # type: ignore[return-value]
 
+    @staticmethod
+    def _filter_session_local_items(request: RetrievalRequest, items: List[Any]) -> List[Any]:
+        filtered: List[Any] = []
+        request_session_id = getattr(request.context, "session_id", None)
+        request_agent_id = getattr(request.context, "agent_id", None)
+        request_tenant_id = getattr(request.context, "tenant_id", None)
+        for item in items or []:
+            try:
+                tenant_id = getattr(item, "tenant_id", None)
+                if tenant_id and request_tenant_id and tenant_id != request_tenant_id:
+                    continue
+                session_id = getattr(item, "session_id", None)
+                if not session_id:
+                    filtered.append(item)
+                    continue
+                if not request_session_id or session_id != request_session_id:
+                    continue
+                origin_agent_id = getattr(item, "origin_agent_id", None)
+                if origin_agent_id and request_agent_id and origin_agent_id != request_agent_id:
+                    continue
+                filtered.append(item)
+            except Exception:
+                continue
+        return filtered
+
 
     # ------------------------------------------------------------------
     # Semantic
@@ -268,7 +293,7 @@ class UMAMemoryEnvironment:
                 owner_id=resolved_owner_id,
             )
             logger.debug("Environment.fetch_facts_by_ids: returned %d", len(facts or []))
-            return facts or []
+            return self._filter_session_local_items(request, facts or [])
         except Exception:
             logger.exception("Environment.fetch_facts_by_ids failed")
             raise
@@ -299,13 +324,14 @@ class UMAMemoryEnvironment:
             )
 
             # Ownership-only: subject must not be used for semantic retrieval.
-            return await semantic_core.fetch_more_facts(
+            facts = await semantic_core.fetch_more_facts(
                 predicate=predicate,
                 owner_type=owner_type,
                 owner_id=resolved_owner_id,
                 k=int(k),
                 offset=int(offset),
             )
+            return self._filter_session_local_items(request, facts or [])
         except Exception:
             logger.exception("Environment.fetch_more_facts failed")
             raise
@@ -715,7 +741,7 @@ class UMAMemoryEnvironment:
                 logger.error("Environment.execute_action: semantic_core is None")
                 raise RuntimeError("Environment.execute_action: semantic_core is None")
             filters = getattr(action, "filters", None)
-            return await semantic_core.search(
+            facts = await semantic_core.search(
                 query_embedding=[float(x) for x in query_embedding],
                 owner_type=lane_owner_type,
                 owner_id=lane_owner_id,
@@ -724,6 +750,7 @@ class UMAMemoryEnvironment:
                 filters=filters,
                 query_text=query_text,
             )
+            return self._filter_session_local_items(request, facts or [])
 
         if a == "fetch_more_facts":
             offset = 0
@@ -776,13 +803,14 @@ class UMAMemoryEnvironment:
             if episodic_core is None:
                 logger.error("Environment.execute_action: episodic_core is None")
                 raise RuntimeError("Environment.execute_action: episodic_core is None")
-            return await episodic_core.search(
+            episodes = await episodic_core.search(
                 user_id=request.normalized_user_id,
                 query_embedding=[float(x) for x in query_embedding],
                 owner_type=lane_owner_type,
                 owner_id=lane_owner_id,
                 k=k,
             )
+            return self._filter_session_local_items(request, episodes or [])
 
         if a == "episodic_clusters":
             return await self.episodic_cluster_summaries(

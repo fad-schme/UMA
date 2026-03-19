@@ -6,6 +6,7 @@ import pytest
 
 from uma.core.retrieval.rlm.environment import UMAMemoryEnvironment
 from uma.core.retrieval.rlm.request import RetrievalRequest
+from uma.stores.base_sql_store import DEFAULT_TENANT_ID
 from uma.types import RuntimeContext
 from uma.types import Episode, Fact
 
@@ -24,7 +25,7 @@ async def test_environment_fetch_facts_by_ids_is_owner_scoped(uma_memory):
     env = UMAMemoryEnvironment(memory)
     request = RetrievalRequest.from_runtime_context(
         RuntimeContext(
-            tenant_id="tenant-test",
+            tenant_id=DEFAULT_TENANT_ID,
             agent_id=memory.agent_id or "agent-default",
             request_id="req-env-facts",
             user_id="user:u1",
