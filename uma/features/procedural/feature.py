@@ -5,8 +5,8 @@ After attaching to UMAMemory, the agent gains:
 
 - procedural_health() -> FeatureResult
 - procedural_add_skill(skill: Skill, embedding: List[float]) -> FeatureResult
-- procedural_find_skills(query_text: str, k: int = 5) -> FeatureResult
-- procedural_get_skill(skill_id: str) -> FeatureResult
+- procedural_find_skills(query_text: str, *, user_id: str, k: int = 5) -> FeatureResult
+- procedural_get_skill(skill_id: str, *, user_id: str) -> FeatureResult
 
 The feature is OPTIONAL and built on top of the core UMA memory system.
 
@@ -116,7 +116,12 @@ class ProceduralFeature(UMAFeature):
                 logger.exception("ProceduralFeature.add_skill: failed for id=%s", skill.id)
                 return FeatureResult.failure([str(exc)])
 
-        async def procedural_find_skills(query_text: str, k: int = 5) -> FeatureResult:
+        async def procedural_find_skills(
+            query_text: str,
+            *,
+            user_id: str,
+            k: int = 5,
+        ) -> FeatureResult:
             """
             Retrieve relevant skills for a natural language query.
 
@@ -134,9 +139,8 @@ class ProceduralFeature(UMAFeature):
             if not query_text_clean:
                 logger.debug("ProceduralFeature.find_skills: empty query_text.")
                 return FeatureResult.success([])
-            user_id = getattr(memory_client, "user_id", None)
-            if not user_id:
-                logger.error("ProceduralFeature.find_skills: missing memory_client.user_id.")
+            if not user_id or not isinstance(user_id, str) or not user_id.strip():
+                logger.error("ProceduralFeature.find_skills: missing user_id.")
                 return FeatureResult.failure(["missing user_id"], data=[])
 
             try:
@@ -186,7 +190,7 @@ class ProceduralFeature(UMAFeature):
                 logger.exception("ProceduralFeature.find_skills: matcher failed.")
                 return FeatureResult.failure([str(exc)], data=[])
 
-        async def procedural_get_skill(skill_id: str) -> FeatureResult:
+        async def procedural_get_skill(skill_id: str, *, user_id: str) -> FeatureResult:
             """
             Retrieve a single skill by ID.
 
@@ -198,9 +202,8 @@ class ProceduralFeature(UMAFeature):
             if not skill_id:
                 logger.debug("ProceduralFeature.get_skill: empty skill_id.")
                 return FeatureResult.failure(["empty skill_id"], data=None)
-            user_id = getattr(memory_client, "user_id", None)
-            if not user_id:
-                logger.error("ProceduralFeature.get_skill: missing memory_client.user_id.")
+            if not user_id or not isinstance(user_id, str) or not user_id.strip():
+                logger.error("ProceduralFeature.get_skill: missing user_id.")
                 return FeatureResult.failure(["missing user_id"], data=None)
 
             try:

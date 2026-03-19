@@ -97,6 +97,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+import warnings
 from typing import Any, Dict, List, Optional
 
 from .memory_config import UMAConfig  # YAML loader + validation (dict-like)
@@ -260,6 +261,13 @@ class UMAMemory:
             if not isinstance(value, str) or not value.strip():
                 raise ValueError("UMAMemory.agent_id must be a non-empty string or None.")
             value = value.strip()
+            warnings.warn(
+                "UMAMemory.agent_id is deprecated as a public scope API. "
+                "Use UMARuntime.bind(RuntimeContext(...)) for retrieval entry points. "
+                "This setter remains as a temporary bridge while deep internal scope cleanup is pending.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self._agent_id = value
         # Keep RLM environment in sync with the canonical agent_id.
         if getattr(self, "memory_env", None) is not None:

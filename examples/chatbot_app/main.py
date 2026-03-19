@@ -5,9 +5,11 @@ import logging
 import os
 from typing import Any, Dict, Optional, Tuple
 
+from uma import UMARuntime
 from uma.core.uma_memory import UMAMemory
 from uma.adapters.llm.base import LLMInterface
 from uma.core.ingest.parser import FileContentParser
+from uma.types import RuntimeContext
 logger = logging.getLogger(__name__)
 
 
@@ -170,7 +172,10 @@ async def interactive_chat(
 
     # Initialize UMA memory runtime
     memory = UMAMemory.from_yaml(config_path)
+    # Temporary bridge for current internal retrieval/ingestion internals.
+    # Public retrieval below uses bound RuntimeContext via UMARuntime.
     memory.agent_id = agent_id
+    runtime = UMARuntime.from_memory(memory)
     
     try:
         vector_backend = getattr(memory.raw_config.storage, "vector_backend", "")
@@ -241,8 +246,16 @@ async def interactive_chat(
             # Normal chat: retrieve context only; agent behavior is developer-owned
             try:
                 user_message = user
-                snippet = await memory.get_rendered_context(
-                    user_id=user_id, query_text=user_message
+                handle = runtime.bind(
+                    RuntimeContext(
+                        tenant_id="default",
+                        agent_id=agent_id,
+                        request_id=f"chat:{user_id}",
+                        user_id=user_id,
+                    )
+                )
+                snippet = await handle.retrieve_rendered_context(
+                    query_text=user_message
                 )
                 if not snippet:
                     context_messages = [{"role": "user", "content": user_message}]
