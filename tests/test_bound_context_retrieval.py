@@ -100,14 +100,17 @@ async def test_umamemory_retrieval_shims_delegate_through_request_handle(uma_mem
     monkeypatch.setattr(UMARequestHandle, "retrieve_rendered_context", fake_rendered)
     monkeypatch.setattr(UMARequestHandle, "get_context_messages", fake_messages)
 
-    await memory.get_structured_context("user:u1", "hello world")
-    await memory.get_rendered_context("user:u1", "hello world")
-    await memory.get_context_messages(
-        user_id="user:u1",
-        query_text="hello world",
-        agent_id="ignored-agent",
-        render_mode="raw_rendered",
-    )
+    with pytest.warns(DeprecationWarning, match="get_structured_context"):
+        await memory.get_structured_context("user:u1", "hello world")
+    with pytest.warns(DeprecationWarning, match="get_rendered_context"):
+        await memory.get_rendered_context("user:u1", "hello world")
+    with pytest.warns(DeprecationWarning, match="get_context_messages"):
+        await memory.get_context_messages(
+            user_id="user:u1",
+            query_text="hello world",
+            agent_id="ignored-agent",
+            render_mode="raw_rendered",
+        )
 
     assert [item[0] for item in calls] == ["structured", "rendered", "messages"]
     for _, context, _ in calls:

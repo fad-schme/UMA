@@ -275,6 +275,21 @@ class UMAMemory:
             )
         self._agent_id = value
 
+    def _warn_legacy_public_api(
+        self,
+        api_name: str,
+        *,
+        replacement: str,
+        detail: str | None = None,
+    ) -> None:
+        message = (
+            f"UMAMemory.{api_name} is deprecated as a public compatibility shim. "
+            f"{replacement}"
+        )
+        if detail:
+            message = f"{message} {detail}"
+        warnings.warn(message, DeprecationWarning, stacklevel=3)
+
     def _ensure_base_ready(self) -> None:
         """
         Minimal baseline readiness:
@@ -759,6 +774,11 @@ class UMAMemory:
 
         This is a recovery utility and should be used in maintenance jobs.
         """
+        self._warn_legacy_public_api(
+            "rebuild_vector_indexes",
+            replacement="Prefer an explicit UMARuntime/maintenance entrypoint when the public maintenance surface is finalized.",
+            detail="This facade remains temporary and routes directly to the canonical maintenance helper.",
+        )
         from .utils.maintenance import rebuild_vector_indexes
 
         return await rebuild_vector_indexes(
@@ -787,6 +807,11 @@ class UMAMemory:
 
         This is an explicit maintenance utility. It does not change runtime retrieval semantics.
         """
+        self._warn_legacy_public_api(
+            "rebuild_derived_indexes",
+            replacement="Prefer an explicit UMARuntime/maintenance entrypoint when the public maintenance surface is finalized.",
+            detail="This facade remains temporary and routes directly to the canonical maintenance helper.",
+        )
         from .utils.maintenance import rebuild_derived_indexes
 
         return await rebuild_derived_indexes(
@@ -858,6 +883,11 @@ class UMAMemory:
         - Does not expose structured retrieval internals.
         - Safe for transport over an external service boundary.
         """
+        self._warn_legacy_public_api(
+            "get_context_messages",
+            replacement="Prefer UMARuntime.bind(RuntimeContext(...)).get_context_messages(...).",
+            detail="This facade remains temporary and routes through the canonical bound request handle.",
+        )
         if not user_id or not isinstance(user_id, str):
             raise ValueError("UMAMemory.get_context_messages: user_id must be a non-empty string.")
         if not query_text or not isinstance(query_text, str):
@@ -905,6 +935,11 @@ class UMAMemory:
                 "graph": [...],
             }
         """
+        self._warn_legacy_public_api(
+            "get_structured_context",
+            replacement="Prefer UMARuntime.bind(RuntimeContext(...)).retrieve_structured_context(...).",
+            detail="This facade remains temporary and routes through the canonical bound request handle.",
+        )
         if not user_id or not isinstance(user_id, str):
             raise ValueError("UMAMemory.get_structured_context: user_id must be a non-empty string.")
         handle = UMARuntime.from_memory(self).bind(
@@ -925,6 +960,11 @@ class UMAMemory:
 
         This is the primary ingestion API and wraps the internal pipeline.
         """
+        self._warn_legacy_public_api(
+            "process_turn",
+            replacement="Prefer explicit-context ingestion surfaces as they are exposed.",
+            detail="This facade remains temporary and routes through the canonical pipeline/session-local turn path.",
+        )
         self._ensure_ingestion_ready()
 
         if not getattr(self, "pipeline", None):
@@ -950,6 +990,17 @@ class UMAMemory:
         """
         Ingest an unstructured document into UMA memory.
         """
+        self._warn_legacy_public_api(
+            "ingest_document",
+            replacement="Prefer explicit target_owner-based ingestion surfaces.",
+            detail="This facade remains temporary and routes through the canonical explicit-owner ingest service.",
+        )
+        if target_owner is None and owner_type is not None and owner_id is not None:
+            self._warn_legacy_public_api(
+                "ingest_document(owner_type, owner_id)",
+                replacement="Pass target_owner=TargetOwner(...) explicitly.",
+                detail="The loose owner_type/owner_id call shape remains only as a thin compatibility adapter.",
+            )
         self._ensure_ingestion_ready()
 
         from .ingest.ingest_service import ingest_document as _ingest
@@ -969,6 +1020,11 @@ class UMAMemory:
         Configuration is internal to UMA (via memory.retrieval_cfg.context). Callers should not
         inspect config or select rendering modes.
         """
+        self._warn_legacy_public_api(
+            "get_rendered_context",
+            replacement="Prefer UMARuntime.bind(RuntimeContext(...)).retrieve_rendered_context(...).",
+            detail="This facade remains temporary and routes through the canonical bound request handle.",
+        )
         handle = UMARuntime.from_memory(self).bind(
             self._build_runtime_context_for_retrieval(user_id=user_id)
         )
