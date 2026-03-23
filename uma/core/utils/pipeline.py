@@ -27,8 +27,11 @@ Coding Agent Instructions
 
 from __future__ import annotations
 
+from collections import deque
+from dataclasses import dataclass
 import logging
 import hashlib
+import threading
 from typing import Any, Dict, Optional, List
 from .promotion import PromotionPolicy
 from ...adapters.observability.context import request_context
@@ -38,6 +41,18 @@ from ...types import RuntimeContext, SessionScope
 from ..working_memory.core import legacy_session_scope_for_user
 from .identity import normalize_user_id
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _DeferredPostTurnTask:
+    user_id: str
+    user_msg: str
+    assistant_reply: str
+    episode: Any
+    facts: Any
+    turn_context: RuntimeContext
+    extra_meta: Dict[str, Any]
+
 
 def _get_fact_embedding(fact: Any) -> Optional[List[float]]:
     """Extract an embedding from fact.meta if present."""
@@ -97,7 +112,8 @@ class MemoryPipeline:
         self.mem = memory_client
         self.hooks = hooks
         self.promotion_policy = promotion_policy
-        self._post_turn_queue: List[Dict[str, Any]] = []
+        self._post_turn_queue: deque[_DeferredPostTurnTask] = deque()
+        self._post_turn_queue_lock = threading.Lock()
         if promotion_policy is None:
             logger.info("PromotionPolicy disabled (none provided).")
         else:
@@ -136,29 +152,53 @@ class MemoryPipeline:
         Best-effort enqueue for deferred post-turn tasks.
         """
         limit = self._post_turn_queue_limit()
-        if len(self._post_turn_queue) >= limit:
-            logger.warning(
-                "MemoryPipeline: post-turn queue full (size=%d limit=%d). Dropping task.",
-                len(self._post_turn_queue),
-                limit,
-            )
-            return False
-        self._post_turn_queue.append(payload)
-        return True
+        task = _DeferredPostTurnTask(
+            user_id=payload["user_id"],
+            user_msg=payload["user_msg"],
+            assistant_reply=payload["assistant_reply"],
+            episode=payload["episode"],
+            facts=payload["facts"],
+            turn_context=payload["turn_context"],
+            extra_meta=dict(payload.get("extra_meta") or {}),
+        )
+        with self._post_turn_queue_lock:
+            queue_size = len(self._post_turn_queue)
+            if queue_size >= limit:
+                logger.warning(
+                    "MemoryPipeline: post-turn queue full (size=%d limit=%d). Dropping task.",
+                    queue_size,
+                    limit,
+                )
+                return False
+            self._post_turn_queue.append(task)
+            return True
 
     async def process_post_turn_queue(self, *, max_items: Optional[int] = None) -> int:
         """
         Drain deferred post-turn tasks.
         Returns the number of tasks processed.
         """
-        if not self._post_turn_queue:
+        with self._post_turn_queue_lock:
+            queue_size = len(self._post_turn_queue)
+        if queue_size == 0:
             return 0
         count = 0
-        limit = len(self._post_turn_queue) if max_items is None else max(0, int(max_items))
-        while self._post_turn_queue and count < limit:
-            payload = self._post_turn_queue.pop(0)
+        limit = queue_size if max_items is None else max(0, int(max_items))
+        while count < limit:
+            with self._post_turn_queue_lock:
+                if not self._post_turn_queue:
+                    break
+                payload = self._post_turn_queue.popleft()
             try:
-                await self._run_post_turn_tasks(**payload)
+                await self._run_post_turn_tasks(
+                    user_id=payload.user_id,
+                    user_msg=payload.user_msg,
+                    assistant_reply=payload.assistant_reply,
+                    episode=payload.episode,
+                    facts=payload.facts,
+                    turn_context=payload.turn_context,
+                    extra_meta=payload.extra_meta,
+                )
                 count += 1
             except Exception:
                 logger.exception("MemoryPipeline: deferred post-turn task failed; continuing.")

@@ -18,7 +18,7 @@ import logging
 import os
 import sys
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from .providers import ensure_embedder, ensure_llm
 from .stores import initialize_stores
@@ -27,6 +27,39 @@ if TYPE_CHECKING:
     from ..uma_memory import UMAMemory
 
 logger = logging.getLogger(__name__)
+
+
+def _run_singleflight_initializer(
+    memory: "UMAMemory",
+    *,
+    key: str,
+    ready_attr: str,
+    initializer: Callable[[], None],
+) -> None:
+    """
+    Run one initializer at a time per readiness key.
+
+    The coordination lock only protects state transitions. The actual
+    initialization work runs outside the lock so DB/provider/model setup is
+    not globally serialized.
+    """
+    with memory._init_condition:
+        if getattr(memory, ready_attr, False):
+            return
+        if key in memory._init_inflight:
+            while key in memory._init_inflight and not getattr(memory, ready_attr, False):
+                memory._init_condition.wait()
+            if getattr(memory, ready_attr, False):
+                return
+            raise RuntimeError(f"UMA initialization failed for {key}.")
+        memory._init_inflight.add(key)
+
+    try:
+        initializer()
+    finally:
+        with memory._init_condition:
+            memory._init_inflight.discard(key)
+            memory._init_condition.notify_all()
 
 
 # ---------------------------------------------------------------------
@@ -150,21 +183,28 @@ def init_retrieval_ready(memory: "UMAMemory") -> None:
 
     MUST NOT initialize ingestion pipeline/features.
     """
-    ensure_stores(memory)
-    ensure_llm(memory)
-    ensure_embedder(memory)
-    ensure_cores(memory)
+    def _initialize() -> None:
+        ensure_stores(memory)
+        ensure_llm(memory)
+        ensure_embedder(memory)
+        ensure_cores(memory)
 
-    # Graph is optional; never fail retrieval startup because of graph.
-    try:
-        ensure_graph(memory)
-    except Exception:
-        logger.exception("Graph init failed during retrieval startup (non-fatal).")
-        memory.graph_core = None
+        # Graph is optional; never fail retrieval startup because of graph.
+        try:
+            ensure_graph(memory)
+        except Exception:
+            logger.exception("Graph init failed during retrieval startup (non-fatal).")
+            memory.graph_core = None
 
-    ensure_rlm(memory)
+        ensure_rlm(memory)
+        memory._retrieval_ready = True
 
-    memory._retrieval_ready = True
+    _run_singleflight_initializer(
+        memory,
+        key="retrieval",
+        ready_attr="_retrieval_ready",
+        initializer=_initialize,
+    )
 
 
 # ---------------------------------------------------------------------
@@ -182,20 +222,28 @@ def init_ingestion_ready(memory: "UMAMemory") -> None:
 
     Safe to call multiple times.
     """
-    ensure_stores(memory)
-    ensure_llm(memory)
-    ensure_embedder(memory)
+    def _initialize() -> None:
+        ensure_stores(memory)
+        ensure_llm(memory)
+        ensure_embedder(memory)
 
-    ensure_cores(memory)
+        ensure_cores(memory)
 
-    # features optional; should not abort readiness
-    try:
-        ensure_features(memory)
-    except Exception:
-        logger.exception("Feature init failed (non-fatal).")
+        # features optional; should not abort readiness
+        try:
+            ensure_features(memory)
+        except Exception:
+            logger.exception("Feature init failed (non-fatal).")
 
-    ensure_pipeline(memory)
-    memory._ingestion_ready = True
+        ensure_pipeline(memory)
+        memory._ingestion_ready = True
+
+    _run_singleflight_initializer(
+        memory,
+        key="ingestion",
+        ready_attr="_ingestion_ready",
+        initializer=_initialize,
+    )
 
 
 # ---------------------------------------------------------------------
@@ -208,9 +256,10 @@ def schedule_ingestion_warmup(memory: "UMAMemory") -> None:
     - Does not block retrieval-ready startup.
     - If warmup fails, ingestion APIs will still self-heal by calling init_ingestion_ready.
     """
-    if getattr(memory, "_warmup_scheduled", False):
-        return
-    memory._warmup_scheduled = True
+    with memory._lifecycle_lock:
+        if getattr(memory, "_warmup_scheduled", False):
+            return
+        memory._warmup_scheduled = True
 
     async def _warmup_async() -> None:
         try:

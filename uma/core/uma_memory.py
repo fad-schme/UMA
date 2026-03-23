@@ -96,6 +96,7 @@ Design Philosophy
 from __future__ import annotations
 
 import logging
+import threading
 import uuid
 import warnings
 from typing import Any, Dict, List, Optional
@@ -207,6 +208,9 @@ class UMAMemory:
         self._retrieval_ready: bool = False
         self._ingestion_ready: bool = False
         self._warmup_scheduled: bool = False
+        self._lifecycle_lock = threading.RLock()
+        self._init_condition = threading.Condition(self._lifecycle_lock)
+        self._init_inflight: set[str] = set()
 
         # RLM components (initialized later)
         self.memory_env = None
