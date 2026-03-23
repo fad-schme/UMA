@@ -472,63 +472,24 @@ class UMAMemoryEnvironment:
         if not cleaned:
             return []
 
-        adapter = getattr(graph_core, "adapter", None)
-        run_query = getattr(adapter, "run_query", None)
-        if not callable(run_query):
+        resolve_nodes = getattr(graph_core, "resolve_nodes", None)
+        if not callable(resolve_nodes):
             return []
 
-        domains = None
-        if domain_scope:
-            try:
-                domains = [str(d).strip().lower() for d in (domain_scope or []) if d]
-                domains = [d for d in domains if d]
-            except Exception:
-                domains = None
-
         try:
-            rows = run_query(
-                """
-                MATCH (n)-[r]-()
-                WHERE r.owner_type = $owner_type AND r.owner_id = $owner_id
-                  AND ($domains IS NULL OR toLower(coalesce(r.domain, "")) IN $domains)
-                  AND (
-                    toLower(coalesce(n.name, "")) IN $names
-                    OR toLower(coalesce(n.id, "")) IN $names
-                    OR toLower(coalesce(n.value, "")) IN $names
-                    OR toLower(coalesce(n.text, "")) IN $names
-                  )
-                RETURN DISTINCT n.id AS node_id
-                LIMIT $limit
-                """,
-                params={
-                    "names": cleaned,
-                    "domains": domains,
-                    "owner_type": owner_type,
-                    "owner_id": resolved_owner_id,
-                    "limit": limit_i,
-                },
+            rows = resolve_nodes(
+                tenant_id=request.context.tenant_id,
+                owner_type=owner_type,
+                owner_id=resolved_owner_id,
+                names=cleaned,
+                domain_scope=domain_scope,
+                limit=limit_i,
             )
         except Exception:
             logger.exception("Environment.graph_resolve_nodes failed")
             raise
 
-        out: List[str] = []
-        seen_ids = set()
-        for row in rows or []:
-            try:
-                node_id = row.get("node_id") if isinstance(row, dict) else None
-                s = str(node_id or "").strip()
-                if not s:
-                    continue
-                if s in seen_ids:
-                    continue
-                seen_ids.add(s)
-                out.append(s)
-                if len(out) >= limit_i:
-                    break
-            except Exception:
-                continue
-        return out
+        return list(rows or [])[:limit_i]
 
     async def graph_neighbors(
         self,
@@ -571,6 +532,7 @@ class UMAMemoryEnvironment:
                 graph_core.neighbors(
                     user_id=request.normalized_user_id,
                     node_id=node_id,
+                    tenant_id=request.context.tenant_id,
                     predicate_scope=predicate_scope,
                     domain_scope=domain_scope,
                     depth=depth_i,

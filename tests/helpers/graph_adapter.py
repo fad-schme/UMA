@@ -14,13 +14,15 @@ class RecordingGraphAdapter(GraphAdapter):
 
     def __init__(self, **_kwargs: Any) -> None:
         self.queries: List[Tuple[str, Optional[Dict[str, Any]]]] = []
+        self.next_results: List[List[Dict[str, Any]]] = []
 
     def run_query(
         self, cypher: str, params: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
         self.queries.append((str(cypher), dict(params) if isinstance(params, dict) else params))
+        if self.next_results:
+            return self.next_results.pop(0)
         return []
 
     def close(self) -> None:
         return
-

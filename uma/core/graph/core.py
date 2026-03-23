@@ -17,7 +17,7 @@ Graph traversal and persistence are governed by explicit ownership scope:
     (owner_type, owner_id)
 
 Where:
-- owner_type is one of {'user','agent'} (optionally 'global' later)
+- owner_type is one of {'user','agent','workspace'}
 - owner_id is the canonical identifier within that scope
 
 User canonicalization:
@@ -37,6 +37,7 @@ import re
 from typing import Any, List, Optional
 
 from ...adapters.graph.base import GraphAdapter
+from ...types.types_scope import validate_owner_type, validate_tenant_id
 from ..utils.identity import normalize_user_id
 from .updater import GraphUpdater
 
@@ -91,11 +92,13 @@ class TemporalGraphCore:
         subject: str,
         predicate: str,
         object: str,
+        tenant_id: str,
         owner_type: str,
         owner_id: str,
         source_chunk_id: str,
         created_at: str,
         updated_at: str,
+        scope_model_version: str | None = None,
         meta_json: str | None = None,
         domain: str | None = None,
     ) -> bool:
@@ -112,6 +115,14 @@ class TemporalGraphCore:
             bool: True if the upsert succeeded, False otherwise.
         """
         try:
+            tenant_id = validate_tenant_id(tenant_id)
+            owner_type = validate_owner_type(owner_type)
+            if owner_type == "system":
+                raise ValueError("TemporalGraphCore.insert_fact_triplet: system owner_type is not supported")
+            if owner_type == "user":
+                owner_id = normalize_user_id(owner_id)
+            if owner_type not in {"agent", "user", "workspace"}:
+                raise ValueError(f"TemporalGraphCore.insert_fact_triplet: unsupported owner_type={owner_type!r}")
             rel_type = self._sanitize_predicate(predicate)
 
             cypher = f"""
@@ -121,12 +132,14 @@ class TemporalGraphCore:
             MERGE (subj)-[r:{rel_type}]->(obj)
               SET
                 r.fact_id = $fact_id,
+                r.tenant_id = $tenant_id,
                 r.owner_type = $owner_type,
                 r.owner_id = $owner_id,
                 r.source_chunk_id = $source_chunk_id,
                 r.created_at = $created_at,
                 r.updated_at = $updated_at,
                 r.domain = $domain,
+                r.scope_model_version = $scope_model_version,
                 r.meta_json = $meta_json
 
             MERGE (f:Fact {{id: $fact_id}})
@@ -134,12 +147,14 @@ class TemporalGraphCore:
                 f.subject = $subject,
                 f.predicate = $predicate,
                 f.object = $object,
+                f.tenant_id = $tenant_id,
                 f.owner_type = $owner_type,
                 f.owner_id = $owner_id,
                 f.source_chunk_id = $source_chunk_id,
                 f.created_at = $created_at,
                 f.updated_at = $updated_at,
                 f.domain = $domain,
+                f.scope_model_version = $scope_model_version,
                 f.meta_json = $meta_json
 
             MERGE (f)-[:SUBJECT]->(subj)
@@ -152,11 +167,13 @@ class TemporalGraphCore:
                 "subject": subject,
                 "predicate": predicate,
                 "object": object,
+                "tenant_id": tenant_id,
                 "owner_type": owner_type,
                 "owner_id": owner_id,
                 "source_chunk_id": source_chunk_id,
                 "created_at": created_at,
                 "updated_at": updated_at,
+                "scope_model_version": scope_model_version,
                 "meta_json": meta_json,
                 "domain": domain,
             }
@@ -186,6 +203,7 @@ class TemporalGraphCore:
         self,
         user_id: str,
         node_id: str,
+        tenant_id: str,
         owner_type: str,
         owner_id: str,
         predicate_scope: Optional[List[str]] = None,
@@ -215,7 +233,7 @@ class TemporalGraphCore:
         node_id : str
             Starting node id.
         owner_type : str
-            One of {'user','agent'}.
+            One of {'user','agent','workspace'}.
         owner_id : str
             Canonical owner identifier (e.g. 'user:u1' or 'agent-default').
         predicate_scope : Optional[List[str]]
@@ -233,13 +251,22 @@ class TemporalGraphCore:
         if not owner_type or not owner_id:
             logger.error("TemporalGraphCore.neighbors: owner_type and owner_id are required")
             return []
+        if not tenant_id:
+            logger.error("TemporalGraphCore.neighbors: tenant_id is required")
+            return []
 
         # Canonicalize user owner_id for consistency (owner scoping, not subject normalization).
         try:
+            tenant_id = validate_tenant_id(tenant_id)
+            owner_type = validate_owner_type(owner_type)
+            if owner_type == "system":
+                raise ValueError("TemporalGraphCore.neighbors: system owner_type is not supported")
+            if owner_type not in {"agent", "user", "workspace"}:
+                raise ValueError(f"TemporalGraphCore.neighbors: unsupported owner_type={owner_type!r}")
             if owner_type == "user":
                 owner_id = normalize_user_id(owner_id)
         except Exception:
-            logger.exception("TemporalGraphCore.neighbors: invalid user owner_id")
+            logger.exception("TemporalGraphCore.neighbors: invalid scoped graph request")
             return []
 
         depth_i = max(1, min(5, int(depth)))
@@ -257,7 +284,7 @@ class TemporalGraphCore:
 
         cypher = f"""
         MATCH (n {{id: $node_id}})-[rs*1..{depth_i}]-(m)
-        WHERE ALL(r IN rs WHERE r.owner_type = $owner_type AND r.owner_id = $owner_id)
+        WHERE ALL(r IN rs WHERE r.tenant_id = $tenant_id AND r.owner_type = $owner_type AND r.owner_id = $owner_id)
         AND ($preds IS NULL OR ALL(r IN rs WHERE type(r) IN $preds))
         AND ($domains IS NULL OR ALL(r IN rs WHERE toLower(coalesce(r.domain, "")) IN $domains))
         RETURN DISTINCT m AS node, labels(m) AS labels, properties(m) AS properties
@@ -265,6 +292,7 @@ class TemporalGraphCore:
         """
         params = {
             "node_id": node_id,
+            "tenant_id": tenant_id,
             "owner_type": owner_type,
             "owner_id": owner_id,
             "preds": preds,
@@ -301,21 +329,96 @@ class TemporalGraphCore:
             logger.exception("TemporalGraphCore.neighbors failed.")
             return []
 
-    def query(
+    def resolve_nodes(
         self,
-        cypher: str,
-        params: Optional[dict] = None,
-    ) -> List[dict]:
-        """
-        Run a raw Cypher query through the adapter.
-
-        This is intended for controlled, internal call sites only.
-        """
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+        names: List[str],
+        domain_scope: Optional[List[str]] = None,
+        limit: int = 8,
+    ) -> List[str]:
         try:
-            return self.adapter.run_query(cypher, params=params or {})
+            tenant_id = validate_tenant_id(tenant_id)
+            owner_type = validate_owner_type(owner_type)
+            if owner_type == "system":
+                raise ValueError("TemporalGraphCore.resolve_nodes: system owner_type is not supported")
+            if owner_type not in {"agent", "user", "workspace"}:
+                raise ValueError(f"TemporalGraphCore.resolve_nodes: unsupported owner_type={owner_type!r}")
+            if owner_type == "user":
+                owner_id = normalize_user_id(owner_id)
         except Exception:
-            logger.exception("TemporalGraphCore.query failed.")
+            logger.exception("TemporalGraphCore.resolve_nodes: invalid scoped graph request")
             return []
+
+        limit_i = max(1, min(50, int(limit)))
+        cleaned: List[str] = []
+        seen = set()
+        for name in names or []:
+            value = str(name or "").strip().lower()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            cleaned.append(value)
+            if len(cleaned) >= 20:
+                break
+        if not cleaned:
+            return []
+
+        domains = None
+        if domain_scope:
+            domains = [str(d).strip().lower() for d in domain_scope if d]
+            domains = [d for d in domains if d]
+
+        try:
+            rows = self.adapter.run_query(
+                """
+                MATCH (n)-[r]-()
+                WHERE r.tenant_id = $tenant_id
+                  AND r.owner_type = $owner_type
+                  AND r.owner_id = $owner_id
+                  AND ($domains IS NULL OR toLower(coalesce(r.domain, "")) IN $domains)
+                  AND (
+                    toLower(coalesce(n.name, "")) IN $names
+                    OR toLower(coalesce(n.id, "")) IN $names
+                    OR toLower(coalesce(n.value, "")) IN $names
+                    OR toLower(coalesce(n.text, "")) IN $names
+                  )
+                RETURN DISTINCT n.id AS node_id
+                LIMIT $limit
+                """,
+                params={
+                    "tenant_id": tenant_id,
+                    "owner_type": owner_type,
+                    "owner_id": owner_id,
+                    "domains": domains,
+                    "names": cleaned,
+                    "limit": limit_i,
+                },
+            )
+        except Exception:
+            logger.exception("TemporalGraphCore.resolve_nodes failed")
+            return []
+
+        out: List[str] = []
+        seen_ids = set()
+        for row in rows or []:
+            try:
+                node_id = row.get("node_id") if isinstance(row, dict) else None
+                value = str(node_id or "").strip()
+                if not value or value in seen_ids:
+                    continue
+                seen_ids.add(value)
+                out.append(value)
+                if len(out) >= limit_i:
+                    break
+            except Exception:
+                continue
+        return out
+
+    def query(self, cypher: str, params: Optional[dict] = None) -> List[dict]:
+        raise RuntimeError("TemporalGraphCore.query is unsafe and not available in normal runtime flow")
 
     # ------------------------------------------------------------------
     # SHUTDOWN

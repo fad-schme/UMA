@@ -34,6 +34,9 @@ async def test_pipeline_updates_graph_with_facts_and_temporal_links(tmp_path):
         assert any("HAS_EPISODE" in c for c in cyphers)
         assert any("MERGE (f:Fact" in c or "MERGE (f:Fact" in c.replace("\n", " ") for c in cyphers)
         assert any("PRECEDES" in c for c in cyphers), "expected temporal PRECEDES/FOLLOWS edges"
+        assert any((params or {}).get("tenant_id") == "default" for _c, params in queries)
+        assert any((params or {}).get("owner_type") == "user" for _c, params in queries)
+        assert any((params or {}).get("scope_model_version") == "v2" for _c, params in queries)
     finally:
         try:
             mem.shutdown()

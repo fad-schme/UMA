@@ -23,9 +23,29 @@ import json
 import logging
 from typing import Any, List
 
+from ...stores.base_sql_store import DEFAULT_TENANT_ID
+from ...types.types_scope import validate_owner_type, validate_tenant_id
 from ..utils.identity import normalize_user_id
 
 logger = logging.getLogger(__name__)
+
+
+def _graph_scope_from_object(object: Any) -> tuple[str, str, str, str | None]:
+    tenant_id = str(getattr(object, "tenant_id", None) or DEFAULT_TENANT_ID)
+    owner_type = str(getattr(object, "owner_type", "") or "").strip()
+    owner_id_raw = str(getattr(object, "owner_id", "") or "").strip()
+    scope_model_version = getattr(object, "scope_model_version", None)
+
+    tenant_id = validate_tenant_id(tenant_id)
+    owner_type = validate_owner_type(owner_type)
+    if owner_type == "system":
+        raise ValueError("system owner_type is not supported for graph writes")
+    if owner_type not in {"agent", "user", "workspace"}:
+        raise ValueError(f"unsupported owner_type for graph writes: {owner_type!r}")
+    owner_id = normalize_user_id(owner_id_raw) if owner_type == "user" else owner_id_raw
+    if not owner_id:
+        raise ValueError("owner_id is required for graph writes")
+    return tenant_id, owner_type, owner_id, (str(scope_model_version) if scope_model_version else None)
 
 
 class GraphUpdater:
@@ -76,9 +96,7 @@ class GraphUpdater:
             if not hasattr(episode, "id") or not hasattr(episode, "timestamp"):
                 raise ValueError("Invalid episode object")
 
-            owner_type = str(getattr(episode, "owner_type", "user") or "user")
-            owner_id_raw = str(getattr(episode, "owner_id", "") or "")
-            owner_id = normalize_user_id(owner_id_raw) if owner_type == "user" else owner_id_raw
+            tenant_id, owner_type, owner_id, scope_model_version = _graph_scope_from_object(episode)
 
             self.graph_core.adapter.run_query(
                 """
@@ -86,20 +104,26 @@ class GraphUpdater:
                 MERGE (e:Episode {id: $episode_id})
                 SET e.summary = $summary,
                     e.timestamp = $timestamp,
+                    e.tenant_id = $tenant_id,
                     e.owner_type = $owner_type,
-                    e.owner_id = $owner_id
+                    e.owner_id = $owner_id,
+                    e.scope_model_version = $scope_model_version
                 MERGE (u)-[r:HAS_EPISODE]->(e)
                 SET r.timestamp = $timestamp,
+                    r.tenant_id = $tenant_id,
                     r.owner_type = $owner_type,
-                    r.owner_id = $owner_id
+                    r.owner_id = $owner_id,
+                    r.scope_model_version = $scope_model_version
                 """,
                 {
                     "user_id": owner_id,
                     "episode_id": str(episode.id),
                     "summary": getattr(episode, "summary", None),
                     "timestamp": episode.timestamp.isoformat(),
+                    "tenant_id": tenant_id,
                     "owner_type": owner_type,
                     "owner_id": owner_id,
+                    "scope_model_version": scope_model_version,
                 },
             )
 
@@ -125,19 +149,7 @@ class GraphUpdater:
                 return
 
             # Ownership is mandatory for graph navigation safety.
-            owner_type = str(getattr(fact, "owner_type", "") or "").strip()
-            owner_id_raw = str(getattr(fact, "owner_id", "") or "").strip()
-            if not owner_type or not owner_id_raw:
-                logger.warning(
-                    "GraphUpdater.add_fact skipped: missing owner (fact_id=%s owner_type=%r owner_id=%r)",
-                    getattr(fact, "id", None),
-                    owner_type,
-                    owner_id_raw,
-                )
-                return
-
-            # Canonicalize owner_id only for user-owned facts.
-            owner_id = normalize_user_id(owner_id_raw) if owner_type == "user" else owner_id_raw
+            tenant_id, owner_type, owner_id, scope_model_version = _graph_scope_from_object(fact)
 
             # IMPORTANT: do NOT normalize KB fact.subject into user:<id>.
             subj = str(getattr(fact, "subject", "") or "").strip()
@@ -206,11 +218,13 @@ class GraphUpdater:
                 subject=subj,
                 predicate=pred,
                 object=obj,
+                tenant_id=tenant_id,
                 owner_type=owner_type,
                 owner_id=owner_id,
                 source_chunk_id=source_chunk_id,
                 created_at=created_at_s,
                 updated_at=updated_at_s,
+                scope_model_version=scope_model_version,
                 meta_json=meta_json,
                 domain=domain,
             )
@@ -236,9 +250,7 @@ class GraphUpdater:
             return
 
         try:
-            owner_type = str(getattr(episode, "owner_type", "user") or "user")
-            owner_id_raw = str(getattr(episode, "owner_id", "") or "")
-            owner_id = normalize_user_id(owner_id_raw) if owner_type == "user" else owner_id_raw
+            tenant_id, owner_type, owner_id, scope_model_version = _graph_scope_from_object(episode)
         except Exception:
             logger.exception("GraphUpdater.link_episode_to_facts: invalid episode ownership")
             return
@@ -251,14 +263,18 @@ class GraphUpdater:
                     MATCH (e:Episode {id: $ep_id})
                     MATCH (f:Fact {id: $fact_id})
                     MERGE (e)-[r:MENTIONS]->(f)
-                    SET r.owner_type = $owner_type,
-                        r.owner_id = $owner_id
+                    SET r.tenant_id = $tenant_id,
+                        r.owner_type = $owner_type,
+                        r.owner_id = $owner_id,
+                        r.scope_model_version = $scope_model_version
                     """,
                     {
                         "ep_id": str(episode.id),
                         "fact_id": str(getattr(fact, "id", "")),
+                        "tenant_id": tenant_id,
                         "owner_type": owner_type,
                         "owner_id": owner_id,
+                        "scope_model_version": scope_model_version,
                     },
                 )
 
@@ -272,14 +288,18 @@ class GraphUpdater:
                     MATCH (e:Episode {{id: $ep_id}})
                     MERGE (o:Entity {{id: $object}})
                     MERGE (e)-[r:{predicate}]->(o)
-                    SET r.owner_type = $owner_type,
-                        r.owner_id = $owner_id
+                    SET r.tenant_id = $tenant_id,
+                        r.owner_type = $owner_type,
+                        r.owner_id = $owner_id,
+                        r.scope_model_version = $scope_model_version
                     """,
                     {
                         "ep_id": str(episode.id),
                         "object": obj,
+                        "tenant_id": tenant_id,
                         "owner_type": owner_type,
                         "owner_id": owner_id,
+                        "scope_model_version": scope_model_version,
                     },
                 )
 
@@ -300,26 +320,30 @@ class GraphUpdater:
         Add PRECEDES / FOLLOWS relationships between episodes with ownership.
         """
         try:
-            owner_type = str(getattr(ep_prev, "owner_type", "user") or "user")
-            owner_id_raw = str(getattr(ep_prev, "owner_id", "") or "")
-            owner_id = normalize_user_id(owner_id_raw) if owner_type == "user" else owner_id_raw
+            tenant_id, owner_type, owner_id, scope_model_version = _graph_scope_from_object(ep_prev)
 
             self.graph_core.adapter.run_query(
                 """
                 MATCH (a:Episode {id: $a})
                 MATCH (b:Episode {id: $b})
                 MERGE (a)-[p:PRECEDES]->(b)
-                SET p.owner_type = $owner_type,
-                    p.owner_id = $owner_id
+                SET p.tenant_id = $tenant_id,
+                    p.owner_type = $owner_type,
+                    p.owner_id = $owner_id,
+                    p.scope_model_version = $scope_model_version
                 MERGE (b)-[f:FOLLOWS]->(a)
-                SET f.owner_type = $owner_type,
-                    f.owner_id = $owner_id
+                SET f.tenant_id = $tenant_id,
+                    f.owner_type = $owner_type,
+                    f.owner_id = $owner_id,
+                    f.scope_model_version = $scope_model_version
                 """,
                 {
                     "a": str(ep_prev.id),
                     "b": str(ep_next.id),
+                    "tenant_id": tenant_id,
                     "owner_type": owner_type,
                     "owner_id": owner_id,
+                    "scope_model_version": scope_model_version,
                 },
             )
 

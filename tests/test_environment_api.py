@@ -9,6 +9,7 @@ from uma.core.retrieval.rlm.request import RetrievalRequest
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
 from uma.types import RuntimeContext
 from uma.types import Episode, Fact
+from tests.helpers.graph_adapter import RecordingGraphAdapter
 
 
 @pytest.mark.asyncio
@@ -87,6 +88,66 @@ async def test_environment_graph_neighbors_returns_empty_when_no_edges(uma_memor
         owner_id=uma_memory.agent_id,
     )
     assert out == []
+
+    adapter = getattr(uma_memory.graph_core, "adapter", None)
+    queries = getattr(adapter, "queries", None)
+    if isinstance(queries, list) and queries:
+        _cypher, params = queries[-1]
+        assert params["tenant_id"] == "tenant-test"
+        assert params["owner_type"] == "agent"
+        assert params["owner_id"] == (uma_memory.agent_id or "agent-default")
+
+
+@pytest.mark.asyncio
+async def test_environment_graph_resolve_nodes_is_tenant_and_owner_scoped(uma_memory):
+    env = UMAMemoryEnvironment(uma_memory)
+    request = RetrievalRequest.from_runtime_context(
+        RuntimeContext(
+            tenant_id="tenant-test",
+            agent_id=uma_memory.agent_id or "agent-default",
+            request_id="req-env-graph-resolve",
+            user_id="user:u1",
+        )
+    )
+    adapter = RecordingGraphAdapter()
+    adapter.next_results.append([{"node_id": "resolved-node"}])
+    uma_memory.graph_core.adapter = adapter
+
+    out = await env.graph_resolve_nodes(
+        request,
+        names=["Resolved Node"],
+        owner_type="agent",
+        owner_id=uma_memory.agent_id,
+        limit=5,
+    )
+    assert out == ["resolved-node"]
+    assert adapter.queries
+    _cypher, params = adapter.queries[-1]
+    assert params["tenant_id"] == "tenant-test"
+    assert params["owner_type"] == "agent"
+    assert params["owner_id"] == (uma_memory.agent_id or "agent-default")
+
+
+@pytest.mark.asyncio
+async def test_environment_graph_neighbors_rejects_workspace_scope_in_runtime_flow(uma_memory):
+    env = UMAMemoryEnvironment(uma_memory)
+    request = RetrievalRequest.from_runtime_context(
+        RuntimeContext(
+            tenant_id="tenant-test",
+            agent_id=uma_memory.agent_id or "agent-default",
+            request_id="req-env-graph-workspace",
+            user_id="user:u1",
+        )
+    )
+    with pytest.raises(ValueError, match="invalid owner_type"):
+        await env.graph_neighbors(
+            request,
+            "node1",
+            depth=1,
+            k=5,
+            owner_type="workspace",
+            owner_id="workspace:alpha",
+        )
 
 
 def test_environment_time_range_helpers():
