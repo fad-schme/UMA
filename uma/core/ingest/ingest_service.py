@@ -15,10 +15,9 @@ from .graph_updater import update_graph
 from .episodic_writer import write_document_episode
 from .consolidation_trigger import maybe_trigger_consolidation
 
-from ...types import Chunk, Fact, TargetOwner, make_target_owner
+from ...types import Chunk, Fact, TargetOwner
 from ...stores.document_sql import DocumentRecord
-from ...stores.base_sql_store import DEFAULT_TENANT_ID
-from ..utils.identity import normalize_user_id
+from ..utils.ownership import resolve_target_owner
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +28,10 @@ _CHUNKER_VERSION = "doc_chunk_v2"
 
 
 def _coerce_ingest_target_owner(owner_type: str, owner_id: str) -> TargetOwner:
-    normalized_owner_id = normalize_user_id(owner_id) if owner_type == "user" else owner_id
-    return make_target_owner(
-        tenant_id=DEFAULT_TENANT_ID,
+    return resolve_target_owner(
         owner_type=owner_type,
-        owner_id=normalized_owner_id,
-        allowed_owner_types=("agent", "user"),
+        owner_id=owner_id,
+        allowed_owner_types=("agent", "user", "workspace"),
     )
 
 
@@ -82,8 +79,9 @@ def _merge_manifest_meta(
 async def ingest_document(
     pdf_path: str,
     *,
-    owner_type: str,
-    owner_id: str,
+    target_owner: TargetOwner | None = None,
+    owner_type: str | None = None,
+    owner_id: str | None = None,
     config: IngestConfig | None = None,
     memory: Any | None = None,
     embedder: Any | None = None,
@@ -136,7 +134,15 @@ async def ingest_document(
         document_store = document_store or getattr(memory, "document_store", None)
         graph_core = graph_core or getattr(memory, "graph_core", None)
 
-    target_owner = _coerce_ingest_target_owner(owner_type, owner_id)
+    if target_owner is None:
+        if not owner_type or not owner_id:
+            raise ValueError("ingest_document: target_owner or owner_type/owner_id is required")
+        target_owner = _coerce_ingest_target_owner(owner_type, owner_id)
+    else:
+        target_owner = resolve_target_owner(
+            target_owner=target_owner,
+            allowed_owner_types=("agent", "user", "workspace"),
+        )
     owner_type = target_owner.owner_type
     owner_id = target_owner.owner_id
     tenant_id = target_owner.tenant_id

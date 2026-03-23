@@ -4,9 +4,9 @@ ProceduralFeature: UMA plugin for skill-based procedural memory.
 After attaching to UMAMemory, the agent gains:
 
 - procedural_health() -> FeatureResult
-- procedural_add_skill(skill: Skill, embedding: List[float]) -> FeatureResult
-- procedural_find_skills(query_text: str, *, user_id: str, k: int = 5) -> FeatureResult
-- procedural_get_skill(skill_id: str, *, user_id: str) -> FeatureResult
+- procedural_add_skill(skill: Skill, embedding: List[float], *, target_owner: TargetOwner | None = None) -> FeatureResult
+- procedural_find_skills(query_text: str, *, user_id: str | None = None, owner_type: str | None = None, owner_id: str | None = None, k: int = 5) -> FeatureResult
+- procedural_get_skill(skill_id: str, *, user_id: str | None = None, owner_type: str | None = None, owner_id: str | None = None) -> FeatureResult
 
 The feature is OPTIONAL and built on top of the core UMA memory system.
 
@@ -23,9 +23,9 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, List, Optional
 
+from ...core.utils.ownership import resolve_ownership_ref
 from ...core.utils.registry import FeatureContext, FeatureHandle, FeatureResult, UMAFeature
-from ...core.utils.identity import normalize_user_id
-from ...types import Skill
+from ...types import OwnershipRef, Skill, TargetOwner
 from .matcher import SkillMatcher
 
 if TYPE_CHECKING:
@@ -98,7 +98,34 @@ class ProceduralFeature(UMAFeature):
             ok = self.core is not None and self.embedder is not None
             return FeatureResult.success() if ok else FeatureResult.failure(["missing dependencies"])
 
-        async def procedural_add_skill(skill: Skill, embedding: List[float]) -> FeatureResult:
+        def _resolve_owner(
+            *,
+            user_id: str | None = None,
+            owner_type: str | None = None,
+            owner_id: str | None = None,
+        ) -> OwnershipRef:
+            if user_id and user_id.strip():
+                if owner_type or owner_id:
+                    raise ValueError("provide either user_id or owner_type/owner_id, not both")
+                return resolve_ownership_ref(
+                    owner_type="user",
+                    owner_id=user_id,
+                    allowed_owner_types=("agent", "user", "workspace"),
+                )
+            if not owner_type or not owner_id:
+                raise ValueError("missing scoped owner")
+            return resolve_ownership_ref(
+                owner_type=owner_type,
+                owner_id=owner_id,
+                allowed_owner_types=("agent", "user", "workspace"),
+            )
+
+        async def procedural_add_skill(
+            skill: Skill,
+            embedding: List[float],
+            *,
+            target_owner: TargetOwner | None = None,
+        ) -> FeatureResult:
             """
             Store a new procedural skill via ProceduralCore.
             """
@@ -109,7 +136,10 @@ class ProceduralFeature(UMAFeature):
                 logger.warning("ProceduralFeature.add_skill: invalid embedding.")
                 return FeatureResult.failure(["invalid embedding"])
             try:
-                await self.core.add_skill(skill, embedding)
+                if target_owner is not None:
+                    await self.core.add_skill_for_owner(skill, embedding, target_owner=target_owner)
+                else:
+                    await self.core.add_skill(skill, embedding)
                 logger.info("ProceduralFeature.add_skill: stored skill id=%s", skill.id)
                 return FeatureResult.success()
             except Exception as exc:
@@ -119,7 +149,9 @@ class ProceduralFeature(UMAFeature):
         async def procedural_find_skills(
             query_text: str,
             *,
-            user_id: str,
+            user_id: str | None = None,
+            owner_type: str | None = None,
+            owner_id: str | None = None,
             k: int = 5,
         ) -> FeatureResult:
             """
@@ -139,9 +171,14 @@ class ProceduralFeature(UMAFeature):
             if not query_text_clean:
                 logger.debug("ProceduralFeature.find_skills: empty query_text.")
                 return FeatureResult.success([])
-            if not user_id or not isinstance(user_id, str) or not user_id.strip():
-                logger.error("ProceduralFeature.find_skills: missing user_id.")
-                return FeatureResult.failure(["missing user_id"], data=[])
+            try:
+                owner = _resolve_owner(user_id=user_id, owner_type=owner_type, owner_id=owner_id)
+            except Exception as exc:
+                logger.error("ProceduralFeature.find_skills: invalid owner scope.")
+                message = str(exc)
+                if message == "missing scoped owner":
+                    message = "missing user_id"
+                return FeatureResult.failure([message], data=[])
 
             try:
                 vectors = await self.embedder.embed([query_text_clean])
@@ -166,12 +203,9 @@ class ProceduralFeature(UMAFeature):
 
             k_clamped = min(k_int, self.max_k)
             try:
-                normalized_user_id = normalize_user_id(user_id)
                 candidates = await self.core.search(
-                    user_id=normalized_user_id,
                     query_embedding=query_emb,
-                    owner_type="user",
-                    owner_id=normalized_user_id,
+                    owner=owner,
                     k=k_clamped,
                 )
             except Exception as exc:
@@ -190,7 +224,13 @@ class ProceduralFeature(UMAFeature):
                 logger.exception("ProceduralFeature.find_skills: matcher failed.")
                 return FeatureResult.failure([str(exc)], data=[])
 
-        async def procedural_get_skill(skill_id: str, *, user_id: str) -> FeatureResult:
+        async def procedural_get_skill(
+            skill_id: str,
+            *,
+            user_id: str | None = None,
+            owner_type: str | None = None,
+            owner_id: str | None = None,
+        ) -> FeatureResult:
             """
             Retrieve a single skill by ID.
 
@@ -202,16 +242,19 @@ class ProceduralFeature(UMAFeature):
             if not skill_id:
                 logger.debug("ProceduralFeature.get_skill: empty skill_id.")
                 return FeatureResult.failure(["empty skill_id"], data=None)
-            if not user_id or not isinstance(user_id, str) or not user_id.strip():
-                logger.error("ProceduralFeature.get_skill: missing user_id.")
-                return FeatureResult.failure(["missing user_id"], data=None)
+            try:
+                owner = _resolve_owner(user_id=user_id, owner_type=owner_type, owner_id=owner_id)
+            except Exception as exc:
+                logger.error("ProceduralFeature.get_skill: invalid owner scope.")
+                message = str(exc)
+                if message == "missing scoped owner":
+                    message = "missing user_id"
+                return FeatureResult.failure([message], data=None)
 
             try:
-                normalized_user_id = normalize_user_id(user_id)
                 skill = await self.core.get_skill(
                     skill_id,
-                    owner_type="user",
-                    owner_id=normalized_user_id,
+                    owner=owner,
                 )
                 if skill is None:
                     logger.info("ProceduralFeature.get_skill: no skill for id=%s", skill_id)

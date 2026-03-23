@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from uma.types import Skill
+from uma.types import OwnershipRef, Skill
 
 
 @pytest.mark.asyncio
@@ -75,10 +75,8 @@ async def test_procedural_search_does_not_require_subject(uma_memory):
 
     query_embedding = (await memory.embedder.embed(["hello world procedure"]))[0]
     res = await memory.procedural_core.search(
-        user_id="user:u1",
         query_embedding=query_embedding,
-        owner_type=owner_type,
-        owner_id=owner_id,
+        owner=OwnershipRef(tenant_id="default", owner_type=owner_type, owner_id=owner_id),
         k=5,
     )
     assert res and res[0].id == "skill_s1"

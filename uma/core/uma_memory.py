@@ -126,7 +126,7 @@ from .initializers.runtime import init_retrieval_ready, init_ingestion_ready, sc
 # Optional Features
 from .utils.registry import FeatureLoader, FeaturePolicy, default_feature_registry
 from ..stores.base_sql_store import DEFAULT_TENANT_ID
-from ..types import RuntimeContext, SessionScope
+from ..types import RuntimeContext, SessionScope, TargetOwner
 from .runtime import UMARuntime
 from .retrieval.rlm.request import RetrievalRequest
 
@@ -913,8 +913,9 @@ class UMAMemory:
         self,
         file_path: str,
         *,
-        owner_type: str,
-        owner_id: str,
+        target_owner: Optional[TargetOwner] = None,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
         config: Optional[Any] = None,
     ) -> Any:
         """
@@ -925,6 +926,7 @@ class UMAMemory:
         from .ingest.ingest_service import ingest_document as _ingest
         return await _ingest(
             file_path,
+            target_owner=target_owner,
             owner_type=owner_type,
             owner_id=owner_id,
             config=config,

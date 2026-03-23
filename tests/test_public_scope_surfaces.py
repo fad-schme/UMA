@@ -7,7 +7,8 @@ import pytest
 import yaml
 
 from uma.core.uma_memory import UMAMemory
-from uma.types import Skill
+from uma.core.retrieval.rlm.request import RetrievalRequest
+from uma.types import TargetOwner, Skill
 
 from tests.helpers.runtime import build_test_config
 
@@ -92,6 +93,63 @@ async def test_public_procedural_reads_no_longer_depend_on_ambient_memory_user_i
         assert not result.ok
         assert "missing user_id" in result.errors
         assert not hasattr(memory, "user_id")
+    finally:
+        memory.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_public_procedural_reads_accept_explicit_workspace_scope_without_broadening_retrieval(tmp_path) -> None:
+    memory = await _init_memory_with_procedural_feature(tmp_path)
+    try:
+        now = datetime.now(timezone.utc)
+        skill = Skill(
+            id="skill_workspace_owned",
+            name="Workspace rollout",
+            description="Run the shared workspace rollout procedure safely.",
+            created_at=now,
+            updated_at=now,
+            trigger_phrases=["workspace rollout"],
+            trigger_patterns=[],
+            plan={"steps": ["rollout"]},
+            tools=["shell"],
+            example="workspace rollout",
+            meta={},
+        )
+        embedding = (await memory.embedder.embed([skill.description]))[0]
+        add_result = await memory.procedural_add_skill(
+            skill,
+            embedding,
+            target_owner=TargetOwner(
+                tenant_id="default",
+                owner_type="workspace",
+                owner_id="workspace:alpha",
+                workspace_id="workspace:alpha",
+            ),
+        )
+        assert add_result.ok
+
+        find_result = await memory.procedural_find_skills(
+            "workspace rollout",
+            owner_type="workspace",
+            owner_id="workspace:alpha",
+            k=5,
+        )
+        assert find_result.ok
+        assert [item.id for item in find_result.data] == ["skill_workspace_owned"]
+
+        get_result = await memory.procedural_get_skill(
+            "skill_workspace_owned",
+            owner_type="workspace",
+            owner_id="workspace:alpha",
+        )
+        assert get_result.ok
+        assert get_result.data is not None
+        assert get_result.data.owner_type == "workspace"
+
+        request = RetrievalRequest.from_runtime_context(
+            memory._build_runtime_context_for_retrieval(user_id="user:u1")
+        )
+        assert [scope.owner_type for scope in request.scopes] == ["agent", "user"]
     finally:
         memory.shutdown()
 

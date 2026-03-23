@@ -17,8 +17,10 @@ from dataclasses import replace
 import logging
 from typing import Any, List, Optional
 
-from ...types import Skill, TargetOwner, make_target_owner
+from ...stores.base_sql_store import DEFAULT_TENANT_ID
+from ...types import OwnershipRef, Skill, TargetOwner
 from ..utils.dedupe import dedupe_by_id
+from ..utils.ownership import resolve_ownership_ref, resolve_target_owner
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +39,26 @@ class ProceduralCore:
     # ------------------------------------------------------------------
 
     def _target_owner_from_skill(self, skill: Skill) -> TargetOwner:
-        return make_target_owner(
-            tenant_id=getattr(skill, "tenant_id", None) or "default",
+        return resolve_target_owner(
+            tenant_id=getattr(skill, "tenant_id", None) or DEFAULT_TENANT_ID,
             owner_type=getattr(skill, "owner_type", None) or "user",
             owner_id=getattr(skill, "owner_id", None) or "",
             workspace_id=getattr(skill, "workspace_id", None),
+            allowed_owner_types=("agent", "user", "workspace"),
+        )
+
+    def _read_owner_ref(
+        self,
+        *,
+        owner: OwnershipRef | None = None,
+        owner_type: str | None = None,
+        owner_id: str | None = None,
+    ) -> OwnershipRef:
+        return resolve_ownership_ref(
+            owner=owner,
+            tenant_id=(owner.tenant_id if owner is not None else DEFAULT_TENANT_ID),
+            owner_type=owner_type,
+            owner_id=owner_id,
             allowed_owner_types=("agent", "user", "workspace"),
         )
 
@@ -55,11 +72,8 @@ class ProceduralCore:
         if self.store is None:
             return None
         try:
-            normalized_owner = make_target_owner(
-                tenant_id=target_owner.tenant_id,
-                owner_type=target_owner.owner_type,
-                owner_id=target_owner.owner_id,
-                workspace_id=target_owner.workspace_id,
+            normalized_owner = resolve_target_owner(
+                target_owner=target_owner,
                 allowed_owner_types=("agent", "user", "workspace"),
             )
             normalized_skill = replace(
@@ -88,16 +102,24 @@ class ProceduralCore:
         self,
         skill_id: str,
         *,
-        owner_type: str,
-        owner_id: str,
+        owner: OwnershipRef | None = None,
+        owner_type: str | None = None,
+        owner_id: str | None = None,
     ) -> Optional[Skill]:
         if self.store is None or not skill_id:
             return None
         try:
+            read_owner = self._read_owner_ref(owner=owner, owner_type=owner_type, owner_id=owner_id)
+        except ValueError:
+            raise
+        except Exception:
+            logger.exception("ProceduralCore.get_skill failed for id=%s", skill_id)
+            return None
+        try:
             return await self.store.get_skill(
                 skill_id,
-                owner_type=owner_type,
-                owner_id=owner_id,
+                owner_type=read_owner.owner_type,
+                owner_id=read_owner.owner_id,
             )
         except Exception:
             logger.exception("ProceduralCore.get_skill failed for id=%s", skill_id)
@@ -107,17 +129,25 @@ class ProceduralCore:
         self,
         ids: List[str],
         *,
-        owner_type: str,
-        owner_id: str,
+        owner: OwnershipRef | None = None,
+        owner_type: str | None = None,
+        owner_id: str | None = None,
     ) -> List[Skill]:
         if self.store is None or not ids:
+            return []
+        try:
+            read_owner = self._read_owner_ref(owner=owner, owner_type=owner_type, owner_id=owner_id)
+        except ValueError:
+            raise
+        except Exception:
+            logger.exception("ProceduralCore.fetch_by_ids failed")
             return []
         try:
             if hasattr(self.store, "fetch_skills_by_ids"):
                 return await self.store.fetch_skills_by_ids(
                     ids,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
+                    owner_type=read_owner.owner_type,
+                    owner_id=read_owner.owner_id,
                 )
             logger.error("ProceduralCore.fetch_by_ids requires fetch_skills_by_ids support")
             raise RuntimeError("ProceduralCore.fetch_by_ids requires fetch_skills_by_ids support")
@@ -128,16 +158,24 @@ class ProceduralCore:
     async def list_skills(
         self,
         *,
-        owner_type: str,
-        owner_id: str,
+        owner: OwnershipRef | None = None,
+        owner_type: str | None = None,
+        owner_id: str | None = None,
         limit: Optional[int] = None,
     ) -> List[Skill]:
         if self.store is None:
             return []
         try:
+            read_owner = self._read_owner_ref(owner=owner, owner_type=owner_type, owner_id=owner_id)
+        except ValueError:
+            raise
+        except Exception:
+            logger.exception("ProceduralCore.list_skills failed")
+            return []
+        try:
             return await self.store.list_skills(
-                owner_type=owner_type,
-                owner_id=owner_id,
+                owner_type=read_owner.owner_type,
+                owner_id=read_owner.owner_id,
                 limit=limit,
             )
         except Exception:
@@ -148,16 +186,24 @@ class ProceduralCore:
         self,
         skill_id: str,
         *,
-        owner_type: str,
-        owner_id: str,
+        owner: OwnershipRef | None = None,
+        owner_type: str | None = None,
+        owner_id: str | None = None,
     ) -> bool:
         if self.store is None or not skill_id:
             return False
         try:
+            read_owner = self._read_owner_ref(owner=owner, owner_type=owner_type, owner_id=owner_id)
+        except ValueError:
+            raise
+        except Exception:
+            logger.exception("ProceduralCore.delete_skill failed for id=%s", skill_id)
+            return False
+        try:
             await self.store.delete_skill(
                 skill_id,
-                owner_type=owner_type,
-                owner_id=owner_id,
+                owner_type=read_owner.owner_type,
+                owner_id=read_owner.owner_id,
             )
             return True
         except Exception:
@@ -170,21 +216,32 @@ class ProceduralCore:
 
     async def search(
         self,
-        user_id: str,
         query_embedding: List[float],
         *,
-        owner_type: str,
-        owner_id: str,
+        owner: OwnershipRef | None = None,
+        owner_type: str | None = None,
+        owner_id: str | None = None,
         k: int = 5,
     ) -> List[Skill]:
         if self.store is None:
             return []
         skills: List[Skill] = []
         try:
+            read_owner = self._read_owner_ref(owner=owner, owner_type=owner_type, owner_id=owner_id)
+        except ValueError:
+            raise
+        except Exception:
+            logger.exception(
+                "ProceduralCore.search failed owner=%s:%s",
+                owner_type if owner is None else owner.owner_type,
+                owner_id if owner is None else owner.owner_id,
+            )
+            return []
+        try:
             found = await self.store.search(
                 query_embedding=query_embedding,
-                owner_type=owner_type,
-                owner_id=owner_id,
+                owner_type=read_owner.owner_type,
+                owner_id=read_owner.owner_id,
                 k=int(k),
             )
             if found:
@@ -192,8 +249,8 @@ class ProceduralCore:
         except Exception:
             logger.exception(
                 "ProceduralCore.search failed owner=%s:%s",
-                owner_type,
-                owner_id,
+                owner_type if owner is None else owner.owner_type,
+                owner_id if owner is None else owner.owner_id,
             )
         return dedupe_by_id(skills)
 

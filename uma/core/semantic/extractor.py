@@ -257,7 +257,7 @@ class FactExtractor:
         """
         if not chunks:
             return []
-        if owner_type not in ("user", "agent"):
+        if owner_type not in ("user", "agent", "workspace"):
             raise ValueError(f"extract_chunk_facts_batch: invalid owner_type={owner_type!r}")
         if not owner_id or not isinstance(owner_id, str):
             raise ValueError("extract_chunk_facts_batch: owner_id must be a non-empty string")
@@ -443,7 +443,7 @@ class FactExtractor:
     ) -> List[Fact]:
         if chunk is None:
             return []
-        if owner_type not in ("user", "agent"):
+        if owner_type not in ("user", "agent", "workspace"):
             raise ValueError(f"extract_chunk_facts_one: invalid owner_type={owner_type!r}")
         if not owner_id or not isinstance(owner_id, str):
             raise ValueError("extract_chunk_facts_one: owner_id must be a non-empty string")

@@ -861,7 +861,6 @@ class UMAMemoryEnvironment:
                 logger.error("Environment.execute_action: procedural_core is None")
                 raise RuntimeError("Environment.execute_action: procedural_core is None")
             return await procedural_core.search(
-                user_id=None,
                 query_embedding=[float(x) for x in query_embedding],
                 owner_type=lane_owner_type,
                 owner_id=lane_owner_id,
