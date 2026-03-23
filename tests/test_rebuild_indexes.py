@@ -164,6 +164,7 @@ async def test_rebuild_derived_indexes_replays_graph_from_authoritative_scope(um
     adapter.queries.clear()
 
     result = await memory.rebuild_derived_indexes(
+        tenant_id="tenant-a",
         owner_type="user",
         owner_id=owner_id,
         include_procedural=False,
@@ -191,6 +192,7 @@ async def test_rebuild_derived_indexes_replays_graph_from_authoritative_scope(um
     first_query_count = len(adapter.queries)
 
     result_again = await memory.rebuild_derived_indexes(
+        tenant_id="tenant-a",
         owner_type="user",
         owner_id=owner_id,
         include_procedural=False,
@@ -230,6 +232,7 @@ async def test_rebuild_vector_indexes_preserves_promoted_workspace_fact_scope(um
     memory.semantic_core.vector_index().delete([fact.id])
 
     result = await memory.rebuild_vector_indexes(
+        tenant_id="tenant-w",
         owner_type="workspace",
         owner_id="workspace:alpha",
         include_episodic=False,
@@ -244,3 +247,157 @@ async def test_rebuild_vector_indexes_preserves_promoted_workspace_fact_scope(um
     assert metadata["workspace_id"] == "workspace:alpha"
     assert metadata["session_id"] is None
     assert metadata["scope_model_version"] == "v2"
+
+
+@pytest.mark.asyncio
+async def test_rebuild_derived_indexes_is_tenant_scoped_for_identical_owner_tuple(uma_memory):
+    memory = uma_memory
+    owner_id = normalize_user_id("user:shared")
+    base_ts = datetime.utcnow()
+    embedding = (await memory.embedder.embed(["tenant scoped rebuild"]))[0]
+
+    await memory.episodic_core.add_episode(
+        Episode(
+            id="ep-tenant-a",
+            timestamp=base_ts,
+            summary="tenant a episode",
+            user_id=owner_id,
+            owner_type="user",
+            owner_id=owner_id,
+            tenant_id="tenant-a",
+            session_id="session-a",
+            origin_agent_id="agent-a",
+            origin_user_id=owner_id,
+            origin_session_id="session-a",
+            meta={"turn_id": "turn-a"},
+        ),
+        embedding,
+    )
+    await memory.episodic_core.add_episode(
+        Episode(
+            id="ep-tenant-b",
+            timestamp=base_ts,
+            summary="tenant b episode",
+            user_id=owner_id,
+            owner_type="user",
+            owner_id=owner_id,
+            tenant_id="tenant-b",
+            session_id="session-b",
+            origin_agent_id="agent-b",
+            origin_user_id=owner_id,
+            origin_session_id="session-b",
+            meta={"turn_id": "turn-b"},
+        ),
+        embedding,
+    )
+
+    await memory.semantic_core.upsert_fact(
+        Fact(
+            id="fact_tenant_rebuild_a",
+            subject=owner_id,
+            predicate="LIKES",
+            object="alpha",
+            created_at=base_ts,
+            updated_at=base_ts,
+            source_ids=["chunk-a"],
+            confidence=0.9,
+            tenant_id="tenant-a",
+            owner_type="user",
+            owner_id=owner_id,
+            session_id="session-a",
+            origin_agent_id="agent-a",
+            origin_user_id=owner_id,
+            origin_session_id="session-a",
+            meta={"turn_id": "turn-a"},
+        ),
+        embedding,
+    )
+    await memory.semantic_core.upsert_fact(
+        Fact(
+            id="fact_tenant_rebuild_b",
+            subject=owner_id,
+            predicate="LIKES",
+            object="beta",
+            created_at=base_ts,
+            updated_at=base_ts,
+            source_ids=["chunk-b"],
+            confidence=0.9,
+            tenant_id="tenant-b",
+            owner_type="user",
+            owner_id=owner_id,
+            session_id="session-b",
+            origin_agent_id="agent-b",
+            origin_user_id=owner_id,
+            origin_session_id="session-b",
+            meta={"turn_id": "turn-b"},
+        ),
+        embedding,
+    )
+
+    await memory.procedural_core.add_skill(
+        Skill(
+            id="skill_tenant_rebuild_a",
+            name="Tenant A Skill",
+            description="alpha",
+            created_at=base_ts,
+            updated_at=base_ts,
+            tenant_id="tenant-a",
+            owner_type="user",
+            owner_id=owner_id,
+            trigger_phrases=["alpha"],
+            trigger_patterns=[],
+            plan={"steps": ["a"]},
+            tools=["tool-a"],
+            example="alpha",
+            meta={},
+        ),
+        embedding,
+    )
+    await memory.procedural_core.add_skill(
+        Skill(
+            id="skill_tenant_rebuild_b",
+            name="Tenant B Skill",
+            description="beta",
+            created_at=base_ts,
+            updated_at=base_ts,
+            tenant_id="tenant-b",
+            owner_type="user",
+            owner_id=owner_id,
+            trigger_phrases=["beta"],
+            trigger_patterns=[],
+            plan={"steps": ["b"]},
+            tools=["tool-b"],
+            example="beta",
+            meta={},
+        ),
+        embedding,
+    )
+
+    memory.episodic_core.vector_index().delete(["ep-tenant-a", "ep-tenant-b"])
+    memory.semantic_core.vector_index().delete(["fact_tenant_rebuild_a", "fact_tenant_rebuild_b"])
+    memory.procedural_core.vector_index().delete(["skill_tenant_rebuild_a", "skill_tenant_rebuild_b"])
+    memory.graph_core.adapter.queries.clear()
+
+    result = await memory.rebuild_derived_indexes(
+        tenant_id="tenant-a",
+        owner_type="user",
+        owner_id=owner_id,
+    )
+
+    assert result["status"] in ("ok", "degraded")
+    assert result["vector"]["report"]["episodic"]["count"] == 1
+    assert result["vector"]["report"]["semantic"]["count"] == 1
+    assert result["vector"]["report"]["procedural"]["count"] == 1
+    assert result["graph"]["episodes"] == 1
+    assert result["graph"]["facts"] == 1
+
+    assert "ep-tenant-a" in memory.episodic_core.vector_index()._vectors
+    assert "ep-tenant-b" not in memory.episodic_core.vector_index()._vectors
+    assert "fact_tenant_rebuild_a" in memory.semantic_core.vector_index()._vectors
+    assert "fact_tenant_rebuild_b" not in memory.semantic_core.vector_index()._vectors
+    assert "skill_tenant_rebuild_a" in memory.procedural_core.vector_index()._vectors
+    assert "skill_tenant_rebuild_b" not in memory.procedural_core.vector_index()._vectors
+
+    params_list = [params or {} for _cypher, params in memory.graph_core.adapter.queries]
+    assert any(params.get("tenant_id") == "tenant-a" and params.get("episode_id") == "ep-tenant-a" for params in params_list)
+    assert not any(params.get("tenant_id") == "tenant-b" for params in params_list)

@@ -151,12 +151,23 @@ class ChunkSQLStore(BaseVectorSQLStore):
     # Insert/Upsert
     # ------------------------------------------------------------------ #
 
-    def _owner_where(self, owner_type: Optional[str], owner_id: Optional[str], params: List[Any]) -> str:
+    def _scope_where(
+        self,
+        tenant_id: Optional[str],
+        owner_type: Optional[str],
+        owner_id: Optional[str],
+        params: List[Any],
+    ) -> str:
+        if tenant_id:
+            params.append(tenant_id)
+        else:
+            logger.error("ChunkSQLStore requires tenant_id")
+            raise ValueError("ChunkSQLStore requires tenant_id")
         if not owner_type or not owner_id:
             logger.error("ChunkSQLStore requires owner_type and owner_id")
             raise ValueError("ChunkSQLStore requires owner_type and owner_id")
         params.extend([owner_type, owner_id])
-        return "owner_type=? AND owner_id=?"
+        return "tenant_id=? AND owner_type=? AND owner_id=?"
 
     async def upsert_chunk(self, chunk: Chunk, embedding: List[float]) -> None:
         conn = self._conn()
@@ -226,6 +237,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
             # Vector index upsert (projection)
             try:
                 vector_meta = {
+                    "tenant_id": getattr(chunk, "tenant_id", None) or DEFAULT_TENANT_ID,
                     "doc_id": chunk.doc_id,
                     "position": int(chunk.position),
                     "page_start": int(chunk.page_range[0]),
@@ -268,16 +280,21 @@ class ChunkSQLStore(BaseVectorSQLStore):
         query_embedding: List[float],
         *,
         doc_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
         k: int = 10,
     ) -> List[Chunk]:
+        if not tenant_id:
+            logger.error("ChunkSQLStore.search requires tenant_id")
+            raise ValueError("ChunkSQLStore.search requires tenant_id")
         if not owner_type or not owner_id:
             logger.error("ChunkSQLStore.search requires owner_type and owner_id")
             raise ValueError("ChunkSQLStore.search requires owner_type and owner_id")
         filters: Dict[str, Any] = {}
         if doc_id:
             filters["doc_id"] = doc_id
+        filters["tenant_id"] = tenant_id
         filters["owner_type"] = owner_type
         filters["owner_id"] = owner_id
         try:
@@ -296,7 +313,12 @@ class ChunkSQLStore(BaseVectorSQLStore):
                 )
                 return []
             ids = [sid for sid, _score in id_score_pairs]
-            chunks = await self.fetch_by_ids(ids, owner_type=owner_type, owner_id=owner_id)
+            chunks = await self.fetch_by_ids(
+                ids,
+                tenant_id=tenant_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+            )
             self._attach_vector_scores(chunks, id_score_pairs)
             logger.debug(
                 "ChunkSQLStore.search: vector candidates=%d, sql_fetched=%d, owner=%s:%s",
@@ -322,6 +344,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
         self,
         query_text: str,
         *,
+        tenant_id: Optional[str] = None,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
         k: int = 10,
@@ -335,6 +358,9 @@ class ChunkSQLStore(BaseVectorSQLStore):
 
         if not query_text or not isinstance(query_text, str):
             return []
+        if not tenant_id:
+            logger.error("ChunkSQLStore.lexical_search requires tenant_id")
+            raise ValueError("ChunkSQLStore.lexical_search requires tenant_id")
         if not owner_type or not owner_id:
             logger.error("ChunkSQLStore.lexical_search requires owner_type and owner_id")
             raise ValueError("ChunkSQLStore.lexical_search requires owner_type and owner_id")
@@ -370,6 +396,9 @@ class ChunkSQLStore(BaseVectorSQLStore):
 
         where = []
         params: dict[str, Any] = {}
+        if tenant_id:
+            where.append("tenant_id = :tenant_id")
+            params["tenant_id"] = tenant_id
         if owner_type:
             where.append("owner_type = :owner_type")
             params["owner_type"] = owner_type
@@ -464,6 +493,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
     async def fetch_by_doc_and_position_range(
         self,
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         doc_id: str,
@@ -480,6 +510,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
             return []
         if pos_end_i < pos_start_i:
             return []
+        tenant_id = tenant_id or DEFAULT_TENANT_ID
 
         conn = self._conn()
         try:
@@ -488,13 +519,14 @@ class ChunkSQLStore(BaseVectorSQLStore):
                 """
                 SELECT *
                 FROM chunks
-                WHERE owner_type = ?
+                WHERE tenant_id = ?
+                  AND owner_type = ?
                   AND owner_id = ?
                   AND doc_id = ?
                   AND position BETWEEN ? AND ?
                 ORDER BY position ASC
                 """,
-                params=[owner_type, owner_id, doc_id, pos_start_i, pos_end_i],
+                params=[tenant_id, owner_type, owner_id, doc_id, pos_start_i, pos_end_i],
                 log_context=log_context,
             )
             return [self._row_to_object(r) for r in (rows or [])]
@@ -513,6 +545,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
         self,
         ids: List[str],
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         log_context: str = "",
@@ -522,6 +555,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
         """
         if not ids:
             return []
+        tenant_id = tenant_id or DEFAULT_TENANT_ID
         if not owner_type or not owner_id:
             logger.error("ChunkSQLStore.fetch_by_ids requires owner_type and owner_id")
             raise ValueError("ChunkSQLStore.fetch_by_ids requires owner_type and owner_id")
@@ -536,8 +570,8 @@ class ChunkSQLStore(BaseVectorSQLStore):
         try:
             placeholders = ",".join("?" for _ in ids)
             params: List[Any] = list(ids)
-            owner_clause = self._owner_where(owner_type, owner_id, params)
-            sql = f"SELECT * FROM chunks WHERE id IN ({placeholders}) AND {owner_clause}"
+            scope_clause = self._scope_where(tenant_id, owner_type, owner_id, params)
+            sql = f"SELECT * FROM chunks WHERE id IN ({placeholders}) AND {scope_clause}"
             rows = self._query_all(conn, sql, params=params, log_context="fetch_by_ids")
             row_map = {r["id"]: r for r in rows}
             ordered: List[Chunk] = []

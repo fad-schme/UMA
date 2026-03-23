@@ -233,6 +233,7 @@ class BaseVectorSQLStore(BaseSQLStore):
         self,
         ids: List[str],
         log_context: str = "",
+        tenant_id: Optional[str] = None,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
     ) -> List[Any]:
@@ -255,6 +256,9 @@ class BaseVectorSQLStore(BaseSQLStore):
             sql = f"SELECT * FROM {self._table_name} WHERE {self._id_column} IN ({placeholders})"
             params: List[Any] = list(ids)
 
+            if tenant_id:
+                sql += " AND tenant_id=?"
+                params.append(tenant_id)
             if owner_type:
                 sql += " AND owner_type=?"
                 params.append(owner_type)
@@ -330,6 +334,7 @@ class BaseVectorSQLStore(BaseSQLStore):
         items = await self._fetch_ranked_rows_by_ids(
             ids=ids,
             log_context=log_context,
+            tenant_id=filters.get("tenant_id") if filters else None,
             owner_type=filters.get("owner_type") if filters else None,
             owner_id=filters.get("owner_id") if filters else None,
         )
@@ -372,7 +377,8 @@ class BaseVectorSQLStore(BaseSQLStore):
     async def fetch_by_ids(
         self,
         ids: List[str],
-        *,     
+        *,
+        tenant_id: Optional[str] = None,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
         log_context: str = "",
@@ -390,6 +396,7 @@ class BaseVectorSQLStore(BaseSQLStore):
         return await self._fetch_ranked_rows_by_ids(
             ids=ids,
             log_context=log_context,
+            tenant_id=tenant_id,
             owner_type=owner_type,
             owner_id=owner_id,
         )

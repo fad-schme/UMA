@@ -703,7 +703,12 @@ class MemoryPipeline:
                 return
             from .identity import normalize_user_id
             normalized_user_id = normalize_user_id(user_id)
-            recent = await core.list_recent(owner_type="user", owner_id=normalized_user_id, n=20)
+            recent = await core.list_recent(
+                turn_context.tenant_id,
+                owner_type="user",
+                owner_id=normalized_user_id,
+                n=20,
+            )
             scoped_recent = [
                 ep for ep in (recent or [])
                 if getattr(ep, "session_id", None) == turn_context.session_id

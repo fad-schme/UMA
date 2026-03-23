@@ -737,6 +737,7 @@ class UMAMemory:
     async def rebuild_vector_indexes(
         self,
         *,
+        tenant_id: Optional[str] = None,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
         include_episodic: bool = True,
@@ -758,6 +759,7 @@ class UMAMemory:
 
         return await rebuild_vector_indexes(
             self,
+            tenant_id=tenant_id,
             owner_type=owner_type,
             owner_id=owner_id,
             include_episodic=include_episodic,
@@ -769,6 +771,7 @@ class UMAMemory:
     async def rebuild_derived_indexes(
         self,
         *,
+        tenant_id: Optional[str] = None,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
         include_episodic: bool = True,
@@ -791,6 +794,7 @@ class UMAMemory:
 
         return await rebuild_derived_indexes(
             self,
+            tenant_id=tenant_id,
             owner_type=owner_type,
             owner_id=owner_id,
             include_episodic=include_episodic,

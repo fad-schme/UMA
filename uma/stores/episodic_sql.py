@@ -2,7 +2,7 @@
 EpisodicSQLStore — Episodic memory store for UMA (SQL + Vector index)
 
 This implementation persists Episode rows and indexes embeddings in a VectorIndex.
-This store is scoped by ownership only (owner_type/owner_id).
+This store is scoped by tenant + ownership.
 """
 
 from __future__ import annotations
@@ -196,10 +196,15 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     # CRUD operations
     # ------------------------------------------------------------------ #
 
-    def _require_owner(self, owner_type: Optional[str], owner_id: Optional[str]) -> None:
+    def _require_scope(
+        self,
+        tenant_id: Optional[str],
+        owner_type: Optional[str],
+        owner_id: Optional[str],
+    ) -> None:
         if not owner_type or not owner_id:
-            logger.error("EpisodicSQLStore requires owner_type and owner_id")
-            raise ValueError("EpisodicSQLStore requires owner_type and owner_id")
+            logger.error("EpisodicSQLStore requires tenant_id, owner_type and owner_id")
+            raise ValueError("EpisodicSQLStore requires tenant_id, owner_type and owner_id")
 
     async def add_episode(self, ep: Episode, embedding: List[float]) -> None:
         """
@@ -210,6 +215,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         try:
             owner_type = getattr(ep, "owner_type", "user") or "user"
             owner_id = getattr(ep, "owner_id", "")
+            tenant_id = getattr(ep, "tenant_id", None) or DEFAULT_TENANT_ID
             if not owner_id:
                 raise ValueError("EpisodicSQLStore.add_episode: owner_id must be set")
             if not getattr(ep, "user_id", None):
@@ -224,12 +230,12 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                         conn,
                         """
                         SELECT id FROM episodes
-                        WHERE owner_type = ? AND owner_id = ?
+                        WHERE tenant_id = ? AND owner_type = ? AND owner_id = ?
                           AND json_extract(meta, '$.turn_id') = ?
                         ORDER BY timestamp DESC
                         LIMIT 1
                         """,
-                        params=[owner_type, owner_id, str(turn_id)],
+                        params=[tenant_id, owner_type, owner_id, str(turn_id)],
                         log_context="add_episode_idempotency",
                     )
                     if existing:
@@ -303,7 +309,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 self.vector_index.upsert(
                     ids=[ep.id],
                     vectors=[embedding],
-                    metadata=[{"owner_type": owner_type, "owner_id": owner_id}],
+                    metadata=[{"tenant_id": tenant_id, "owner_type": owner_type, "owner_id": owner_id}],
                 )
             except Exception:
                 logger.exception("EpisodicSQLStore.add_episode: vector upsert failed for id=%s", ep.id)
@@ -335,18 +341,18 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         self,
         episode_id: str,
         *,
+        tenant_id: Optional[str] = None,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
     ) -> Optional[Episode]:
-        if not owner_type or not owner_id:
-            logger.error("EpisodicSQLStore.get_episode requires owner_type and owner_id")
-            raise ValueError("EpisodicSQLStore.get_episode requires owner_type and owner_id")
+        tenant_id = tenant_id or DEFAULT_TENANT_ID
+        self._require_scope(tenant_id, owner_type, owner_id)
         conn = self._conn()
         try:
             row = self._query_one(
                 conn,
-                "SELECT * FROM episodes WHERE id = ? AND owner_type = ? AND owner_id = ?",
-                params=[episode_id, owner_type, owner_id],
+                "SELECT * FROM episodes WHERE id = ? AND tenant_id = ? AND owner_type = ? AND owner_id = ?",
+                params=[episode_id, tenant_id, owner_type, owner_id],
                 log_context="get_episode",
             )
             return self._row_to_object(row) if row else None
@@ -360,18 +366,18 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         self,
         episode_id: str,
         *,
+        tenant_id: Optional[str] = None,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
     ) -> None:
-        if not owner_type or not owner_id:
-            logger.error("EpisodicSQLStore.delete_episode requires owner_type and owner_id")
-            raise ValueError("EpisodicSQLStore.delete_episode requires owner_type and owner_id")
+        tenant_id = tenant_id or DEFAULT_TENANT_ID
+        self._require_scope(tenant_id, owner_type, owner_id)
         conn = self._conn()
         try:
             self._execute(
                 conn,
-                "DELETE FROM episodes WHERE id = ? AND owner_type = ? AND owner_id = ?",
-                params=[episode_id, owner_type, owner_id],
+                "DELETE FROM episodes WHERE id = ? AND tenant_id = ? AND owner_type = ? AND owner_id = ?",
+                params=[episode_id, tenant_id, owner_type, owner_id],
                 log_context="delete_episode",
             )
             conn.commit()
@@ -403,14 +409,14 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     # Listing / Retention Helpers
     # ------------------------------------------------------------------ #
 
-    async def list_episodes(self, owner_type: str, owner_id: str) -> List[Episode]:
-        self._require_owner(owner_type, owner_id)
+    async def list_episodes(self, tenant_id: str = DEFAULT_TENANT_ID, owner_type: str = "", owner_id: str = "") -> List[Episode]:
+        self._require_scope(tenant_id, owner_type, owner_id)
         conn = self._conn()
         try:
             rows = self._query_all(
                 conn,
-                "SELECT * FROM episodes WHERE owner_type = ? AND owner_id = ?",
-                params=[owner_type, owner_id],
+                "SELECT * FROM episodes WHERE tenant_id = ? AND owner_type = ? AND owner_id = ?",
+                params=[tenant_id, owner_type, owner_id],
                 log_context="list_episodes",
             )
             logger.debug(
@@ -430,19 +436,19 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         finally:
             conn.close()
 
-    async def list_recent(self, owner_type: str, owner_id: str, n: int = 5) -> List[Episode]:
-        self._require_owner(owner_type, owner_id)
+    async def list_recent(self, tenant_id: str = DEFAULT_TENANT_ID, owner_type: str = "", owner_id: str = "", n: int = 5) -> List[Episode]:
+        self._require_scope(tenant_id, owner_type, owner_id)
         conn = self._conn()
         try:
             rows = self._query_all(
                 conn,
                 """
                 SELECT * FROM episodes
-                WHERE owner_type = ? AND owner_id = ?
+                WHERE tenant_id = ? AND owner_type = ? AND owner_id = ?
                 ORDER BY timestamp DESC
                 LIMIT ?
                 """,
-                params=[owner_type, owner_id, n],
+                params=[tenant_id, owner_type, owner_id, n],
                 log_context="list_recent",
             )
             logger.debug(
@@ -466,6 +472,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         self,
         ids: List[str],
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
     ) -> List[dict]:
@@ -474,8 +481,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         """
         if not ids:
             return []
-        if not owner_type or not owner_id:
-            raise ValueError("EpisodicSQLStore.fetch_summaries requires owner_type and owner_id")
+        self._require_scope(tenant_id, owner_type, owner_id)
 
         conn = self._conn()
         try:
@@ -484,10 +490,11 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 SELECT id, user_id, timestamp, summary
                 FROM episodes
                 WHERE id IN ({placeholders})
+                  AND tenant_id = ?
                   AND owner_type = ?
                   AND owner_id = ?
             """
-            params = list(ids) + [owner_type, owner_id]
+            params = list(ids) + [tenant_id, owner_type, owner_id]
             rows = self._query_all(conn, sql, params=params, log_context="fetch_episode_summaries")
             row_map = {r["id"]: r for r in rows}
             ordered: List[dict] = []
@@ -514,6 +521,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         self,
         ids: List[str],
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
     ) -> List[dict]:
@@ -522,8 +530,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         """
         if not ids:
             return []
-        if not owner_type or not owner_id:
-            raise ValueError("EpisodicSQLStore.fetch_transcripts requires owner_type and owner_id")
+        self._require_scope(tenant_id, owner_type, owner_id)
 
         conn = self._conn()
         try:
@@ -532,10 +539,11 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 SELECT id, user_id, timestamp, summary, raw
                 FROM episodes
                 WHERE id IN ({placeholders})
+                  AND tenant_id = ?
                   AND owner_type = ?
                   AND owner_id = ?
             """
-            params = list(ids) + [owner_type, owner_id]
+            params = list(ids) + [tenant_id, owner_type, owner_id]
             rows = self._query_all(conn, sql, params=params, log_context="fetch_episode_transcripts")
             row_map = {r["id"]: r for r in rows}
             ordered: List[dict] = []
@@ -567,6 +575,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         self,
         query_embedding: List[float],
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         k: int = 20,
@@ -577,9 +586,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
 
         Filter by owner_type/owner_id when provided.
         """
-        if not owner_type or not owner_id:
-            logger.error("EpisodicSQLStore.search requires owner_type and owner_id")
-            raise ValueError("EpisodicSQLStore.search requires owner_type and owner_id")
+        self._require_scope(tenant_id, owner_type, owner_id)
         try:
             k_i = max(0, int(k))
         except Exception:
@@ -590,7 +597,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             offset_i = 0
         if k_i <= 0:
             return []
-        filters = {"owner_type": owner_type, "owner_id": owner_id}
+        filters = {"tenant_id": tenant_id, "owner_type": owner_type, "owner_id": owner_id}
         try:
             id_score_pairs = await self._vector_search_ids(
                 query_embedding=query_embedding,
@@ -612,6 +619,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             windowed_ids = [sid for sid, _score in windowed_pairs]
             episodes = await self.fetch_by_ids(
                 windowed_ids,
+                tenant_id=tenant_id,
                 owner_type=owner_type,
                 owner_id=owner_id,
             )
@@ -640,20 +648,19 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         self,
         ids: List[str],
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
     ) -> List[Episode]:
         if not ids:
             return []
-        if not owner_type or not owner_id:
-            logger.error("EpisodicSQLStore.fetch_by_ids requires owner_type and owner_id")
-            raise ValueError("EpisodicSQLStore.fetch_by_ids requires owner_type and owner_id")
+        self._require_scope(tenant_id, owner_type, owner_id)
 
         conn = self._conn()
         try:
             placeholders = ",".join("?" for _ in ids)
-            params: List[str] = list(ids) + [owner_type, owner_id]
-            sql = f"SELECT * FROM episodes WHERE id IN ({placeholders}) AND owner_type=? AND owner_id=?"
+            params: List[str] = list(ids) + [tenant_id, owner_type, owner_id]
+            sql = f"SELECT * FROM episodes WHERE id IN ({placeholders}) AND tenant_id=? AND owner_type=? AND owner_id=?"
             rows = self._query_all(conn, sql, params=params, log_context="fetch_episodes_by_ids")
             row_map = {r["id"]: r for r in rows}
             ordered: List[Episode] = []
@@ -688,6 +695,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     async def upsert_cluster_summary(
         self,
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         user_id: str,
@@ -695,7 +703,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         summary: str,
         latest_timestamp: str,
     ) -> None:
-        self._require_owner(owner_type, owner_id)
+        self._require_scope(tenant_id, owner_type, owner_id)
         if not user_id:
             raise ValueError("EpisodicSQLStore.upsert_cluster_summary requires user_id")
         conn = self._conn()
@@ -704,7 +712,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 "id": f"cluster:{owner_type}:{owner_id}:{user_id}:{latest_timestamp}",
                 "summary": summary,
                 "episode_ids": json.dumps(episode_ids or []),
-                "tenant_id": DEFAULT_TENANT_ID,
+                "tenant_id": tenant_id,
                 "owner_type": owner_type,
                 "owner_id": owner_id,
                 "workspace_id": None,
@@ -767,17 +775,18 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     async def list_cluster_summaries(
         self,
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         k: int = 5,
         max_episodes: Optional[int] = None,
         time_range: Optional[dict] = None,
     ) -> List[dict]:
-        self._require_owner(owner_type, owner_id)
+        self._require_scope(tenant_id, owner_type, owner_id)
         conn = self._conn()
         try:
-            where = ["owner_type = ?", "owner_id = ?"]
-            params: List[Any] = [owner_type, owner_id]
+            where = ["tenant_id = ?", "owner_type = ?", "owner_id = ?"]
+            params: List[Any] = [tenant_id, owner_type, owner_id]
             if isinstance(time_range, dict):
                 start = time_range.get("start")
                 end = time_range.get("end")
@@ -833,11 +842,12 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     async def get_cluster_members(
         self,
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         cluster_id: str,
     ) -> List[Episode]:
-        self._require_owner(owner_type, owner_id)
+        self._require_scope(tenant_id, owner_type, owner_id)
         if not cluster_id:
             return []
         conn = self._conn()
@@ -846,9 +856,9 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 conn,
                 """
                 SELECT id FROM episode_clusters
-                WHERE id = ? AND owner_type = ? AND owner_id = ?
+                WHERE id = ? AND tenant_id = ? AND owner_type = ? AND owner_id = ?
                 """,
-                params=[cluster_id, owner_type, owner_id],
+                params=[cluster_id, tenant_id, owner_type, owner_id],
                 log_context="get_cluster_members",
             )
             if not cluster:
@@ -865,10 +875,10 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 SELECT e.*
                 FROM episode_cluster_members m
                 JOIN episodes e ON e.id = m.episode_id
-                WHERE m.cluster_id = ? AND e.owner_type = ? AND e.owner_id = ?
+                WHERE m.cluster_id = ? AND e.tenant_id = ? AND e.owner_type = ? AND e.owner_id = ?
                 ORDER BY e.timestamp DESC
                 """,
-                params=[cluster_id, owner_type, owner_id],
+                params=[cluster_id, tenant_id, owner_type, owner_id],
                 log_context="get_cluster_members",
             )
             episodes = [self._row_to_object(r) for r in rows]

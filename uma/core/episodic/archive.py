@@ -38,6 +38,7 @@ class EpisodicArchive:
         self,
         episode_ids: List[str],
         *,
+        tenant_id: str,
         owner_type: str,
         owner_id: str,
     ):
@@ -52,6 +53,7 @@ class EpisodicArchive:
             try:
                 await self.store.delete_episode(
                     eid,
+                    tenant_id=tenant_id,
                     owner_type=owner_type,
                     owner_id=owner_id,
                 )

@@ -173,6 +173,7 @@ class Consolidator:
                 return []
             normalized_user_id = normalize_user_id(user_id)
             episodes = await self.episodic_core.list_recent(
+                self.memory.tenant_id,
                 owner_type="user",
                 owner_id=normalized_user_id,
                 n=self.max_episodes,
@@ -311,6 +312,7 @@ class Consolidator:
                 episodes = []
             else:
                 episodes = await self.episodic_core.list_recent(
+                    self.memory.tenant_id,
                     owner_type="user",
                     owner_id=normalized_user_id,
                     n=self.max_episodes,
@@ -348,6 +350,7 @@ class Consolidator:
                             break
                         await self.episodic_core.delete_episode(
                             ep_id,
+                            tenant_id=self.memory.tenant_id,
                             owner_type="user",
                             owner_id=normalized_user_id,
                         )
@@ -365,6 +368,7 @@ class Consolidator:
                 semantic_facts = []
             else:
                 semantic_facts = await self.semantic_core.list_facts_for_owner(
+                    tenant_id=self.memory.tenant_id,
                     owner_type="user",
                     owner_id=normalized_user_id,
                 )
@@ -403,6 +407,7 @@ class Consolidator:
                         break
                     await self.semantic_core.delete_fact(
                         fact_id,
+                        tenant_id=self.memory.tenant_id,
                         owner_type="user",
                         owner_id=normalized_user_id,
                     )

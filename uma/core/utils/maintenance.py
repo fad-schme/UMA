@@ -10,12 +10,21 @@ import logging
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
+from ...stores.base_sql_store import DEFAULT_TENANT_ID
 from ...types import Fact
-from ...types import Skill
+from ...types import OwnershipRef, Skill
 from .identity import normalize_user_id
 from .user_query_helper import build_fact_embedding_text
 
 logger = logging.getLogger(__name__)
+
+
+def _ownership_ref(tenant_id: str, owner_type: str, owner_id: str) -> OwnershipRef:
+    return OwnershipRef(
+        tenant_id=tenant_id,
+        owner_type=owner_type,
+        owner_id=owner_id,
+    )
 
 
 def _scope_metadata_from_object(object: Any, *, include_session_id: bool) -> Dict[str, Any]:
@@ -91,6 +100,7 @@ async def _embed_in_batches(embedder: Any, texts: List[str], batch_size: int) ->
 async def rebuild_vector_indexes(
     memory: Any,
     *,
+    tenant_id: Optional[str] = None,
     owner_type: Optional[str] = None,
     owner_id: Optional[str] = None,
     include_episodic: bool = True,
@@ -105,7 +115,7 @@ async def rebuild_vector_indexes(
     -----
     - Episodic embeddings are reused if present; otherwise summaries are embedded.
     - Semantic and procedural embeddings are recomputed from text representations.
-    - If owner_type or owner_id is not provided, semantic and episodic rebuilds are skipped.
+    - If tenant_id, owner_type or owner_id is not provided, semantic and episodic rebuilds are skipped.
     """
     report: Dict[str, Any] = {
         "episodic": {"status": "skipped", "count": 0},
@@ -145,12 +155,14 @@ async def rebuild_vector_indexes(
             "report": report,
         }
 
+    tenant_id = tenant_id or getattr(memory, "tenant_id", None) or DEFAULT_TENANT_ID
+
     if include_episodic:
         if not owner_type or not owner_id:
             report["episodic"]["status"] = "skipped"
         else:
             try:
-                episodes = await memory.episodic_core.list_episodes(owner_type, owner_id)
+                episodes = await memory.episodic_core.list_episodes(tenant_id, owner_type, owner_id)
                 ids: List[str] = []
                 vectors: List[List[float]] = []
                 metas: List[Dict[str, Any]] = []
@@ -193,6 +205,7 @@ async def rebuild_vector_indexes(
                 if owner_type == "user":
                     scoped_owner_id = normalize_user_id(owner_id)
                 facts: List[Fact] = await memory.semantic_core.list_facts_for_owner(
+                    tenant_id=tenant_id,
                     owner_type=owner_type,
                     owner_id=scoped_owner_id,
                     limit=None,
@@ -217,8 +230,7 @@ async def rebuild_vector_indexes(
                 report["procedural"]["status"] = "skipped"
             else:
                 skills = await memory.procedural_core.list_skills(
-                    owner_type=owner_type,
-                    owner_id=owner_id,
+                    owner=_ownership_ref(tenant_id, owner_type, owner_id),
                 )
                 if skills:
                     texts = [_skill_embedding_text(s) for s in skills]
@@ -246,6 +258,7 @@ async def rebuild_vector_indexes(
 async def rebuild_derived_indexes(
     memory: Any,
     *,
+    tenant_id: Optional[str] = None,
     owner_type: Optional[str] = None,
     owner_id: Optional[str] = None,
     include_episodic: bool = True,
@@ -256,6 +269,7 @@ async def rebuild_derived_indexes(
 ) -> Dict[str, Any]:
     vector_result = await rebuild_vector_indexes(
         memory,
+        tenant_id=tenant_id,
         owner_type=owner_type,
         owner_id=owner_id,
         include_episodic=include_episodic,
@@ -265,6 +279,7 @@ async def rebuild_derived_indexes(
     )
     graph_report = await _rebuild_graph_from_authoritative_stores(
         memory,
+        tenant_id=tenant_id,
         owner_type=owner_type,
         owner_id=owner_id,
         include_graph=include_graph,
@@ -284,6 +299,7 @@ async def rebuild_derived_indexes(
 async def _rebuild_graph_from_authoritative_stores(
     memory: Any,
     *,
+    tenant_id: Optional[str],
     owner_type: Optional[str],
     owner_id: Optional[str],
     include_graph: bool,
@@ -297,6 +313,7 @@ async def _rebuild_graph_from_authoritative_stores(
     }
     if not include_graph:
         return report
+    tenant_id = tenant_id or getattr(memory, "tenant_id", None) or DEFAULT_TENANT_ID
     if not owner_type or not owner_id:
         return report
 
@@ -308,8 +325,9 @@ async def _rebuild_graph_from_authoritative_stores(
 
     try:
         scoped_owner_id = normalize_user_id(owner_id) if owner_type == "user" else owner_id
-        episodes = await episodic_core.list_episodes(owner_type, scoped_owner_id) if include_graph else []
+        episodes = await episodic_core.list_episodes(tenant_id, owner_type, scoped_owner_id) if include_graph else []
         facts: List[Fact] = await semantic_core.list_facts_for_owner(
+            tenant_id=tenant_id,
             owner_type=owner_type,
             owner_id=scoped_owner_id,
             limit=None,

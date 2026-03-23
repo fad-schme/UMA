@@ -7,7 +7,7 @@ env/
 venv/
 .venv/
 ENV/
-
+.agents/
 # Byte-compiled / optimized / DLL files
 *.pyc
 *.pyo

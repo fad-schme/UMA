@@ -256,5 +256,5 @@ async def test_rebuild_shims_warn_and_route_to_canonical_maintenance_helpers(uma
 
     assert vector_result["status"] == "ok"
     assert derived_result["status"] == "ok"
-    assert seen[0] == ("vector", uma_memory, {"owner_type": "user", "owner_id": "user:u1", "include_episodic": True, "include_semantic": True, "include_procedural": True, "batch_size": 32})
-    assert seen[1] == ("derived", uma_memory, {"owner_type": "user", "owner_id": "user:u1", "include_episodic": True, "include_semantic": True, "include_procedural": True, "include_graph": True, "batch_size": 32})
+    assert seen[0] == ("vector", uma_memory, {"tenant_id": None, "owner_type": "user", "owner_id": "user:u1", "include_episodic": True, "include_semantic": True, "include_procedural": True, "batch_size": 32})
+    assert seen[1] == ("derived", uma_memory, {"tenant_id": None, "owner_type": "user", "owner_id": "user:u1", "include_episodic": True, "include_semantic": True, "include_procedural": True, "include_graph": True, "batch_size": 32})

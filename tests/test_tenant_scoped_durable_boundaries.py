@@ -1,0 +1,236 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import pytest
+
+from uma.core.utils.identity import normalize_user_id
+from uma.types import Chunk, Episode, Fact, OwnershipRef, Skill
+
+
+@pytest.mark.asyncio
+async def test_chunk_retrieval_is_tenant_scoped_for_identical_owner_tuple(uma_memory) -> None:
+    memory = uma_memory
+    owner_id = normalize_user_id("user:shared")
+    emb_a = (await memory.embedder.embed(["tenant alpha chunk"]))[0]
+    emb_b = (await memory.embedder.embed(["tenant beta chunk"]))[0]
+    now = datetime.now(timezone.utc)
+
+    await memory.chunk_core.upsert_chunk(
+        Chunk(
+            id="chunk_tenant_a",
+            doc_id="doc-tenant-a",
+            text="tenant alpha chunk",
+            page_range=(1, 1),
+            position=1,
+            source_path="/tmp/a.txt",
+            source_hash="hash-a",
+            created_at=now,
+            updated_at=now,
+            tenant_id="tenant-a",
+            owner_type="user",
+            owner_id=owner_id,
+            meta={},
+        ),
+        emb_a,
+    )
+    await memory.chunk_core.upsert_chunk(
+        Chunk(
+            id="chunk_tenant_b",
+            doc_id="doc-tenant-b",
+            text="tenant beta chunk",
+            page_range=(1, 1),
+            position=1,
+            source_path="/tmp/b.txt",
+            source_hash="hash-b",
+            created_at=now,
+            updated_at=now,
+            tenant_id="tenant-b",
+            owner_type="user",
+            owner_id=owner_id,
+            meta={},
+        ),
+        emb_b,
+    )
+
+    found = await memory.chunk_core.search_chunks(
+        query_embedding=emb_a,
+        tenant_id="tenant-a",
+        owner_type="user",
+        owner_id=owner_id,
+        k=5,
+    )
+
+    assert [chunk.id for chunk in found] == ["chunk_tenant_a"]
+    assert memory.chunk_core.store.vector_index._metadata["chunk_tenant_a"]["tenant_id"] == "tenant-a"
+    assert memory.chunk_core.store.vector_index._metadata["chunk_tenant_b"]["tenant_id"] == "tenant-b"
+
+
+@pytest.mark.asyncio
+async def test_procedural_retrieval_is_tenant_scoped_for_identical_owner_tuple(uma_memory) -> None:
+    memory = uma_memory
+    owner_id = normalize_user_id("user:shared")
+    emb_a = (await memory.embedder.embed(["tenant alpha procedure"]))[0]
+    emb_b = (await memory.embedder.embed(["tenant beta procedure"]))[0]
+    now = datetime.now(timezone.utc)
+
+    await memory.procedural_core.add_skill(
+        Skill(
+            id="skill_tenant_a",
+            name="Tenant Alpha Procedure",
+            description="alpha",
+            created_at=now,
+            updated_at=now,
+            tenant_id="tenant-a",
+            owner_type="user",
+            owner_id=owner_id,
+            trigger_phrases=["alpha"],
+            trigger_patterns=[],
+            plan={"steps": ["a"]},
+            tools=["tool-a"],
+            example="alpha",
+            meta={},
+        ),
+        emb_a,
+    )
+    await memory.procedural_core.add_skill(
+        Skill(
+            id="skill_tenant_b",
+            name="Tenant Beta Procedure",
+            description="beta",
+            created_at=now,
+            updated_at=now,
+            tenant_id="tenant-b",
+            owner_type="user",
+            owner_id=owner_id,
+            trigger_phrases=["beta"],
+            trigger_patterns=[],
+            plan={"steps": ["b"]},
+            tools=["tool-b"],
+            example="beta",
+            meta={},
+        ),
+        emb_b,
+    )
+
+    owner = OwnershipRef(tenant_id="tenant-a", owner_type="user", owner_id=owner_id)
+    found = await memory.procedural_core.search(query_embedding=emb_a, owner=owner, k=5)
+
+    assert [skill.id for skill in found] == ["skill_tenant_a"]
+    assert memory.procedural_core.store.vector_index._metadata["skill_tenant_a"]["tenant_id"] == "tenant-a"
+    assert memory.procedural_core.store.vector_index._metadata["skill_tenant_b"]["tenant_id"] == "tenant-b"
+
+
+@pytest.mark.asyncio
+async def test_semantic_store_list_and_fetch_are_tenant_scoped_at_durable_boundary(uma_memory) -> None:
+    memory = uma_memory
+    owner_id = normalize_user_id("user:shared")
+    emb = (await memory.embedder.embed(["tenant scoped fact"]))[0]
+    now = datetime.now(timezone.utc)
+
+    await memory.semantic_core.upsert_fact(
+        Fact(
+            id="fact_tenant_a",
+            subject=owner_id,
+            predicate="LIKES",
+            object="alpha",
+            created_at=now,
+            updated_at=now,
+            source_ids=[],
+            confidence=0.9,
+            tenant_id="tenant-a",
+            owner_type="user",
+            owner_id=owner_id,
+            meta={},
+        ),
+        emb,
+    )
+    await memory.semantic_core.upsert_fact(
+        Fact(
+            id="fact_tenant_b",
+            subject=owner_id,
+            predicate="LIKES",
+            object="beta",
+            created_at=now,
+            updated_at=now,
+            source_ids=[],
+            confidence=0.9,
+            tenant_id="tenant-b",
+            owner_type="user",
+            owner_id=owner_id,
+            meta={},
+        ),
+        emb,
+    )
+
+    listed = await memory.semantic_core.store.list_facts_for_owner(
+        tenant_id="tenant-a",
+        owner_type="user",
+        owner_id=owner_id,
+        limit=None,
+    )
+    fetched = await memory.semantic_core.store.fetch_by_ids(
+        ids=["fact_tenant_a", "fact_tenant_b"],
+        tenant_id="tenant-a",
+        owner_type="user",
+        owner_id=owner_id,
+    )
+
+    assert [fact.id for fact in listed] == ["fact_tenant_a"]
+    assert [fact.id for fact in fetched] == ["fact_tenant_a"]
+    assert memory.semantic_core.vector_index()._metadata["fact_tenant_a"]["tenant_id"] == "tenant-a"
+    assert memory.semantic_core.vector_index()._metadata["fact_tenant_b"]["tenant_id"] == "tenant-b"
+
+
+@pytest.mark.asyncio
+async def test_episodic_store_list_and_fetch_are_tenant_scoped_at_durable_boundary(uma_memory) -> None:
+    memory = uma_memory
+    owner_id = normalize_user_id("user:shared")
+    emb = (await memory.embedder.embed(["tenant scoped episode"]))[0]
+    now = datetime.now(timezone.utc)
+
+    await memory.episodic_core.add_episode(
+        Episode(
+            id="episode_tenant_a",
+            timestamp=now,
+            summary="alpha",
+            raw="alpha",
+            tags=[],
+            embedding=emb,
+            meta={},
+            tenant_id="tenant-a",
+            owner_type="user",
+            owner_id=owner_id,
+            user_id=owner_id,
+        ),
+        emb,
+    )
+    await memory.episodic_core.add_episode(
+        Episode(
+            id="episode_tenant_b",
+            timestamp=now,
+            summary="beta",
+            raw="beta",
+            tags=[],
+            embedding=emb,
+            meta={},
+            tenant_id="tenant-b",
+            owner_type="user",
+            owner_id=owner_id,
+            user_id=owner_id,
+        ),
+        emb,
+    )
+
+    listed = await memory.episodic_core.store.list_episodes("tenant-a", "user", owner_id)
+    fetched = await memory.episodic_core.store.fetch_by_ids(
+        ["episode_tenant_a", "episode_tenant_b"],
+        tenant_id="tenant-a",
+        owner_type="user",
+        owner_id=owner_id,
+    )
+
+    assert [episode.id for episode in listed] == ["episode_tenant_a"]
+    assert [episode.id for episode in fetched] == ["episode_tenant_a"]
+    assert memory.episodic_core.vector_index()._metadata["episode_tenant_a"]["tenant_id"] == "tenant-a"
+    assert memory.episodic_core.vector_index()._metadata["episode_tenant_b"]["tenant_id"] == "tenant-b"

@@ -6,6 +6,7 @@ import inspect
 import logging
 from typing import Any, Dict, List, Literal, Optional, Union
 
+from ....types import OwnershipRef
 from .request import RetrievalRequest, ScopedOwnerType
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,14 @@ async def _maybe_await(result: Any) -> Any:
     if inspect.isawaitable(result):
         return await result
     return result
+
+
+def _build_ownership_ref(request: RetrievalRequest, owner_type: str, owner_id: str) -> OwnershipRef:
+    return OwnershipRef(
+        tenant_id=request.context.tenant_id,
+        owner_type=owner_type,
+        owner_id=owner_id,
+    )
 
 
 
@@ -261,6 +270,7 @@ class UMAMemoryEnvironment:
             )
             chunks = await chunk_core._fetch_by_ids(
                 ids=clean_ids,
+                tenant_id=request.context.tenant_id,
                 owner_type=owner_type,
                 owner_id=resolved_owner_id,
                 log_context="Environment.fetch_chunks",
@@ -307,6 +317,7 @@ class UMAMemoryEnvironment:
             )
             facts = await semantic_core.fetch_by_ids(
                 ids,
+                tenant_id=request.context.tenant_id,
                 owner_type=owner_type,
                 owner_id=resolved_owner_id,
             )
@@ -344,6 +355,7 @@ class UMAMemoryEnvironment:
             # Ownership-only: subject must not be used for semantic retrieval.
             facts = await semantic_core.fetch_more_facts(
                 predicate=predicate,
+                tenant_id=request.context.tenant_id,
                 owner_type=owner_type,
                 owner_id=resolved_owner_id,
                 k=int(k),
@@ -390,6 +402,7 @@ class UMAMemoryEnvironment:
             )
             clusters = await episodic_core.list_cluster_summaries(
                 user_id=request.normalized_user_id,
+                tenant_id=request.context.tenant_id,
                 owner_type=owner_type,
                 owner_id=resolved_owner_id,
                 k=int(k),
@@ -723,6 +736,7 @@ class UMAMemoryEnvironment:
             filters = getattr(action, "filters", None)
             facts = await semantic_core.search(
                 query_embedding=[float(x) for x in query_embedding],
+                tenant_id=request.context.tenant_id,
                 owner_type=lane_owner_type,
                 owner_id=lane_owner_id,
                 k=k,
@@ -772,6 +786,7 @@ class UMAMemoryEnvironment:
                 raise RuntimeError("Environment.execute_action: chunk_core is None")
             return await chunk_core.search_chunks_for_rlm(
                 query_embedding=[float(x) for x in query_embedding],
+                tenant_id=request.context.tenant_id,
                 owner_type=lane_owner_type,
                 owner_id=lane_owner_id,
                 k=k,
@@ -786,6 +801,7 @@ class UMAMemoryEnvironment:
             episodes = await episodic_core.search(
                 user_id=request.normalized_user_id,
                 query_embedding=[float(x) for x in query_embedding],
+                tenant_id=request.context.tenant_id,
                 owner_type=lane_owner_type,
                 owner_id=lane_owner_id,
                 k=k,
@@ -842,8 +858,7 @@ class UMAMemoryEnvironment:
                 raise RuntimeError("Environment.execute_action: procedural_core is None")
             return await procedural_core.search(
                 query_embedding=[float(x) for x in query_embedding],
-                owner_type=lane_owner_type,
-                owner_id=lane_owner_id,
+                owner=_build_ownership_ref(request, lane_owner_type, lane_owner_id),
                 k=k,
             )
 

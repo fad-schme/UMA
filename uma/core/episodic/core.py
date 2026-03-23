@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 from typing import Any, List, Optional
 
+from ...stores.base_sql_store import DEFAULT_TENANT_ID
 from .indexer import EpisodeIndexer
 from .archive import EpisodicArchive
 from .mapper import EpisodeMapper
@@ -117,7 +118,7 @@ class EpisodicCore:
             # ------------------------------
             # 4. Apply retention policy
             # ------------------------------
-            await self.cleanup(owner_type, owner_id)
+            await self.cleanup(turn_context.tenant_id, owner_type, owner_id)
 
             return episode
 
@@ -146,17 +147,18 @@ class EpisodicCore:
     # Retention / Cleanup
     # ------------------------------------------------------------------
 
-    async def cleanup(self, owner_type: str, owner_id: str) -> None:
+    async def cleanup(self, tenant_id: str = DEFAULT_TENANT_ID, owner_type: str = "", owner_id: str = "") -> None:
         """
         Apply retention policy and prune old episodes for the owner scope.
         """
         try:
-            episodes = await self.store.list_episodes(owner_type, owner_id)
+            episodes = await self.store.list_episodes(tenant_id, owner_type, owner_id)
             prunable = self.policy.select_prunable(episodes)
 
             if prunable:
                 await self.archive.delete_many(
                     [ep.id for ep in prunable],
+                    tenant_id=tenant_id,
                     owner_type=owner_type,
                     owner_id=owner_id,
                 )
@@ -175,12 +177,12 @@ class EpisodicCore:
             )
 
     
-    async def list_recent(self, owner_type: str, owner_id: str, n: int = 5):
+    async def list_recent(self, tenant_id: str = DEFAULT_TENANT_ID, owner_type: str = "", owner_id: str = "", n: int = 5):
         """
         Return the N most recent episodes for an owner scope.
         """
         try:
-            return await self.store.list_recent(owner_type, owner_id, n)
+            return await self.store.list_recent(tenant_id, owner_type, owner_id, n)
         except Exception:
             logger.exception("EpisodicCore.list_recent failed.")
             return []
@@ -189,6 +191,7 @@ class EpisodicCore:
         self,
         episode_id: str,
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
     ) -> bool:
@@ -200,6 +203,7 @@ class EpisodicCore:
         try:
             await self.store.delete_episode(
                 episode_id,
+                tenant_id=tenant_id,
                 owner_type=owner_type,
                 owner_id=owner_id,
             )
@@ -208,14 +212,14 @@ class EpisodicCore:
             logger.exception("EpisodicCore.delete_episode failed id=%s", episode_id)
             return False
 
-    async def list_episodes(self, owner_type: str, owner_id: str) -> List[Episode]:
+    async def list_episodes(self, tenant_id: str = DEFAULT_TENANT_ID, owner_type: str = "", owner_id: str = "") -> List[Episode]:
         """
         Return all episodes for the given owner scope.
         """
         if self.store is None:
             return []
         try:
-            return await self.store.list_episodes(owner_type, owner_id)
+            return await self.store.list_episodes(tenant_id, owner_type, owner_id)
         except Exception:
             logger.exception("EpisodicCore.list_episodes failed.")
             return []
@@ -224,6 +228,7 @@ class EpisodicCore:
         self,
         user_id: str,
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         episode_ids: List[str],
@@ -237,6 +242,7 @@ class EpisodicCore:
             return False
         try:
             await self.store.upsert_cluster_summary(
+                tenant_id=tenant_id,
                 owner_type=owner_type,
                 owner_id=owner_id,
                 user_id=user_id,
@@ -265,6 +271,7 @@ class EpisodicCore:
         user_id: str,
         query_embedding: List[float],
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         k: int = 20,
@@ -289,6 +296,7 @@ class EpisodicCore:
         try:
             found = await self.store.search(
                 query_embedding=query_embedding,
+                tenant_id=tenant_id,
                 owner_type=owner_type,
                 owner_id=owner_id,
                 k=int(k),
@@ -308,6 +316,7 @@ class EpisodicCore:
         self,
         user_id: str,
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         k: int = 5,
@@ -335,6 +344,7 @@ class EpisodicCore:
         clusters: List[Any] = []
         try:
             found = await self.store.list_cluster_summaries(
+                tenant_id=tenant_id,
                 owner_type=owner_type,
                 owner_id=owner_id,
                 k=int(k),
@@ -352,7 +362,7 @@ class EpisodicCore:
         return dedupe_by_id(clusters)
     
 
-    async def fetch_summaries(self, ids: List[str], *, owner_type: str, owner_id: str) -> List[dict]:
+    async def fetch_summaries(self, ids: List[str], *, tenant_id: str = DEFAULT_TENANT_ID, owner_type: str, owner_id: str) -> List[dict]:
         """
         Fetch summary payloads for a list of episodic IDs.
         """
@@ -362,12 +372,17 @@ class EpisodicCore:
             logger.error("EpisodicCore.fetch_summaries requires owner_type and owner_id")
             return []
         try:
-            return await self.store.fetch_summaries(ids, owner_type=owner_type, owner_id=owner_id)
+            return await self.store.fetch_summaries(
+                ids,
+                tenant_id=tenant_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+            )
         except Exception:
             logger.exception("EpisodicCore.fetch_summaries failed")
             return []
 
-    async def fetch_transcripts(self, ids: List[str], *, owner_type: str, owner_id: str) -> List[dict]:
+    async def fetch_transcripts(self, ids: List[str], *, tenant_id: str = DEFAULT_TENANT_ID, owner_type: str, owner_id: str) -> List[dict]:
         """
         Fetch transcript payloads for a list of episodic IDs.
         """
@@ -377,7 +392,12 @@ class EpisodicCore:
             logger.error("EpisodicCore.fetch_transcripts requires owner_type and owner_id")
             return []
         try:
-            return await self.store.fetch_transcripts(ids, owner_type=owner_type, owner_id=owner_id)
+            return await self.store.fetch_transcripts(
+                ids,
+                tenant_id=tenant_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+            )
         except Exception:
             logger.exception("EpisodicCore.fetch_transcripts failed")
             return []

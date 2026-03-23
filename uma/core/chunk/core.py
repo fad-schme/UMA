@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from ...stores.base_sql_store import DEFAULT_TENANT_ID
 from ...types import Chunk
 from ..retrieval.ranking import fuse_candidates
 from ..utils.dedupe import dedupe_by_id
@@ -98,6 +99,7 @@ class ChunkCore:
         self,
         *,
         query_embedding: List[float],
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         k: int,
@@ -130,6 +132,7 @@ class ChunkCore:
 
         return await self.search_chunks(
             query_embedding=list(query_embedding),
+            tenant_id=tenant_id,
             owner_type=owner_type,
             owner_id=owner_id,
             k=int(k),
@@ -147,6 +150,7 @@ class ChunkCore:
         user_id: str,
         query_embedding: List[float],
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         k: int = 10,
@@ -162,6 +166,7 @@ class ChunkCore:
         try:
             found = await self.store.search(
                 query_embedding=query_embedding,
+                tenant_id=tenant_id,
                 doc_id=doc_id,
                 owner_type=owner_type,
                 owner_id=owner_id,
@@ -178,6 +183,7 @@ class ChunkCore:
         self,
         query_text: str,
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         k: int = 10,
@@ -192,6 +198,7 @@ class ChunkCore:
         try:
             found = await self.store.lexical_search(
                 query_text=query_text,
+                tenant_id=tenant_id,
                 owner_type=owner_type,
                 owner_id=owner_id,
                 k=int(k),
@@ -207,6 +214,7 @@ class ChunkCore:
         self,
         ids: Sequence[str],
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         log_context: str = "ChunkCore.fetch_by_ids",
@@ -223,6 +231,7 @@ class ChunkCore:
             return await self.store.fetch_by_ids(
                 ids=[str(x) for x in ids if x],
                 log_context=log_context,
+                tenant_id=tenant_id,
                 owner_type=owner_type,
                 owner_id=owner_id,
             )
@@ -234,6 +243,7 @@ class ChunkCore:
         self,
         ids: Sequence[str],
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         log_context: str = "ChunkCore.fetch_ranked_by_ids",
@@ -250,6 +260,7 @@ class ChunkCore:
             return await self.store._fetch_ranked_rows_by_ids(
                 ids=[str(x) for x in ids if x],
                 log_context=log_context,
+                tenant_id=tenant_id,
                 owner_type=owner_type,
                 owner_id=owner_id,
             )
@@ -261,6 +272,7 @@ class ChunkCore:
         self,
         *,
         query_embedding: List[float],
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         k: int = 10,
@@ -314,6 +326,7 @@ class ChunkCore:
         chunks = await self._search(
             user_id="",
             query_embedding=query_embedding,
+            tenant_id=tenant_id,
             owner_type=owner_type,
             owner_id=owner_id,
             k=dense_k,
@@ -349,6 +362,7 @@ class ChunkCore:
             )
             found = await self._lexical_search(
                 query_text=query_text,
+                tenant_id=tenant_id,
                 owner_type=owner_type,
                 owner_id=owner_id,
                 k=int(top_k_sparse),
@@ -470,6 +484,7 @@ class ChunkCore:
                     shortlist_max_per_doc=shortlist_max_per_doc,
                 )
                 chunks = await self.expand_neighbors(
+                    tenant_id=tenant_id,
                     owner_type=owner_type,
                     owner_id=owner_id,
                     anchors=anchors,
@@ -525,6 +540,7 @@ class ChunkCore:
     async def expand_neighbors(
         self,
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         anchors: List[Chunk],
@@ -596,6 +612,7 @@ class ChunkCore:
             for s, e in ranges:
                 try:
                     rows = await self.store.fetch_by_doc_and_position_range(
+                        tenant_id=tenant_id,
                         owner_type=owner_type,
                         owner_id=owner_id,
                         doc_id=doc_id,

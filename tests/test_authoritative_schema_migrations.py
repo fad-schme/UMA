@@ -185,7 +185,12 @@ async def test_chunk_store_migrates_legacy_rows_and_round_trips_scope_fields(tmp
         embedding=[0.0, 0.0, 0.0],
     )
 
-    stored = await store.fetch_by_ids(["chunk_new"], owner_type="workspace", owner_id="workspace:alpha")
+    stored = await store.fetch_by_ids(
+        ["chunk_new"],
+        tenant_id="tenant-1",
+        owner_type="workspace",
+        owner_id="workspace:alpha",
+    )
     assert len(stored) == 1
     assert stored[0].tenant_id == "tenant-1"
     assert stored[0].workspace_id == "workspace:alpha"
@@ -254,7 +259,12 @@ async def test_semantic_store_migrates_legacy_rows_and_persists_new_scope_column
         embedding=[0.0, 0.0, 0.0],
     )
 
-    stored = await store.list_facts_for_owner(owner_type="workspace", owner_id="workspace:alpha", limit=None)
+    stored = await store.list_facts_for_owner(
+        tenant_id="tenant-1",
+        owner_type="workspace",
+        owner_id="workspace:alpha",
+        limit=None,
+    )
     assert len(stored) == 1
     assert stored[0].tenant_id == "tenant-1"
     assert stored[0].workspace_id == "workspace:alpha"
@@ -335,7 +345,7 @@ async def test_episodic_store_migrates_legacy_rows_and_persists_session_scope_fi
         embedding=[0.0, 0.0, 0.0],
     )
 
-    stored = await store.list_episodes(owner_type="workspace", owner_id="workspace:alpha")
+    stored = await store.list_episodes("tenant-1", "workspace", "workspace:alpha")
     assert len(stored) == 1
     assert stored[0].tenant_id == "tenant-1"
     assert stored[0].workspace_id == "workspace:alpha"
@@ -407,7 +417,7 @@ async def test_procedural_store_migrates_legacy_rows_and_persists_provenance_fie
         embedding=[0.0, 0.0, 0.0],
     )
 
-    stored = await store.list_skills(owner_type="workspace", owner_id="workspace:alpha")
+    stored = await store.list_skills(tenant_id="tenant-1", owner_type="workspace", owner_id="workspace:alpha")
     assert len(stored) == 1
     assert stored[0].tenant_id == "tenant-1"
     assert stored[0].workspace_id == "workspace:alpha"

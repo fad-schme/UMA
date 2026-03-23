@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from ...stores.base_sql_store import DEFAULT_TENANT_ID
 from ...types import Fact, RuntimeContext, SCOPE_MODEL_VERSION
 from ..retrieval.ranking import fuse_candidates
 from ..utils.identity import normalize_user_id
@@ -187,6 +188,7 @@ class SemanticCore:
     async def list_facts_for_owner(
         self,
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         limit: Optional[int] = None,
@@ -198,11 +200,16 @@ class SemanticCore:
         if not hasattr(self.store, "list_facts_for_owner"):
             logger.error("SemanticCore.list_facts_for_owner: store missing or unsupported")
             raise RuntimeError("SemanticCore.list_facts_for_owner: store missing or unsupported")
-        if not owner_type or not owner_id:
-            logger.error("SemanticCore.list_facts_for_owner requires owner_type and owner_id")
-            raise ValueError("SemanticCore.list_facts_for_owner requires owner_type and owner_id")
+        if not tenant_id or not owner_type or not owner_id:
+            logger.error("SemanticCore.list_facts_for_owner requires tenant_id, owner_type and owner_id")
+            raise ValueError("SemanticCore.list_facts_for_owner requires tenant_id, owner_type and owner_id")
         try:
-            return await self.store.list_facts_for_owner(owner_type=owner_type, owner_id=owner_id, limit=limit)
+            return await self.store.list_facts_for_owner(
+                tenant_id=tenant_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                limit=limit,
+            )
         except Exception:
             logger.exception("SemanticCore.list_facts_for_owner failed")
             raise
@@ -211,6 +218,7 @@ class SemanticCore:
         self,
         fact_id: str,
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
     ) -> None:
@@ -226,11 +234,16 @@ class SemanticCore:
         if not fact_id or not isinstance(fact_id, str):
             logger.error("SemanticCore.delete_fact requires fact_id as a non-empty string")
             raise ValueError("SemanticCore.delete_fact requires fact_id as a non-empty string")
-        if not owner_type or not owner_id:
-            logger.error("SemanticCore.delete_fact requires owner_type and owner_id")
-            raise ValueError("SemanticCore.delete_fact requires owner_type and owner_id")
+        if not tenant_id or not owner_type or not owner_id:
+            logger.error("SemanticCore.delete_fact requires tenant_id, owner_type and owner_id")
+            raise ValueError("SemanticCore.delete_fact requires tenant_id, owner_type and owner_id")
         try:
-            await self.store.delete_fact(fact_id, owner_type=owner_type, owner_id=owner_id)
+            await self.store.delete_fact(
+                fact_id,
+                tenant_id=tenant_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+            )
         except Exception:
             logger.exception("SemanticCore.delete_fact failed")
             raise
@@ -239,6 +252,7 @@ class SemanticCore:
         self,
         query_embedding: List[float],
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         k: int = 10,
@@ -253,9 +267,9 @@ class SemanticCore:
         - Optional topic/predicate filtering is applied after retrieval.
         - Lexical fallback is allowed but must also be ownership-only.
         """
-        if not owner_type or not owner_id:
-            logger.error("SemanticCore.search requires owner_type and owner_id")
-            raise ValueError("SemanticCore.search requires owner_type and owner_id")
+        if not tenant_id or not owner_type or not owner_id:
+            logger.error("SemanticCore.search requires tenant_id, owner_type and owner_id")
+            raise ValueError("SemanticCore.search requires tenant_id, owner_type and owner_id")
 
         requested_topic = filters.get("topic") if isinstance(filters, dict) else None
         requested_predicate = filters.get("predicate") if isinstance(filters, dict) else None
@@ -282,6 +296,7 @@ class SemanticCore:
             logger.debug("SemanticCore.search: path=vector owner=%s:%s", owner_type, owner_id)
             found = await self.store.search(
                 query_embedding=query_embedding,
+                tenant_id=tenant_id,
                 owner_type=owner_type,
                 owner_id=owner_id,
                 k=int(dense_k),
@@ -312,6 +327,7 @@ class SemanticCore:
                 )
                 found = await self.store.lexical_search(
                     query_text=query_text,
+                    tenant_id=tenant_id,
                     owner_type=owner_type,
                     owner_id=owner_id,
                     k=int(top_k_sparse),
@@ -360,6 +376,7 @@ class SemanticCore:
                 # Ownership-only lexical search (no subject param)
                 found = await self.store.lexical_search(
                     query_text=query_text,
+                    tenant_id=tenant_id,
                     owner_type=owner_type,
                     owner_id=owner_id,
                     k=int(k),
@@ -376,6 +393,7 @@ class SemanticCore:
         self,
         predicate: str,
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         k: int,
@@ -388,14 +406,19 @@ class SemanticCore:
         - No subject parameter allowed.
         - Store must provide stable ordering for list_facts_for_owner (e.g., updated_at desc).
         """
-        if not owner_type or not owner_id:
-            logger.error("SemanticCore.fetch_more_facts requires owner_type and owner_id")
-            raise ValueError("SemanticCore.fetch_more_facts requires owner_type and owner_id")
+        if not tenant_id or not owner_type or not owner_id:
+            logger.error("SemanticCore.fetch_more_facts requires tenant_id, owner_type and owner_id")
+            raise ValueError("SemanticCore.fetch_more_facts requires tenant_id, owner_type and owner_id")
 
         predicate_u = (predicate or "").upper()
         try:
             if hasattr(self.store, "list_facts_for_owner"):
-                facts = await self.store.list_facts_for_owner(owner_type=owner_type, owner_id=owner_id, limit=None)
+                facts = await self.store.list_facts_for_owner(
+                    tenant_id=tenant_id,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    limit=None,
+                )
             else:
                 facts = []
         except Exception:
@@ -423,6 +446,7 @@ class SemanticCore:
         self,
         ids: List[str],
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
     ) -> List[Fact]:
@@ -432,11 +456,16 @@ class SemanticCore:
     
         if not hasattr(self.store, "fetch_by_ids"):
             return []
-        if not owner_type or not owner_id:
-            logger.error("SemanticCore.fetch_by_ids requires owner_type and owner_id")
-            raise ValueError("SemanticCore.fetch_by_ids requires owner_type and owner_id")
+        if not tenant_id or not owner_type or not owner_id:
+            logger.error("SemanticCore.fetch_by_ids requires tenant_id, owner_type and owner_id")
+            raise ValueError("SemanticCore.fetch_by_ids requires tenant_id, owner_type and owner_id")
         try:
-            facts = await self.store.fetch_by_ids(ids=ids, owner_type=owner_type, owner_id=owner_id)
+            facts = await self.store.fetch_by_ids(
+                ids=ids,
+                tenant_id=tenant_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+            )
             missing = max(0, len(ids or []) - len(facts or []))
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
@@ -456,7 +485,8 @@ class SemanticCore:
             # Defensive filter in case upstream store misbehaves.
             filtered = [
                 f for f in (facts or [])
-                if getattr(f, "owner_type", None) == owner_type
+                if getattr(f, "tenant_id", None) == tenant_id
+                and getattr(f, "owner_type", None) == owner_type
                 and getattr(f, "owner_id", None) == owner_id
             ]
             if filtered and len(filtered) != len(facts or []):

@@ -118,6 +118,7 @@ class ProceduralCore:
         try:
             return await self.store.get_skill(
                 skill_id,
+                tenant_id=read_owner.tenant_id,
                 owner_type=read_owner.owner_type,
                 owner_id=read_owner.owner_id,
             )
@@ -146,6 +147,7 @@ class ProceduralCore:
             if hasattr(self.store, "fetch_skills_by_ids"):
                 return await self.store.fetch_skills_by_ids(
                     ids,
+                    tenant_id=read_owner.tenant_id,
                     owner_type=read_owner.owner_type,
                     owner_id=read_owner.owner_id,
                 )
@@ -174,6 +176,7 @@ class ProceduralCore:
             return []
         try:
             return await self.store.list_skills(
+                tenant_id=read_owner.tenant_id,
                 owner_type=read_owner.owner_type,
                 owner_id=read_owner.owner_id,
                 limit=limit,
@@ -202,6 +205,7 @@ class ProceduralCore:
         try:
             await self.store.delete_skill(
                 skill_id,
+                tenant_id=read_owner.tenant_id,
                 owner_type=read_owner.owner_type,
                 owner_id=read_owner.owner_id,
             )
@@ -240,6 +244,7 @@ class ProceduralCore:
         try:
             found = await self.store.search(
                 query_embedding=query_embedding,
+                tenant_id=read_owner.tenant_id,
                 owner_type=read_owner.owner_type,
                 owner_id=read_owner.owner_id,
                 k=int(k),
