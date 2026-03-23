@@ -352,8 +352,7 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         """
         Fetch a single skill by ID. Returns None if not found.
         """
-        tenant_id = tenant_id or DEFAULT_TENANT_ID
-        if not owner_type or not owner_id:
+        if not tenant_id or not owner_type or not owner_id:
             logger.error("ProceduralSQLStore.get_skill requires tenant_id, owner_type and owner_id")
             raise ValueError("ProceduralSQLStore.get_skill requires tenant_id, owner_type and owner_id")
         conn = self._conn()
@@ -387,8 +386,7 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         """
         if not ids:
             return []
-        tenant_id = tenant_id or DEFAULT_TENANT_ID
-        if not owner_type or not owner_id:
+        if not tenant_id or not owner_type or not owner_id:
             logger.error("ProceduralSQLStore.fetch_skills_by_ids requires tenant_id, owner_type and owner_id")
             raise ValueError("ProceduralSQLStore.fetch_skills_by_ids requires tenant_id, owner_type and owner_id")
 
@@ -429,8 +427,7 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         """
         List skills ordered by updated_at DESC.
         """
-        tenant_id = tenant_id or DEFAULT_TENANT_ID
-        if not owner_type or not owner_id:
+        if not tenant_id or not owner_type or not owner_id:
             logger.error("ProceduralSQLStore.list_skills requires tenant_id, owner_type and owner_id")
             raise ValueError("ProceduralSQLStore.list_skills requires tenant_id, owner_type and owner_id")
         conn = self._conn()
@@ -462,8 +459,7 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         """
         Remove a skill from SQL + vector store.
         """
-        tenant_id = tenant_id or DEFAULT_TENANT_ID
-        if not owner_type or not owner_id:
+        if not tenant_id or not owner_type or not owner_id:
             logger.error("ProceduralSQLStore.delete_skill requires tenant_id, owner_type and owner_id")
             raise ValueError("ProceduralSQLStore.delete_skill requires tenant_id, owner_type and owner_id")
         conn = self._conn()
@@ -521,8 +517,7 @@ class ProceduralSQLStore(BaseVectorSQLStore):
 
         Delegates ranking + row mapping to BaseVectorSQLStore.
         """
-        tenant_id = tenant_id or DEFAULT_TENANT_ID
-        if not owner_type or not owner_id:
+        if not tenant_id or not owner_type or not owner_id:
             logger.error("ProceduralSQLStore.search requires tenant_id, owner_type and owner_id")
             raise ValueError("ProceduralSQLStore.search requires tenant_id, owner_type and owner_id")
         try:

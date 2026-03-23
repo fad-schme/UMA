@@ -155,7 +155,7 @@ async def test_chunk_store_migrates_legacy_rows_and_round_trips_scope_fields(tmp
         conn.close()
 
     store = ChunkSQLStore(db_adapter=SQLiteAdapter(db_path), vector_index=_NoopVectorIndex())
-    legacy = await store.fetch_by_ids(["chunk_old"], owner_type="user", owner_id="user:u1")
+    legacy = await store.fetch_by_ids(["chunk_old"], tenant_id="default", owner_type="user", owner_id="user:u1")
     assert len(legacy) == 1
     assert legacy[0].tenant_id == "default"
     assert legacy[0].workspace_id is None
@@ -231,7 +231,7 @@ async def test_semantic_store_migrates_legacy_rows_and_persists_new_scope_column
         conn.close()
 
     store = SemanticSQLStore(db_adapter=SQLiteAdapter(db_path), vector_index=_NoopVectorIndex())
-    legacy = await store.list_facts_for_owner(owner_type="user", owner_id="user:u1", limit=None)
+    legacy = await store.list_facts_for_owner(tenant_id="default", owner_type="user", owner_id="user:u1", limit=None)
     assert len(legacy) == 1
     assert legacy[0].tenant_id == "default"
     assert legacy[0].session_id is None
@@ -317,7 +317,7 @@ async def test_episodic_store_migrates_legacy_rows_and_persists_session_scope_fi
         conn.close()
 
     store = EpisodicSQLStore(db_adapter=SQLiteAdapter(db_path), vector_index=_NoopVectorIndex())
-    legacy = await store.list_episodes(owner_type="user", owner_id="user:u1")
+    legacy = await store.list_episodes(tenant_id="default", owner_type="user", owner_id="user:u1")
     assert len(legacy) == 1
     assert legacy[0].tenant_id == "default"
     assert legacy[0].session_id is None
@@ -386,7 +386,7 @@ async def test_procedural_store_migrates_legacy_rows_and_persists_provenance_fie
         conn.close()
 
     store = ProceduralSQLStore(db_adapter=SQLiteAdapter(db_path), vector_index=_NoopVectorIndex())
-    legacy = await store.list_skills(owner_type="user", owner_id="user:u1")
+    legacy = await store.list_skills(tenant_id="default", owner_type="user", owner_id="user:u1")
     assert len(legacy) == 1
     assert legacy[0].tenant_id == "default"
     assert legacy[0].workspace_id is None

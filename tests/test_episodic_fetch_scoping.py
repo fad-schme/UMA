@@ -42,8 +42,8 @@ async def test_episodic_fetch_summaries_owner_scoped():
     await store.add_episode(e1, embedding=[0.0, 0.0, 0.0])
     await store.add_episode(e2, embedding=[0.0, 0.0, 0.0])
 
-    rows = await store.fetch_summaries(["e1", "e2"], owner_type="user", owner_id="user:u1")
+    rows = await store.fetch_summaries(["e1", "e2"], tenant_id="default", owner_type="user", owner_id="user:u1")
     assert [r["id"] for r in rows] == ["e1"]
 
-    rows = await store.fetch_transcripts(["e1", "e2"], owner_type="user", owner_id="user:u2")
+    rows = await store.fetch_transcripts(["e1", "e2"], tenant_id="default", owner_type="user", owner_id="user:u2")
     assert [r["id"] for r in rows] == ["e2"]

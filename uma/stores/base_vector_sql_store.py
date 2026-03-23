@@ -359,13 +359,20 @@ class BaseVectorSQLStore(BaseSQLStore):
 
         This is an optional optimization to enable "IDs+scores first" retrieval.
         """
-        if not filters or not filters.get("owner_type") or not filters.get("owner_id"):
+        if (
+            not filters
+            or not filters.get("tenant_id")
+            or not filters.get("owner_type")
+            or not filters.get("owner_id")
+        ):
             logger.error(
-                "%s search_ids requires owner_type and owner_id%s",
+                "%s search_ids requires tenant_id, owner_type and owner_id%s",
                 self.__class__.__name__,
                 f" [{log_context}]" if log_context else "",
             )
-            raise ValueError(f"{self.__class__.__name__} search_ids requires owner_type and owner_id")
+            raise ValueError(
+                f"{self.__class__.__name__} search_ids requires tenant_id, owner_type and owner_id"
+            )
         return await self._vector_search_ids(
             query_embedding=query_embedding,
             k=k,

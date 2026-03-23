@@ -470,7 +470,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
         self,
         query_embedding: List[float],
         *,
-        tenant_id: str = DEFAULT_TENANT_ID,
+        tenant_id: Optional[str] = None,
         owner_type: str,
         owner_id: str,
         k: int = 10,
@@ -554,7 +554,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
         self,
         query_text: str,
         *,
-        tenant_id: str = DEFAULT_TENANT_ID,
+        tenant_id: Optional[str] = None,
         owner_type: str,
         owner_id: str,
         k: int = 5,
@@ -611,7 +611,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
         self,
         subject: str,
         limit: Optional[int] = None,
-        tenant_id: Optional[str] = DEFAULT_TENANT_ID,
+        tenant_id: Optional[str] = None,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
     ) -> List[Fact]:
@@ -659,7 +659,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
     async def list_facts_for_owner(
         self,
         *,
-        tenant_id: str = DEFAULT_TENANT_ID,
+        tenant_id: Optional[str] = None,
         owner_type: str,
         owner_id: str,
         limit: Optional[int] = None,
@@ -689,7 +689,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
     async def fetch_facts_by_ids(
         self,
         ids: List[str],
-        tenant_id: Optional[str] = DEFAULT_TENANT_ID,
+        tenant_id: Optional[str] = None,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
     ) -> List[Fact]:
@@ -709,7 +709,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
         ids: List[str],
         *,
         log_context: str = "",
-        tenant_id: Optional[str] = DEFAULT_TENANT_ID,
+        tenant_id: Optional[str] = None,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
     ) -> List[Fact]:
@@ -768,7 +768,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
     async def delete_fact(
         self,
         fact_id: str,
-        tenant_id: Optional[str] = DEFAULT_TENANT_ID,
+        tenant_id: Optional[str] = None,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
     ) -> None:

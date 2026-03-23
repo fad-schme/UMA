@@ -493,7 +493,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
     async def fetch_by_doc_and_position_range(
         self,
         *,
-        tenant_id: str = DEFAULT_TENANT_ID,
+        tenant_id: Optional[str] = None,
         owner_type: str,
         owner_id: str,
         doc_id: str,
@@ -510,7 +510,9 @@ class ChunkSQLStore(BaseVectorSQLStore):
             return []
         if pos_end_i < pos_start_i:
             return []
-        tenant_id = tenant_id or DEFAULT_TENANT_ID
+        if not tenant_id:
+            logger.error("ChunkSQLStore.fetch_by_doc_and_position_range requires tenant_id")
+            raise ValueError("ChunkSQLStore.fetch_by_doc_and_position_range requires tenant_id")
 
         conn = self._conn()
         try:
@@ -545,7 +547,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
         self,
         ids: List[str],
         *,
-        tenant_id: str = DEFAULT_TENANT_ID,
+        tenant_id: Optional[str] = None,
         owner_type: str,
         owner_id: str,
         log_context: str = "",
@@ -555,10 +557,9 @@ class ChunkSQLStore(BaseVectorSQLStore):
         """
         if not ids:
             return []
-        tenant_id = tenant_id or DEFAULT_TENANT_ID
-        if not owner_type or not owner_id:
-            logger.error("ChunkSQLStore.fetch_by_ids requires owner_type and owner_id")
-            raise ValueError("ChunkSQLStore.fetch_by_ids requires owner_type and owner_id")
+        if not tenant_id or not owner_type or not owner_id:
+            logger.error("ChunkSQLStore.fetch_by_ids requires tenant_id, owner_type and owner_id")
+            raise ValueError("ChunkSQLStore.fetch_by_ids requires tenant_id, owner_type and owner_id")
 
         logger.debug(
             "ChunkSQLStore.fetch_by_ids: ids=%d owner=%s:%s",

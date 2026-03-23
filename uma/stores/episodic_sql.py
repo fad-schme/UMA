@@ -202,7 +202,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         owner_type: Optional[str],
         owner_id: Optional[str],
     ) -> None:
-        if not owner_type or not owner_id:
+        if not tenant_id or not owner_type or not owner_id:
             logger.error("EpisodicSQLStore requires tenant_id, owner_type and owner_id")
             raise ValueError("EpisodicSQLStore requires tenant_id, owner_type and owner_id")
 
@@ -345,7 +345,6 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
     ) -> Optional[Episode]:
-        tenant_id = tenant_id or DEFAULT_TENANT_ID
         self._require_scope(tenant_id, owner_type, owner_id)
         conn = self._conn()
         try:
@@ -370,7 +369,6 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
     ) -> None:
-        tenant_id = tenant_id or DEFAULT_TENANT_ID
         self._require_scope(tenant_id, owner_type, owner_id)
         conn = self._conn()
         try:
@@ -409,7 +407,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     # Listing / Retention Helpers
     # ------------------------------------------------------------------ #
 
-    async def list_episodes(self, tenant_id: str = DEFAULT_TENANT_ID, owner_type: str = "", owner_id: str = "") -> List[Episode]:
+    async def list_episodes(self, tenant_id: Optional[str] = None, owner_type: str = "", owner_id: str = "") -> List[Episode]:
         self._require_scope(tenant_id, owner_type, owner_id)
         conn = self._conn()
         try:
@@ -436,7 +434,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         finally:
             conn.close()
 
-    async def list_recent(self, tenant_id: str = DEFAULT_TENANT_ID, owner_type: str = "", owner_id: str = "", n: int = 5) -> List[Episode]:
+    async def list_recent(self, tenant_id: Optional[str] = None, owner_type: str = "", owner_id: str = "", n: int = 5) -> List[Episode]:
         self._require_scope(tenant_id, owner_type, owner_id)
         conn = self._conn()
         try:
@@ -472,7 +470,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         self,
         ids: List[str],
         *,
-        tenant_id: str = DEFAULT_TENANT_ID,
+        tenant_id: Optional[str] = None,
         owner_type: str,
         owner_id: str,
     ) -> List[dict]:
@@ -521,7 +519,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         self,
         ids: List[str],
         *,
-        tenant_id: str = DEFAULT_TENANT_ID,
+        tenant_id: Optional[str] = None,
         owner_type: str,
         owner_id: str,
     ) -> List[dict]:
@@ -575,7 +573,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         self,
         query_embedding: List[float],
         *,
-        tenant_id: str = DEFAULT_TENANT_ID,
+        tenant_id: Optional[str] = None,
         owner_type: str,
         owner_id: str,
         k: int = 20,
@@ -648,7 +646,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         self,
         ids: List[str],
         *,
-        tenant_id: str = DEFAULT_TENANT_ID,
+        tenant_id: Optional[str] = None,
         owner_type: str,
         owner_id: str,
     ) -> List[Episode]:
@@ -695,7 +693,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     async def upsert_cluster_summary(
         self,
         *,
-        tenant_id: str = DEFAULT_TENANT_ID,
+        tenant_id: Optional[str] = None,
         owner_type: str,
         owner_id: str,
         user_id: str,
@@ -775,7 +773,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     async def list_cluster_summaries(
         self,
         *,
-        tenant_id: str = DEFAULT_TENANT_ID,
+        tenant_id: Optional[str] = None,
         owner_type: str,
         owner_id: str,
         k: int = 5,
@@ -842,7 +840,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     async def get_cluster_members(
         self,
         *,
-        tenant_id: str = DEFAULT_TENANT_ID,
+        tenant_id: Optional[str] = None,
         owner_type: str,
         owner_id: str,
         cluster_id: str,
