@@ -1,12 +1,13 @@
 """
 Maintenance helpers for data consistency and recovery.
 
-These utilities focus on reindexing vector stores from SQL-backed data.
+These utilities rebuild derived indexes from SQL-backed authoritative data.
 """
 
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
 from ...types import Fact
@@ -15,6 +16,50 @@ from .identity import normalize_user_id
 from .user_query_helper import build_fact_embedding_text
 
 logger = logging.getLogger(__name__)
+
+
+def _scope_metadata_from_object(object: Any, *, include_session_id: bool) -> Dict[str, Any]:
+    owner_type = str(getattr(object, "owner_type", "") or "").strip()
+    owner_id = str(getattr(object, "owner_id", "") or "").strip()
+    if owner_type == "user":
+        owner_id = normalize_user_id(owner_id)
+    metadata: Dict[str, Any] = {
+        "tenant_id": str(getattr(object, "tenant_id", None) or "default"),
+        "owner_type": owner_type,
+        "owner_id": owner_id,
+        "workspace_id": getattr(object, "workspace_id", None),
+        "scope_model_version": getattr(object, "scope_model_version", None),
+        "scope_key": f"{owner_type}:{owner_id}",
+    }
+    if include_session_id:
+        metadata["session_id"] = getattr(object, "session_id", None)
+    return metadata
+
+
+def _fact_vector_metadata(fact: Fact) -> Dict[str, Any]:
+    meta = _scope_metadata_from_object(fact, include_session_id=True)
+    meta.update(
+        {
+            "subject": fact.subject,
+            "predicate": fact.predicate,
+        }
+    )
+    topic = (fact.meta or {}).get("topic") if isinstance(fact.meta, dict) else None
+    if topic:
+        meta["topic"] = topic
+    return meta
+
+
+def _skill_vector_metadata(skill: Skill) -> Dict[str, Any]:
+    meta = _scope_metadata_from_object(skill, include_session_id=False)
+    meta["name"] = skill.name
+    return meta
+
+
+def _episode_vector_metadata(episode: Any) -> Dict[str, Any]:
+    meta = _scope_metadata_from_object(episode, include_session_id=True)
+    meta["user_id"] = getattr(episode, "user_id", None)
+    return meta
 
 async def _embed_in_batches(embedder: Any, texts: List[str], batch_size: int) -> List[List[float]]:
     if not texts:
@@ -117,11 +162,11 @@ async def rebuild_vector_indexes(
                     if ep.embedding and len(ep.embedding) == dim:
                         ids.append(ep.id)
                         vectors.append(ep.embedding)
-                        metas.append({"owner_type": ep.owner_type, "owner_id": ep.owner_id, "user_id": ep.user_id})
+                        metas.append(_episode_vector_metadata(ep))
                     else:
                         text_ids.append(ep.id)
                         texts.append(ep.summary or "")
-                        text_metas.append({"owner_type": ep.owner_type, "owner_id": ep.owner_id, "user_id": ep.user_id})
+                        text_metas.append(_episode_vector_metadata(ep))
 
                 if texts:
                     text_vectors = await _embed_in_batches(embedder, texts, batch_size)
@@ -156,16 +201,7 @@ async def rebuild_vector_indexes(
                     texts = [build_fact_embedding_text(f) for f in facts]
                     vectors = await _embed_in_batches(embedder, texts, batch_size)
                     ids = [f.id for f in facts]
-                    metas = [
-                        {
-                            "subject": f.subject,
-                            "predicate": f.predicate,
-                            "owner_type": f.owner_type,
-                            "owner_id": f.owner_id,
-                            "scope_key": f"{f.owner_type}:{f.owner_id}",
-                        }
-                        for f in facts
-                    ]
+                    metas = [_fact_vector_metadata(f) for f in facts]
                     idx = memory.semantic_core.vector_index() if memory.semantic_core else None
                     if idx is None:
                         raise RuntimeError("semantic vector index missing")
@@ -188,7 +224,7 @@ async def rebuild_vector_indexes(
                     texts = [_skill_embedding_text(s) for s in skills]
                     vectors = await _embed_in_batches(embedder, texts, batch_size)
                     ids = [s.id for s in skills]
-                    metas = [{"name": s.name, "owner_type": s.owner_type, "owner_id": s.owner_id} for s in skills]
+                    metas = [_skill_vector_metadata(s) for s in skills]
                     idx = memory.procedural_core.vector_index() if memory.procedural_core else None
                     if idx is None:
                         raise RuntimeError("procedural vector index missing")
@@ -205,6 +241,132 @@ async def rebuild_vector_indexes(
         overall = "degraded"
 
     return {"status": overall, "report": report}
+
+
+async def rebuild_derived_indexes(
+    memory: Any,
+    *,
+    owner_type: Optional[str] = None,
+    owner_id: Optional[str] = None,
+    include_episodic: bool = True,
+    include_semantic: bool = True,
+    include_procedural: bool = True,
+    include_graph: bool = True,
+    batch_size: int = 32,
+) -> Dict[str, Any]:
+    vector_result = await rebuild_vector_indexes(
+        memory,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        include_episodic=include_episodic,
+        include_semantic=include_semantic,
+        include_procedural=include_procedural,
+        batch_size=batch_size,
+    )
+    graph_report = await _rebuild_graph_from_authoritative_stores(
+        memory,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        include_graph=include_graph,
+    )
+    overall = "ok"
+    if vector_result.get("status") == "error" or graph_report.get("status") == "error":
+        overall = "error"
+    elif vector_result.get("status") != "ok" or graph_report.get("status") != "ok":
+        overall = "degraded"
+    return {
+        "status": overall,
+        "vector": vector_result,
+        "graph": graph_report,
+    }
+
+
+async def _rebuild_graph_from_authoritative_stores(
+    memory: Any,
+    *,
+    owner_type: Optional[str],
+    owner_id: Optional[str],
+    include_graph: bool,
+) -> Dict[str, Any]:
+    report: Dict[str, Any] = {
+        "status": "skipped",
+        "episodes": 0,
+        "facts": 0,
+        "episode_fact_links": 0,
+        "temporal_links": 0,
+    }
+    if not include_graph:
+        return report
+    if not owner_type or not owner_id:
+        return report
+
+    graph = getattr(memory, "graph_core", None)
+    episodic_core = getattr(memory, "episodic_core", None)
+    semantic_core = getattr(memory, "semantic_core", None)
+    if graph is None or episodic_core is None or semantic_core is None:
+        return report
+
+    try:
+        scoped_owner_id = normalize_user_id(owner_id) if owner_type == "user" else owner_id
+        episodes = await episodic_core.list_episodes(owner_type, scoped_owner_id) if include_graph else []
+        facts: List[Fact] = await semantic_core.list_facts_for_owner(
+            owner_type=owner_type,
+            owner_id=scoped_owner_id,
+            limit=None,
+        )
+
+        for episode in episodes or []:
+            graph.add_episode(episode)
+        if facts:
+            graph.add_facts(list(facts))
+
+        facts_by_turn_id: Dict[str, List[Fact]] = defaultdict(list)
+        for fact in facts or []:
+            meta = getattr(fact, "meta", None) or {}
+            turn_id = str(meta.get("turn_id") or "").strip() if isinstance(meta, dict) else ""
+            if turn_id:
+                facts_by_turn_id[turn_id].append(fact)
+
+        episode_fact_links = 0
+        for episode in episodes or []:
+            meta = getattr(episode, "meta", None) or {}
+            turn_id = str(meta.get("turn_id") or "").strip() if isinstance(meta, dict) else ""
+            if not turn_id:
+                continue
+            linked_facts = facts_by_turn_id.get(turn_id) or []
+            if not linked_facts:
+                continue
+            graph.link_episode_to_facts(episode, linked_facts)
+            episode_fact_links += len(linked_facts)
+
+        temporal_links = 0
+        scoped_sequences: Dict[tuple[str, str], List[Any]] = defaultdict(list)
+        for episode in episodes or []:
+            session_id = str(getattr(episode, "session_id", "") or "").strip()
+            origin_agent_id = str(getattr(episode, "origin_agent_id", "") or "").strip()
+            if not session_id or not origin_agent_id:
+                continue
+            scoped_sequences[(session_id, origin_agent_id)].append(episode)
+        for scoped_episodes in scoped_sequences.values():
+            ordered = sorted(scoped_episodes, key=lambda ep: (getattr(ep, "timestamp", None), getattr(ep, "id", "")))
+            for previous, current in zip(ordered, ordered[1:]):
+                graph.link_temporal(previous, current)
+                temporal_links += 1
+
+        report.update(
+            {
+                "status": "ok",
+                "episodes": len(episodes or []),
+                "facts": len(facts or []),
+                "episode_fact_links": episode_fact_links,
+                "temporal_links": temporal_links,
+            }
+        )
+        return report
+    except Exception:
+        logger.exception("rebuild_derived_indexes: graph rebuild failed.")
+        report["status"] = "error"
+        return report
 
 
 def _skill_embedding_text(skill: Skill) -> str:

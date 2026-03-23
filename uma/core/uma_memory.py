@@ -771,6 +771,35 @@ class UMAMemory:
             batch_size=batch_size,
         )
 
+    async def rebuild_derived_indexes(
+        self,
+        *,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+        include_episodic: bool = True,
+        include_semantic: bool = True,
+        include_procedural: bool = True,
+        include_graph: bool = True,
+        batch_size: int = 32,
+    ) -> Dict[str, Any]:
+        """
+        Rebuild derived vector and graph indexes from SQL-backed authoritative data.
+
+        This is an explicit maintenance utility. It does not change runtime retrieval semantics.
+        """
+        from .utils.maintenance import rebuild_derived_indexes
+
+        return await rebuild_derived_indexes(
+            self,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            include_episodic=include_episodic,
+            include_semantic=include_semantic,
+            include_procedural=include_procedural,
+            include_graph=include_graph,
+            batch_size=batch_size,
+        )
+
     # ----------------------------------------------------------------------
     # PUBLIC DEVELOPER API — Unified User Context (WM + LT Retrieval)
     # ----------------------------------------------------------------------
