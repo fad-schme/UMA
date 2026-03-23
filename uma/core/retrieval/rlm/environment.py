@@ -162,6 +162,7 @@ class UMAMemoryEnvironment:
         request_session_id = getattr(request.context, "session_id", None)
         request_agent_id = getattr(request.context, "agent_id", None)
         request_tenant_id = getattr(request.context, "tenant_id", None)
+        include_legacy_turn_data = bool(getattr(request, "include_legacy_turn_data", False))
         for item in items or []:
             try:
                 tenant_id = getattr(item, "tenant_id", None)
@@ -169,6 +170,8 @@ class UMAMemoryEnvironment:
                     continue
                 session_id = getattr(item, "session_id", None)
                 if not session_id:
+                    if not include_legacy_turn_data and UMAMemoryEnvironment._is_legacy_user_global_turn_item(item):
+                        continue
                     filtered.append(item)
                     continue
                 if not request_session_id or session_id != request_session_id:
@@ -180,6 +183,21 @@ class UMAMemoryEnvironment:
             except Exception:
                 continue
         return filtered
+
+    @staticmethod
+    def _is_legacy_user_global_turn_item(item: Any) -> bool:
+        try:
+            if str(getattr(item, "owner_type", "") or "").strip().lower() != "user":
+                return False
+            if getattr(item, "session_id", None):
+                return False
+            meta = getattr(item, "meta", None) or {}
+            if not isinstance(meta, dict):
+                return False
+            turn_id = str(meta.get("turn_id") or "").strip()
+            return bool(turn_id)
+        except Exception:
+            return False
 
 
     # ------------------------------------------------------------------

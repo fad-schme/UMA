@@ -40,6 +40,7 @@ class RetrievalRequest:
     normalized_user_id: str
     scopes: Tuple[RetrievalScope, ...]
     trace_id: Optional[str] = None
+    include_legacy_turn_data: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.context, RuntimeContext):
@@ -61,6 +62,7 @@ class RetrievalRequest:
         context: RuntimeContext,
         *,
         trace_id: Optional[str] = None,
+        include_legacy_turn_data: bool = False,
     ) -> "RetrievalRequest":
         normalized_user_id = normalize_user_id(context.user_id or "")
         return cls(
@@ -71,6 +73,7 @@ class RetrievalRequest:
                 RetrievalScope(owner_type="user", owner_id=normalized_user_id),
             ),
             trace_id=trace_id or context.request_id,
+            include_legacy_turn_data=bool(include_legacy_turn_data),
         )
 
     def scopes_for_owner_type(self, owner_type: Optional[str] = None) -> Tuple[RetrievalScope, ...]:
