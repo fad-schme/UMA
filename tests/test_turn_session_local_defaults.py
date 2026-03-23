@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import warnings
-
 import pytest
 
 from uma import UMARuntime
@@ -154,9 +152,7 @@ async def test_retrieval_does_not_share_turn_artifacts_across_agents(uma_memory)
     mem = uma_memory
     assert mem.agent_id
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        mem.agent_id = "agent-a"
+    mem._agent_id = "agent-a"
     await mem.process_turn(
         user_id="user:u1",
         user_msg="first",
@@ -164,9 +160,7 @@ async def test_retrieval_does_not_share_turn_artifacts_across_agents(uma_memory)
         extra_meta={"session_id": "shared-session"},
     )
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        mem.agent_id = "agent-b"
+    mem._agent_id = "agent-b"
     await mem.process_turn(
         user_id="user:u1",
         user_msg="second",

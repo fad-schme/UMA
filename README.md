@@ -92,19 +92,29 @@ pip install -r requirements.txt
 ## Typical Usage
 
 ```python
+from uma import UMARuntime
 from uma.core.uma_memory import UMAMemory
+from uma.types import RuntimeContext
 
 memory = UMAMemory.from_yaml("config/uma.yaml")
-memory.initialize()
+memory._agent_id = "agent-default"  # temporary write-side bridge for process_turn(...)
+runtime = UMARuntime.from_memory(memory)
 
-# Get UMA-RLM context (RLM retrieval) for the current user message:
-context_messages = await memory.build_prompt_messages(
-    user_id="user-123",
-    query_text=user_message,
+handle = runtime.bind(
+    RuntimeContext(
+        tenant_id="default",
+        agent_id="agent-default",
+        request_id="req-1",
+        user_id="user-123",
+        session_id="session-1",
+    )
 )
 
+# Get UMA-RLM context (RLM retrieval) for the current user message:
+context = await handle.retrieve_structured_context(user_message)
+
 # Your agent controls the system prompt and the LLM call:
-messages = [{"role": "system", "content": system_prompt}] + context_messages
+messages = [{"role": "system", "content": system_prompt}, {"role": "system", "content": str(context)}]
 agent_reply = await agent_llm_generate(messages)
 
 # Persist the turn into UMA memory:
@@ -112,6 +122,7 @@ await memory.process_turn(
     user_id="user-123",
     user_msg=user_message,
     assistant_reply=agent_reply,
+    extra_meta={"session_id": "session-1"},
 )
 ```
 
@@ -125,7 +136,7 @@ Keeping them separate lets developers:
 - log/debug retrieval results without string parsing
 
 If you want UMA to render a string snippet using its configured context settings,
-use `UMAMemory.get_rendered_context(user_id, query_text)`.
+bind a runtime context and call `UMARequestHandle.retrieve_rendered_context(query_text)`.
 
 
 
@@ -170,7 +181,7 @@ If you need different retry behavior, wrap your adapters or supply custom provid
 If a vector index drifts from SQL state, you can rebuild it from stored data.
 
 ```python
-result = await memory.rebuild_vector_indexes(user_id="user-123")
+result = await memory.rebuild_vector_indexes(owner_type="user", owner_id="user:user-123")
 print(result)
 ```
 

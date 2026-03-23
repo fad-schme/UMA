@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 import pytest
 
 from uma import UMARequestHandle, UMARuntime
+from uma.core.uma_memory import UMAMemory
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
 from uma.types import RuntimeContext
 
@@ -73,52 +74,10 @@ async def test_request_handle_retrieval_requires_user_id_for_current_behavior(um
     with pytest.raises(ValueError, match="user_id"):
         await handle.retrieve_structured_context("hello world")
 
-
-@pytest.mark.asyncio
-async def test_umamemory_retrieval_shims_delegate_through_request_handle(uma_memory, monkeypatch) -> None:
-    memory = uma_memory
-    calls: List[tuple[str, RuntimeContext, str]] = []
-
-    async def fake_structured(self: UMARequestHandle, query_text: str) -> Dict[str, list]:
-        calls.append(("structured", self.context, query_text))
-        return {"facts": [], "chunks": [], "working_memory": [], "episodic": [], "skills": [], "graph": []}
-
-    async def fake_rendered(self: UMARequestHandle, query_text: str) -> str:
-        calls.append(("rendered", self.context, query_text))
-        return "rendered context"
-
-    async def fake_messages(
-        self: UMARequestHandle,
-        query_text: str,
-        *,
-        render_mode: str = "openclaw_v1",
-    ) -> Dict[str, Any]:
-        calls.append(("messages", self.context, f"{query_text}:{render_mode}"))
-        return {"messages": [], "meta": {"render_mode": render_mode}}
-
-    monkeypatch.setattr(UMARequestHandle, "retrieve_structured_context", fake_structured)
-    monkeypatch.setattr(UMARequestHandle, "retrieve_rendered_context", fake_rendered)
-    monkeypatch.setattr(UMARequestHandle, "get_context_messages", fake_messages)
-
-    with pytest.warns(DeprecationWarning, match="get_structured_context"):
-        await memory.get_structured_context("user:u1", "hello world")
-    with pytest.warns(DeprecationWarning, match="get_rendered_context"):
-        await memory.get_rendered_context("user:u1", "hello world")
-    with pytest.warns(DeprecationWarning, match="get_context_messages"):
-        await memory.get_context_messages(
-            user_id="user:u1",
-            query_text="hello world",
-            agent_id="ignored-agent",
-            render_mode="raw_rendered",
-        )
-
-    assert [item[0] for item in calls] == ["structured", "rendered", "messages"]
-    for _, context, _ in calls:
-        assert context.user_id == "user:u1"
-        assert context.agent_id == memory.agent_id
-        assert context.tenant_id == DEFAULT_TENANT_ID
-        assert context.request_id.startswith("uma-retrieval:")
-        assert context.session_id == "legacy-user:user:u1"
+def test_umamemory_retrieval_shims_are_removed() -> None:
+    assert not hasattr(UMAMemory, "get_structured_context")  # type: ignore[name-defined]
+    assert not hasattr(UMAMemory, "get_rendered_context")  # type: ignore[name-defined]
+    assert not hasattr(UMAMemory, "get_context_messages")  # type: ignore[name-defined]
 
 
 @pytest.mark.asyncio

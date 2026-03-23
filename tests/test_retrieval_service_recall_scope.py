@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import pytest
 
+from uma import UMARuntime
+from uma.stores.base_sql_store import DEFAULT_TENANT_ID
+from uma.types import RuntimeContext
+
 
 @pytest.mark.asyncio
 async def test_rlm_lane_recall_scopes_user_only(uma_memory, tmp_path):
     memory = uma_memory
     assert memory.agent_id, "test runtime must set agent_id"
+    runtime = UMARuntime.from_memory(memory)
 
     agent_doc = tmp_path / "agent_doc.txt"
     agent_doc.write_text(
@@ -30,7 +35,15 @@ async def test_rlm_lane_recall_scopes_user_only(uma_memory, tmp_path):
     await memory.ingest_document(str(agent_doc), owner_type="agent", owner_id=memory.agent_id)
     await memory.ingest_document(str(user_doc), owner_type="user", owner_id="user:u1")
 
-    ctx = await memory.get_structured_context("user:u1", "remember last time hello world")
+    ctx = await runtime.bind(
+        RuntimeContext(
+            tenant_id=DEFAULT_TENANT_ID,
+            agent_id=memory.agent_id,
+            request_id="req-recall-user-only",
+            user_id="user:u1",
+            session_id="legacy-user:user:u1",
+        )
+    ).retrieve_structured_context("remember last time hello world")
     facts = ctx.get("facts") or []
     chunks = ctx.get("chunks") or []
     assert all(getattr(f, "owner_type", None) == "user" for f in facts)
@@ -43,6 +56,7 @@ async def test_rlm_lane_recall_scopes_user_only(uma_memory, tmp_path):
 async def test_rlm_lane_kb_scopes_agent_and_user(uma_memory, tmp_path):
     memory = uma_memory
     assert memory.agent_id, "test runtime must set agent_id"
+    runtime = UMARuntime.from_memory(memory)
 
     agent_doc = tmp_path / "agent_doc.txt"
     agent_doc.write_text(
@@ -66,7 +80,15 @@ async def test_rlm_lane_kb_scopes_agent_and_user(uma_memory, tmp_path):
     await memory.ingest_document(str(agent_doc), owner_type="agent", owner_id=memory.agent_id)
     await memory.ingest_document(str(user_doc), owner_type="user", owner_id="user:u1")
 
-    ctx = await memory.get_structured_context("user:u1", "hello world")
+    ctx = await runtime.bind(
+        RuntimeContext(
+            tenant_id=DEFAULT_TENANT_ID,
+            agent_id=memory.agent_id,
+            request_id="req-recall-kb",
+            user_id="user:u1",
+            session_id="legacy-user:user:u1",
+        )
+    ).retrieve_structured_context("hello world")
     chunks = list(ctx.get("chunks") or [])
     assert any(getattr(c, "owner_type", None) == "agent" for c in chunks)
     assert any(getattr(c, "owner_type", None) == "user" for c in chunks)

@@ -21,8 +21,8 @@ WorkingMemoryCore does NOT:
 - build prompts
 - generate assistant replies
 
-Long-term memory retrieval is handled by UMAMemory.get_structured_context(...)
-via RLMController.
+Long-term memory retrieval is handled by the bound runtime/request-handle path
+via `UMARuntime.bind(RuntimeContext(...))` and `UMARequestHandle`.
 """
 
 from __future__ import annotations

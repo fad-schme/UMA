@@ -105,7 +105,7 @@ class MemoryPipeline:
         - graph_core (optional)
         - hooks
 
-    Developers use UMAMemory.get_structured_context() outside this pipeline.
+    Retrieval happens outside this pipeline through the bound runtime/request-handle path.
     """
 
     def __init__(self, memory_client: Any, hooks: Any, promotion_policy: Optional[PromotionPolicy] = None) -> None:

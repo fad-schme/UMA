@@ -42,7 +42,7 @@ class CoTMemoryBuilder:
         Parameters
         ----------
         ctx : dict
-            Context object from UMAMemory.get_structured_context().
+            Context object from `UMARequestHandle.retrieve_structured_context(...)`.
 
         Returns
         -------
@@ -140,6 +140,6 @@ class CoTMemoryBuilder:
 
 #
 # No convenience wrappers: callers should explicitly:
-#   1) await UMAMemory.get_structured_context(...)
+#   1) bind request scope and call UMARequestHandle.retrieve_structured_context(...)
 #   2) CoTMemoryBuilder.build(ctx)
 #

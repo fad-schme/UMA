@@ -2,7 +2,7 @@
 context_pack_builder.py
 =======================
 
-Transforms UMA memory (from UMAMemory.get_structured_context) into a
+Transforms UMA retrieval output from the bound runtime/request-handle path into a
 RAG-ready structured context pack.
 
 This module does NOT generate prompts. It produces structured, 
@@ -52,7 +52,7 @@ class ContextPackBuilder:
             The natural-language query used to retrieve memory.
         
         ctx : dict
-            Full memory context from UMAMemory.get_structured_context(), e.g.:
+            Full memory context returned by `UMARequestHandle.retrieve_structured_context(...)`, e.g.:
 
                 {
                     "working_memory": [...],

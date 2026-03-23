@@ -9,7 +9,7 @@ import yaml
 
 from uma.core.uma_memory import UMAMemory
 from uma.core.retrieval.rlm.request import RetrievalRequest
-from uma.types import TargetOwner, Skill
+from uma.types import RuntimeContext, TargetOwner, Skill
 
 from tests.helpers.runtime import build_test_config
 
@@ -35,9 +35,7 @@ async def _init_memory_with_procedural_feature(tmp_path) -> UMAMemory:
     cfg_path.write_text(yaml.safe_dump(cfg))
 
     memory = UMAMemory.from_yaml(str(cfg_path))
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        memory.agent_id = "agent-default"
+    memory._agent_id = "agent-default"
     memory._ensure_ingestion_ready()
     return memory
 
@@ -148,15 +146,21 @@ async def test_public_procedural_reads_accept_explicit_workspace_scope_without_b
         assert get_result.data.owner_type == "workspace"
 
         request = RetrievalRequest.from_runtime_context(
-            memory._build_runtime_context_for_retrieval(user_id="user:u1")
+            RuntimeContext(
+                tenant_id="default",
+                agent_id="agent-default",
+                request_id="req-procedural-workspace",
+                user_id="user:u1",
+                session_id="legacy-user:user:u1",
+            )
         )
         assert [scope.owner_type for scope in request.scopes] == ["agent", "user"]
     finally:
         memory.shutdown()
 
 
-def test_agent_id_setter_warns_as_deprecated_public_scope_api(uma_memory) -> None:
-    with pytest.warns(DeprecationWarning, match="deprecated as a public scope API"):
+def test_agent_id_setter_is_removed_from_public_surface(uma_memory) -> None:
+    with pytest.raises(AttributeError):
         uma_memory.agent_id = "agent-deprecated-test"
 
 

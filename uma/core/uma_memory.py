@@ -44,11 +44,20 @@ Typical developer workflow
         - graph updates
         - lifecycle hooks
 
-3. When constructing a prompt for the agent, fetch UMA context:
+3. When constructing a prompt for the agent, bind explicit request scope and fetch UMA context:
 
-    ctx = await memory.get_structured_context(
-        user_id=user_id,
-        query_text="the user's current question or task"
+    runtime = UMARuntime.from_memory(memory)
+    handle = runtime.bind(
+        RuntimeContext(
+            tenant_id="default",
+            agent_id="agent-default",
+            request_id="req-1",
+            user_id=user_id,
+            session_id="session-1",
+        )
+    )
+    ctx = await handle.retrieve_structured_context(
+        "the user's current question or task"
     )
 
    The context dictionary includes:
@@ -83,7 +92,7 @@ Internal retrieval components
     • Are not part of the public API
     • Never mutate memory
     • Never perform agent reasoning
-    • Are used only by `get_structured_context()`
+    • Are used only by the bound runtime retrieval path
 
 Design Philosophy
 -----------------
@@ -97,7 +106,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import uuid
 import warnings
 from typing import Any, Dict, List, Optional
 
@@ -126,7 +134,6 @@ from .initializers.runtime import init_retrieval_ready, init_ingestion_ready, sc
 
 # Optional Features
 from .utils.registry import FeatureLoader, FeaturePolicy, default_feature_registry
-from ..stores.base_sql_store import DEFAULT_TENANT_ID
 from ..types import RuntimeContext, SessionScope, TargetOwner
 from .runtime import UMARuntime
 from .retrieval.rlm.request import RetrievalRequest
@@ -140,7 +147,7 @@ class UMAMemory:
 
     This class:
         - Initializes all core subsystems lazily
-        - Provides public APIs for pipeline and retrieval
+        - Provides public APIs for ingestion/maintenance
         - Loads optional features via direct attachment
 
     Developers ONLY interact with:
@@ -150,7 +157,8 @@ class UMAMemory:
         await memory.process_turn(user_id=user_id, user_msg=user_msg, assistant_reply=assistant_reply)
 
         # when building prompts:
-        ctx = await memory.get_structured_context(user_id, query_text)
+        handle = UMARuntime.from_memory(memory).bind(RuntimeContext(...))
+        ctx = await handle.retrieve_structured_context(query_text)
 
     All other subsystems remain internal.
 
@@ -264,21 +272,6 @@ class UMAMemory:
     def agent_id(self) -> Optional[str]:
         return self._agent_id
 
-    @agent_id.setter
-    def agent_id(self, value: Optional[str]) -> None:
-        if value is not None:
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError("UMAMemory.agent_id must be a non-empty string or None.")
-            value = value.strip()
-            warnings.warn(
-                "UMAMemory.agent_id is deprecated as a public scope API. "
-                "Use UMARuntime.bind(RuntimeContext(...)) for retrieval entry points. "
-                "This setter remains as a temporary bridge while deep internal scope cleanup is pending.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        self._agent_id = value
-
     def _warn_legacy_public_api(
         self,
         api_name: str,
@@ -341,28 +334,6 @@ class UMAMemory:
     # ----------------------------------------------------------------------
     # Core Subsystems (WM, Episodic, Semantic, Procedural, Chunk — Retrieval wired lazily)
     # ----------------------------------------------------------------------
-
-    def _build_runtime_context_for_retrieval(self, *, user_id: str) -> RuntimeContext:
-        if not user_id or not isinstance(user_id, str):
-            raise ValueError("UMAMemory retrieval requires user_id to be a non-empty string.")
-
-        agent_id = getattr(self, "agent_id", None)
-        if not agent_id or not isinstance(agent_id, str) or not agent_id.strip():
-            raise ValueError("UMAMemory retrieval requires agent_id to be a non-empty string.")
-
-        normalized_user_id = normalize_user_id(user_id)
-        legacy_scope = legacy_session_scope_for_user(
-            tenant_id=DEFAULT_TENANT_ID,
-            agent_id=agent_id,
-            user_id=normalized_user_id,
-        )
-        return RuntimeContext(
-            tenant_id=DEFAULT_TENANT_ID,
-            agent_id=agent_id,
-            request_id=f"uma-retrieval:{uuid.uuid4()}",
-            user_id=normalized_user_id,
-            session_id=legacy_scope.session_id,
-        )
 
     def _build_retrieval_request(self, context: RuntimeContext) -> RetrievalRequest:
         return RetrievalRequest.from_runtime_context(
@@ -829,128 +800,6 @@ class UMAMemory:
             batch_size=batch_size,
         )
 
-    # ----------------------------------------------------------------------
-    # PUBLIC DEVELOPER API — Unified User Context (WM + LT Retrieval)
-    # ----------------------------------------------------------------------
-    from typing import Any, Dict, List, Optional
-
-    async def get_context_messages(
-        self,
-        *,
-        user_id: str,
-        query_text: str,
-        agent_id: Optional[str] = None,
-        render_mode: str = "openclaw_v1",
-    ) -> Dict[str, Any]:
-        """
-        Return UMA retrieval output as a message-list payload for agent runtimes.
-
-        This is a presentation-layer helper for external runtimes such as OpenClaw.
-        UMA remains the owner of retrieval and rendering; this method only packages
-        the rendered result into a stable message-oriented contract.
-
-        Parameters
-        ----------
-        user_id : str
-            Canonical user identifier.
-        query_text : str
-            User query / latest user message used for retrieval.
-        agent_id : Optional[str]
-            Optional agent scope hint for future use.
-        project_id : Optional[str]
-            Optional project scope hint for future use.
-        render_mode : str
-            Rendering mode for runtime-facing output. Current supported values:
-            - "openclaw_v1"
-            - "raw_rendered"
-
-        Returns
-        -------
-        Dict[str, Any]
-            {
-                "messages": [
-                    {"role": "system", "content": "..."}
-                ],
-                "meta": {
-                    "provider": "uma",
-                    "format": "message_list",
-                    "render_mode": "openclaw_v1",
-                    "message_count": 1,
-                    "agent_id": ...,
-                    "project_id": ...,
-                }
-            }
-
-        Notes
-        -----
-        - Returns an empty message list if no rendered context is available.
-        - Does not expose structured retrieval internals.
-        - Safe for transport over an external service boundary.
-        """
-        self._warn_legacy_public_api(
-            "get_context_messages",
-            replacement="Prefer UMARuntime.bind(RuntimeContext(...)).get_context_messages(...).",
-            detail="This facade remains temporary and routes through the canonical bound request handle.",
-        )
-        if not user_id or not isinstance(user_id, str):
-            raise ValueError("UMAMemory.get_context_messages: user_id must be a non-empty string.")
-        if not query_text or not isinstance(query_text, str):
-            raise ValueError("UMAMemory.get_context_messages: query_text must be a non-empty string.")
-        if agent_id is not None and (not isinstance(agent_id, str) or not agent_id.strip()):
-            raise ValueError("UMAMemory.get_context_messages: agent_id must be a non-empty string or None.")
-        if not isinstance(render_mode, str) or not render_mode.strip():
-            raise ValueError("UMAMemory.get_context_messages: render_mode must be a non-empty string.")
-
-        render_mode = render_mode.strip()
-
-        if render_mode not in {"openclaw_v1", "raw_rendered"}:
-            raise ValueError(
-                f"UMAMemory.get_context_messages: unsupported render_mode={render_mode!r}. "
-                "Supported modes: 'openclaw_v1', 'raw_rendered'."
-            )
-        handle = UMARuntime.from_memory(self).bind(
-            self._build_runtime_context_for_retrieval(user_id=user_id)
-        )
-        return await handle.get_context_messages(query_text=query_text, render_mode=render_mode)
-
-
-    async def get_structured_context(self, user_id: str, query_text: str) -> Dict[str, list]:
-        """
-        Return a unified, developer-facing context pack for retrieval-augmented agents.
-
-        UMA is a memory SDK:
-        - No assistant reply generation
-        - No prompt building
-        - Retrieval only
-
-        Retrieval path
-        --------------
-        - Always includes stored Working Memory (WM).
-        - Long-term retrieval is performed using RLMController (recursive retrieval).
-
-        Returns
-        -------
-        Dict[str, list]
-            {
-                "working_memory": [...],
-                "episodic": [...],
-            "facts": [...],
-            "skills": [...],
-                "graph": [...],
-            }
-        """
-        self._warn_legacy_public_api(
-            "get_structured_context",
-            replacement="Prefer UMARuntime.bind(RuntimeContext(...)).retrieve_structured_context(...).",
-            detail="This facade remains temporary and routes through the canonical bound request handle.",
-        )
-        if not user_id or not isinstance(user_id, str):
-            raise ValueError("UMAMemory.get_structured_context: user_id must be a non-empty string.")
-        handle = UMARuntime.from_memory(self).bind(
-            self._build_runtime_context_for_retrieval(user_id=user_id)
-        )
-        return await handle.retrieve_structured_context(query_text=query_text)
-
     async def process_turn(
         self,
         *,
@@ -1016,23 +865,6 @@ class UMAMemory:
             config=config,
             memory=self,
         )
-
-    async def get_rendered_context(self, user_id: str, query_text: str) -> str:
-        """
-        Render a production-ready snippet directly from RLM retrieval.
-
-        Configuration is internal to UMA (via memory.retrieval_cfg.context). Callers should not
-        inspect config or select rendering modes.
-        """
-        self._warn_legacy_public_api(
-            "get_rendered_context",
-            replacement="Prefer UMARuntime.bind(RuntimeContext(...)).retrieve_rendered_context(...).",
-            detail="This facade remains temporary and routes through the canonical bound request handle.",
-        )
-        handle = UMARuntime.from_memory(self).bind(
-            self._build_runtime_context_for_retrieval(user_id=user_id)
-        )
-        return await handle.retrieve_rendered_context(query_text=query_text)
 
     # ----------------------------------------------------------------------
     # Shutdown

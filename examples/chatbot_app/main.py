@@ -172,9 +172,8 @@ async def interactive_chat(
 
     # Initialize UMA memory runtime
     memory = UMAMemory.from_yaml(config_path)
-    # Temporary bridge for current internal retrieval/ingestion internals.
-    # Public retrieval below uses bound RuntimeContext via UMARuntime.
-    memory.agent_id = agent_id
+    # Transitional write-side bridge for process_turn internals only.
+    memory._agent_id = agent_id
     runtime = UMARuntime.from_memory(memory)
     
     try:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -361,7 +360,7 @@ async def test_cross_agent_visibility_requires_explicit_promotion(uma_memory) ->
 
 
 @pytest.mark.asyncio
-async def test_retrieval_shim_routes_through_request_handle_under_overlap(uma_memory, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_request_handle_retrieval_remains_isolated_under_overlap(uma_memory, monkeypatch: pytest.MonkeyPatch) -> None:
     memory = uma_memory
     assert memory.agent_id
     barrier = threading.Barrier(2)
@@ -373,13 +372,28 @@ async def test_retrieval_shim_routes_through_request_handle_under_overlap(uma_me
         return {"working_memory": [], "episodic": [], "facts": [], "chunks": [], "skills": [], "graph": [], "trace": [], "confidence": {}}
 
     monkeypatch.setattr(UMARequestHandle, "retrieve_structured_context", fake_structured)
+    runtime = UMARuntime.from_memory(memory)
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        results = await asyncio.gather(
-            memory.get_structured_context("user:u1", "query-a"),
-            memory.get_structured_context("user:u2", "query-b"),
-        )
+    results = await asyncio.gather(
+        runtime.bind(
+            RuntimeContext(
+                tenant_id=DEFAULT_TENANT_ID,
+                agent_id=memory.agent_id,
+                request_id="req-overlap-a",
+                user_id="user:u1",
+                session_id="legacy-user:user:u1",
+            )
+        ).retrieve_structured_context("query-a"),
+        runtime.bind(
+            RuntimeContext(
+                tenant_id=DEFAULT_TENANT_ID,
+                agent_id=memory.agent_id,
+                request_id="req-overlap-b",
+                user_id="user:u2",
+                session_id="legacy-user:user:u2",
+            )
+        ).retrieve_structured_context("query-b"),
+    )
 
     assert len(results) == 2
     assert sorted(seen_contexts) == [
