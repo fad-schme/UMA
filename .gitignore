@@ -8,6 +8,10 @@ venv/
 .venv/
 ENV/
 .agents/
+.codex/
+.gold_runs/
+.ruff_cache/
+
 # Byte-compiled / optimized / DLL files
 *.pyc
 *.pyo
@@ -39,6 +43,7 @@ dist/
 website/
 material/
 data/
+scripts/
 *.zip
 *.tar.gz
 tmp.txt

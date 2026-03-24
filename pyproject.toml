@@ -9,7 +9,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
-  {name = "UMAContributors"},
+  { name = "a.Diaz-Schmeier", email = "ad-schme@memory-engineering.com" },
 ]
 dynamic = ["version"]
 dependencies = [
@@ -34,4 +34,4 @@ version = {attr = "uma.version.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["uma*"]
-exclude = ["tests*", "examples*", "scripts*", "config*", ".venv*", ".pytest_cache*"]
+exclude = ["uma.extensions*", "tests*", "examples*", "scripts*", "config*", ".venv*", ".pytest_cache*"]
