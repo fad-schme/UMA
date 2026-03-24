@@ -230,9 +230,13 @@ embedding:
 ```
 
 ### Extensions (custom adapters)
-UMA can load custom adapters from `extensions/` located at your project root
-(alongside `config/`). This is ideal for vector/db plugins you don't want to ship
-inside the UMA package.
+The published `uma` package contains UMA core only. Adapters remain external to
+the package, and users continue to load config explicitly with
+`UMAMemory.from_yaml(config_path)`.
+
+UMA resolves external adapter modules in two ways:
+- Explicit adapter roots from `UMA_ADAPTER_ROOTS` (multiple roots may be separated by `os.pathsep`; earlier entries win).
+- Backward-compatible project-local `extensions/` or `plugins/` directories alongside your config root.
 
 Folder layout:
 ```
@@ -257,6 +261,8 @@ storage:
 Notes:
 - `vector_backend` accepts a plugin spec `module:callable`.
 - The callable must accept `dim` as the first argument and return a `VectorIndex`.
+- For installed use, make the directory that contains `vector/`, `graph/`, `db/`, or `llm/`
+  import packages available via `UMA_ADAPTER_ROOTS` if it is not in Python's import path already.
 
 #### Consolidation feature usage
 Consolidation is an optional feature that runs an asynchronous "sleep cycle" for a user. It:

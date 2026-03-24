@@ -3,13 +3,13 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "uma-rlm"
-description = "UMA-RLM: modular memory and context manager for AI agents"
+name = "uma"
+description = "UMA: modular memory and context manager for AI agents"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
-  {name = "UMA-RLM Contributors"},
+  {name = "UMAContributors"},
 ]
 dynamic = ["version"]
 dependencies = [

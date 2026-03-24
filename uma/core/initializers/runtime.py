@@ -18,7 +18,7 @@ import logging
 import os
 import sys
 import threading
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Iterable
 
 from .providers import ensure_embedder, ensure_llm
 from .stores import initialize_stores
@@ -27,6 +27,8 @@ if TYPE_CHECKING:
     from ..uma_memory import UMAMemory
 
 logger = logging.getLogger(__name__)
+
+_ADAPTER_ROOTS_ENV = "UMA_ADAPTER_ROOTS"
 
 
 def _run_singleflight_initializer(
@@ -65,33 +67,67 @@ def _run_singleflight_initializer(
 # ---------------------------------------------------------------------
 # Runtime environment (called during config load)
 # ---------------------------------------------------------------------
+def _iter_adapter_roots(cfg: object) -> Iterable[str]:
+    """
+    Yield adapter roots that should be made importable for plugin specs.
+
+    Order matters:
+      1. Explicit external adapter roots from the environment.
+      2. Backward-compatible config-adjacent `extensions/` and `plugins/` roots.
+    """
+    seen: set[str] = set()
+
+    env_roots = os.environ.get(_ADAPTER_ROOTS_ENV, "")
+    for raw_path in env_roots.split(os.pathsep):
+        path = raw_path.strip()
+        if not path:
+            continue
+        normalized = os.path.abspath(os.path.expanduser(os.path.expandvars(path)))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        yield normalized
+
+    source_dir = getattr(cfg, "_source_dir", None)
+    if not source_dir:
+        return
+
+    root_dir = os.path.dirname(source_dir)
+    for path in (
+        os.path.join(root_dir, "extensions"),
+        os.path.join(root_dir, "plugins"),
+    ):
+        normalized = os.path.abspath(path)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        yield normalized
+
+
 def init_runtime_env(cfg: object) -> None:
     """
     Initialize UMA runtime environment as early as config load time.
 
     Intentionally lightweight:
-      - register local plugin/extension roots on sys.path
+      - register explicit external adapter roots on sys.path
+      - keep config-adjacent plugin/extension roots working
       - DO NOT initialize providers, DBs, vector indexes, or other heavy services
     """
-    source_dir = getattr(cfg, "_source_dir", None)
-    if not source_dir:
-        return
-
     try:
-        root_dir = os.path.dirname(source_dir)
-        plugins_dir = os.path.join(root_dir, "plugins")
-        extensions_dir = os.path.join(root_dir, "extensions")
-
-        registered = False
-        for path in (extensions_dir, plugins_dir):
+        valid_roots: list[str] = []
+        for path in _iter_adapter_roots(cfg):
             if not os.path.isdir(path):
                 continue
-            if path not in sys.path:
-                sys.path.insert(0, path)
-                logger.info("Registered plugin root on sys.path: %s", path)
-            registered = True
+            valid_roots.append(path)
 
-        if registered:
+        for path in reversed(valid_roots):
+            if path in sys.path:
+                sys.path.remove(path)
+            sys.path.insert(0, path)
+            logger.info("Registered adapter root on sys.path: %s", path)
+
+        source_dir = getattr(cfg, "_source_dir", None)
+        if valid_roots and source_dir:
             os.environ.setdefault("UMA_CONFIG_DIR", str(source_dir))
     except Exception:
         logger.exception("Failed to initialize UMA runtime environment (non-fatal).")

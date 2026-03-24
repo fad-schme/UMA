@@ -21,6 +21,7 @@ storage:
     timeout_s: 10.0
     distance: "cosine"
     on_disk_payload: false
+    bm25_enabled: false
 
   graph_config:
     # Neo4j (custom adapter)
@@ -100,7 +101,7 @@ retrieval:
   hybrid:
     enabled: true
     top_k_dense: 0       # 0 => use the call-site k
-    top_k_sparse: 15     # 0 disables lexical retrieval
+    top_k_sparse: 0      # disables lexical retrieval
     fusion_strategy: rrf # rrf | overlap_boost
 
   context:

@@ -1,4 +1,0 @@
-Hello, how are you?
-What is your name?
-Tell me about memory systems.
-/quit
