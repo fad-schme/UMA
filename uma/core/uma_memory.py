@@ -3,10 +3,9 @@ r"""
  | | | |  \/  | /_\ ___| _ \ |  |  \/  |
  | |_| | |\/| |/ _ \___|   / |__| |\/| |
   \___/|_|  |_/_/ \_\  |_|_\____|_|  |_|
-                                        
 
-	UMAMemory — Core UMA Memory Runtime
-	=====================================
+    UMAMemory — Core UMA Memory Runtime
+    =====================================
 
 UMA is a **memory SDK**, not an autonomous agent.
 
@@ -14,13 +13,13 @@ This class owns and orchestrates all UMA memory subsystems:
 
     • Working Memory (short-term conversational state)
     • Episodic Memory (indexed event history)
-	    • Fact Memory (facts, preferences, domain knowledge)
-	    • Skill Memory (skills, routines)
-	    • Temporal Graph (optional knowledge graph)
+    • Fact Memory (facts, preferences, domain knowledge)
+    • Skill Memory (skills, routines)
+    • Temporal Graph (optional knowledge graph)
 
-UMA does **not** generate assistant replies and does **not** perform
-agent reasoning. Developers bring their own LLM or agent loop and use
-UMA strictly for memory management.
+UMA does not generate assistant replies and does not perform agent reasoning.
+Developers bring their own LLM or agent loop and use UMA strictly for memory
+management.
 
 Typical developer workflow
 --------------------------
@@ -29,70 +28,23 @@ Typical developer workflow
 
     memory = UMAMemory.from_yaml("uma.yaml")
 
-2. After the developer's agent produces a reply, store the memory turn:
+2. Bind request scope ergonomically for repeated retrieval:
 
-    await memory.process_turn(
+    bound = memory.for_context(
         user_id=user_id,
-        user_msg=user_message,
-        assistant_reply=final_agent_reply,
+        agent_id="agent-default",
+        tenant_id="default",
+        request_id="req-1",
+        session_id="session-1",
     )
 
-   This uses an internal ingestion pipeline for:
-        - working memory update + compaction
-        - episodic memory generation
-        - semantic fact ingestion
-        - graph updates
-        - lifecycle hooks
+3. Retrieve context:
 
-3. When constructing a prompt for the agent, bind explicit request scope and fetch UMA context:
-
-    runtime = UMARuntime.from_memory(memory)
-    handle = runtime.bind(
-        RuntimeContext(
-            tenant_id="default",
-            agent_id="agent-default",
-            request_id="req-1",
-            user_id=user_id,
-            session_id="session-1",
-        )
-    )
-    ctx = await handle.retrieve_structured_context(
-        "the user's current question or task"
+    snippet = await bound.retrieve_rendered_context(
+        query_text="the user's current question or task"
     )
 
-   The context dictionary includes:
-
-        {
-            "working_memory": [...],   # always included
-            "episodic": [...],         # retrieval-matched episodes
-            "facts": [...],            # relevant long-term facts
-            "skills": [...],           # relevant skills
-            "graph": [...],            # relevant graph items
-        }
-
-4. Developers decide how to inject this memory into their agent prompts.
-   UMA never performs reasoning or constructs prompts on its own.
-
-Internal retrieval components
------------------------------
-    The following attributes are internal and initialized lazily on first use:
-
-    • memory_env
-        An instance of UMAMemoryEnvironment.
-        This provides a safe, read-only retrieval environment
-        used exclusively by the RLMController.
-
-	    • rlm_controller
-	        An optional RLMController instance.
-	        When enabled via configuration, it performs bounded, recursive
-	        memory retrieval using the configured LLM as a control model.
-	        Retrieval uses RLM exclusively.
-
-    These components:
-    • Are not part of the public API
-    • Never mutate memory
-    • Never perform agent reasoning
-    • Are used only by the bound runtime retrieval path
+4. Ingest conversation turns or documents through the public APIs on UMAMemory.
 
 Design Philosophy
 -----------------
@@ -106,20 +58,14 @@ from __future__ import annotations
 
 import logging
 import threading
-import warnings
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-from .memory_config import UMAConfig  # YAML loader + validation (dict-like)
+from .memory_config import UMAConfig
 from .utils.config_types import RuntimeConfig
-
 from .utils.hooks import UMAHooks
 from .utils.identity import normalize_user_id
 from .utils.logging_setup import logger as uma_logger  # noqa: F401 (init side-effect)
-from .working_memory.core import (
-    WorkingMemoryCore,
-    legacy_session_scope_for_user,
-    session_scope_from_runtime_context,
-)
+from .working_memory.core import WorkingMemoryCore
 from .episodic.core import EpisodicCore
 from .episodic.indexer import EpisodeIndexer
 from .episodic.policies import EpisodicRetentionPolicy
@@ -134,44 +80,40 @@ from .initializers.runtime import init_retrieval_ready, init_ingestion_ready, sc
 
 # Optional Features
 from .utils.registry import FeatureLoader, FeaturePolicy, default_feature_registry
-from ..types import RuntimeContext, SessionScope, TargetOwner
-from .runtime import UMARuntime
-from .retrieval.rlm.request import RetrievalRequest
+from ..types import RuntimeContext, TargetOwner
+from .runtime import UMABoundMemory, UMARuntime
 
 logger = logging.getLogger(__name__)
 
 
 class UMAMemory:
-    """
-    UMA Memory Runtime Container.
+    """UMA Memory Runtime Container.
 
     This class:
-        - Initializes all core subsystems lazily
-        - Provides public APIs for ingestion/maintenance
-        - Loads optional features via direct attachment
+        - initializes all core subsystems lazily
+        - provides public APIs for retrieval, ingestion, and maintenance
+        - loads optional features via direct attachment
 
-    Developers ONLY interact with:
+    Developers should primarily interact with:
+
         memory = UMAMemory.from_yaml("uma.yaml")
 
-        # after their own agent produces a reply:
-        await memory.process_turn(user_id=user_id, user_msg=user_msg, assistant_reply=assistant_reply)
+        bound = memory.for_context(
+            user_id=user_id,
+            agent_id="agent-default",
+            tenant_id="default",
+            request_id="req-1",
+        )
 
-        # when building prompts:
-        handle = UMARuntime.from_memory(memory).bind(RuntimeContext(...))
-        ctx = await handle.retrieve_structured_context(query_text)
+        snippet = await bound.retrieve_rendered_context(query_text)
 
-    All other subsystems remain internal.
+        await memory.process_turn(
+            user_id=user_id,
+            user_msg=user_msg,
+            assistant_reply=assistant_reply,
+        )
 
-    The configuration is YAML-driven and MUST contain at top-level:
-        storage           – {db_root, sql_backend, vector_backend, graph_backend}
-        working_memory    – WM token window + thresholds
-        embedding         – provider, model, dimension
-        llm               – UMA internal LLM provider + model
-        retrieval         – caps for episodes/facts/skills/graph items
-        consolidation     – cluster_similarity, max_episodes_per_cycle,
-                            prune_min_fact_salience
-        features          – {load, policy}
-        graph             – (only required when storage.graph_backend != "disabled")
+    UMARuntime remains internal and canonical for retrieval execution.
     """
 
     # ------------------------------------------------------------------
@@ -180,6 +122,7 @@ class UMAMemory:
 
     @classmethod
     def from_yaml(cls, path: str) -> "UMAMemory":
+        """Create a UMAMemory instance from YAML config."""
         cfg = UMAConfig.load_yaml(path)
         mem = cls(cfg, config_path=path)
 
@@ -190,25 +133,12 @@ class UMAMemory:
 
         # Background warmup: cores/features/pipeline (ingestion readiness).
         schedule_ingestion_warmup(mem)
-        # Ingestion readiness is best-effort in warmup; enforced on first ingestion API call.
 
         return mem
 
     def __init__(self, config: UMAConfig, config_path: Optional[str] = None) -> None:
-        """
-        Convert nested config dicts into typed dataclasses where appropriate.
-
-        Notes
-        -----
-        - Episodic / semantic / procedural stores no longer have dedicated
-          config sections; all DB paths and vector settings are derived from:
-              storage.db_root
-              storage.sql_backend
-              storage.vector_backend
-              embedding.dimension
-        - This keeps the config surface minimal for developers.
-        """
-        self.raw_config = config  # keep original for debugging
+        """Initialize the UMA memory container from validated config."""
+        self.raw_config = config
         self._config_path = config_path or getattr(config, "_source_path", None)
         self._config_dir = getattr(config, "_source_dir", None)
         self.initialized: bool = False
@@ -236,6 +166,7 @@ class UMAMemory:
         self.pipeline_cfg = self.cfg.pipeline
         self.semantic_salience_threshold = self.cfg.semantic_salience_threshold
         self._agent_id: Optional[str] = None
+        self._runtime: Optional[UMARuntime] = None
 
         # Internal store registry (core-only access; no direct store usage outside cores)
         self._stores: Dict[str, Any] = {}
@@ -265,233 +196,197 @@ class UMAMemory:
         logger.debug("UMAMemory instance created with unified storage config.")
 
     # ----------------------------------------------------------------------
-    # Internal lazy initialization (developer should NOT call initialization)
+    # Internal lazy initialization
     # ----------------------------------------------------------------------
 
     @property
     def agent_id(self) -> Optional[str]:
         return self._agent_id
 
-    def _warn_legacy_public_api(
-        self,
-        api_name: str,
-        *,
-        replacement: str,
-        detail: str | None = None,
-    ) -> None:
-        message = (
-            f"UMAMemory.{api_name} is deprecated as a public compatibility shim. "
-            f"{replacement}"
-        )
-        if detail:
-            message = f"{message} {detail}"
-        warnings.warn(message, DeprecationWarning, stacklevel=3)
+    @property
+    def runtime(self) -> UMARuntime:
+        """Return the shared internal runtime, refreshing lazy-owned services."""
+        if self._runtime is None:
+            self._runtime = UMARuntime.from_memory(self)
+        else:
+            self._runtime.refresh_from_memory()
+        return self._runtime
+
 
     def _ensure_base_ready(self) -> None:
-        """
-        Minimal baseline readiness:
-        - stores only
-
-        This must be cheap and safe to call from any public API.
-        """
-        # In the new model, from_yaml() makes retrieval ready immediately.
-        # Base readiness is therefore equivalent to ensuring retrieval is ready.
+        """Ensure the minimum baseline runtime is ready."""
         if not getattr(self, "_retrieval_ready", False):
             init_retrieval_ready(self)
         self.initialized = True
 
     def _ensure_retrieval_ready(self) -> None:
-        """
-        Retrieval readiness (automatic lazy init).
-
-        Must remain lean:
-        - stores + LLM + embedder + retrieval cores (+ graph if enabled)
-        - MUST NOT initialize ingestion pipeline/features
-        """
-        # Retrieval must be ready immediately after from_yaml().
-        # Keep a defensive guard for non-standard construction paths.
+        """Ensure retrieval-only dependencies are ready."""
         if not getattr(self, "_retrieval_ready", False):
             init_retrieval_ready(self)
         self.initialized = True
 
     def _ensure_ingestion_ready(self) -> None:
-        """
-        Ingestion readiness (automatic lazy init).
-
-        Heavy path:
-        - stores
-        - LLM (required)
-        - embedder
-        - cores
-        - optional features
-        - pipeline
-        """
-        # Ingestion is warmed up in the background, but must self-heal on first ingestion call.
+        """Ensure ingestion dependencies are ready."""
         if not getattr(self, "_ingestion_ready", False):
             init_ingestion_ready(self)
         self.initialized = True
 
     # ----------------------------------------------------------------------
-    # Core Subsystems (WM, Episodic, Semantic, Procedural, Chunk — Retrieval wired lazily)
+    # Public retrieval API
     # ----------------------------------------------------------------------
 
-    def _build_retrieval_request(self, context: RuntimeContext) -> RetrievalRequest:
-        return RetrievalRequest.from_runtime_context(
-            context,
-            trace_id=context.request_id,
+    def _build_runtime_context(
+        self,
+        *,
+        user_id: str,
+        agent_id: Optional[str] = None,
+        tenant_id: str = "default",
+        request_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> RuntimeContext:
+        """Build a validated runtime context for public retrieval APIs."""
+        if not isinstance(user_id, str) or not user_id.strip():
+            raise ValueError("UMAMemory retrieval requires a non-empty user_id.")
+
+        resolved_agent_id = (agent_id or self.agent_id or "agent-default").strip()
+        if not resolved_agent_id:
+            raise ValueError("UMAMemory retrieval requires a non-empty agent_id.")
+
+        resolved_tenant_id = (tenant_id or "default").strip()
+        if not resolved_tenant_id:
+            raise ValueError("UMAMemory retrieval requires a non-empty tenant_id.")
+
+        resolved_request_id = (request_id or f"request:{user_id.strip()}").strip()
+        if not resolved_request_id:
+            raise ValueError("UMAMemory retrieval requires a non-empty request_id.")
+
+        return RuntimeContext(
+            tenant_id=resolved_tenant_id,
+            agent_id=resolved_agent_id,
+            request_id=resolved_request_id,
+            user_id=user_id.strip(),
+            workspace_id=workspace_id,
+            session_id=session_id,
         )
 
-    def _working_memory_scope_for_context(self, context: RuntimeContext) -> Optional[SessionScope]:
-        return session_scope_from_runtime_context(context)
-
-    async def _retrieve_structured_context_for_context(
+    def for_context(
         self,
-        context: RuntimeContext,
+        *,
+        user_id: str,
+        agent_id: Optional[str] = None,
+        tenant_id: str = "default",
+        request_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> UMABoundMemory:
+        """Return an ergonomic bound facade for repeated retrieval calls.
+
+        This keeps UMAMemory as the only public entrypoint while hiding
+        UMARuntime and RuntimeContext from common usage.
+        """
+        context = self._build_runtime_context(
+            user_id=user_id,
+            agent_id=agent_id,
+            tenant_id=tenant_id,
+            request_id=request_id,
+            workspace_id=workspace_id,
+            session_id=session_id,
+        )
+        logger.debug(
+            "UMAMemory.for_context: bound tenant=%s agent=%s user=%s request=%s session=%s",
+            context.tenant_id,
+            context.agent_id,
+            context.user_id,
+            context.request_id,
+            context.session_id,
+        )
+        return UMABoundMemory(memory=self, context=context)
+
+    async def retrieve_structured_context(
+        self,
         *,
         query_text: str,
+        user_id: str,
+        agent_id: Optional[str] = None,
+        tenant_id: str = "default",
+        request_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> Dict[str, list]:
-        from ..adapters.observability.metrics import increment, timed
+        """Retrieve structured memory context for one explicit request scope."""
+        context = self._build_runtime_context(
+            user_id=user_id,
+            agent_id=agent_id,
+            tenant_id=tenant_id,
+            request_id=request_id,
+            workspace_id=workspace_id,
+            session_id=session_id,
+        )
+        return await self.runtime.retrieve_structured_context(
+            context,
+            query_text=query_text,
+        )
 
-        self._ensure_retrieval_ready()
-
-        if not isinstance(context, RuntimeContext):
-            raise TypeError("UMAMemory retrieval requires a RuntimeContext instance.")
-        if not context.user_id:
-            raise ValueError("UMAMemory retrieval requires RuntimeContext.user_id.")
-        if not query_text or not isinstance(query_text, str):
-            raise ValueError("UMAMemory.get_structured_context: query_text must be a non-empty string.")
-
-        normalized_user_id = normalize_user_id(context.user_id)
-
-        with timed("uma.get_structured_context.latency"):
-            try:
-                wm_scope = self._working_memory_scope_for_context(context)
-                wm_stored = (
-                    self.working_memory.get_context(wm_scope)
-                    if self.working_memory and wm_scope is not None
-                    else []
-                )
-            except Exception:
-                logger.exception(
-                    "UMAMemory.get_structured_context: failed to load WM tenant=%s agent=%s session=%s",
-                    context.tenant_id,
-                    context.agent_id,
-                    context.session_id,
-                )
-                wm_stored = []
-
-            controller = getattr(self, "_rlm_controller", None)
-            if controller is None:
-                raise RuntimeError("UMAMemory.get_structured_context: RLM controller not initialized.")
-
-            pack = await controller.retrieve_context(
-                request=self._build_retrieval_request(context),
-                query_text=query_text,
-            )
-            increment("uma.get_structured_context.calls", tags={"path": "rlm"})
-            coverage = getattr(pack, "coverage", None)
-            from .retrieval.rlm.coverage import compute_confidence
-            return {
-                "working_memory": wm_stored,
-                "episodic": pack.episodes,
-                "facts": pack.facts or [],
-                "chunks": getattr(pack, "chunks", []),
-                "skills": pack.skills,
-                "graph": pack.graph,
-                "trace": pack.steps,
-                "confidence": compute_confidence(coverage) if coverage is not None else {},
-            }
-
-    async def _retrieve_rendered_context_for_context(
+    async def retrieve_rendered_context(
         self,
-        context: RuntimeContext,
         *,
         query_text: str,
+        user_id: str,
+        agent_id: Optional[str] = None,
+        tenant_id: str = "default",
+        request_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> str:
-        from .utils.context_pack_builder import ContextPackBuilder
+        """Retrieve rendered memory context for one explicit request scope."""
+        context = self._build_runtime_context(
+            user_id=user_id,
+            agent_id=agent_id,
+            tenant_id=tenant_id,
+            request_id=request_id,
+            workspace_id=workspace_id,
+            session_id=session_id,
+        )
+        return await self.runtime.retrieve_rendered_context(
+            context,
+            query_text=query_text,
+        )
 
-        ctx = await self._retrieve_structured_context_for_context(context, query_text=query_text)
-        pack = ContextPackBuilder.build(query_text, ctx)
-        ctx_cfg = getattr(getattr(self, "retrieval_cfg", None), "context", None)
-        if getattr(ctx_cfg, "snippet_refiner_enabled", False):
-            return await ContextPackBuilder.render_snippet_async(
-                pack, ctx_cfg, llm=getattr(self, "llm", None)
-            )
-        return ContextPackBuilder.render_snippet(pack, ctx_cfg)
-
-    async def _get_context_messages_for_context(
+    async def get_context_messages(
         self,
-        context: RuntimeContext,
         *,
         query_text: str,
+        user_id: str,
+        agent_id: Optional[str] = None,
+        tenant_id: str = "default",
+        request_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        session_id: Optional[str] = None,
         render_mode: str = "openclaw_v1",
     ) -> Dict[str, Any]:
-        if not isinstance(context, RuntimeContext):
-            raise TypeError("UMAMemory retrieval requires a RuntimeContext instance.")
-        if not context.user_id:
-            raise ValueError("UMAMemory.get_context_messages: RuntimeContext.user_id is required.")
-        if not query_text or not isinstance(query_text, str):
-            raise ValueError("UMAMemory.get_context_messages: query_text must be a non-empty string.")
-        if not isinstance(render_mode, str) or not render_mode.strip():
-            raise ValueError("UMAMemory.get_context_messages: render_mode must be a non-empty string.")
+        """Retrieve context formatted as prompt messages for one request scope."""
+        context = self._build_runtime_context(
+            user_id=user_id,
+            agent_id=agent_id,
+            tenant_id=tenant_id,
+            request_id=request_id,
+            workspace_id=workspace_id,
+            session_id=session_id,
+        )
+        return await self.runtime.get_context_messages(
+            context,
+            query_text=query_text,
+            render_mode=render_mode,
+        )
 
-        render_mode = render_mode.strip()
 
-        if render_mode not in {"openclaw_v1", "raw_rendered"}:
-            raise ValueError(
-                f"UMAMemory.get_context_messages: unsupported render_mode={render_mode!r}. "
-                "Supported modes: 'openclaw_v1', 'raw_rendered'."
-            )
-
-        rendered = await self._retrieve_rendered_context_for_context(context, query_text=query_text)
-        rendered = (rendered or "").strip()
-
-        messages: List[Dict[str, str]] = []
-
-        if rendered:
-            if render_mode == "openclaw_v1":
-                messages.append(
-                    {
-                        "role": "system",
-                        "content": (
-                            "Relevant memory context from UMA follows. "
-                            "Use it only as supporting context; prefer direct task instructions "
-                            "and the current conversation when they conflict.\n\n"
-                            f"{rendered}"
-                        ),
-                    }
-                )
-            elif render_mode == "raw_rendered":
-                messages.append(
-                    {
-                        "role": "system",
-                        "content": rendered,
-                    }
-                )
-
-        return {
-            "messages": messages,
-            "meta": {
-                "provider": "uma",
-                "format": "message_list",
-                "render_mode": render_mode,
-                "message_count": len(messages)
-            },
-        }
+    # ----------------------------------------------------------------------
+    # Core subsystem initialization
+    # ----------------------------------------------------------------------
 
     def _init_core_subsystems(self) -> None:
-        """
-        Initialize core UMA subsystems that depend on:
-            - LLM + embedder
-            - SQL + vector stores
-
-        Subsystems initialized here:
-            - WorkingMemoryCore
-            - EpisodicCore
-            - SemanticCore
-            - ProceduralCore
-            - ChunkCore
-        """
+        """Initialize core UMA subsystems that depend on LLM/embedder/stores."""
         if self.llm is None or self.embedder is None:
             raise RuntimeError(
                 "UMAMemory._init_core_subsystems: LLM and embedder must "
@@ -538,17 +433,17 @@ class UMAMemory:
 
         # ---------------------- Semantic Core ---------------------------
         try:
-            sal = self.semantic_salience_threshold
+            salience = self.semantic_salience_threshold
             self.semantic_core = SemanticCore(
                 llm=self.llm,
                 embedder=self.embedder,
                 semantic_store=self._stores["semantic"],
-                salience_threshold=sal,
+                salience_threshold=salience,
                 memory=self,
             )
             logger.info(
                 "SemanticCore initialized (salience_threshold=%.2f).",
-                sal,
+                salience,
             )
         except Exception:
             logger.exception("UMAMemory: failed to initialize SemanticCore.")
@@ -570,25 +465,12 @@ class UMAMemory:
             logger.exception("UMAMemory: failed to initialize ChunkCore.")
             raise
 
-
-       # ----------------------------------------------------------------------
-    # Graph Subsystem Initialization (Unified Backend Selection)
     # ----------------------------------------------------------------------
+    # Graph subsystem initialization
+    # ----------------------------------------------------------------------
+
     def _init_graph_core(self) -> None:
-        """
-        Initialize the graph subsystem using the unified storage config.
-
-        Uses:
-            storage.graph_backend: plugin spec "module:callable" | "disabled"
-            storage.graph_config: connection details for plugin adapter
-
-        Rules:
-        -------
-        • If graph_backend="disabled" → skip cleanly.
-        • If plugin spec → load adapter factory and pass graph_config.
-        • Never swallow connection failures silently.
-        """
-
+        """Initialize the graph subsystem using the unified storage config."""
         storage_cfg = self.raw_config.storage
         backend = storage_cfg.graph_backend
 
@@ -711,12 +593,12 @@ class UMAMemory:
                 )
             setattr(self, name, func)
 
-    def health_check(self) -> Dict[str, Any]:
-        """
-        Run basic dependency readiness checks.
+    # ----------------------------------------------------------------------
+    # Health and maintenance
+    # ----------------------------------------------------------------------
 
-        Returns a dict with overall status and per-dependency details.
-        """
+    def health_check(self) -> Dict[str, Any]:
+        """Run basic dependency readiness checks."""
         if not self.initialized:
             return {
                 "status": "error",
@@ -745,16 +627,7 @@ class UMAMemory:
         include_procedural: bool = True,
         batch_size: int = 32,
     ) -> Dict[str, Any]:
-        """
-        Rebuild vector indexes from SQL-backed data.
-
-        This is a recovery utility and should be used in maintenance jobs.
-        """
-        self._warn_legacy_public_api(
-            "rebuild_vector_indexes",
-            replacement="Prefer an explicit UMARuntime/maintenance entrypoint when the public maintenance surface is finalized.",
-            detail="This facade remains temporary and routes directly to the canonical maintenance helper.",
-        )
+        """Rebuild vector indexes from SQL-backed data."""
         from .utils.maintenance import rebuild_vector_indexes
 
         return await rebuild_vector_indexes(
@@ -780,16 +653,7 @@ class UMAMemory:
         include_graph: bool = True,
         batch_size: int = 32,
     ) -> Dict[str, Any]:
-        """
-        Rebuild derived vector and graph indexes from SQL-backed authoritative data.
-
-        This is an explicit maintenance utility. It does not change runtime retrieval semantics.
-        """
-        self._warn_legacy_public_api(
-            "rebuild_derived_indexes",
-            replacement="Prefer an explicit UMARuntime/maintenance entrypoint when the public maintenance surface is finalized.",
-            detail="This facade remains temporary and routes directly to the canonical maintenance helper.",
-        )
+        """Rebuild derived vector and graph indexes from authoritative SQL-backed data."""
         from .utils.maintenance import rebuild_derived_indexes
 
         return await rebuild_derived_indexes(
@@ -804,6 +668,10 @@ class UMAMemory:
             batch_size=batch_size,
         )
 
+    # ----------------------------------------------------------------------
+    # Ingestion
+    # ----------------------------------------------------------------------
+
     async def process_turn(
         self,
         *,
@@ -812,16 +680,7 @@ class UMAMemory:
         assistant_reply: str,
         extra_meta: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """
-        Ingest a full conversation turn into UMA memory.
-
-        This is the primary ingestion API and wraps the internal pipeline.
-        """
-        self._warn_legacy_public_api(
-            "process_turn",
-            replacement="Prefer explicit-context ingestion surfaces as they are exposed.",
-            detail="This facade remains temporary and routes through the canonical pipeline/session-local turn path.",
-        )
+        """Ingest a full conversation turn into UMA memory."""
         self._ensure_ingestion_ready()
 
         if not getattr(self, "pipeline", None):
@@ -844,20 +703,7 @@ class UMAMemory:
         owner_id: Optional[str] = None,
         config: Optional[Any] = None,
     ) -> Any:
-        """
-        Ingest an unstructured document into UMA memory.
-        """
-        self._warn_legacy_public_api(
-            "ingest_document",
-            replacement="Prefer explicit target_owner-based ingestion surfaces.",
-            detail="This facade remains temporary and routes through the canonical explicit-owner ingest service.",
-        )
-        if target_owner is None and owner_type is not None and owner_id is not None:
-            self._warn_legacy_public_api(
-                "ingest_document(owner_type, owner_id)",
-                replacement="Pass target_owner=TargetOwner(...) explicitly.",
-                detail="The loose owner_type/owner_id call shape remains only as a thin compatibility adapter.",
-            )
+        """Ingest an unstructured document into UMA memory."""
         self._ensure_ingestion_ready()
 
         from .ingest.ingest_service import ingest_document as _ingest
@@ -881,5 +727,3 @@ class UMAMemory:
                 self.graph_core.close()
             except Exception:
                 logger.exception("Error shutting down GraphCore.")
-
-        #

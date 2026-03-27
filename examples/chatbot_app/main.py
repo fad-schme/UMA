@@ -245,17 +245,19 @@ async def interactive_chat(
             # Normal chat: retrieve context only; agent behavior is developer-owned
             try:
                 user_message = user
-                handle = runtime.bind(
-                    RuntimeContext(
-                        tenant_id="default",
-                        agent_id=agent_id,
-                        request_id=f"chat:{user_id}",
-                        user_id=user_id,
-                    )
+             # Initialize UMA memory runtime
+                memory = UMAMemory.from_yaml(config_path).for_context(
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    tenant_id="default",
+                    request_id=f"chat:{user_id}",
                 )
-                snippet = await handle.retrieve_rendered_context(
+
+                snippet = await memory.retrieve_rendered_context(
                     query_text=user_message
                 )
+
+   
                 if not snippet:
                     context_messages = [{"role": "user", "content": user_message}]
                     reply = "No memory snippet available to evaluate."
