@@ -5,11 +5,9 @@ import logging
 import os
 from typing import Any, Dict, Optional, Tuple
 
-from uma import UMARuntime
 from uma.core.uma_memory import UMAMemory
 from uma.adapters.llm.base import LLMInterface
 from uma.core.ingest.parser import FileContentParser
-from uma.types import RuntimeContext
 logger = logging.getLogger(__name__)
 
 
@@ -170,11 +168,18 @@ async def interactive_chat(
 ):
     system_prompt = system_prompt or SYSTEM_PROMPT_DEFAULT
 
-    # Initialize UMA memory runtime
-    memory = UMAMemory.from_yaml(config_path)
-    # Transitional write-side bridge for process_turn internals only.
-    memory._agent_id = agent_id
-    runtime = UMARuntime.from_memory(memory)
+    # Initialize UMA memory runtime once, then bind the fixed chat scope.
+    memory = UMAMemory.from_yaml(config_path).set_context(
+        user_id=user_id,
+        agent_id=agent_id,
+        tenant_id="default",
+        request_id=f"chat:{user_id}",
+    )
+    
+    await memory.load_memory_bootstrap("./examples/MEMORY.md")
+    memory.load_userprofile("./examples/USER.md")
+    memory.load_agentprofile("./examples/SOUL.md")
+    await memory.load_daily_diary_bootstrap("./examples/DAILY_DIARY.md")
     
     try:
         vector_backend = getattr(memory.raw_config.storage, "vector_backend", "")
@@ -245,19 +250,11 @@ async def interactive_chat(
             # Normal chat: retrieve context only; agent behavior is developer-owned
             try:
                 user_message = user
-             # Initialize UMA memory runtime
-                memory = UMAMemory.from_yaml(config_path).for_context(
-                    user_id=user_id,
-                    agent_id=agent_id,
-                    tenant_id="default",
-                    request_id=f"chat:{user_id}",
+                snippet = await memory.fetch_memory(
+                    query_text=user_message,
+                    format="rendered",
                 )
 
-                snippet = await memory.retrieve_rendered_context(
-                    query_text=user_message
-                )
-
-   
                 if not snippet:
                     context_messages = [{"role": "user", "content": user_message}]
                     reply = "No memory snippet available to evaluate."
@@ -279,9 +276,9 @@ async def interactive_chat(
                         f"Snippet to evaluate:\n{snippet}\n"
                     )
                     context_messages = [{"role": "user", "content": user_content}]
-                    print("\n**************************** Snippet to evaluate:")
+                    print("\n**************************** memory fetch:")
                     print(snippet)
-                    print("**************************** End of snippet\n\n")
+                    print("**************************** End memory\n\n")
 
                 reply = await agent_generate(
                     messages=[{"role": "system", "content": system_prompt}] + context_messages,
@@ -292,9 +289,7 @@ async def interactive_chat(
 
                 print("Assistant>", reply)
                 # Update UMA memory with the turn
-                # await memory.process_turn(
-                #     user_id=user_id, user_msg=user_message, assistant_reply=reply
-                # )
+                await memory.sync_memory(user_id=user_id, user_msg=user_message, assistant_reply=reply )
 
             except Exception as exc:
                 logging.exception("Chat turn failed: %s", exc)

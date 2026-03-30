@@ -1,5 +1,5 @@
 r"""
-  _   _ __  __   _      ___ _    __  __ 
+  _   _ __  __   _      ___ _    __  __
  | | | |  \/  | /_\ ___| _ \ |  |  \/  |
  | |_| | |\/| |/ _ \___|   / |__| |\/| |
   \___/|_|  |_/_/ \_\  |_|_\____|_|  |_|
@@ -30,7 +30,7 @@ Typical developer workflow
 
 2. Bind request scope ergonomically for repeated retrieval:
 
-    bound = memory.for_context(
+    memory = memory.set_context(
         user_id=user_id,
         agent_id="agent-default",
         tenant_id="default",
@@ -40,7 +40,7 @@ Typical developer workflow
 
 3. Retrieve context:
 
-    snippet = await bound.retrieve_rendered_context(
+    snippet = await memory.retrieve_rendered_context(
         query_text="the user's current question or task"
     )
 
@@ -56,15 +56,19 @@ Design Philosophy
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
+from datetime import datetime, timezone
+from pathlib import Path
 import threading
 from typing import Any, Dict, Optional
 
 from .memory_config import UMAConfig
-from .utils.config_types import RuntimeConfig
+from .utils.config_types import RuntimeConfig, parse_plugin_spec
 from .utils.hooks import UMAHooks
 from .utils.identity import normalize_user_id
-from .utils.logging_setup import logger as uma_logger  # noqa: F401 (init side-effect)
+from .utils.user_query_helper import _build_bootstrap_skip_result, _build_memory_bootstrap_signature, _extract_memory_bootstrap_lines, _is_bootstrap_manifest_duplicate, _persist_bootstrap_manifest, _read_bootstrap_file, _validate_bootstrap_file_path, build_fact_embedding_text
 from .working_memory.core import WorkingMemoryCore
 from .episodic.core import EpisodicCore
 from .episodic.indexer import EpisodeIndexer
@@ -73,15 +77,15 @@ from .semantic.core import SemanticCore
 from .procedural.core import ProceduralCore
 from .chunk.core import ChunkCore
 from .graph import TemporalGraphCore
-
-# Stores
-from .utils.config_types import parse_plugin_spec
-from .initializers.runtime import init_retrieval_ready, init_ingestion_ready, schedule_ingestion_warmup
-
-# Optional Features
+from .initializers.runtime import (
+    init_retrieval_ready,
+    init_ingestion_ready,
+    schedule_ingestion_warmup,
+)
 from .utils.registry import FeatureLoader, FeaturePolicy, default_feature_registry
-from ..types import RuntimeContext, TargetOwner
-from .runtime import UMABoundMemory, UMARuntime
+from .runtime import AnimusProfileProvider, UMARuntime
+from ..types import Fact, RuntimeContext, TargetOwner
+from ..stores.document_sql import DocumentRecord
 
 logger = logging.getLogger(__name__)
 
@@ -94,24 +98,6 @@ class UMAMemory:
         - provides public APIs for retrieval, ingestion, and maintenance
         - loads optional features via direct attachment
 
-    Developers should primarily interact with:
-
-        memory = UMAMemory.from_yaml("uma.yaml")
-
-        bound = memory.for_context(
-            user_id=user_id,
-            agent_id="agent-default",
-            tenant_id="default",
-            request_id="req-1",
-        )
-
-        snippet = await bound.retrieve_rendered_context(query_text)
-
-        await memory.process_turn(
-            user_id=user_id,
-            user_msg=user_msg,
-            assistant_reply=assistant_reply,
-        )
 
     UMARuntime remains internal and canonical for retrieval execution.
     """
@@ -167,6 +153,8 @@ class UMAMemory:
         self.semantic_salience_threshold = self.cfg.semantic_salience_threshold
         self._agent_id: Optional[str] = None
         self._runtime: Optional[UMARuntime] = None
+        self._bound_runtime_context: Optional[RuntimeContext] = None
+        self.animus_profile_provider = AnimusProfileProvider()
 
         # Internal store registry (core-only access; no direct store usage outside cores)
         self._stores: Dict[str, Any] = {}
@@ -183,7 +171,7 @@ class UMAMemory:
         self.llm: Any = None
         self.agent_llm: Any = None
         self.embedder: Any = None
-
+        self.pipeline: Optional[Any] = None
         self.document_store: Optional[Any] = None
 
         self.working_memory: Optional[WorkingMemoryCore] = None
@@ -200,10 +188,6 @@ class UMAMemory:
     # ----------------------------------------------------------------------
 
     @property
-    def agent_id(self) -> Optional[str]:
-        return self._agent_id
-
-    @property
     def runtime(self) -> UMARuntime:
         """Return the shared internal runtime, refreshing lazy-owned services."""
         if self._runtime is None:
@@ -212,6 +196,35 @@ class UMAMemory:
             self._runtime.refresh_from_memory()
         return self._runtime
 
+    def _require_bound_runtime_context(self) -> RuntimeContext:
+        """Return the currently bound runtime context for public retrieval APIs."""
+        runtime_context = self._bound_runtime_context
+        if runtime_context is None:
+            raise RuntimeError(
+                "UMAMemory requires a bound runtime_context. Call set_context(...) before retrieval."
+            )
+        return runtime_context
+
+    @staticmethod
+    def _extract_daily_diary_entries(raw_text: str) -> list[str]:
+        """Extract one diary entry per markdown bullet."""
+        entries: list[str] = []
+        for line in raw_text.splitlines():
+            stripped = line.lstrip()
+            if not stripped.startswith("- "):
+                continue
+            entry = stripped[2:].strip()
+            if entry:
+                entries.append(entry)
+        return entries
+
+    @staticmethod
+    def _build_diary_bootstrap_signature(*, raw_text: str) -> dict:
+        """Build a stable manifest signature for diary bootstrap idempotency."""
+        return {
+            "pipeline_version": "daily_diary_bootstrap_v1",
+            "content_hash": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+        }
 
     def _ensure_base_ready(self) -> None:
         """Ensure the minimum baseline runtime is ready."""
@@ -230,10 +243,6 @@ class UMAMemory:
         if not getattr(self, "_ingestion_ready", False):
             init_ingestion_ready(self)
         self.initialized = True
-
-    # ----------------------------------------------------------------------
-    # Public retrieval API
-    # ----------------------------------------------------------------------
 
     def _build_runtime_context(
         self,
@@ -270,7 +279,10 @@ class UMAMemory:
             session_id=session_id,
         )
 
-    def for_context(
+    # ----------------------------------------------------------------------
+    # -------------------- Core Public APIs -------------------------------
+    # ----------------------------------------------------------------------
+    def set_context(
         self,
         *,
         user_id: str,
@@ -279,13 +291,8 @@ class UMAMemory:
         request_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
         session_id: Optional[str] = None,
-    ) -> UMABoundMemory:
-        """Return an ergonomic bound facade for repeated retrieval calls.
-
-        This keeps UMAMemory as the only public entrypoint while hiding
-        UMARuntime and RuntimeContext from common usage.
-        """
-        context = self._build_runtime_context(
+    ) -> "UMAMemory":
+        runtime_context = self._build_runtime_context(
             user_id=user_id,
             agent_id=agent_id,
             tenant_id=tenant_id,
@@ -293,92 +300,642 @@ class UMAMemory:
             workspace_id=workspace_id,
             session_id=session_id,
         )
+        self._bound_runtime_context = runtime_context
+        self._agent_id = runtime_context.agent_id
         logger.debug(
             "UMAMemory.for_context: bound tenant=%s agent=%s user=%s request=%s session=%s",
-            context.tenant_id,
-            context.agent_id,
-            context.user_id,
-            context.request_id,
-            context.session_id,
+            runtime_context.tenant_id,
+            runtime_context.agent_id,
+            runtime_context.user_id,
+            runtime_context.request_id,
+            runtime_context.session_id,
         )
-        return UMABoundMemory(memory=self, context=context)
-
-    async def retrieve_structured_context(
+        return self
+    
+    # ----------------------------------------------------------------------
+    # Core API: Memory Context Retrieval
+    # Replaces API function:
+    #   get_context_messages()
+    #   retrieve_structured_context()
+    #   retrieve_rendered_context()
+    # ----------------------------------------------------------------------    
+    async def fetch_memory(
         self,
         *,
         query_text: str,
-        user_id: str,
-        agent_id: Optional[str] = None,
-        tenant_id: str = "default",
-        request_id: Optional[str] = None,
-        workspace_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-    ) -> Dict[str, list]:
-        """Retrieve structured memory context for one explicit request scope."""
-        context = self._build_runtime_context(
-            user_id=user_id,
-            agent_id=agent_id,
-            tenant_id=tenant_id,
-            request_id=request_id,
-            workspace_id=workspace_id,
-            session_id=session_id,
-        )
-        return await self.runtime.retrieve_structured_context(
-            context,
-            query_text=query_text,
-        )
+        format: str = "structured",
+        render_mode: str = "",
+    ) -> Any:
+        """Fetch UMA memory using the bound runtime context.
 
-    async def retrieve_rendered_context(
+        External API:
+        - format="structured" -> structured retrieval payload
+        - format="rendered"   -> rendered snippet string
+        - render_mode="animus_v1" -> prompt message payload
+
+        Internal execution remains delegated to the original runtime retrieval
+        functions.
+        """
+        runtime_context = self._require_bound_runtime_context()
+
+        normalized_format = str(format).strip().lower()
+        normalized_render_mode = str(render_mode or "animus_v1").strip()
+
+        if normalized_render_mode == "animus_v1":
+            return await self.runtime.get_context_messages(
+                runtime_context,
+                query_text=query_text,
+                render_mode=normalized_render_mode,
+            )
+
+        if normalized_format == "structured":
+            return await self.runtime.retrieve_structured_context(
+                runtime_context,
+                query_text=query_text,
+            )
+
+        if normalized_format == "rendered":
+            return await self.runtime.retrieve_rendered_context(
+                runtime_context,
+                query_text=query_text,
+            )
+
+        raise ValueError(
+            "UMAMemory.fetch_memory: format must be 'structured' or 'rendered', "
+            f"got {format!r}"
+        )
+    
+    
+    # ----------------------------------------------------------------------
+    # Core API: Data Ingestion
+    # ----------------------------------------------------------------------
+    #async def process_turn(
+    async def sync_memory(
         self,
         *,
-        query_text: str,
         user_id: str,
-        agent_id: Optional[str] = None,
-        tenant_id: str = "default",
-        request_id: Optional[str] = None,
-        workspace_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-    ) -> str:
-        """Retrieve rendered memory context for one explicit request scope."""
-        context = self._build_runtime_context(
-            user_id=user_id,
-            agent_id=agent_id,
-            tenant_id=tenant_id,
-            request_id=request_id,
-            workspace_id=workspace_id,
-            session_id=session_id,
-        )
-        return await self.runtime.retrieve_rendered_context(
-            context,
-            query_text=query_text,
+        user_msg: str,
+        assistant_reply: str,
+        extra_meta: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Ingest a full conversation turn into UMA memory."""
+        self._ensure_ingestion_ready()
+
+        if self.pipeline is None:
+            from .utils.pipeline import MemoryPipeline
+
+            self.pipeline = MemoryPipeline(
+                memory_client=self,
+                hooks=self.hooks,
+                promotion_policy=self.promotion_policy,
+            )
+            logger.debug("UMAMemory.sync_memory: MemoryPipeline initialized lazily.")
+
+        runtime_context = self._require_bound_runtime_context()
+        normalized_user_id = normalize_user_id(user_id)
+        await self.pipeline.process_turn(
+            user_id=normalized_user_id,
+            user_msg=user_msg,
+            assistant_reply=assistant_reply,
+            extra_meta=extra_meta,
+            agent_id=runtime_context.agent_id,
+            tenant_id=runtime_context.tenant_id,
+            workspace_id=runtime_context.workspace_id,
+            session_id=runtime_context.session_id,
+            request_id=runtime_context.request_id,
         )
 
-    async def get_context_messages(
+    async def ingest_document(
         self,
+        file_path: str,
         *,
-        query_text: str,
-        user_id: str,
-        agent_id: Optional[str] = None,
-        tenant_id: str = "default",
-        request_id: Optional[str] = None,
-        workspace_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-        render_mode: str = "openclaw_v1",
+        target_owner: Optional[TargetOwner] = None,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+        config: Optional[Any] = None,
+    ) -> Any:
+        """Ingest an unstructured document into UMA memory."""
+        self._ensure_ingestion_ready()
+
+        from .ingest.ingest_service import ingest_document as _ingest
+        return await _ingest(
+            file_path,
+            target_owner=target_owner,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            config=config,
+            memory=self,
+        )
+
+    def load_userprofile(self, path: str) -> "UMAMemory":
+        """Load USER.md into the in-memory Animus profile cache."""
+        self.animus_profile_provider.load_user_profile(path)
+        return self
+
+    def load_agentprofile(self, path: str) -> "UMAMemory":
+        """Load SOUL.md into the in-memory Animus profile cache."""
+        self.animus_profile_provider.load_agent_profile(path)
+        return self
+
+    async def load_memory_bootstrap(
+        self,
+        file_path: str,
+        *,
+        config: Optional[Any] = None,
     ) -> Dict[str, Any]:
-        """Retrieve context formatted as prompt messages for one request scope."""
-        context = self._build_runtime_context(
-            user_id=user_id,
-            agent_id=agent_id,
+        """Bootstrap long-term memory facts from an optional MEMORY.md file.
+
+        Phase-1 behavior stays intentionally simple:
+        - missing file -> skip
+        - empty file -> skip
+        - no importable lines -> skip
+        - otherwise create one durable fact per extracted line
+
+        The file is imported once per exact content hash. After import, UMA is
+        the source of truth and normal memory consolidation can manage future
+        duplicates at the memory layer.
+        """
+        del config  # Reserved for future bootstrap tuning.
+
+        runtime_context = self._require_bound_runtime_context()
+        normalized_user_id = runtime_context.user_id
+        normalized_tenant_id = runtime_context.tenant_id
+        workspace_id = runtime_context.workspace_id
+
+        if not normalized_user_id:
+            raise ValueError("UMAMemory.load_memory_bootstrap: bound runtime_context.user_id is required")
+
+        normalized_path = _validate_bootstrap_file_path(
+            file_path,
+            api_name="load_memory_bootstrap",
+        )
+
+        if not os.path.exists(normalized_path):
+            logger.info(
+                "UMAMemory.load_memory_bootstrap: skipping missing memory bootstrap file path=%s user_id=%s",
+                normalized_path,
+                normalized_user_id,
+            )
+            return _build_bootstrap_skip_result(
+                reason="missing_file",
+                path=normalized_path,
+                user_id=normalized_user_id,
+                tenant_id=normalized_tenant_id,
+            )
+
+        raw_text = _read_bootstrap_file(
+            normalized_path,
+            api_name="load_memory_bootstrap",
+        )
+
+        if not raw_text.strip():
+            logger.info(
+                "UMAMemory.load_memory_bootstrap: skipping empty memory bootstrap file path=%s user_id=%s",
+                normalized_path,
+                normalized_user_id,
+            )
+            return _build_bootstrap_skip_result(
+                reason="empty_file",
+                path=normalized_path,
+                user_id=normalized_user_id,
+                tenant_id=normalized_tenant_id,
+            )
+
+        entries = _extract_memory_bootstrap_lines(raw_text)
+        if not entries:
+            logger.info(
+                "UMAMemory.load_memory_bootstrap: skipping memory bootstrap without importable lines path=%s user_id=%s",
+                normalized_path,
+                normalized_user_id,
+            )
+            return _build_bootstrap_skip_result(
+                reason="no_entries",
+                path=normalized_path,
+                user_id=normalized_user_id,
+                tenant_id=normalized_tenant_id,
+            )
+
+        ingest_signature = _build_memory_bootstrap_signature(raw_text=raw_text)
+        source_hash = ingest_signature["content_hash"]
+
+        if await _is_bootstrap_manifest_duplicate(
+            document_store=self.document_store,
+            owner_type="user",
+            owner_id=normalized_user_id,
+            source_hash=source_hash,
+            ingest_signature=ingest_signature,
+            api_name="load_memory_bootstrap",
+        ):
+            logger.info(
+                "UMAMemory.load_memory_bootstrap: skipping idempotent re-import path=%s user_id=%s",
+                normalized_path,
+                normalized_user_id,
+            )
+            return _build_bootstrap_skip_result(
+                reason="idempotent",
+                path=normalized_path,
+                user_id=normalized_user_id,
+                tenant_id=normalized_tenant_id,
+                extra={"entries_found": len(entries)},
+            )
+
+        self._ensure_ingestion_ready()
+
+        semantic_store = self._stores.get("semantic")
+        if semantic_store is None or not hasattr(semantic_store, "upsert_fact"):
+            raise RuntimeError(
+                "UMAMemory.load_memory_bootstrap: semantic store is not initialized or does not support upsert_fact"
+            )
+        if self.embedder is None:
+            raise RuntimeError("UMAMemory.load_memory_bootstrap: embedder is not initialized")
+
+        logger.info(
+            "UMAMemory.load_memory_bootstrap: importing memory bootstrap path=%s tenant_id=%s user_id=%s entries=%d",
+            normalized_path,
+            normalized_tenant_id,
+            normalized_user_id,
+            len(entries),
+        )
+
+        now = datetime.now(timezone.utc)
+        facts: list[Fact] = []
+        for index, entry_text in enumerate(entries):
+            fact_hash = hashlib.sha256(
+                f"{normalized_tenant_id}|{normalized_user_id}|{entry_text}".encode("utf-8")
+            ).hexdigest()[:24]
+            fact = Fact(
+                id=f"fact_mem_{fact_hash}",
+                subject=normalized_user_id,
+                predicate="remembers",
+                object=entry_text,
+                created_at=now,
+                updated_at=now,
+                source_ids=[f"memory_bootstrap:{source_hash}"],
+                confidence=1.0,
+                meta={
+                    "source_kind": "memory_bootstrap",
+                    "source_file": normalized_path,
+                    "import_mode": "bootstrap",
+                    "line_index": index,
+                },
+                owner_type="user",
+                owner_id=normalized_user_id,
+                tenant_id=normalized_tenant_id,
+                workspace_id=workspace_id,
+                session_id=runtime_context.session_id,
+                origin_agent_id=runtime_context.agent_id,
+                origin_user_id=runtime_context.user_id,
+                origin_session_id=runtime_context.session_id,
+                scope_model_version="v2",
+                salience=1.0,
+            )
+            fact.validate()
+            facts.append(fact)
+
+        embed_texts = [build_fact_embedding_text(fact) for fact in facts]
+        try:
+            vectors = await self.embedder.embed(embed_texts)
+        except Exception as exc:
+            logger.exception("UMAMemory.load_memory_bootstrap: embedding failed path=%s", normalized_path)
+            raise RuntimeError(
+                f"UMAMemory.load_memory_bootstrap: embedding failed for file: {normalized_path}"
+            ) from exc
+
+        if not isinstance(vectors, list) or len(vectors) != len(facts):
+            raise RuntimeError(
+                "UMAMemory.load_memory_bootstrap: embedder returned an invalid number of vectors"
+            )
+
+        persisted_fact_ids: list[str] = []
+        for fact, vector in zip(facts, vectors):
+            try:
+                await semantic_store.upsert_fact(fact, vector)
+                persisted_fact_ids.append(fact.id)
+            except Exception:
+                logger.exception(
+                    "UMAMemory.load_memory_bootstrap: failed to persist fact fact_id=%s path=%s",
+                    fact.id,
+                    normalized_path,
+                )
+
+        if not persisted_fact_ids:
+            raise RuntimeError(
+                f"UMAMemory.load_memory_bootstrap: failed to persist any facts for file: {normalized_path}"
+            )
+
+        await _persist_bootstrap_manifest(
+            document_store=self.document_store,
+            doc_id=f"memory-bootstrap:{source_hash}",
+            source_path=normalized_path,
+            source_hash=source_hash,
+            runtime_context=runtime_context,
+            meta={
+                "source_kind": "memory_bootstrap",
+                "import_mode": "bootstrap",
+                "entries_found": len(entries),
+                "facts_created": len(persisted_fact_ids),
+                "ingest_signature": ingest_signature,
+            },
+            api_name="load_memory_bootstrap",
+        )
+
+        return {
+            "status": "ingested",
+            "path": normalized_path,
+            "tenant_id": normalized_tenant_id,
+            "user_id": normalized_user_id,
+            "workspace_id": workspace_id,
+            "entries_found": len(entries),
+            "facts_created": len(persisted_fact_ids),
+            "fact_ids": persisted_fact_ids,
+        }
+
+    async def load_daily_diary_bootstrap(
+        self,
+        file_path: str,
+    ) -> Dict[str, Any]:
+        """
+        Bootstrap a daily OpenClaw diary file into UMA episodic memory.
+
+        Phase-1 behavior:
+        - one-time import only
+        - each markdown bullet becomes one episode
+        - if the file does not exist, skip cleanly
+        - if the file exists but has no bullet entries, skip cleanly
+
+        After import, UMA becomes the source of truth.
+        """
+        runtime_context = self._require_bound_runtime_context()
+
+        if not isinstance(file_path, str) or not file_path.strip():
+            raise ValueError("UMAMemory.load_daily_diary_bootstrap: file_path must be a non-empty string")
+
+        normalized_path = os.path.abspath(file_path.strip())
+        normalized_user_id = runtime_context.user_id
+        normalized_tenant_id = runtime_context.tenant_id
+        workspace_id = runtime_context.workspace_id
+
+        if not normalized_user_id:
+            raise ValueError(
+                "UMAMemory.load_daily_diary_bootstrap: bound runtime_context.user_id is required"
+            )
+
+        if not os.path.exists(normalized_path):
+            logger.info(
+                "UMAMemory.load_daily_diary_bootstrap: skipping missing diary file path=%s user_id=%s",
+                normalized_path,
+                normalized_user_id,
+            )
+            return {
+                "status": "skipped",
+                "reason": "missing_file",
+                "path": normalized_path,
+                "user_id": normalized_user_id,
+                "tenant_id": normalized_tenant_id,
+            }
+
+        if not os.path.isfile(normalized_path):
+            raise ValueError(
+                f"UMAMemory.load_daily_diary_bootstrap: path is not a file: {normalized_path}"
+            )
+
+        try:
+            with open(normalized_path, "r", encoding="utf-8") as handle:
+                raw_text = handle.read()
+        except Exception as exc:
+            logger.exception(
+                "UMAMemory.load_daily_diary_bootstrap: failed to read diary file path=%s",
+                normalized_path,
+            )
+            raise RuntimeError(
+                f"UMAMemory.load_daily_diary_bootstrap: failed to read file: {normalized_path}"
+            ) from exc
+
+        if not raw_text.strip():
+            logger.info(
+                "UMAMemory.load_daily_diary_bootstrap: skipping empty diary file path=%s user_id=%s",
+                normalized_path,
+                normalized_user_id,
+            )
+            return {
+                "status": "skipped",
+                "reason": "empty_file",
+                "path": normalized_path,
+                "user_id": normalized_user_id,
+                "tenant_id": normalized_tenant_id,
+            }
+
+        entries = self._extract_daily_diary_entries(raw_text)
+
+        if not entries:
+            logger.info(
+                "UMAMemory.load_daily_diary_bootstrap: skipping diary without bullet entries path=%s user_id=%s",
+                normalized_path,
+                normalized_user_id,
+            )
+            return {
+                "status": "skipped",
+                "reason": "no_entries",
+                "path": normalized_path,
+                "user_id": normalized_user_id,
+                "tenant_id": normalized_tenant_id,
+            }
+
+        ingest_signature = self._build_diary_bootstrap_signature(raw_text=raw_text)
+        source_hash = ingest_signature["content_hash"]
+
+        existing_manifest = None
+        try:
+            if self.document_store is not None and hasattr(self.document_store, "get_by_owner_and_hash"):
+                existing_manifest = await self.document_store.get_by_owner_and_hash(
+                    owner_type="user",
+                    owner_id=normalized_user_id,
+                    source_hash=source_hash,
+                )
+        except Exception:
+            existing_manifest = None
+            logger.exception(
+                "UMAMemory.load_daily_diary_bootstrap: manifest lookup failed; continuing with import"
+            )
+
+        if existing_manifest is not None:
+            existing_sig = (getattr(existing_manifest, "meta", None) or {}).get("ingest_signature") or {}
+            if existing_sig == ingest_signature:
+                logger.info(
+                    "UMAMemory.load_daily_diary_bootstrap: skipping idempotent re-import path=%s user_id=%s",
+                    normalized_path,
+                    normalized_user_id,
+                )
+                return {
+                    "status": "skipped",
+                    "reason": "idempotent",
+                    "path": normalized_path,
+                    "user_id": normalized_user_id,
+                    "tenant_id": normalized_tenant_id,
+                    "entries_found": len(entries),
+                }
+
+        diary_date = None
+        try:
+            diary_date = Path(normalized_path).stem
+        except Exception:
+            diary_date = None
+
+        self._ensure_ingestion_ready()
+
+        from .ingest.episodic_writer import write_daily_diary_episodes
+
+        logger.info(
+            "UMAMemory.load_daily_diary_bootstrap: importing diary path=%s tenant_id=%s user_id=%s entries=%d",
+            normalized_path,
+            normalized_tenant_id,
+            normalized_user_id,
+            len(entries),
+        )
+
+        episode_ids = await write_daily_diary_episodes(
+            file_path=normalized_path,
+            diary_date=diary_date,
+            entries=entries,
+            owner_type="user",
+            owner_id=normalized_user_id,
+            user_id=normalized_user_id,
+            embedder=self.embedder,
+            episodic_core=self.episodic_core,
+        )
+
+        if episode_ids and self.document_store is not None and hasattr(self.document_store, "upsert_document"):
+            try:
+                now = Path(normalized_path).stat().st_mtime if os.path.exists(normalized_path) else None
+                if now is not None:
+                    ingested_at = datetime.fromtimestamp(now, tz=timezone.utc)
+                else:
+                    ingested_at = datetime.now(timezone.utc)
+
+                await self.document_store.upsert_document(
+                    DocumentRecord(
+                        doc_id=f"daily-diary:{source_hash}",
+                        source_path=normalized_path,
+                        source_hash=source_hash,
+                        ingested_at=ingested_at,
+                        tenant_id=normalized_tenant_id,
+                        owner_type="user",
+                        owner_id=normalized_user_id,
+                        workspace_id=workspace_id,
+                        meta={
+                            "source_kind": "daily_diary",
+                            "diary_date": diary_date,
+                            "import_mode": "bootstrap",
+                            "entries_found": len(entries),
+                            "episodes_created": len(episode_ids),
+                            "ingest_signature": ingest_signature,
+                        },
+                    )
+                )
+            except Exception:
+                logger.exception(
+                    "UMAMemory.load_daily_diary_bootstrap: failed to persist diary manifest path=%s",
+                    normalized_path,
+                )
+
+        return {
+            "status": "ingested",
+            "path": normalized_path,
+            "tenant_id": normalized_tenant_id,
+            "user_id": normalized_user_id,
+            "workspace_id": workspace_id,
+            "diary_date": diary_date,
+            "entries_found": len(entries),
+            "episodes_created": len(episode_ids),
+            "episode_ids": episode_ids,
+        }
+
+    # ----------------------------------------------------------------------
+    # Core API: Health and maintenance
+    # ----------------------------------------------------------------------
+
+    def health_check(self) -> Dict[str, Any]:
+        """Run basic dependency readiness checks."""
+        if not self.initialized:
+            return {
+                "status": "error",
+                "checks": {
+                    "memory": {
+                        "name": "memory",
+                        "status": "error",
+                        "detail": "UMAMemory not initialized",
+                        "latency_ms": None,
+                    }
+                },
+            }
+
+        from .utils.health import run_health_checks
+
+        return run_health_checks(self)
+
+    async def rebuild_vector_indexes(
+        self,
+        *,
+        tenant_id: Optional[str] = None,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+        include_episodic: bool = True,
+        include_semantic: bool = True,
+        include_procedural: bool = True,
+        batch_size: int = 32,
+    ) -> Dict[str, Any]:
+        """Rebuild vector indexes from SQL-backed data."""
+        from .utils.maintenance import rebuild_vector_indexes
+
+        return await rebuild_vector_indexes(
+            self,
             tenant_id=tenant_id,
-            request_id=request_id,
-            workspace_id=workspace_id,
-            session_id=session_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            include_episodic=include_episodic,
+            include_semantic=include_semantic,
+            include_procedural=include_procedural,
+            batch_size=batch_size,
         )
-        return await self.runtime.get_context_messages(
-            context,
-            query_text=query_text,
-            render_mode=render_mode,
+
+    async def rebuild_derived_indexes(
+        self,
+        *,
+        tenant_id: Optional[str] = None,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+        include_episodic: bool = True,
+        include_semantic: bool = True,
+        include_procedural: bool = True,
+        include_graph: bool = True,
+        batch_size: int = 32,
+    ) -> Dict[str, Any]:
+        """Rebuild derived vector and graph indexes from authoritative SQL-backed data."""
+        from .utils.maintenance import rebuild_derived_indexes
+
+        return await rebuild_derived_indexes(
+            self,
+            tenant_id=tenant_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            include_episodic=include_episodic,
+            include_semantic=include_semantic,
+            include_procedural=include_procedural,
+            include_graph=include_graph,
+            batch_size=batch_size,
         )
+
+    # ----------------------------------------------------------------------
+    # Core API: Shutdown
+    # ----------------------------------------------------------------------
+
+    def shutdown(self) -> None:
+        """Clean up backend resources."""
+        if self.graph_core:
+            try:
+                self.graph_core.close()
+            except Exception:
+                logger.exception("Error shutting down GraphCore.")
 
 
     # ----------------------------------------------------------------------
@@ -593,137 +1150,4 @@ class UMAMemory:
                 )
             setattr(self, name, func)
 
-    # ----------------------------------------------------------------------
-    # Health and maintenance
-    # ----------------------------------------------------------------------
-
-    def health_check(self) -> Dict[str, Any]:
-        """Run basic dependency readiness checks."""
-        if not self.initialized:
-            return {
-                "status": "error",
-                "checks": {
-                    "memory": {
-                        "name": "memory",
-                        "status": "error",
-                        "detail": "UMAMemory not initialized",
-                        "latency_ms": None,
-                    }
-                },
-            }
-
-        from .utils.health import run_health_checks
-
-        return run_health_checks(self)
-
-    async def rebuild_vector_indexes(
-        self,
-        *,
-        tenant_id: Optional[str] = None,
-        owner_type: Optional[str] = None,
-        owner_id: Optional[str] = None,
-        include_episodic: bool = True,
-        include_semantic: bool = True,
-        include_procedural: bool = True,
-        batch_size: int = 32,
-    ) -> Dict[str, Any]:
-        """Rebuild vector indexes from SQL-backed data."""
-        from .utils.maintenance import rebuild_vector_indexes
-
-        return await rebuild_vector_indexes(
-            self,
-            tenant_id=tenant_id,
-            owner_type=owner_type,
-            owner_id=owner_id,
-            include_episodic=include_episodic,
-            include_semantic=include_semantic,
-            include_procedural=include_procedural,
-            batch_size=batch_size,
-        )
-
-    async def rebuild_derived_indexes(
-        self,
-        *,
-        tenant_id: Optional[str] = None,
-        owner_type: Optional[str] = None,
-        owner_id: Optional[str] = None,
-        include_episodic: bool = True,
-        include_semantic: bool = True,
-        include_procedural: bool = True,
-        include_graph: bool = True,
-        batch_size: int = 32,
-    ) -> Dict[str, Any]:
-        """Rebuild derived vector and graph indexes from authoritative SQL-backed data."""
-        from .utils.maintenance import rebuild_derived_indexes
-
-        return await rebuild_derived_indexes(
-            self,
-            tenant_id=tenant_id,
-            owner_type=owner_type,
-            owner_id=owner_id,
-            include_episodic=include_episodic,
-            include_semantic=include_semantic,
-            include_procedural=include_procedural,
-            include_graph=include_graph,
-            batch_size=batch_size,
-        )
-
-    # ----------------------------------------------------------------------
-    # Ingestion
-    # ----------------------------------------------------------------------
-
-    async def process_turn(
-        self,
-        *,
-        user_id: str,
-        user_msg: str,
-        assistant_reply: str,
-        extra_meta: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """Ingest a full conversation turn into UMA memory."""
-        self._ensure_ingestion_ready()
-
-        if not getattr(self, "pipeline", None):
-            raise RuntimeError("UMAMemory.process_turn: pipeline not initialized.")
-
-        normalized_user_id = normalize_user_id(user_id)
-        await self.pipeline.process_turn(
-            user_id=normalized_user_id,
-            user_msg=user_msg,
-            assistant_reply=assistant_reply,
-            extra_meta=extra_meta,
-        )
-
-    async def ingest_document(
-        self,
-        file_path: str,
-        *,
-        target_owner: Optional[TargetOwner] = None,
-        owner_type: Optional[str] = None,
-        owner_id: Optional[str] = None,
-        config: Optional[Any] = None,
-    ) -> Any:
-        """Ingest an unstructured document into UMA memory."""
-        self._ensure_ingestion_ready()
-
-        from .ingest.ingest_service import ingest_document as _ingest
-        return await _ingest(
-            file_path,
-            target_owner=target_owner,
-            owner_type=owner_type,
-            owner_id=owner_id,
-            config=config,
-            memory=self,
-        )
-
-    # ----------------------------------------------------------------------
-    # Shutdown
-    # ----------------------------------------------------------------------
-
-    def shutdown(self) -> None:
-        """Clean up backend resources."""
-        if self.graph_core:
-            try:
-                self.graph_core.close()
-            except Exception:
-                logger.exception("Error shutting down GraphCore.")
+   

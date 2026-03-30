@@ -4,7 +4,7 @@ from typing import Any, Dict, List
 
 import pytest
 
-from uma import UMARequestHandle, UMARuntime
+from uma import  UMARuntime
 from uma.core.uma_memory import UMAMemory
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
 from uma.types import RuntimeContext

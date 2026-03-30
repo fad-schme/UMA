@@ -4,7 +4,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from uma import UMARequestHandle, UMARuntime
+from uma import UMAMemory
 from uma.types import RuntimeContext
 
 

@@ -9,6 +9,7 @@ runtime internally.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional
 
@@ -18,128 +19,93 @@ from ..working_memory.core import session_scope_from_runtime_context
 
 logger = logging.getLogger(__name__)
 
-
 @dataclass(frozen=True)
-class UMARequestHandle:
-    """Immutable request-bound runtime handle.
+class _AnimusProfileCacheEntry:
+    """One cached markdown profile file.
 
-    This handle carries request-scoped context only. All execution delegates to
-    the shared runtime instance.
+    The provider keeps the source path and refreshes the cached text lazily when
+    the TTL expires. This is intentionally simple because OpenClaw uses one
+    current user profile and one current agent profile.
     """
 
-    runtime: "UMARuntime"
-    context: RuntimeContext
-
-    @property
-    def tenant_id(self) -> str:
-        return self.context.tenant_id
-
-    @property
-    def agent_id(self) -> str:
-        return self.context.agent_id
-
-    @property
-    def request_id(self) -> str:
-        return self.context.request_id
-
-    @property
-    def user_id(self) -> Optional[str]:
-        return self.context.user_id
-
-    @property
-    def workspace_id(self) -> Optional[str]:
-        return self.context.workspace_id
-
-    @property
-    def session_id(self) -> Optional[str]:
-        return self.context.session_id
-
-    async def retrieve_structured_context(self, query_text: str) -> Dict[str, list]:
-        """Retrieve structured UMA context for this bound request."""
-        return await self.runtime.retrieve_structured_context(
-            self.context,
-            query_text=query_text,
-        )
-
-    async def retrieve_rendered_context(self, query_text: str) -> str:
-        """Retrieve rendered UMA context for this bound request."""
-        return await self.runtime.retrieve_rendered_context(
-            self.context,
-            query_text=query_text,
-        )
-
-    async def get_context_messages(
-        self,
-        query_text: str,
-        *,
-        render_mode: str = "openclaw_v1",
-    ) -> Dict[str, Any]:
-        """Retrieve UMA context rendered as prompt messages for this request."""
-        return await self.runtime.get_context_messages(
-            self.context,
-            query_text=query_text,
-            render_mode=render_mode,
-        )
+    path: str
+    text: str
+    loaded_at: float
+    expires_at: float
 
 
-@dataclass(frozen=True)
-class UMABoundMemory:
-    """Public ergonomic facade bound to one explicit request context.
+class AnimusProfileProvider:
+    """Small in-memory provider for USER.md and SOUL.md overlays.
 
-    This keeps UMAMemory as the only public entrypoint while hiding
-    UMARuntime and RuntimeContext from common usage.
-
-    Example:
-        memory = UMAMemory.from_yaml(path).for_context(
-            user_id="user:1",
-            agent_id="agent-default",
-            tenant_id="default",
-            request_id="chat:user:1",
-        )
-        snippet = await memory.retrieve_rendered_context(query_text="hello")
+    Phase 1 design:
+    - no DB persistence
+    - no partial field editing
+    - load from markdown files provided by the integration
+    - refresh cached content when the TTL expires
     """
 
-    memory: Any
-    context: RuntimeContext
+    def __init__(self, ttl_seconds: int = 300) -> None:
+        if ttl_seconds <= 0:
+            raise ValueError("AnimusProfileProvider.ttl_seconds must be a positive integer.")
+        self.ttl_seconds = ttl_seconds
+        self._user_profile: Optional[_AnimusProfileCacheEntry] = None
+        self._agent_profile: Optional[_AnimusProfileCacheEntry] = None
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self.memory, name)
+    def load_user_profile(self, path: str) -> None:
+        """Load and cache the current USER.md profile."""
+        self._user_profile = self._load_profile(path)
+        logger.info("AnimusProfileProvider: loaded user profile from %s", self._user_profile.path)
 
-    async def retrieve_structured_context(self, *, query_text: str) -> Dict[str, list]:
-        """Retrieve structured context using the bound request context."""
-        return await self.memory.runtime.retrieve_structured_context(
-            self.context,
-            query_text=query_text,
-        )
+    def load_agent_profile(self, path: str) -> None:
+        """Load and cache the current SOUL.md profile."""
+        self._agent_profile = self._load_profile(path)
+        logger.info("AnimusProfileProvider: loaded agent profile from %s", self._agent_profile.path)
 
-    async def retrieve_rendered_context(self, *, query_text: str) -> str:
-        """Retrieve rendered context using the bound request context."""
-        return await self.memory.runtime.retrieve_rendered_context(
-            self.context,
-            query_text=query_text,
-        )
+    def get_user_profile_text(self) -> str:
+        """Return cached USER.md content, refreshing it after TTL expiry."""
+        self._user_profile = self._refresh_if_needed(self._user_profile)
+        return self._user_profile.text if self._user_profile is not None else ""
 
-    async def get_context_messages(
+    def get_agent_profile_text(self) -> str:
+        """Return cached SOUL.md content, refreshing it after TTL expiry."""
+        self._agent_profile = self._refresh_if_needed(self._agent_profile)
+        return self._agent_profile.text if self._agent_profile is not None else ""
+
+    def _refresh_if_needed(
         self,
-        *,
-        query_text: str,
-        render_mode: str = "openclaw_v1",
-    ) -> Dict[str, Any]:
-        """Retrieve context messages using the bound request context."""
-        return await self.memory.runtime.get_context_messages(
-            self.context,
-            query_text=query_text,
-            render_mode=render_mode,
+        entry: Optional[_AnimusProfileCacheEntry],
+    ) -> Optional[_AnimusProfileCacheEntry]:
+        if entry is None:
+            return None
+        if time.time() < entry.expires_at:
+            return entry
+        refreshed = self._load_profile(entry.path)
+        logger.info("AnimusProfileProvider: refreshed profile from %s after TTL expiry", refreshed.path)
+        return refreshed
+
+    def _load_profile(self, path: str) -> _AnimusProfileCacheEntry:
+        if not isinstance(path, str) or not path.strip():
+            raise ValueError("AnimusProfileProvider path must be a non-empty string.")
+
+        normalized_path = path.strip()
+        try:
+            with open(normalized_path, "r", encoding="utf-8") as handle:
+                text = handle.read().strip()
+        except FileNotFoundError as exc:
+            logger.exception("AnimusProfileProvider: profile file not found: %s", normalized_path)
+            raise RuntimeError(f"Profile file not found: {normalized_path}") from exc
+        except Exception as exc:
+            logger.exception("AnimusProfileProvider: failed to read profile file: %s", normalized_path)
+            raise RuntimeError(f"Failed to read profile file: {normalized_path}") from exc
+
+        now = time.time()
+        return _AnimusProfileCacheEntry(
+            path=normalized_path,
+            text=text,
+            loaded_at=now,
+            expires_at=now + self.ttl_seconds,
         )
-
-    async def get_structured_context(self, *, query_text: str) -> Dict[str, list]:
-        """Compatibility alias for retrieve_structured_context."""
-        return await self.retrieve_structured_context(query_text=query_text)
-
-    async def get_rendered_context(self, *, query_text: str) -> str:
-        """Compatibility alias for retrieve_rendered_context."""
-        return await self.retrieve_rendered_context(query_text=query_text)
-
+    
 
 class UMARuntime:
     """Shared UMA infrastructure container.
@@ -198,11 +164,6 @@ class UMARuntime:
             metadata={"source": "UMAMemory"},
         )
 
-    def bind(self, context: RuntimeContext) -> UMARequestHandle:
-        """Return an immutable request handle bound to ``context``."""
-        if not isinstance(context, RuntimeContext):
-            raise TypeError("UMARuntime.bind requires a RuntimeContext instance")
-        return UMARequestHandle(runtime=self, context=context)
 
     def _require_memory_bridge(self) -> Any:
         memory = self.memory_bridge
@@ -239,13 +200,14 @@ class UMARuntime:
         )
 
     @staticmethod
-    def _working_memory_scope_for_context(context: RuntimeContext) -> Optional[Any]:
+    def _working_memory_scope_set_context(context: RuntimeContext) -> Optional[Any]:
         """Build the working-memory scope for a runtime context."""
         return session_scope_from_runtime_context(context)
 
+    
     async def retrieve_structured_context(
         self,
-        context: RuntimeContext,
+        runtime_context: RuntimeContext,
         *,
         query_text: str,
     ) -> Dict[str, list]:
@@ -253,9 +215,9 @@ class UMARuntime:
         from ...adapters.observability.metrics import increment, timed
         from ..retrieval.rlm.coverage import compute_confidence
 
-        if not isinstance(context, RuntimeContext):
+        if not isinstance(runtime_context, RuntimeContext):
             raise TypeError("UMARuntime retrieval requires a RuntimeContext instance.")
-        if not context.user_id:
+        if not runtime_context.user_id:
             raise ValueError("UMARuntime retrieval requires RuntimeContext.user_id.")
         if not isinstance(query_text, str) or not query_text.strip():
             raise ValueError(
@@ -267,7 +229,7 @@ class UMARuntime:
 
         with timed("uma.get_structured_context.latency"):
             try:
-                wm_scope = self._working_memory_scope_for_context(context)
+                wm_scope = self._working_memory_scope_set_context(runtime_context)
                 wm_core = getattr(memory, "working_memory", None)
                 wm_stored = (
                     wm_core.get_context(wm_scope)
@@ -278,9 +240,9 @@ class UMARuntime:
                 logger.exception(
                     "UMARuntime.retrieve_structured_context: failed to load WM "
                     "tenant=%s agent=%s session=%s",
-                    context.tenant_id,
-                    context.agent_id,
-                    context.session_id,
+                    runtime_context.tenant_id,
+                    runtime_context.agent_id,
+                    runtime_context.session_id,
                 )
                 wm_stored = []
 
@@ -291,7 +253,7 @@ class UMARuntime:
                 )
 
             pack = await controller.retrieve_context(
-                request=self._build_retrieval_request(context),
+                request=self._build_retrieval_request(runtime_context),
                 query_text=query_text.strip(),
             )
             increment("uma.get_structured_context.calls", tags={"path": "rlm"})
@@ -308,9 +270,36 @@ class UMARuntime:
                 "confidence": compute_confidence(coverage) if coverage is not None else {},
             }
 
+    def _render_profile_overlay(self) -> str:
+        """Render cached USER.md and SOUL.md overlays for every response.
+
+        The integration loads the files explicitly through UMAMemory. Retrieval
+        remains deterministic here: if a profile is loaded, it is prepended to
+        the rendered context on every request.
+        """
+        memory = self._require_memory_bridge()
+        provider = getattr(memory, "animus_profile_provider", None)
+        if provider is None:
+            return ""
+
+        try:
+            agent_profile = provider.get_agent_profile_text().strip()
+            user_profile = provider.get_user_profile_text().strip()
+        except Exception:
+            logger.exception("UMARuntime: failed to load cached Animus profiles.")
+            return ""
+
+        sections: list[str] = []
+        if agent_profile:
+            sections.append("## Agent Profile\n" + agent_profile)
+        if user_profile:
+            sections.append("## User Profile\n" + user_profile)
+        return "\n\n".join(sections).strip()
+
+
     async def retrieve_rendered_context(
         self,
-        context: RuntimeContext,
+        runtime_context: RuntimeContext,
         *,
         query_text: str,
     ) -> str:
@@ -318,31 +307,37 @@ class UMARuntime:
         from ..utils.context_pack_builder import ContextPackBuilder
 
         structured = await self.retrieve_structured_context(
-            context,
+            runtime_context,
             query_text=query_text,
         )
         pack = ContextPackBuilder.build(query_text, structured)
         ctx_cfg = getattr(getattr(self.config, "retrieval", None), "context", None)
 
         if getattr(ctx_cfg, "snippet_refiner_enabled", False):
-            return await ContextPackBuilder.render_snippet_async(
+            rendered_memory = await ContextPackBuilder.render_snippet_async(
                 pack,
                 ctx_cfg,
                 llm=self.llm,
             )
-        return ContextPackBuilder.render_snippet(pack, ctx_cfg)
+        else:
+            rendered_memory = ContextPackBuilder.render_snippet(pack, ctx_cfg)
+
+        profile_overlay = self._render_profile_overlay()
+        parts = [part.strip() for part in (profile_overlay, rendered_memory) if part and part.strip()]
+        return "\n\n".join(parts).strip()
+    
 
     async def get_context_messages(
         self,
-        context: RuntimeContext,
+        runtime_context: RuntimeContext,
         *,
         query_text: str,
-        render_mode: str = "openclaw_v1",
+        render_mode: str = "animus_v1",
     ) -> Dict[str, Any]:
         """Retrieve context formatted as prompt messages."""
-        if not isinstance(context, RuntimeContext):
+        if not isinstance(runtime_context, RuntimeContext):
             raise TypeError("UMARuntime retrieval requires a RuntimeContext instance.")
-        if not context.user_id:
+        if not runtime_context.user_id:
             raise ValueError("UMARuntime.get_context_messages: RuntimeContext.user_id is required.")
         if not isinstance(query_text, str) or not query_text.strip():
             raise ValueError("UMARuntime.get_context_messages: query_text must be a non-empty string.")
@@ -350,21 +345,21 @@ class UMARuntime:
             raise ValueError("UMARuntime.get_context_messages: render_mode must be a non-empty string.")
 
         normalized_render_mode = render_mode.strip()
-        if normalized_render_mode not in {"openclaw_v1", "raw_rendered"}:
+        if normalized_render_mode not in {"animus_v1", "raw_rendered"}:
             raise ValueError(
                 f"UMARuntime.get_context_messages: unsupported render_mode={normalized_render_mode!r}. "
-                "Supported modes: 'openclaw_v1', 'raw_rendered'."
+                "Supported modes: 'animus_v1', 'raw_rendered'."
             )
 
         rendered = await self.retrieve_rendered_context(
-            context,
+            runtime_context,
             query_text=query_text,
         )
         rendered = (rendered or "").strip()
 
         messages: list[dict[str, str]] = []
         if rendered:
-            if normalized_render_mode == "openclaw_v1":
+            if normalized_render_mode == "animus_v1":
                 messages.append(
                     {
                         "role": "system",
@@ -393,3 +388,4 @@ class UMARuntime:
                 "message_count": len(messages),
             },
         }
+    
