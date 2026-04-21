@@ -4,7 +4,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from uma import UMAMemory, UMARuntime
+from uma import UMAMemory, UMARequestHandle, UMARuntime
 from uma.types import RuntimeContext
 
 
@@ -77,7 +77,7 @@ def test_runtime_does_not_mutate_when_binding_distinct_contexts() -> None:
     assert runtime.stores == before_stores
     assert not hasattr(runtime, "context")
     assert not hasattr(runtime, "request_id")
-    assert not hasattr(runtime, "agent_id")
+    assert runtime.agent_id is None
     assert not hasattr(runtime, "session_id")
     assert not hasattr(runtime, "user_id")
 

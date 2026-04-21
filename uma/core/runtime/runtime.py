@@ -19,6 +19,82 @@ from ..working_memory.core import session_scope_from_runtime_context
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass(frozen=True)
+class UMARequestHandle:
+    """Immutable request-bound runtime handle.
+
+    The handle carries one explicit `RuntimeContext` and delegates execution to
+    the shared `UMARuntime` instance without mutating runtime-global state.
+    """
+
+    runtime: "UMARuntime"
+    context: RuntimeContext
+
+    @property
+    def tenant_id(self) -> str:
+        return self.context.tenant_id
+
+    @property
+    def agent_id(self) -> str:
+        return self.context.agent_id
+
+    @property
+    def request_id(self) -> str:
+        return self.context.request_id
+
+    @property
+    def user_id(self) -> Optional[str]:
+        return self.context.user_id
+
+    @property
+    def workspace_id(self) -> Optional[str]:
+        return self.context.workspace_id
+
+    @property
+    def session_id(self) -> Optional[str]:
+        return self.context.session_id
+
+    async def retrieve_structured_context(self, query_text: str) -> Dict[str, list]:
+        memory = getattr(self.runtime, "memory_bridge", None)
+        delegate = getattr(memory, "_retrieve_structured_context_for_context", None)
+        if callable(delegate):
+            return await delegate(self.context, query_text=query_text)
+        return await self.runtime.retrieve_structured_context(
+            self.context,
+            query_text=query_text,
+        )
+
+    async def retrieve_rendered_context(self, query_text: str) -> str:
+        memory = getattr(self.runtime, "memory_bridge", None)
+        delegate = getattr(memory, "_retrieve_rendered_context_for_context", None)
+        if callable(delegate):
+            return await delegate(self.context, query_text=query_text)
+        return await self.runtime.retrieve_rendered_context(
+            self.context,
+            query_text=query_text,
+        )
+
+    async def get_context_messages(
+        self,
+        query_text: str,
+        *,
+        render_mode: str = "animus_v1",
+    ) -> Dict[str, Any]:
+        memory = getattr(self.runtime, "memory_bridge", None)
+        delegate = getattr(memory, "_get_context_messages_for_context", None)
+        if callable(delegate):
+            return await delegate(
+                self.context,
+                query_text=query_text,
+                render_mode=render_mode,
+            )
+        return await self.runtime.get_context_messages(
+            self.context,
+            query_text=query_text,
+            render_mode=render_mode,
+        )
+
 @dataclass(frozen=True)
 class _AnimusProfileCacheEntry:
     """One cached markdown profile file.
@@ -202,6 +278,12 @@ class UMARuntime:
         memory = self._require_memory_bridge()
         memory._ensure_retrieval_ready()
         self.refresh_from_memory()
+
+    def bind(self, context: RuntimeContext) -> UMARequestHandle:
+        """Bind one explicit request context without mutating shared runtime state."""
+        if not isinstance(context, RuntimeContext):
+            raise TypeError("UMARuntime.bind requires a RuntimeContext instance.")
+        return UMARequestHandle(runtime=self, context=context)
 
     @staticmethod
     def _build_retrieval_request(context: RuntimeContext) -> RetrievalRequest:

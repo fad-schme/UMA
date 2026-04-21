@@ -204,14 +204,14 @@ class UMAMemory:
         may come from a bound runtime context or from internal bootstrap code
         that seeds `_agent_id` before request-scoped flows execute.
         """
-        runtime_context = self._bound_runtime_context
-        if runtime_context is not None and runtime_context.agent_id:
-            return runtime_context.agent_id
-
         agent_id = self._agent_id
         if isinstance(agent_id, str):
             normalized = agent_id.strip()
             return normalized or None
+
+        runtime_context = self._bound_runtime_context
+        if runtime_context is not None and runtime_context.agent_id:
+            return runtime_context.agent_id
         return None
 
     def _require_bound_runtime_context(self) -> RuntimeContext:
@@ -382,13 +382,51 @@ class UMAMemory:
             "UMAMemory.fetch_memory: format must be 'structured' or 'rendered', "
             f"got {format!r}"
         )
+
+    async def _retrieve_structured_context_for_context(
+        self,
+        runtime_context: RuntimeContext,
+        *,
+        query_text: str,
+    ) -> Dict[str, list]:
+        return await self.runtime.retrieve_structured_context(
+            runtime_context,
+            query_text=query_text,
+        )
+
+    async def _retrieve_rendered_context_for_context(
+        self,
+        runtime_context: RuntimeContext,
+        *,
+        query_text: str,
+    ) -> str:
+        return await self.runtime.retrieve_rendered_context(
+            runtime_context,
+            query_text=query_text,
+        )
+
+    async def _get_context_messages_for_context(
+        self,
+        runtime_context: RuntimeContext,
+        *,
+        query_text: str,
+        render_mode: str = "animus_v1",
+    ) -> Dict[str, Any]:
+        return await self.runtime.get_context_messages(
+            runtime_context,
+            query_text=query_text,
+            render_mode=render_mode,
+        )
+
+    def _build_retrieval_request(self, runtime_context: RuntimeContext) -> Any:
+        """Compatibility bridge to the canonical runtime request builder."""
+        return self.runtime._build_retrieval_request(runtime_context)
     
     
     # ----------------------------------------------------------------------
     # Core API: Data Ingestion
     # ----------------------------------------------------------------------
-    #async def process_turn(
-    async def sync_memory(
+    async def process_turn(
         self,
         *,
         user_id: str,
@@ -396,7 +434,12 @@ class UMAMemory:
         assistant_reply: str,
         extra_meta: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Ingest a full conversation turn into UMA memory."""
+        """Public turn-ingest entrypoint.
+
+        This is the supported memory-surface wrapper over the canonical
+        pipeline turn processor. It uses the current runtime `agent_id` and the
+        explicit `extra_meta` scope fields consumed by `MemoryPipeline`.
+        """
         self._ensure_ingestion_ready()
 
         if self.pipeline is None:
@@ -407,20 +450,30 @@ class UMAMemory:
                 hooks=self.hooks,
                 promotion_policy=self.promotion_policy,
             )
-            logger.debug("UMAMemory.sync_memory: MemoryPipeline initialized lazily.")
+            logger.debug("UMAMemory.process_turn: MemoryPipeline initialized lazily.")
 
-        runtime_context = self._require_bound_runtime_context()
         normalized_user_id = normalize_user_id(user_id)
         await self.pipeline.process_turn(
             user_id=normalized_user_id,
             user_msg=user_msg,
             assistant_reply=assistant_reply,
             extra_meta=extra_meta,
-            agent_id=runtime_context.agent_id,
-            tenant_id=runtime_context.tenant_id,
-            workspace_id=runtime_context.workspace_id,
-            session_id=runtime_context.session_id,
-            request_id=runtime_context.request_id,
+        )
+
+    async def sync_memory(
+        self,
+        *,
+        user_id: str,
+        user_msg: str,
+        assistant_reply: str,
+        extra_meta: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Backward-compatible alias for `process_turn(...)`."""
+        await self.process_turn(
+            user_id=user_id,
+            user_msg=user_msg,
+            assistant_reply=assistant_reply,
+            extra_meta=extra_meta,
         )
 
     async def ingest_document(
