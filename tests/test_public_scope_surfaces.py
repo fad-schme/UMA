@@ -35,7 +35,12 @@ async def _init_memory_with_procedural_feature(tmp_path) -> UMAMemory:
     cfg_path.write_text(yaml.safe_dump(cfg))
 
     memory = UMAMemory.from_yaml(str(cfg_path))
-    memory._agent_id = "agent-default"
+    memory.set_context(
+        user_id="user:u1",
+        agent_id="agent-default",
+        tenant_id="default",
+        request_id="test:agent-default",
+    )
     memory._ensure_ingestion_ready()
     return memory
 
@@ -162,5 +167,4 @@ async def test_public_procedural_reads_accept_explicit_workspace_scope_without_b
 def test_agent_id_setter_is_removed_from_public_surface(uma_memory) -> None:
     with pytest.raises(AttributeError):
         uma_memory.agent_id = "agent-deprecated-test"
-
 

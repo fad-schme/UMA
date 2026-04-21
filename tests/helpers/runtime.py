@@ -128,6 +128,11 @@ async def init_uma_for_tests(
     cfg_path.write_text(yaml.safe_dump(cfg))
 
     memory = UMAMemory.from_yaml(str(cfg_path))
-    memory._agent_id = agent_id
+    memory.set_context(
+        user_id="user:u1",
+        agent_id=agent_id,
+        tenant_id="default",
+        request_id=f"test:{agent_id}",
+    )
     memory._ensure_ingestion_ready()
     return memory

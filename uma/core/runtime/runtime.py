@@ -171,6 +171,18 @@ class UMARuntime:
             raise RuntimeError("UMARuntime operation requires a memory_bridge.")
         return memory
 
+    @property
+    def agent_id(self) -> Optional[str]:
+        """Return the bridge runtime agent identity, if one is known."""
+        memory = self.memory_bridge
+        if memory is None:
+            return None
+        agent_id = getattr(memory, "agent_id", None)
+        if isinstance(agent_id, str):
+            normalized = agent_id.strip()
+            return normalized or None
+        return None
+
     def refresh_from_memory(self) -> None:
         """Refresh runtime-owned shared service references from UMAMemory."""
         memory = self._require_memory_bridge()

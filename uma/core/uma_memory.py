@@ -196,6 +196,24 @@ class UMAMemory:
             self._runtime.refresh_from_memory()
         return self._runtime
 
+    @property
+    def agent_id(self) -> Optional[str]:
+        """Return the current runtime agent identity, if one is known.
+
+        This remains request/runtime state, not durable configuration. A value
+        may come from a bound runtime context or from internal bootstrap code
+        that seeds `_agent_id` before request-scoped flows execute.
+        """
+        runtime_context = self._bound_runtime_context
+        if runtime_context is not None and runtime_context.agent_id:
+            return runtime_context.agent_id
+
+        agent_id = self._agent_id
+        if isinstance(agent_id, str):
+            normalized = agent_id.strip()
+            return normalized or None
+        return None
+
     def _require_bound_runtime_context(self) -> RuntimeContext:
         """Return the currently bound runtime context for public retrieval APIs."""
         runtime_context = self._bound_runtime_context
