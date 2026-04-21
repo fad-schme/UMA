@@ -5,7 +5,7 @@ import logging
 import os
 from typing import Any, Dict, Optional, Tuple
 
-from uma.core.uma_memory import UMAMemory
+from uma import UMAMemory
 from uma.adapters.llm.base import LLMInterface
 from uma.core.ingest.parser import FileContentParser
 logger = logging.getLogger(__name__)

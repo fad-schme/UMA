@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from tests.helpers.runtime import init_uma_for_tests
-from uma import UMAMemory
+from uma import UMAMemory, UMARuntime
 from uma.core.retrieval.rlm.context_pack import ContextPack
 from uma.core.utils.promotion import PromotionPolicy
 from uma.core.working_memory.core import SessionScope

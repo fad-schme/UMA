@@ -92,8 +92,7 @@ pip install -r requirements.txt
 ## Typical Usage
 
 ```python
-from uma import UMARuntime
-from uma.core.uma_memory import UMAMemory
+from uma import UMAMemory, UMARuntime
 from uma.types import RuntimeContext
 
 memory = UMAMemory.from_yaml("config/uma.yaml")
@@ -136,7 +135,7 @@ Keeping them separate lets developers:
 - log/debug retrieval results without string parsing
 
 If you want UMA to render a string snippet using its configured context settings,
-bind a runtime context and call `UMARequestHandle.retrieve_rendered_context(query_text)`.
+bind a runtime context and call `handle.retrieve_rendered_context(query_text)`.
 
 
 
