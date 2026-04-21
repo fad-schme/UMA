@@ -39,6 +39,7 @@ dist/
 
 # Secrets
 .env
+config/*.local.yaml
 
 website/
 material/

@@ -6,17 +6,23 @@ Usage:
 
 1. Run the example as a module from the repo root.
 2. Install UMA dependencies in the current environment, for example `pip install -e .`.
-3. Ensure `config/uma.yaml` is configured for the backends you actually want to use.
-4. Install any optional extras required by that config.
+3. Copy the safe baseline config to a local file, for example:
+
+```bash
+cp config/uma.yaml config/uma.local.yaml
+```
+
+4. Update `config/uma.local.yaml` for the backends you actually want to use.
+5. Install any optional extras required by that local config.
    Examples:
    `pip install '.[vector]'` for Qdrant/FAISS-related vector backends
    `pip install '.[graph]'` for Neo4j
    `pip install '.[ollama]'` for Ollama-based providers
-5. (Optional) install parser extras for document ingestion, e.g. `pip install '.[parsers]'`
-6. Run:
+6. (Optional) install parser extras for document ingestion, e.g. `pip install '.[parsers]'`
+7. Run:
 
 ```bash
-python -m examples.chatbot_app.main --config config/uma.yaml --user user:local --agent agent-default
+python -m examples.chatbot_app.main --config config/uma.local.yaml --user user:local --agent agent-default
 ```
 
 Supported execution mode:
@@ -27,7 +33,8 @@ Supported execution mode:
 Startup expectations:
 
 - If imports are correct but the configured backends or optional dependencies are missing, startup fails fast with an actionable message.
-- The bundled `config/uma.yaml` currently references optional infrastructure such as vector, graph, and Ollama backends. If those are not installed or reachable, update the config or install the matching extras before running the example.
+- The committed `config/uma.yaml` is a safe baseline, not a personal ready-to-run environment file.
+- Your local `config/uma.local.yaml` may still reference optional infrastructure such as Ollama or custom vector/graph backends. If those are not installed or reachable, update the config or install the matching extras before running the example.
 
 Commands inside the REPL:
 - `/load` — load documents from `/material` into UMA (document ingestion pipeline).

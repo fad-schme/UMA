@@ -50,7 +50,7 @@ def _format_startup_error(config_path: str, exc: Exception) -> str:
         )
 
     lines.append(
-        "The supported invocation is `python -m examples.chatbot_app.main --config config/uma.yaml --user user:local --agent agent-default`."
+        "The supported invocation is `python -m examples.chatbot_app.main --config config/uma.local.yaml --user user:local --agent agent-default`."
     )
     return "\n".join(lines)
 
@@ -189,7 +189,7 @@ async def agent_generate(messages: list, llm: Optional[LLMInterface] = None) -> 
     Generate a response using UMA's configured LLM.
     """
     if llm is None:
-        raise RuntimeError("No LLM configured; set llms.agent in config/uma.yaml.")
+        raise RuntimeError("No LLM configured; set llms.agent in your local UMA config, for example config/uma.local.yaml.")
     reply = await llm.generate(messages=messages, max_tokens=128, temperature=0.2)
     if not isinstance(reply, str) or not reply.strip():
         logger.warning("agent_generate: LLM returned empty reply.")
@@ -197,7 +197,7 @@ async def agent_generate(messages: list, llm: Optional[LLMInterface] = None) -> 
 
 
 async def interactive_chat(
-    config_path: str = "config/uma.yaml",
+    config_path: str = "config/uma.local.yaml",
     user_id: str = "user:local",
     agent_id: str = "agent-default",
     system_prompt: Optional[str] = None,
@@ -354,7 +354,7 @@ def main():
     import shutil
 
     parser = argparse.ArgumentParser(description="Example UMA-RLM interactive chatbot")
-    parser.add_argument("--config", default="config/uma.yaml")
+    parser.add_argument("--config", default="config/uma.local.yaml")
     parser.add_argument("--user", default="user:local")
     parser.add_argument("--agent", default="agent-default")
     parser.add_argument("--system-prompt", default=None)

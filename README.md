@@ -85,6 +85,20 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### Config baseline
+
+`config/uma.yaml` is the committed safe baseline config.
+It is intentionally shareable and does not contain secrets, private LAN endpoints, or personal infrastructure settings.
+
+For local development:
+
+1. Copy `config/uma.yaml` to `config/uma.local.yaml`
+2. Add your real provider settings, endpoints, and secrets there
+3. Run UMA with `--config config/uma.local.yaml` or `UMAMemory.from_yaml("config/uma.local.yaml")`
+
+Keep secrets out of committed YAML configs. Use environment variables or a secret manager.
+The safe baseline may still require local setup for optional providers such as Ollama or custom vector/graph backends.
+
 ### Storage paths
 `storage.db_root` supports `~` and environment variables. For relative paths, set
 `storage.db_root_base` to control resolution (`auto`, `cwd`, or `config`).
@@ -95,19 +109,15 @@ pip install -r requirements.txt
 from uma import UMAMemory, UMARuntime
 from uma.types import RuntimeContext
 
-memory = UMAMemory.from_yaml("config/uma.yaml")
-memory._agent_id = "agent-default"  # temporary write-side bridge for process_turn(...)
-runtime = UMARuntime.from_memory(memory)
-
-handle = runtime.bind(
-    RuntimeContext(
-        tenant_id="default",
-        agent_id="agent-default",
-        request_id="req-1",
-        user_id="user-123",
-        session_id="session-1",
-    )
+memory = UMAMemory.from_yaml("config/uma.local.yaml").set_context(
+    user_id="user-123",
+    agent_id="agent-default",
+    tenant_id="default",
+    request_id="req-1",
+    session_id="session-1",
 )
+runtime = UMARuntime.from_memory(memory)
+handle = runtime.bind(memory._require_bound_runtime_context())
 
 # Get UMA-RLM context (RLM retrieval) for the current user message:
 context = await handle.retrieve_structured_context(user_message)
