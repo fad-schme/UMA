@@ -9,6 +9,7 @@ from uma import UMARuntime
 from uma.core.retrieval.rlm.context_pack import ContextPack
 from uma.core.retrieval.rlm.evidence import expand_evidence_chunks_from_facts
 from uma.core.retrieval.rlm.request import RetrievalRequest
+from uma.stores.base_sql_store import DEFAULT_TENANT_ID
 from uma.types import RuntimeContext
 
 
@@ -110,7 +111,7 @@ async def test_bound_context_retrieval_is_isolated_across_agents_on_shared_runti
 
     handle_a = runtime.bind(
         RuntimeContext(
-            tenant_id="tenant-1",
+            tenant_id=DEFAULT_TENANT_ID,
             agent_id="agent:alpha",
             request_id="req-alpha",
             user_id="user:u1",
@@ -118,7 +119,7 @@ async def test_bound_context_retrieval_is_isolated_across_agents_on_shared_runti
     )
     handle_b = runtime.bind(
         RuntimeContext(
-            tenant_id="tenant-1",
+            tenant_id=DEFAULT_TENANT_ID,
             agent_id="agent:beta",
             request_id="req-beta",
             user_id="user:u1",

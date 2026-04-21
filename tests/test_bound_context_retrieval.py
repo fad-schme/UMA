@@ -113,7 +113,7 @@ async def test_bound_context_workspace_id_does_not_broaden_retrieval_owner_suppo
     runtime = UMARuntime.from_memory(memory)
     handle = runtime.bind(
         RuntimeContext(
-            tenant_id="tenant-1",
+            tenant_id=DEFAULT_TENANT_ID,
             agent_id=memory.agent_id,
             request_id="req-workspace-inert",
             user_id="user:u1",

@@ -85,6 +85,25 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+`requirements.txt` is the repo's thin development convenience layer and resolves
+to the package metadata in `pyproject.toml` plus the `dev` extra.
+
+For other install surfaces:
+
+- Core package only: `pip install -e .`
+- Development/test environment: `pip install -r requirements.txt`
+- Vector backends: `pip install -e '.[vector]'`
+- Graph backend: `pip install -e '.[graph]'`
+- Ollama provider: `pip install -e '.[ollama]'`
+- Parser extras: `pip install -e '.[parsers]'`
+- Postgres backend: `pip install -e '.[postgres]'`
+
+You can combine extras when needed, for example:
+
+```bash
+pip install -e '.[dev,vector,graph,ollama,parsers]'
+```
+
 ### Config baseline
 
 `config/uma.yaml` is the committed safe baseline config.

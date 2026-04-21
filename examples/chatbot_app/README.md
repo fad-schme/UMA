@@ -5,7 +5,9 @@ Simple interactive chatbot demonstrating UMA-RLM memory usage.
 Usage:
 
 1. Run the example as a module from the repo root.
-2. Install UMA dependencies in the current environment, for example `pip install -e .`.
+2. Install UMA dependencies in the current environment.
+   Minimal package install: `pip install -e .`
+   Development/test convenience install: `pip install -r requirements.txt`
 3. Copy the safe baseline config to a local file, for example:
 
 ```bash

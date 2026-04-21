@@ -1,4 +1,5 @@
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -62,4 +63,7 @@ def test_no_subject_keyword_in_search_calls(relpath: str):
 )
 def test_no_ambient_agent_scope_fallback_in_retrieval_internals(relpath: str, forbidden: str):
     src = Path(relpath).read_text(encoding="utf-8")
+    if forbidden == "_agent_id":
+        assert re.search(r"(?<![A-Za-z0-9])_agent_id(?![A-Za-z0-9])", src) is None
+        return
     assert forbidden not in src

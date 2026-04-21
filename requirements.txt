@@ -1,19 +1,17 @@
-numpy
-pytest
-pytest-asyncio
-aiohttp
-pyyaml
-charset-normalizer
+# UMA development/test install surface
+#
+# Runtime dependencies and optional backend extras are defined in `pyproject.toml`.
+# This file exists only as a thin convenience layer for local development so the
+# repo does not maintain a second, drifting dependency contract.
+#
+# Typical usage:
+#   pip install -r requirements.txt
+#
+# For backend/provider extras, install the matching extras explicitly, for example:
+#   pip install -e '.[vector]'
+#   pip install -e '.[graph]'
+#   pip install -e '.[ollama]'
+#   pip install -e '.[parsers]'
+#   pip install -e '.[postgres]'
 
-# Optional PDF parsing for examples
-PyPDF2
-#DB backends
-neo4j           #graph db
-sqlite          #sql db
-qdrant-client   #vector db
-fastembed # for qdrant bm25
-#faiss-cpu    #vector db --- IGNORE ---
-
-# LLM integrations 
-ollama
-#openai
+-e .[dev]

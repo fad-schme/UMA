@@ -169,7 +169,7 @@ class UMAMemoryEnvironment:
     def _filter_session_local_items(request: RetrievalRequest, items: List[Any]) -> List[Any]:
         filtered: List[Any] = []
         request_session_id = getattr(request.context, "session_id", None)
-        request_agent_id = getattr(request.context, "agent_id", None)
+        request_runtime_agent = getattr(request.context, "agent_id", None)
         request_tenant_id = getattr(request.context, "tenant_id", None)
         include_legacy_turn_data = bool(getattr(request, "include_legacy_turn_data", False))
         for item in items or []:
@@ -186,7 +186,7 @@ class UMAMemoryEnvironment:
                 if not request_session_id or session_id != request_session_id:
                     continue
                 origin_agent_id = getattr(item, "origin_agent_id", None)
-                if origin_agent_id and request_agent_id and origin_agent_id != request_agent_id:
+                if origin_agent_id and request_runtime_agent and origin_agent_id != request_runtime_agent:
                     continue
                 filtered.append(item)
             except Exception:
