@@ -18,6 +18,43 @@ SYSTEM_PROMPT_DEFAULT = (
 )
 
 
+def _format_startup_error(config_path: str, exc: Exception) -> str:
+    """Return a concise, actionable startup error for the example app."""
+    text = str(exc).strip()
+    lines = [
+        f"Failed to start the UMA example with config '{config_path}'.",
+        f"Cause: {text or type(exc).__name__}",
+    ]
+
+    lowered = text.lower()
+    if isinstance(exc, ModuleNotFoundError):
+        lines.append(
+            "The example must be run as a module from the repo root."
+        )
+
+    if "qdrant-client is not installed" in lowered or "no module named 'qdrant_client'" in lowered:
+        lines.append(
+            "Install vector dependencies with `pip install '.[vector]'` or switch `storage.vector_backend` to a backend available in your environment."
+        )
+    elif "neo4j" in lowered and ("not installed" in lowered or "no module named" in lowered):
+        lines.append(
+            "Install graph dependencies with `pip install '.[graph]'` or set `storage.graph_backend: disabled`."
+        )
+    elif "ollama" in lowered and ("not installed" in lowered or "no module named" in lowered):
+        lines.append(
+            "Install the Ollama client with `pip install '.[ollama]'` or configure a different LLM/embedder provider."
+        )
+    elif "failed to initialize client" in lowered or "connection" in lowered or "connectivity" in lowered:
+        lines.append(
+            "Verify that the backends referenced by your config are installed, reachable, and running."
+        )
+
+    lines.append(
+        "The supported invocation is `python -m examples.chatbot_app.main --config config/uma.yaml --user user:local --agent agent-default`."
+    )
+    return "\n".join(lines)
+
+
 # ==== External store reset helpers (Qdrant, Neo4j) ====
 
 def _load_yaml_config(path: str) -> Dict[str, Any]:
@@ -167,14 +204,19 @@ async def interactive_chat(
     auto_load_material: bool = False,
 ):
     system_prompt = system_prompt or SYSTEM_PROMPT_DEFAULT
+    session_id = f"chat:{user_id}"
 
     # Initialize UMA memory runtime once, then bind the fixed chat scope.
-    memory = UMAMemory.from_yaml(config_path).set_context(
-        user_id=user_id,
-        agent_id=agent_id,
-        tenant_id="default",
-        request_id=f"chat:{user_id}",
-    )
+    try:
+        memory = UMAMemory.from_yaml(config_path).set_context(
+            user_id=user_id,
+            agent_id=agent_id,
+            tenant_id="default",
+            request_id=f"chat:{user_id}",
+            session_id=session_id,
+        )
+    except Exception as exc:
+        raise RuntimeError(_format_startup_error(config_path, exc)) from exc
     
     await memory.load_memory_bootstrap("./examples/MEMORY.md")
     memory.load_userprofile("./examples/USER.md")
@@ -289,7 +331,12 @@ async def interactive_chat(
 
                 print("Assistant>", reply)
                 # Update UMA memory with the turn
-                await memory.sync_memory(user_id=user_id, user_msg=user_message, assistant_reply=reply )
+                await memory.sync_memory(
+                    user_id=user_id,
+                    user_msg=user_message,
+                    assistant_reply=reply,
+                    extra_meta={"session_id": session_id},
+                )
 
             except Exception as exc:
                 logging.exception("Chat turn failed: %s", exc)
@@ -346,26 +393,32 @@ def main():
             print(f"External reset: {msg}")
         if msg2:
             print(f"Graph reset: {msg2}")
+        try:
+            asyncio.run(
+                interactive_chat(
+                    config_path=args.config,
+                    user_id=args.user,
+                    agent_id=args.agent,
+                    system_prompt=args.system_prompt,
+                    auto_load_material=True,
+                )
+            )
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from exc
+        return
+
+    try:
         asyncio.run(
             interactive_chat(
                 config_path=args.config,
                 user_id=args.user,
                 agent_id=args.agent,
                 system_prompt=args.system_prompt,
-                auto_load_material=True,
+                auto_load_material=False,
             )
         )
-        return
-
-    asyncio.run(
-        interactive_chat(
-            config_path=args.config,
-            user_id=args.user,
-            agent_id=args.agent,
-            system_prompt=args.system_prompt,
-            auto_load_material=False,
-        )
-    )
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 if __name__ == "__main__":
