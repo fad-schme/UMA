@@ -16,7 +16,7 @@ This file exists to make an AI coding agent productive in UMA-RLM quickly, safel
 
 What UMA-RLM is
 
-UMA-RLM is a memory and context manager SDK for developers building AI agents. It ingests data (documents, conversations), stores it in multiple lanes (SQL, vectors, graph), and retrieves high-quality compressed context.
+UMA-RLM is a memory and context manager SDK for developers building AI agents. It ingests data (documents, conversations), stores it in multiple lanes (SQL, vectors, graph), and exposes two thin, sharp retrieval products: curated context retrieval for RAG and evidence-backed memory retrieval over compiled knowledge.
 
 What UMA-RLM is NOT
 	•	Not a chat app.
@@ -24,9 +24,32 @@ What UMA-RLM is NOT
 	•	Not a knowledge-graph-first system (graph is a supporting lane, not the only lane).
 	•	Not a framework that keeps legacy/backward compatibility: remove obsolete paths.
 
+
 Core product principle
 
 RLM is always enabled. Retrieval is LLM-controlled search for context, not answering. The “long context” lives in the environment, not in the prompt.
+
+One-sentence product test
+
+A user must be able to understand what UMA-RLM is in one sentence and install it in one path.
+
+
+Design implication
+If a feature, module split, wrapper, helper, or API surface makes the system harder to explain, harder to install, or harder to trace end-to-end, simplify it before extending it.
+
+Primary goals for every PR
+
+Every PR must preserve or improve these properties:
+• understandable
+• lean
+• easy to trace end-to-end
+• production-appropriate
+• evidence-backed where relevant
+• consistent with canonical UMA paths
+• free of conceptual clutter
+
+Do not optimize for theoretical flexibility, framework elegance, or future abstraction at the cost of clarity.
+Optimize for useful, direct, maintainable code.
 
 ⸻
 
@@ -79,11 +102,13 @@ Cross-scope behavior.
 2) Retrieval lanes (what exists, what they mean)
 
 UMA-RLM retrieval uses multiple “lanes”:
-	1.	Working Memory (WM) — always included; short conversational continuity.
+	1.	Working Memory (WM) — short conversational continuity.
 	2.	Semantic facts — structured statements extracted from chunks/episodes.
-	3.	Chunks — authoritative source text (from SQL), discovered via vector + lexical search.
+	3.	Raw evidence chunks — authoritative source text discovered via vector + lexical retrieval.
 	4.	Episodic — time-ordered memory of interactions / ingest events.
 	5.	Graph — relationship navigation / predicate-scoped expansion.
+	6.	Compiled wiki pages — mutable, evidence-backed continuity artifacts used for synthesis and memory retrieval.
+
 
 Lane responsibilities
 	•	Vector search: candidate discovery (fast recall). Adapter must return (id, score).
@@ -93,6 +118,34 @@ Lane responsibilities
 	•	Graph: routing/index for entity/predicate expansion, not primary truth.
 	•	Facts: preferred “truth layer”; chunks are evidence.
 
+Canonical storage model
+
+Raw evidence
+• Stored through the normal document ingest path.
+• Immutable.
+• Source of truth for evidence.
+• Chunked and indexed through the canonical UMA ingest flow.
+• Expected metadata includes at minimum: kind="raw_source", kb_lane="raw", plus canonical ownership/scope metadata.
+
+Compiled wiki pages
+• Stored in UMA as normal documents or durable records, but logically marked as compiled artifacts.
+• Mutable and updatable.
+• Evidence-backed.
+• Used for continuity, synthesis, and memory retrieval.
+• Expected metadata includes at minimum: kind="wiki_page", kb_lane="wiki", page_slug, page_title, category, status.
+
+Markdown projection
+• wiki/*.md is a projection only.
+• Human-readable, git-friendly, and Obsidian-friendly.
+• Never the canonical source of truth.
+
+Thin retrieval products
+• Context retrieval: high-quality RAG over stored data to produce curated context for the LLM.
+• Memory retrieval: compiled-knowledge retrieval over evidence-backed artifacts; not plain chunk retrieval and not “RAG with nicer formatting”.
+
+Lane policy rule
+Memory lanes are a first-class retrieval contract. Retrieval planning must choose lanes explicitly. Ownership alone is not enough to distinguish user KB, user profile, agent KB, raw evidence, and compiled knowledge.
+
 ⸻
 
 3) Absolute design constraints for this repo
@@ -101,12 +154,24 @@ Backward compatibility
 
 Do not implement legacy fallbacks. Remove obsolete paths rather than preserving them.
 
+Mandatory execution stance
+• Simplify before extending when the topology is confusing.
+• Prefer direct code over indirection.
+• Converge duplicate concepts into one canonical path.
+• Keep public surfaces small and sharp.
+• Avoid parallel paths for the same behavior.
+• If a task can be solved either by adding a new helper/wrapper/abstraction or by simplifying and extending an existing canonical path, choose the second unless there is a strong concrete reason not to.
+
 Code style
-	•	Keep files lean and modular: one responsibility per module
-	•	Avoid over-abstraction; prefer small helpers
-	•	Prefer explicitness over cleverness
-	•	Add logs only where they pay for themselves (start/end of operations, error context, key counters)
-	•	Do not overbuild, plugin systems, adapters, or abstractions.
+	•	Keep files lean and modular: one responsibility per module.
+	•	Prefer explicit, direct code over cleverness or indirection.
+	•	Do not over-engineer.
+	•	Keep the codebase understandable, lean, and easy to trace end-to-end.
+	•	Remove thin wrappers, pass-through helpers, and duplicated utility layers that only forward data, rename concepts, or hide the real path.
+	•	Do not add abstractions, adapters, helper types, or module splits unless they remove real duplication or make a core contract materially clearer.
+	•	Prefer extending canonical paths over creating alternate execution paths.
+	•	Add logs only where they pay for themselves (start/end of operations, error context, key counters).
+	•	Do not overbuild plugin systems, adapters, or abstraction layers.
 
 Error handling
 	•	Never swallow exceptions silently in core flows.
@@ -122,6 +187,7 @@ Comments and logging
 	•	Do not log huge payloads, full prompts, or large text blobs in normal flows.
 	•	When adding logs, keep field naming consistent across modules.
 
+
 Implementation rules for redesign work
 	•	Every change must include or update tests when behavior, contracts, or storage semantics change.
 	•	Do not merge changes that leave the codebase in a partially migrated or internally inconsistent state.
@@ -130,6 +196,23 @@ Implementation rules for redesign work
 	•	Prefer extending canonical paths over creating alternate execution paths.
 	•	Ensure new code does not increase accidental complexity or overengineering.
 	•	Keep compatibility wrappers thin, temporary, and only at boundary layers.
+
+Codebase simplification rule
+• PR1-class cleanup work takes priority over feature growth when the code topology is confusing.
+• The coding agent must always keep the codebase understandable, lean, and free of thin wrappers, pass-through helpers, and duplicated utility layers that only forward data or rename concepts.
+• If two modules express the same concept with slightly different names, shapes, or helper layers, converge them into one canonical path.
+• If a new feature cannot be added without adding conceptual clutter, simplify first.
+
+Canonical path rule
+For each changed behavior, there must be one obvious path.
+A contributor should be able to answer:
+• where does it start?
+• where is the main decision made?
+• where is the real implementation?
+• what does it return?
+• how is it tested?
+
+If the answer requires jumping across many wrappers or mirrored helpers, the path is too diffuse.
 
 ⸻
 
@@ -211,7 +294,10 @@ All production callers must follow this sequence:
 	4.	Selection: deterministic truncation to max_chunks/max_facts.
 	5.	Snippet rendering: presentation-only (merge adjacency, bound length, preserve traceability).
 
+
 Policy: do not implement ranking inside stores, snippet rendering, or controller layers.
+
+The same discipline applies to product paths: UMA-RLM must expose a small number of thin, sharp canonical paths, not a growing set of overlapping flows. “Context retrieval” and “memory retrieval” may share lower-level primitives, but they must remain distinct contracts with distinct outputs.
 
 Both:
 	•	gold runner
@@ -245,6 +331,17 @@ While iterating:
 Logging
 	•	Keep logs structured and consistent: include trace_id, owner_type/owner_id, counts
 	•	Avoid logging huge blobs of text
+
+Testing rules
+• Every behavior, contract, storage, or migration change must include or update tests.
+• Prefer testing canonical paths, product behavior, artifact boundaries, retrieval contracts, and end-to-end scenarios for the changed flow.
+• Do not rely only on tiny helper tests if the real risk is path drift, contract confusion, or artifact boundary regression.
+• Tests should help a human understand the intended behavior.
+
+Documentation rules
+• Every PR must keep documentation aligned with runtime reality.
+• If a PR changes behavior, contracts, canonical paths, install/use flow, or artifact semantics, update the relevant docs, comments, and examples in the same PR.
+• Do not leave docs describing an older architecture.
 
 ⸻
 
@@ -290,6 +387,8 @@ When gold runner and app differ:
 	•	Prefer explicit runtime context objects over loose parameter bundles when request scope is required.
 	•	Use doc_id consistently for document provenance.
 	•	Use chunk_id for chunk identity (don’t alias multiple fields).
+	•	Prefer direct product-facing names for public APIs where new names are introduced (for example: ingest_source, retrieve_context, retrieve_memory, update_wiki_page, export_wiki_projection).
+	•	Do not expose internal architecture complexity through public API naming.
 
 ⸻
 
@@ -298,6 +397,8 @@ When gold runner and app differ:
 Rule
 
 Initialize only what’s required for the selected profile:
+	•	Installation and first-run setup must have one obvious path.
+	•	Optional components must never complicate the baseline install story.
 	•	profile="retrieval" must boot minimal retrieval stack fast.
 	•	Heavy components (graph connections, clustering, optional vector stores) should:
 	•	initialize lazily on first use, or
@@ -356,11 +457,15 @@ Quality & correctness
 	•	✅ tests added or updated for every behavior, contract, storage, or migration change
 	•	✅ no ambient mutable request scope remains in the changed execution path
 	•	✅ code stays lean, avoids duplication, and does not introduce unnecessary abstractions
+	•	✅ the changed path is easy to explain in one sentence and easy to trace through one canonical flow
+	•	✅ no new thin wrappers, pass-through helpers, or rename-only utility layers were introduced
+	•	✅ context retrieval vs memory retrieval contracts remain explicit where relevant
 	•	✅ no obsolete fallback/legacy paths remain
 	•	✅ logs show counts and decisions (without dumping large text)
 
 Reuse & consistency
 	•	✅ changes reuse existing functionality when it exists (no duplicate implementations)
+	•	✅ public surfaces remain small, sharp, and understandable to a new user
 	•	✅ fixes/changes are end-to-end complete, never partial (all call sites updated, all return types consistent)
 	•	✅ comments, logging, and error handling follow the repo rules and remain production-appropriate
 	•	✅ code remains production-ready: consistent interfaces, clear contracts, and stable behavior
