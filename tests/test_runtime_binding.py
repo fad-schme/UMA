@@ -4,8 +4,9 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from uma import UMAMemory, UMARequestHandle, UMARuntime
-from uma.types import RuntimeContext
+from uma import UMAMemory
+from uma.api.runtime import UMARequestHandle, UMARuntime
+from uma.common.types import RuntimeContext
 
 
 def test_runtime_bind_returns_immutable_handle() -> None:

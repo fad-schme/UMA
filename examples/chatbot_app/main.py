@@ -7,7 +7,8 @@ from typing import Any, Dict, Optional, Tuple
 
 from uma import UMAMemory
 from uma.adapters.llm.base import LLMInterface
-from uma.core.ingest.parser import FileContentParser
+from uma.ingest.parser import FileContentParser
+from uma.retrieve import ContextPackBuilder
 logger = logging.getLogger(__name__)
 
 
@@ -292,9 +293,12 @@ async def interactive_chat(
             # Normal chat: retrieve context only; agent behavior is developer-owned
             try:
                 user_message = user
-                snippet = await memory.fetch_memory(
+                context = await memory.retrieve_context(
                     query_text=user_message,
-                    format="rendered",
+                )
+                snippet = ContextPackBuilder.render_snippet(
+                    ContextPackBuilder.build(user_message, context),
+                    getattr(getattr(memory.cfg, "retrieval", None), "context", None),
                 )
 
                 if not snippet:

@@ -34,7 +34,7 @@ from typing import Iterable, List, Optional
 
 import os
 
-from ...core.utils.config_types import EmbeddingConfig
+from uma.common.config_types import EmbeddingConfig
 from .base import EmbeddingInterface
 from .retry_utils import retryable, should_retry_network_only
 

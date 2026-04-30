@@ -7,7 +7,7 @@ import pytest
 from uma.adapters.db.sqlite_adapter import SQLiteAdapter
 from uma.adapters.vector.base import VectorIndex
 from uma.stores.chunk_sql import ChunkSQLStore
-from uma.types import Chunk
+from uma.common.types import Chunk
 
 
 class _SpyVectorIndex(VectorIndex):

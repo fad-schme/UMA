@@ -2,10 +2,10 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from uma.core.utils.identity import normalize_user_id
-from uma.types import Episode
-from uma.types import Fact
-from uma.types import Skill
+from uma.common.identity import normalize_user_id
+from uma.common.types import Episode
+from uma.common.types import Fact
+from uma.common.types import Skill
 
 
 @pytest.mark.asyncio

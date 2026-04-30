@@ -4,10 +4,10 @@ from datetime import datetime
 
 import pytest
 
-from uma.core.retrieval.rlm.decisions import RetrievalAction
-from uma.core.retrieval.rlm.request import RetrievalRequest
+from uma.retrieve.rlm.decisions import RetrievalAction
+from uma.retrieve.rlm.request import RetrievalRequest
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
-from uma.types import Episode, Fact, RuntimeContext
+from uma.common.types import Episode, Fact, RuntimeContext
 
 
 def _request_for_session(memory, *, include_legacy_turn_data: bool = False) -> RetrievalRequest:

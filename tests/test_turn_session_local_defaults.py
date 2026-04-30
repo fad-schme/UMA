@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from uma import UMARuntime
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
-from uma.types import RuntimeContext, SCOPE_MODEL_VERSION
+from uma.common.types import RuntimeContext, SCOPE_MODEL_VERSION
 
 
 @pytest.mark.asyncio
@@ -251,13 +250,10 @@ async def test_explicit_legacy_turn_write_mode_is_gated_and_non_canonical(uma_me
     finally:
         sem_conn.close()
 
-    runtime = UMARuntime.from_memory(mem)
-    ctx = await runtime.bind(
-        RuntimeContext(
-            tenant_id=DEFAULT_TENANT_ID,
-            agent_id=mem.agent_id,
-            request_id="req-no-session",
-            user_id="user:u1",
-        )
-    ).retrieve_structured_context("cocoa")
+    ctx = await mem.set_context(
+        tenant_id=DEFAULT_TENANT_ID,
+        agent_id=mem.agent_id,
+        request_id="req-no-session",
+        user_id="user:u1",
+    ).retrieve_context(query_text="cocoa")
     assert "cocoa" not in {str(getattr(f, "object", "")) for f in (ctx.get("facts") or [])}

@@ -14,8 +14,8 @@ from .base_vector_sql_store import BaseVectorSQLStore
 from .base_sql_store import DEFAULT_TENANT_ID
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
-from ..core.utils.store_metadata import ensure_store_metadata
-from ..types import Chunk, SCOPE_MODEL_VERSION
+from uma.stores.metadata import ensure_store_metadata
+from uma.common.types import Chunk, SCOPE_MODEL_VERSION
 
 logger = logging.getLogger(__name__)
 _DEBUG_LOGGED_PARSE_FAILURES: set[tuple[str, str]] = set()
@@ -365,7 +365,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
             logger.error("ChunkSQLStore.lexical_search requires owner_type and owner_id")
             raise ValueError("ChunkSQLStore.lexical_search requires owner_type and owner_id")
 
-        from ..core.utils.user_query_helper import build_query_term_set
+        from uma.retrieve.user_query_helper import build_query_term_set
 
         def _escape_like(term: str) -> str:
             return (term or "").replace("%", "\\%").replace("_", "\\_")

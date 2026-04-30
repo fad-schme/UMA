@@ -1,0 +1,550 @@
+"""
+config_types.py
+================
+
+Typed, frozen dataclasses representing UMA configuration sections.
+
+These dataclasses replace dynamic UMAConfig attribute wrappers inside
+UMAMemory, ensuring type safety, autocomplete support, and predictable
+configuration behavior.
+
+UMAMemory should convert UMAConfig → these dataclasses at startup.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+import importlib
+from typing import Any, Dict, List, Optional, Union
+
+
+def parse_plugin_spec(spec: Union[str, Dict[str, Any]]):
+    """
+    Parse a plugin specification from configuration.
+
+    Accepted forms:
+    - A string of the form "module.path:callable" which will be imported
+      via importlib and the attribute returned (preferred and safe).
+
+    This avoids executing arbitrary code by default and prefers an
+    import-by-path pattern.
+    """
+    # Shortcut: import path
+    if isinstance(spec, str):
+        if ":" not in spec:
+            raise ValueError("plugin spec string must be 'module:attr'")
+        module_name, attr = spec.split(":", 1)
+        mod = importlib.import_module(module_name)
+        if not hasattr(mod, attr):
+            raise ImportError(f"module {module_name!r} has no attribute {attr!r}")
+        return getattr(mod, attr)
+
+    # Dict form is no longer supported for security reasons.
+    if isinstance(spec, dict):
+        raise ValueError("plugin spec must be an import path string 'module:attr'")
+
+    raise ValueError("unsupported plugin spec type")
+
+
+
+
+# example problematic usage (do not use):
+# fn = types.FunctionType(source_string, globals())
+# Replace any direct FunctionType-from-string usage with:
+# fn = _make_function_from_source(source_string, globals())
+
+
+# ---------------------------------------------------------------------------
+# LLM + Embedding configs
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class LLMConfig:
+    provider: str
+    model: Optional[str]
+    ollama_model: Optional[str] = None
+    config: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "LLMConfig":
+        return cls(
+            provider=d["provider"],
+            model=d.get("model"),
+            ollama_model=d.get("ollama_model"),
+            config=d.get("config") or {},
+        )
+
+
+@dataclass(frozen=True)
+class LLMsConfig:
+    agent: LLMConfig
+    uma: LLMConfig
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "LLMsConfig":
+        # If explicit llms section exists, use it.
+        if "llms" in d and isinstance(d["llms"], dict):
+            llms = d["llms"]
+            return cls(
+                agent=LLMConfig.from_dict(llms.get("agent", {})),
+                uma=LLMConfig.from_dict(llms.get("uma", {})),
+            )
+        # Fallback to single llm section for UMA.
+        if "llm" in d and isinstance(d["llm"], dict):
+            uma_cfg = LLMConfig.from_dict(d["llm"])
+            return cls(agent=uma_cfg, uma=uma_cfg)
+        raise ValueError("Missing LLM configuration; expected 'llm' or 'llms' section")
+
+
+@dataclass(frozen=True)
+class EmbeddingConfig:
+    provider: str
+    model: Optional[str]
+    dimension: int
+    config: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "EmbeddingConfig":
+        return cls(
+            provider=d["provider"],
+            model=d.get("model"),
+            dimension=d["dimension"],
+            config=d.get("config") or {},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Storage config
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class StorageConfig:
+    db_root: str
+    sql_backend: str
+    vector_backend: str
+    vector_config: Dict[str, Any] = field(default_factory=dict)
+    graph_backend: str = "disabled"
+    graph_config: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "StorageConfig":
+        return cls(
+            db_root=d["db_root"],
+            sql_backend=d["sql_backend"],
+            vector_backend=d["vector_backend"],
+            vector_config=d.get("vector_config") or {},
+            graph_backend=d.get("graph_backend", "disabled"),
+            graph_config=d.get("graph_config") or {},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Memory stores: episodic, semantic, procedural
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class EpisodicConfig:
+    db_path: str
+    vector_dim: int
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "EpisodicConfig":
+        return cls(
+            db_path=d["db_path"],
+            vector_dim=d["vector_dim"],
+        )
+
+
+@dataclass(frozen=True)
+class SemanticConfig:
+    db_path: str
+    vector_dim: int
+    salience_threshold: float
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "SemanticConfig":
+        return cls(
+            db_path=d["db_path"],
+            vector_dim=d["vector_dim"],
+            salience_threshold=d["salience_threshold"],
+        )
+
+
+@dataclass(frozen=True)
+class ProceduralConfig:
+    db_path: str
+    vector_dim: int
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "ProceduralConfig":
+        return cls(
+            db_path=d["db_path"],
+            vector_dim=d["vector_dim"],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Working memory + Retrieval configs
+# ---------------------------------------------------------------------------
+
+@dataclass
+class WorkingMemorySettings:
+    max_tokens: int
+    warning_ratio: float
+    hard_limit_ratio: float
+    chunk_size: int = 20        
+    # How many recent messages to preserve at minimum during compaction
+    keep_recent_messages: int = 4
+    # Fraction of `max_tokens` that recent messages should cover before
+    # allowing older messages to be summarized. This implements a
+    # token+message hybrid rule: we keep at least `keep_recent_messages`
+    # but may keep more until recent messages cover this fraction.
+    keep_recent_token_fraction: float = 0.1
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "WorkingMemorySettings":
+        return cls(
+            max_tokens=d["max_tokens"],
+            warning_ratio=d["warning_ratio"],
+            hard_limit_ratio=d["hard_limit_ratio"],
+            chunk_size=d.get("chunk_size", 20),
+            keep_recent_messages=d.get("keep_recent_messages", 4),
+            keep_recent_token_fraction=d.get("keep_recent_token_fraction", 0.1),
+        )
+
+
+@dataclass
+class HybridRetrievalConfig:
+    """
+    Hybrid retrieval configuration (dense + lexical) for provider-agnostic core recall.
+
+    Notes
+    -----
+    - `enabled`: toggles lexical retrieval + fusion when `query_text` is present.
+    - `top_k_dense`: if <= 0, uses the call-site `k`.
+    - `top_k_sparse`: lexical candidate pool size (0 disables lexical).
+    - `fusion_strategy`: `rrf` (default) or `overlap_boost`.
+    """
+
+    enabled: bool = True
+    top_k_dense: int = 0
+    top_k_sparse: int = 15
+    fusion_strategy: str = "rrf"
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any] | None) -> "HybridRetrievalConfig":
+        d = d or {}
+        enabled = bool(d.get("enabled", True))
+        top_k_dense = int(d.get("top_k_dense", 0))
+        top_k_sparse = int(d.get("top_k_sparse", 15))
+        if top_k_dense < 0:
+            raise ValueError("'retrieval.hybrid.top_k_dense' must be >= 0")
+        if top_k_sparse < 0:
+            raise ValueError("'retrieval.hybrid.top_k_sparse' must be >= 0")
+        strategy = str(d.get("fusion_strategy", "rrf") or "rrf").strip().lower()
+        if strategy not in ("rrf", "overlap_boost"):
+            raise ValueError("'retrieval.hybrid.fusion_strategy' must be one of: rrf, overlap_boost")
+        return cls(
+            enabled=enabled,
+            top_k_dense=top_k_dense,
+            top_k_sparse=top_k_sparse,
+            fusion_strategy=strategy,
+        )
+
+
+@dataclass
+class RetrievalConfig:
+    max_episodes: int
+    max_facts: int
+    max_skills: int
+    max_graph_items: int
+    context: "RetrievalContextConfig"
+    strict: bool = True
+    debug_scores: bool = False
+    hybrid: HybridRetrievalConfig = field(default_factory=HybridRetrievalConfig)
+    max_evidence_chunks: int = 6
+    neighbor_window: int = 1
+    max_expanded_chunks: int = 24
+
+    # NEW
+    rlm: Optional[RLMConfig] = None
+    chunk_shortlist_k: int = 12
+    chunk_shortlist_max_per_doc: int = 3
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "RetrievalConfig":
+        strict_mode = bool(d.get("strict", True))
+        debug_scores = bool(d.get("debug_scores", False))
+        max_evidence_chunks = int(d.get("max_evidence_chunks", 6))
+        if max_evidence_chunks < 0:
+            raise ValueError("'retrieval.max_evidence_chunks' must be a non-negative integer")
+        neighbor_window = int(d.get("neighbor_window", 1))
+        if neighbor_window < 0:
+            raise ValueError("'retrieval.neighbor_window' must be a non-negative integer")
+        max_expanded_chunks = int(d.get("max_expanded_chunks", 24))
+        if max_expanded_chunks < 0:
+            raise ValueError("'retrieval.max_expanded_chunks' must be a non-negative integer")
+        chunk_shortlist_k = int(d.get("chunk_shortlist_k", 12))
+        if chunk_shortlist_k < 0:
+            raise ValueError("'retrieval.chunk_shortlist_k' must be a non-negative integer")
+        chunk_shortlist_max_per_doc = int(d.get("chunk_shortlist_max_per_doc", 3))
+        if chunk_shortlist_max_per_doc < 0:
+            raise ValueError("'retrieval.chunk_shortlist_max_per_doc' must be a non-negative integer")
+        hybrid_cfg = d.get("hybrid")
+        hybrid_obj = HybridRetrievalConfig.from_dict(hybrid_cfg if isinstance(hybrid_cfg, dict) else None)
+        rlm_cfg = d.get("rlm")
+        rlm_obj: Optional[RLMConfig] = None
+        if isinstance(rlm_cfg, dict):
+            allowlist = rlm_cfg.get("predicate_allowlist")
+            predicate_allowlist = allowlist if isinstance(allowlist, dict) else None
+            rlm_obj = RLMConfig(
+                enabled=True,
+                test_mode=bool(rlm_cfg.get("test_mode", False)),
+                max_steps=int(rlm_cfg.get("max_steps", 4)),
+                max_actions_per_step=int(rlm_cfg.get("max_actions_per_step", 2)),
+                max_items_per_type=int(rlm_cfg.get("max_items_per_type", 30)),
+                timeout_s=float(rlm_cfg.get("timeout_s", 20.0)),
+                max_env_calls=int(rlm_cfg.get("max_env_calls", 12)),
+                semantic_first=bool(rlm_cfg.get("semantic_first", True)),
+                clusters_first=bool(rlm_cfg.get("clusters_first", True)),
+                salience_threshold=float(rlm_cfg.get("salience_threshold", 0.6)),
+                min_semantic_facts=int(rlm_cfg.get("min_semantic_facts", 4)),
+                min_high_salience_facts=int(rlm_cfg.get("min_high_salience_facts", 2)),
+                min_cluster_summaries=int(rlm_cfg.get("min_cluster_summaries", 1)),
+                cluster_k=int(rlm_cfg.get("cluster_k", 3)),
+                graph_predicate_limit=int(rlm_cfg.get("graph_predicate_limit", 2)),
+                novelty_window=int(rlm_cfg.get("novelty_window", 2)),
+                min_recent_novelty=int(rlm_cfg.get("min_recent_novelty", 1)),
+                predicate_weights=(
+                    rlm_cfg.get("predicate_weights")
+                    if isinstance(rlm_cfg.get("predicate_weights"), dict)
+                    else None
+                ),
+                predicate_allowlist=predicate_allowlist,
+                max_new_facts_per_step=int(rlm_cfg.get("max_new_facts_per_step", 12)),
+                max_new_chunks_per_step=int(rlm_cfg.get("max_new_chunks_per_step", 8)),
+                max_graph_expansions_per_step=int(rlm_cfg.get("max_graph_expansions_per_step", 1)),
+                chunk_fallback_enabled=bool(rlm_cfg.get("chunk_fallback_enabled", True)),
+                chunk_fallback_k_multiplier=int(rlm_cfg.get("chunk_fallback_k_multiplier", 2)),
+            )
+        else:
+            rlm_obj = RLMConfig(enabled=True)
+
+        return cls(
+            max_episodes=int(d["max_episodes"]),
+            max_facts=int(d["max_facts"]),
+            max_skills=int(d["max_skills"]),
+            max_graph_items=int(d["max_graph_items"]),
+            hybrid=hybrid_obj,
+            max_evidence_chunks=max_evidence_chunks,
+            neighbor_window=neighbor_window,
+            max_expanded_chunks=max_expanded_chunks,
+            chunk_shortlist_k=chunk_shortlist_k,
+            chunk_shortlist_max_per_doc=chunk_shortlist_max_per_doc,
+            context=RetrievalContextConfig.from_dict(d.get("context") or {}),
+            strict=strict_mode,
+            debug_scores=debug_scores,
+            rlm=rlm_obj,
+        )
+
+    
+@dataclass
+class RLMConfig:
+    enabled: bool = False
+    test_mode: bool = False
+    max_steps: int = 4
+    max_actions_per_step: int = 2
+    max_items_per_type: int = 30
+    timeout_s: float = 20.0
+    max_env_calls: int = 12
+    semantic_first: bool = True
+    clusters_first: bool = True
+    salience_threshold: float = 0.6
+    min_semantic_facts: int = 4
+    min_high_salience_facts: int = 2
+    min_cluster_summaries: int = 1
+    cluster_k: int = 3
+    graph_predicate_limit: int = 2
+    predicate_weights: Optional[Dict[str, float]] = None
+    predicate_allowlist: Optional[Dict[str, List[str]]] = None
+    novelty_window: int = 2
+    min_recent_novelty: int = 1
+
+    max_new_facts_per_step: int = 12
+    max_new_chunks_per_step: int = 8
+    max_graph_expansions_per_step: int = 1
+    chunk_fallback_enabled: bool = True
+    chunk_fallback_k_multiplier: int = 2
+
+
+@dataclass
+class RetrievalContextConfig:
+    max_working_messages: int = 4
+    max_episodic: int = 3
+    max_semantic: int = 5
+    max_chunks: int = 5
+    max_procedural: int = 3
+    max_graph: int = 3
+    include_working_memory: bool = True
+    include_episodic: bool = True
+    include_graph: bool = True
+    include_procedural: bool = True
+    snippet_max_chars: int = 240
+    snippet_refiner_enabled: bool = False
+    snippet_refiner_top_k: int = 8
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "RetrievalContextConfig":
+        return cls(
+            max_working_messages=int(d.get("max_working_messages", 4)),
+            max_episodic=int(d.get("max_episodic", 3)),
+            max_semantic=int(d.get("max_semantic", 5)),
+            max_chunks=int(d.get("max_chunks", 5)),
+            max_procedural=int(d.get("max_procedural", 3)),
+            max_graph=int(d.get("max_graph", 3)),
+            include_working_memory=bool(d.get("include_working_memory", True)),
+            include_episodic=bool(d.get("include_episodic", True)),
+            include_graph=bool(d.get("include_graph", True)),
+            include_procedural=bool(d.get("include_procedural", True)),
+            snippet_max_chars=int(d.get("snippet_max_chars", 240)),
+            snippet_refiner_enabled=bool(d.get("snippet_refiner_enabled", False)),
+            snippet_refiner_top_k=int(d.get("snippet_refiner_top_k", 8)),
+        )
+
+# ---------------------------------------------------------------------------
+# Pipeline Config
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class PipelineConfig:
+    defer_post_turn: bool
+    post_turn_queue_max: int
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "PipelineConfig":
+        return cls(
+            defer_post_turn=bool(d.get("defer_post_turn", False)),
+            post_turn_queue_max=int(d.get("post_turn_queue_max", 100)),
+        )
+
+# ---------------------------------------------------------------------------
+# Feature flags
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class FeaturesConfig:
+    load: List[Dict[str, Any]]
+    policy: Dict[str, Any]
+    procedural_enabled: bool
+    consolidation_enabled: bool
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]):
+        load_cfg = d.get("load")
+        policy_cfg = d.get("policy") or {}
+        procedural_enabled = d.get("procedural_enabled", True)
+        consolidation_enabled = d.get("consolidation_enabled", True)
+
+        if isinstance(load_cfg, list):
+            return cls(
+                load=load_cfg,
+                policy=policy_cfg,
+                procedural_enabled=procedural_enabled,
+                consolidation_enabled=consolidation_enabled,
+            )
+
+        load: List[Dict[str, Any]] = []
+        if procedural_enabled:
+            load.append(
+                {
+                    "name": "procedural",
+                    "enabled": True,
+                    "provider": "uma.memory.procedural.feature:ProceduralFeature",
+                    "config": {},
+                }
+            )
+        if consolidation_enabled:
+            load.append(
+                {
+                    "name": "consolidation",
+                    "enabled": True,
+                    "provider": "uma.memory.consolidation.feature:ConsolidationFeature",
+                    "config": {},
+                }
+            )
+
+        return cls(
+            load=load,
+            policy=policy_cfg,
+            procedural_enabled=procedural_enabled,
+            consolidation_enabled=consolidation_enabled,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Consolidation Config
+# ---------------------------------------------------------------------------
+@dataclass
+class ConsolidationConfig:
+    enabled: bool
+    cluster_similarity: float
+    max_episodes_per_cycle: int
+    prune_min_fact_salience: float    # ← REQUIRED FIELD
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "ConsolidationConfig":
+        return cls(
+            enabled=d.get("enabled", False),
+            cluster_similarity=d["cluster_similarity"],
+            max_episodes_per_cycle=d["max_episodes_per_cycle"],
+            prune_min_fact_salience=d["prune_min_fact_salience"],   # ← REQUIRED FIELD
+        )
+
+
+# ---------------------------------------------------------------------------
+# Unified runtime config
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    storage: StorageConfig
+    llm: LLMConfig
+    agent_llm: LLMConfig
+    embedding: EmbeddingConfig
+    working_memory: WorkingMemorySettings
+    retrieval: RetrievalConfig
+    features: FeaturesConfig
+    consolidation: ConsolidationConfig
+    pipeline: PipelineConfig
+    semantic_salience_threshold: float
+
+    @classmethod
+    def from_uma_config(cls, cfg: Dict[str, Any]) -> "RuntimeConfig":
+        llms_cfg = LLMsConfig.from_dict(cfg) if isinstance(cfg, dict) else None
+        llm_cfg = llms_cfg.uma if llms_cfg else LLMConfig.from_dict(cfg["llm"])
+        agent_llm_cfg = llms_cfg.agent if llms_cfg else llm_cfg
+
+        embedding_cfg = EmbeddingConfig.from_dict(cfg["embedding"])
+        working_memory_cfg = WorkingMemorySettings.from_dict(cfg["working_memory"])
+        retrieval_cfg = RetrievalConfig.from_dict(cfg["retrieval"])
+        features_cfg = FeaturesConfig.from_dict(cfg.get("features") or {})
+        consolidation_cfg = ConsolidationConfig.from_dict(cfg["consolidation"])
+        storage_cfg = StorageConfig.from_dict(cfg["storage"])
+        pipeline_cfg = PipelineConfig.from_dict(cfg.get("pipeline") or {})
+
+        semantic_section = cfg.get("semantic", {}) if isinstance(cfg, dict) else {}
+        semantic_salience = semantic_section.get("salience_threshold")
+        if semantic_salience is None:
+            semantic_salience = consolidation_cfg.prune_min_fact_salience
+
+        return cls(
+            storage=storage_cfg,
+            llm=llm_cfg,
+            agent_llm=agent_llm_cfg,
+            embedding=embedding_cfg,
+            working_memory=working_memory_cfg,
+            retrieval=retrieval_cfg,
+            features=features_cfg,
+            consolidation=consolidation_cfg,
+            pipeline=pipeline_cfg,
+            semantic_salience_threshold=float(semantic_salience),
+        )

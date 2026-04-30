@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from uma.core.ingest.types import DocumentChunk
-from uma.core.semantic.extractor import FactExtractor
+from uma.ingest.types import DocumentChunk
+from uma.memory.semantic.extractor import FactExtractor
 
 
 def _mk(chunk_id: str, text: str, page_range=(1, 1), position=1) -> DocumentChunk:

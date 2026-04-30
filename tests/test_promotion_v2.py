@@ -4,9 +4,9 @@ from datetime import datetime, timezone
 
 import pytest
 
-from uma.core.utils.promotion import PromotionPolicy
+from uma.memory.promotion import PromotionPolicy
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
-from uma.types import Fact, RuntimeContext, SCOPE_MODEL_VERSION, TargetOwner
+from uma.common.types import Fact, RuntimeContext, SCOPE_MODEL_VERSION, TargetOwner
 
 
 def _build_fact(

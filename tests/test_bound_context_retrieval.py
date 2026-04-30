@@ -4,10 +4,10 @@ from typing import Any, Dict, List
 
 import pytest
 
-from uma import  UMARuntime
-from uma.core.uma_memory import UMAMemory
+from uma.api.runtime import UMARuntime
+from uma.api.memory import UMAMemory
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
-from uma.types import RuntimeContext
+from uma.common.types import RuntimeContext
 
 
 @pytest.mark.asyncio
@@ -25,13 +25,13 @@ async def test_request_handle_retrieval_delegates_to_memory_bridge(uma_memory) -
     handle = runtime.bind(context)
     seen: List[tuple[str, RuntimeContext, str]] = []
 
-    async def fake_structured(bound_context: RuntimeContext, *, query_text: str) -> Dict[str, list]:
-        seen.append(("structured", bound_context, query_text))
+    async def fake_context(bound_context: RuntimeContext, *, query_text: str) -> Dict[str, list]:
+        seen.append(("context", bound_context, query_text))
         return {"facts": [], "chunks": [], "working_memory": [], "episodic": [], "skills": [], "graph": []}
 
-    async def fake_rendered(bound_context: RuntimeContext, *, query_text: str) -> str:
-        seen.append(("rendered", bound_context, query_text))
-        return "rendered context"
+    async def fake_memory(bound_context: RuntimeContext, *, query_text: str) -> Dict[str, Any]:
+        seen.append(("memory", bound_context, query_text))
+        return {"query": query_text, "facts": [], "skills": [], "evidence": [], "artifacts": [], "confidence": {}}
 
     async def fake_messages(
         bound_context: RuntimeContext,
@@ -42,20 +42,20 @@ async def test_request_handle_retrieval_delegates_to_memory_bridge(uma_memory) -
         seen.append(("messages", bound_context, f"{query_text}:{render_mode}"))
         return {"messages": [{"role": "system", "content": "rendered context"}], "meta": {"render_mode": render_mode}}
 
-    memory._retrieve_structured_context_for_context = fake_structured  # type: ignore[method-assign]
-    memory._retrieve_rendered_context_for_context = fake_rendered  # type: ignore[method-assign]
+    memory._retrieve_context_for_context = fake_context  # type: ignore[method-assign]
+    memory._retrieve_memory_for_context = fake_memory  # type: ignore[method-assign]
     memory._get_context_messages_for_context = fake_messages  # type: ignore[method-assign]
 
-    structured = await handle.retrieve_structured_context("hello world")
-    rendered = await handle.retrieve_rendered_context("hello world")
+    structured = await handle.retrieve_context("hello world")
+    memory_payload = await handle.retrieve_memory("hello world")
     messages = await handle.get_context_messages("hello world", render_mode="raw_rendered")
 
     assert structured["facts"] == []
-    assert rendered == "rendered context"
+    assert memory_payload["artifacts"] == []
     assert messages["meta"]["render_mode"] == "raw_rendered"
     assert seen == [
-        ("structured", context, "hello world"),
-        ("rendered", context, "hello world"),
+        ("context", context, "hello world"),
+        ("memory", context, "hello world"),
         ("messages", context, "hello world:raw_rendered"),
     ]
 
@@ -72,9 +72,36 @@ async def test_request_handle_retrieval_requires_user_id_for_current_behavior(um
     )
 
     with pytest.raises(ValueError, match="user_id"):
-        await handle.retrieve_structured_context("hello world")
+        await handle.retrieve_context("hello world")
+
+
+@pytest.mark.asyncio
+async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory) -> None:
+    memory = uma_memory
+    seen: List[tuple[str, str]] = []
+
+    async def fake_context(bound_context: RuntimeContext, *, query_text: str) -> Dict[str, list]:
+        seen.append(("context", query_text))
+        return {"facts": [], "chunks": [], "working_memory": [], "episodic": [], "skills": [], "graph": []}
+
+    async def fake_memory(bound_context: RuntimeContext, *, query_text: str) -> Dict[str, Any]:
+        seen.append(("memory", query_text))
+        return {"query": query_text, "facts": [], "skills": [], "evidence": [], "artifacts": [], "confidence": {}}
+
+    memory.runtime.retrieve_context = fake_context  # type: ignore[method-assign]
+    memory.runtime.retrieve_memory = fake_memory  # type: ignore[method-assign]
+
+    context = await memory.retrieve_context(query_text="hello world")
+    memory_result = await memory.retrieve_memory(query_text="hello world")
+
+    assert context["facts"] == []
+    assert memory_result["artifacts"] == []
+    assert seen == [("context", "hello world"), ("memory", "hello world")]
 
 def test_umamemory_retrieval_shims_are_removed() -> None:
+    assert hasattr(UMAMemory, "retrieve_context")
+    assert hasattr(UMAMemory, "retrieve_memory")
+    assert not hasattr(UMAMemory, "fetch_memory")
     assert not hasattr(UMAMemory, "get_structured_context")  # type: ignore[name-defined]
     assert not hasattr(UMAMemory, "get_rendered_context")  # type: ignore[name-defined]
     assert not hasattr(UMAMemory, "get_context_messages")  # type: ignore[name-defined]
@@ -121,7 +148,7 @@ async def test_bound_context_workspace_id_does_not_broaden_retrieval_owner_suppo
         )
     )
 
-    ctx = await handle.retrieve_structured_context("hello world")
+    ctx = await handle.retrieve_context("hello world")
     owner_types = {getattr(chunk, "owner_type", None) for chunk in list(ctx.get("chunks") or [])}
 
     assert owner_types

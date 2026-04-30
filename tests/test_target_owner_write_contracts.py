@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from uma.core.ingest.ingest_service import _coerce_ingest_target_owner
-from uma.types import OwnershipRef, Skill, TargetOwner
+from uma.ingest.ingest_service import _coerce_ingest_target_owner
+from uma.common.types import OwnershipRef, Skill, TargetOwner
 
 
 def test_ingest_target_owner_accepts_agent_user_and_workspace() -> None:

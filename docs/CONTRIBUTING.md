@@ -47,7 +47,13 @@ Step 1 — Run Retrieval Only
 
 Do not generate an answer.
 
-pack = await rlm_controller.retrieve_context(user_id, prompt)
+memory = UMAMemory.from_yaml("config/uma.local.yaml").set_context(
+    user_id=user_id,
+    agent_id="agent-default",
+    tenant_id="default",
+    request_id="gold-pack-eval",
+)
+pack = await memory.retrieve_context(query_text=prompt)
 
 
 ⸻

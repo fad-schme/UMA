@@ -4,11 +4,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from uma.core.retrieval.rlm.environment import UMAMemoryEnvironment
-from uma.core.retrieval.rlm.request import RetrievalRequest
+from uma.retrieve.rlm.environment import UMAMemoryEnvironment
+from uma.retrieve.rlm.request import RetrievalRequest
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
-from uma.types import RuntimeContext
-from uma.types import Episode, Fact
+from uma.common.types import RuntimeContext
+from uma.common.types import Episode, Fact
 from tests.helpers.graph_adapter import RecordingGraphAdapter
 
 

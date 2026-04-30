@@ -3,7 +3,7 @@ from __future__ import annotations
 import yaml
 import pytest
 
-from uma.core.uma_memory import UMAMemory
+from uma.api.memory import UMAMemory
 
 from tests.helpers.runtime import build_test_config
 
@@ -19,7 +19,7 @@ async def test_feature_loader_attaches_procedural_feature(tmp_path):
             {
                 "name": "procedural",
                 "enabled": True,
-                "provider": "uma.features.procedural.feature:ProceduralFeature",
+                "provider": "uma.memory.procedural.feature:ProceduralFeature",
                 "config": {"max_k": 3},
             }
         ],
@@ -47,7 +47,7 @@ async def test_feature_loader_skips_failed_attachment_when_policy_is_log_and_ski
             {
                 "name": "procedural",
                 "enabled": True,
-                "provider": "uma.features.procedural.feature:DoesNotExist",
+                "provider": "uma.memory.procedural.feature:DoesNotExist",
                 "config": {"max_k": 3},
             }
         ],

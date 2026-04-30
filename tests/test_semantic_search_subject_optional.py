@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from uma.types import Fact
+from uma.common.types import Fact
 
 
 @pytest.mark.asyncio

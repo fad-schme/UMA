@@ -1,3 +1,0 @@
-"""
-Initializer helpers for UMA.
-"""

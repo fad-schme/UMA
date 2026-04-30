@@ -177,12 +177,12 @@ features:
   load:
     - name: procedural
       enabled: true
-      provider: "uma.features.procedural.feature:ProceduralFeature"
+      provider: "uma.memory.procedural.feature:ProceduralFeature"
       config:
         max_k: 50
     - name: consolidation
       enabled: true
-      provider: "uma.features.consolidation.feature:ConsolidationFeature"
+      provider: "uma.memory.consolidation.feature:ConsolidationFeature"
       config:
         cluster_similarity: 0.75
         max_episodes_per_cycle: 200

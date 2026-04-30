@@ -7,9 +7,9 @@ import warnings
 import pytest
 import yaml
 
-from uma.core.uma_memory import UMAMemory
-from uma.core.retrieval.rlm.request import RetrievalRequest
-from uma.types import RuntimeContext, TargetOwner, Skill
+from uma.api.memory import UMAMemory
+from uma.retrieve.rlm.request import RetrievalRequest
+from uma.common.types import RuntimeContext, TargetOwner, Skill
 
 from tests.helpers.runtime import build_test_config
 
@@ -24,7 +24,7 @@ async def _init_memory_with_procedural_feature(tmp_path) -> UMAMemory:
             {
                 "name": "procedural",
                 "enabled": True,
-                "provider": "uma.features.procedural.feature:ProceduralFeature",
+                "provider": "uma.memory.procedural.feature:ProceduralFeature",
                 "config": {"max_k": 5},
             }
         ],

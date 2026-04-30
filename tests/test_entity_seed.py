@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from uma.core.retrieval.rlm.entity_seed import extract_candidate_entities
+from uma.retrieve.rlm.entity_seed import extract_candidate_entities
 
 
 def test_extract_candidate_entities_includes_acronyms_and_is_bounded() -> None:

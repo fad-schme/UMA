@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from uma import UMARuntime
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
-from uma.core.working_memory.core import legacy_session_scope_for_user
-from uma.types import RuntimeContext, SessionScope
+from uma.memory.working_memory.core import legacy_session_scope_for_user
+from uma.common.types import SessionScope
 
 
 @pytest.mark.asyncio
@@ -29,16 +28,13 @@ async def test_bound_retrieval_uses_only_current_session_working_memory(uma_memo
     memory.working_memory.append(scope=scope_a, role="user", content="alpha memory")
     memory.working_memory.append(scope=scope_b, role="user", content="beta memory")
 
-    runtime = UMARuntime.from_memory(memory)
-    ctx = await runtime.bind(
-        RuntimeContext(
-            tenant_id=DEFAULT_TENANT_ID,
-            agent_id=memory.agent_id,
-            request_id="req-session-a",
-            user_id="user:u1",
-            session_id="session-a",
-        )
-    ).retrieve_structured_context("hello world")
+    ctx = await memory.set_context(
+        tenant_id=DEFAULT_TENANT_ID,
+        agent_id=memory.agent_id,
+        request_id="req-session-a",
+        user_id="user:u1",
+        session_id="session-a",
+    ).retrieve_context(query_text="hello world")
 
     wm_contents = [msg.content for msg in ctx["working_memory"]]
     assert wm_contents == ["alpha memory"]
@@ -58,15 +54,12 @@ async def test_bound_retrieval_without_session_does_not_fallback_to_broad_workin
     )
     memory.working_memory.append(scope=legacy_scope, role="user", content="legacy memory")
 
-    runtime = UMARuntime.from_memory(memory)
-    ctx = await runtime.bind(
-        RuntimeContext(
-            tenant_id=DEFAULT_TENANT_ID,
-            agent_id=memory.agent_id,
-            request_id="req-no-session",
-            user_id="user:u1",
-        )
-    ).retrieve_structured_context("hello world")
+    ctx = await memory.set_context(
+        tenant_id=DEFAULT_TENANT_ID,
+        agent_id=memory.agent_id,
+        request_id="req-no-session",
+        user_id="user:u1",
+    ).retrieve_context(query_text="hello world")
 
     assert ctx["working_memory"] == []
 
@@ -141,15 +134,12 @@ async def test_process_turn_without_session_id_uses_explicit_legacy_wm_bridge_on
         assert "legacy first" in contents
         assert "legacy reply" in contents
 
-        runtime = UMARuntime.from_memory(memory)
-        ctx = await runtime.bind(
-            RuntimeContext(
-                tenant_id=DEFAULT_TENANT_ID,
-                agent_id="agent-wm",
-                request_id="req-no-session-bridge",
-                user_id="user:u1",
-            )
-        ).retrieve_structured_context("legacy")
+        ctx = await memory.set_context(
+            tenant_id=DEFAULT_TENANT_ID,
+            agent_id="agent-wm",
+            request_id="req-no-session-bridge",
+            user_id="user:u1",
+        ).retrieve_context(query_text="legacy")
 
         assert ctx["working_memory"] == []
     finally:

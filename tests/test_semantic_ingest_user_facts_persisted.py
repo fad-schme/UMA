@@ -1,6 +1,6 @@
 import pytest
 
-from uma.core.utils.identity import normalize_user_id
+from uma.common.identity import normalize_user_id
 
 
 @pytest.mark.asyncio

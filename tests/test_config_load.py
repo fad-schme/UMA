@@ -1,4 +1,4 @@
-from uma.core.memory_config import UMAConfig
+from uma.common.config import UMAConfig
 
 
 def test_config_load_uses_repo_yaml():

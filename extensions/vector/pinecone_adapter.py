@@ -21,7 +21,7 @@ import os
 import pinecone
 
 from uma.adapters.vector.base import VectorIndex
-from uma.core.utils.retry import retry_sync
+from uma.common.retry import retry_sync
 
 logger = logging.getLogger(__name__)
 

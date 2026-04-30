@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from uma.core.utils.identity import normalize_user_id
-from uma.types import Chunk, Episode, Fact, OwnershipRef, Skill
+from uma.common.identity import normalize_user_id
+from uma.common.types import Chunk, Episode, Fact, OwnershipRef, Skill
 
 
 @pytest.mark.asyncio

@@ -33,7 +33,7 @@ from neo4j import GraphDatabase, basic_auth, Driver
 from neo4j.graph import Node, Relationship, Path
 
 from uma.adapters.graph.base import GraphAdapter
-from uma.core.utils.retry import retry_sync
+from uma.common.retry import retry_sync
 
 logger = logging.getLogger(__name__)
 

@@ -125,8 +125,7 @@ The safe baseline may still require local setup for optional providers such as O
 ## Typical Usage
 
 ```python
-from uma import UMAMemory, UMARuntime
-from uma.types import RuntimeContext
+from uma import UMAMemory
 
 memory = UMAMemory.from_yaml("config/uma.local.yaml").set_context(
     user_id="user-123",
@@ -135,11 +134,12 @@ memory = UMAMemory.from_yaml("config/uma.local.yaml").set_context(
     request_id="req-1",
     session_id="session-1",
 )
-runtime = UMARuntime.from_memory(memory)
-handle = runtime.bind(memory._require_bound_runtime_context())
 
 # Get UMA-RLM context (RLM retrieval) for the current user message:
-context = await handle.retrieve_structured_context(user_message)
+context = await memory.retrieve_context(query_text=user_message)
+
+# Retrieve durable evidence-backed memory artifacts when you want knowledge continuity:
+memory_result = await memory.retrieve_memory(query_text=user_message)
 
 # Your agent controls the system prompt and the LLM call:
 messages = [{"role": "system", "content": system_prompt}, {"role": "system", "content": str(context)}]
@@ -164,7 +164,7 @@ Keeping them separate lets developers:
 - log/debug retrieval results without string parsing
 
 If you want UMA to render a string snippet using its configured context settings,
-bind a runtime context and call `handle.retrieve_rendered_context(query_text)`.
+retrieve context first and render it explicitly with `uma.retrieve.ContextPackBuilder`.
 
 
 
@@ -309,7 +309,7 @@ features:
   load:
     - name: consolidation
       enabled: true
-      provider: "uma.features.consolidation.feature:ConsolidationFeature"
+      provider: "uma.memory.consolidation.feature:ConsolidationFeature"
 ```
 
 ```python
@@ -332,7 +332,7 @@ features:
   load:
     - name: procedural
       enabled: true
-      provider: "uma.features.procedural.feature:ProceduralFeature"
+      provider: "uma.memory.procedural.feature:ProceduralFeature"
       config:
         max_k: 50
 ```

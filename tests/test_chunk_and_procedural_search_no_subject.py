@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from uma.types import OwnershipRef, Skill
+from uma.common.types import OwnershipRef, Skill
 
 
 @pytest.mark.asyncio

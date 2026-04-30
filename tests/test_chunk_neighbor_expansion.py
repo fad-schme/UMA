@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from uma.types import Chunk
+from uma.common.types import Chunk
 
 
 def _mk(doc_id: str, pos: int, *, owner_type: str, owner_id: str) -> Chunk:

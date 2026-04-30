@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 
-from uma.core.ingest.types import DocumentChunk
-from uma.core.semantic.extractor import FactExtractor
+from uma.ingest.types import DocumentChunk
+from uma.memory.semantic.extractor import FactExtractor
 
 
 class _FakeLLM:

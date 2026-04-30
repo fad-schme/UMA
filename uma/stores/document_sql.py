@@ -11,8 +11,8 @@ from typing import Optional
 
 from .base_sql_store import BaseSQLStore, DEFAULT_TENANT_ID
 from ..adapters.db.base import DBAdapter
-from ..core.utils.store_metadata import ensure_store_metadata
-from ..types import SCOPE_MODEL_VERSION
+from uma.stores.metadata import ensure_store_metadata
+from uma.common.types import SCOPE_MODEL_VERSION
 
 logger = logging.getLogger(__name__)
 

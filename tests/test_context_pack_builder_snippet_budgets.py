@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from uma.core.utils.context_pack_builder import ContextPackBuilder
+from uma.retrieve.context_pack_builder import ContextPackBuilder
 
 
 class _Cfg:

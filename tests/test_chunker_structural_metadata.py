@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from uma.core.ingest.chunker import finalize_chunks
-from uma.core.ingest.types import DocumentChunk
+from uma.ingest.chunker import finalize_chunks
+from uma.ingest.types import DocumentChunk
 
 
 def _mk(

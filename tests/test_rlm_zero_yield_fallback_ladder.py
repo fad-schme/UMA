@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from uma.core.retrieval.rlm.decisions import deterministic_decision
+from uma.retrieve.rlm.decisions import deterministic_decision
 
 
 class _Coverage:

@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from uma.core.uma_memory import UMAMemory
+from uma.api.memory import UMAMemory
 
 
 def build_test_config(

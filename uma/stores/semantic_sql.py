@@ -39,12 +39,12 @@ from typing import List, Optional, Any
 
 from .base_vector_sql_store import BaseVectorSQLStore
 from .base_sql_store import DEFAULT_TENANT_ID
-from ..core.utils.user_query_helper import extract_keywords_and_phrases
+from uma.retrieve.user_query_helper import extract_keywords_and_phrases
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
-from ..core.utils.conflict import FactResolver, LatestWinsFactResolver
-from ..core.utils.store_metadata import ensure_store_metadata
-from ..types import Fact, SCOPE_MODEL_VERSION
+from uma.common.conflict import FactResolver, LatestWinsFactResolver
+from uma.stores.metadata import ensure_store_metadata
+from uma.common.types import Fact, SCOPE_MODEL_VERSION
 
 logger = logging.getLogger(__name__)
 

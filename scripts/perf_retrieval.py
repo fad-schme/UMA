@@ -14,11 +14,11 @@ from pathlib import Path
 
 import yaml
 
-from uma.core.uma_memory import UMAMemory
-from uma.core.utils.identity import normalize_user_id
-from uma.types_episode import Episode
-from uma.types_fact import Fact
-from uma.types_skill import Skill
+from uma.api.memory import UMAMemory
+from uma.common.identity import normalize_user_id
+from uma.common.types import Episode
+from uma.common.types import Fact
+from uma.common.types import Skill
 from uma.adapters.observability.metrics import snapshot
 
 

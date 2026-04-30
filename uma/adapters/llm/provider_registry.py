@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Callable, Dict, Optional
 
-from ...core.utils.config_types import EmbeddingConfig, LLMConfig
+from uma.common.config_types import EmbeddingConfig, LLMConfig
 from .base import EmbeddingInterface, LLMInterface
 
 LLMFactory = Callable[[LLMConfig], LLMInterface]

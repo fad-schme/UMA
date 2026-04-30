@@ -1,8 +1,5 @@
-from .core.uma_memory import UMAMemory
-from .core.runtime import UMARequestHandle, UMARuntime
+from .api import UMAMemory
 
 __all__ = [
     "UMAMemory",
-    "UMARequestHandle",
-    "UMARuntime",
 ]

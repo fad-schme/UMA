@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from uma.core.retrieval.ranking import Ranker, fuse_candidates, rerank_candidates
-from uma.types import Chunk, Fact
+from uma.retrieve.ranking import Ranker, fuse_candidates, rerank_candidates
+from uma.common.types import Chunk, Fact
 
 
 def test_fuse_candidates_sparse_precedes_and_dedupes_with_rrf() -> None:

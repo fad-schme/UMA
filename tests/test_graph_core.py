@@ -4,9 +4,9 @@ from datetime import datetime
 
 import pytest
 
-from uma.core.graph.core import TemporalGraphCore
-from uma.core.graph.updater import GraphUpdater
-from uma.types import Episode
+from uma.memory.graph.core import TemporalGraphCore
+from uma.memory.graph.updater import GraphUpdater
+from uma.common.types import Episode
 
 from tests.helpers.graph_adapter import RecordingGraphAdapter
 

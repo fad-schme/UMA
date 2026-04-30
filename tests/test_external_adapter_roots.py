@@ -7,9 +7,9 @@ from pathlib import Path
 import yaml
 
 from tests.helpers.runtime import build_test_config
-from uma.core.memory_config import UMAConfig
-from uma.core.uma_memory import UMAMemory
-from uma.core.utils.config_types import parse_plugin_spec
+from uma.common.config import UMAConfig
+from uma.api.memory import UMAMemory
+from uma.common.config_types import parse_plugin_spec
 
 
 def _clear_plugin_module(module_name: str) -> None:

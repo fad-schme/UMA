@@ -6,9 +6,9 @@ import pytest
 
 from uma.adapters.db.sqlite_adapter import SQLiteAdapter
 from uma.adapters.vector.inmemory import InMemoryVectorIndex
-from uma.core.chunk.core import ChunkCore
+from uma.memory.chunk.core import ChunkCore
 from uma.stores.chunk_sql import ChunkSQLStore
-from uma.types import Chunk
+from uma.common.types import Chunk
 
 
 def test_vector_index_query_returns_id_and_score() -> None:

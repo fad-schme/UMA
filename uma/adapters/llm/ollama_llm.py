@@ -37,8 +37,8 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     aiohttp = None
 
-from ...adapters.llm.base import LLMInterface
-from ...core.utils.config_types import LLMConfig
+from uma.adapters.llm.base import LLMInterface
+from uma.common.config_types import LLMConfig
 from .retry_utils import retryable, should_retry_network_only
 
 logger = logging.getLogger(__name__)

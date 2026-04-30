@@ -21,7 +21,7 @@ from typing import Iterable, List
 
 from openai import AsyncOpenAI
 from uma.adapters.llm.base import EmbeddingInterface
-from uma.core.utils.config_types import EmbeddingConfig
+from uma.common.config_types import EmbeddingConfig
 from uma.adapters.llm.retry_utils import retryable, should_retry_openai
 
 logger = logging.getLogger(__name__)

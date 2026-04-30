@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
-from uma.core.retrieval.rlm.snippet_refiner import SnippetRefiner
-from uma.types import Chunk
+from uma.retrieve.rlm.snippet_refiner import SnippetRefiner
+from uma.common.types import Chunk
 
 
 def test_snippet_refiner_presentation_only_does_not_filter_by_relevance() -> None:

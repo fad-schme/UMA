@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from uma.adapters.llm.callable_adapter import CallableEmbedderAdapter, CallableLLMAdapter
-from uma.core.episodic.indexer import EpisodeIndexer
+from uma.memory.episodic.indexer import EpisodeIndexer
 
 from tests.helpers.providers import fake_embed, fake_llm
 

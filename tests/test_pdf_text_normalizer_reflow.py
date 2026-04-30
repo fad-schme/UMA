@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from uma.core.ingest.normalizer import _clean_page_text, _drop_repeated_lines_across_pages
+from uma.ingest.normalizer import _clean_page_text, _drop_repeated_lines_across_pages
 
 
 def test_clean_page_text_dehyphenates_and_reflows_soft_wraps() -> None:

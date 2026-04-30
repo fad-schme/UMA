@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from uma.core.retrieval.rlm.decisions import deterministic_decision
-from uma.types.types_fact import Fact
+from uma.retrieve.rlm.decisions import deterministic_decision
+from uma.common.types.types_fact import Fact
 
 
 def _kb_fact(*, predicate: str = "SEGMENTED_INTO", text: str = "iam vpc kms") -> Fact:

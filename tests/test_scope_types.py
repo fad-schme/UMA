@@ -5,7 +5,7 @@ from typing import get_args
 
 import pytest
 
-from uma.types import (
+from uma.common.types import (
     OwnerType,
     OwnershipRef,
     RuntimeContext,
@@ -13,7 +13,7 @@ from uma.types import (
     SessionScope,
     TargetOwner,
 )
-from uma.types.types_scope import (
+from uma.common.types.types_scope import (
     make_target_owner,
     validate_agent_id,
     validate_owner_type,
@@ -216,10 +216,10 @@ def test_owner_type_literal_matches_supported_vocabulary() -> None:
 
 
 def test_new_types_are_exported_from_uma_types() -> None:
-    assert RuntimeContext.__module__ == "uma.types.types_scope"
-    assert SessionScope.__module__ == "uma.types.types_scope"
-    assert OwnershipRef.__module__ == "uma.types.types_scope"
-    assert TargetOwner.__module__ == "uma.types.types_scope"
+    assert RuntimeContext.__module__ == "uma.common.types.types_scope"
+    assert SessionScope.__module__ == "uma.common.types.types_scope"
+    assert OwnershipRef.__module__ == "uma.common.types.types_scope"
+    assert TargetOwner.__module__ == "uma.common.types.types_scope"
 
 
 def test_make_target_owner_rejects_disallowed_owner_types() -> None:

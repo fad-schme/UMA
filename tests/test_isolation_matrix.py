@@ -8,12 +8,13 @@ from pathlib import Path
 import pytest
 
 from tests.helpers.runtime import init_uma_for_tests
-from uma import UMAMemory, UMARequestHandle, UMARuntime
-from uma.core.retrieval.rlm.context_pack import ContextPack
-from uma.core.utils.promotion import PromotionPolicy
-from uma.core.working_memory.core import SessionScope
+from uma import UMAMemory
+from uma.api.runtime import UMARequestHandle, UMARuntime
+from uma.retrieve.rlm.context_pack import ContextPack
+from uma.memory.promotion import PromotionPolicy
+from uma.memory.working_memory.core import SessionScope
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
-from uma.types import Fact, RuntimeContext, SCOPE_MODEL_VERSION, TargetOwner
+from uma.common.types import Fact, RuntimeContext, SCOPE_MODEL_VERSION, TargetOwner
 
 
 def _build_fact(
@@ -144,8 +145,8 @@ async def test_multi_tenant_isolation_holds_with_matching_scope_tokens(tmp_path:
         )
 
         ctx_a, ctx_b = await asyncio.gather(
-            handle_a.retrieve_structured_context("tenant isolation"),
-            handle_b.retrieve_structured_context("tenant isolation"),
+            handle_a.retrieve_context("tenant isolation"),
+            handle_b.retrieve_context("tenant isolation"),
         )
         req_a = memory._build_retrieval_request(handle_a.context)
         req_b = memory._build_retrieval_request(handle_b.context)
@@ -204,8 +205,8 @@ async def test_multi_user_retrieval_isolates_user_owned_data_but_keeps_agent_kb_
     )
 
     ctx_a, ctx_b = await asyncio.gather(
-        handle_a.retrieve_structured_context("overlap token"),
-        handle_b.retrieve_structured_context("overlap token"),
+        handle_a.retrieve_context("overlap token"),
+        handle_b.retrieve_context("overlap token"),
     )
 
     owner_pairs_a = {(getattr(chunk, "owner_type", None), getattr(chunk, "owner_id", None)) for chunk in ctx_a.get("chunks") or []}
@@ -263,7 +264,7 @@ async def test_retrieval_and_process_turn_overlap_preserve_session_isolation(tmp
                 session_id="session-a",
             )
         )
-        during_ctx = await handle_a.retrieve_structured_context("coffee")
+        during_ctx = await handle_a.retrieve_context("coffee")
 
         release.set()
         await asyncio.wait_for(turn_task, timeout=2.0)
@@ -371,7 +372,7 @@ async def test_request_handle_retrieval_remains_isolated_under_overlap(uma_memor
         seen_contexts.append((query_text, self.context.user_id or "", self.context.session_id or ""))
         return {"working_memory": [], "episodic": [], "facts": [], "chunks": [], "skills": [], "graph": [], "trace": [], "confidence": {}}
 
-    monkeypatch.setattr(UMARequestHandle, "retrieve_structured_context", fake_structured)
+    monkeypatch.setattr(UMARequestHandle, "retrieve_context", fake_structured)
     runtime = UMARuntime.from_memory(memory)
 
     results = await asyncio.gather(
@@ -383,7 +384,7 @@ async def test_request_handle_retrieval_remains_isolated_under_overlap(uma_memor
                 user_id="user:u1",
                 session_id="legacy-user:user:u1",
             )
-        ).retrieve_structured_context("query-a"),
+        ).retrieve_context("query-a"),
         runtime.bind(
             RuntimeContext(
                 tenant_id=DEFAULT_TENANT_ID,
@@ -392,7 +393,7 @@ async def test_request_handle_retrieval_remains_isolated_under_overlap(uma_memor
                 user_id="user:u2",
                 session_id="legacy-user:user:u2",
             )
-        ).retrieve_structured_context("query-b"),
+        ).retrieve_context("query-b"),
     )
 
     assert len(results) == 2

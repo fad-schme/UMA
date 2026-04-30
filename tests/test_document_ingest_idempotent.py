@@ -90,8 +90,8 @@ async def test_ingest_document_reingests_when_signature_changes(uma_memory, tmp_
     assert report1.chunks_created > 0
 
     # Re-run ingest with a different chunk_size_tokens so the ingest signature changes.
-    from uma.core.ingest.ingest_service import ingest_document as _ingest
-    from uma.core.ingest.types import IngestConfig
+    from uma.ingest.ingest_service import ingest_document as _ingest
+    from uma.ingest.types import IngestConfig
 
     report2 = await _ingest(
         str(p),
@@ -103,7 +103,7 @@ async def test_ingest_document_reingests_when_signature_changes(uma_memory, tmp_
     assert report2.doc_id == report1.doc_id
     assert report2.chunks_created > 0
 
-    from uma.core.ingest.parser import parse_file
+    from uma.ingest.parser import parse_file
 
     parsed = parse_file(str(p))
     manifest = await memory.document_store.get_by_owner_and_hash(

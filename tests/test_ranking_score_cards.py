@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from uma.core.retrieval.policy import RetrievalPolicy
-from uma.core.retrieval.ranking import Ranker
-from uma.types import Chunk
+from uma.retrieve.policy import RetrievalPolicy
+from uma.retrieve.ranking import Ranker
+from uma.common.types import Chunk
 
 
 def test_debug_scores_attaches_score_card_to_chunks() -> None:

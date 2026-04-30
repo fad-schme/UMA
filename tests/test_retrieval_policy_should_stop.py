@@ -1,6 +1,6 @@
 import pytest
 
-from uma.core.retrieval.policy import should_stop
+from uma.retrieve.policy import should_stop
 
 
 def test_should_stop_on_max_calls():

@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from uma.core.retrieval.rlm.snippet_refiner import SnippetRefiner
-from uma.types import Chunk, Fact
+from uma.retrieve.rlm.snippet_refiner import SnippetRefiner
+from uma.common.types import Chunk, Fact
 
 
 @pytest.mark.asyncio

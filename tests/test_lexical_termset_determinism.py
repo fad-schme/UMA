@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from uma.core.utils.user_query_helper import build_query_term_set
+from uma.retrieve.user_query_helper import build_query_term_set
 
 
 def test_build_query_term_set_is_deterministic() -> None:

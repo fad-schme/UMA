@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 
 from uma.adapters.llm.callable_adapter import CallableLLMAdapter
-from uma.core.utils.config_types import WorkingMemorySettings
-from uma.core.working_memory.core import WorkingMemoryCore, legacy_session_scope_for_user
-from uma.types import SessionScope
+from uma.common.config_types import WorkingMemorySettings
+from uma.memory.working_memory.core import WorkingMemoryCore, legacy_session_scope_for_user
+from uma.common.types import SessionScope
 
 from tests.helpers.providers import fake_llm
 

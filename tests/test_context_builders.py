@@ -1,5 +1,5 @@
-from uma.core.utils.context_pack_builder import ContextPackBuilder
-from uma.core.utils.cot_memory_builder import CoTMemoryBuilder
+from uma.retrieve.context_pack_builder import ContextPackBuilder
+from uma.retrieve.cot_memory_builder import CoTMemoryBuilder
 
 
 class DummyMsg:

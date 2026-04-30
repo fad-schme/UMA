@@ -12,7 +12,7 @@ from uma.stores.document_sql import DocumentRecord, DocumentSQLStore
 from uma.stores.episodic_sql import EpisodicSQLStore
 from uma.stores.procedural_sql import ProceduralSQLStore
 from uma.stores.semantic_sql import SemanticSQLStore
-from uma.types import Chunk, Episode, Fact, Skill, SCOPE_MODEL_VERSION
+from uma.common.types import Chunk, Episode, Fact, Skill, SCOPE_MODEL_VERSION
 
 
 class _NoopVectorIndex(VectorIndex):

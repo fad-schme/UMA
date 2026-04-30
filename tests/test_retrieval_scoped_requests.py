@@ -5,12 +5,12 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from uma import UMARuntime
-from uma.core.retrieval.rlm.context_pack import ContextPack
-from uma.core.retrieval.rlm.evidence import expand_evidence_chunks_from_facts
-from uma.core.retrieval.rlm.request import RetrievalRequest
+from uma.api.runtime import UMARuntime
+from uma.retrieve.rlm.context_pack import ContextPack
+from uma.retrieve.rlm.evidence import expand_evidence_chunks_from_facts
+from uma.retrieve.rlm.request import RetrievalRequest
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
-from uma.types import RuntimeContext
+from uma.common.types import RuntimeContext
 
 
 @dataclass
@@ -127,8 +127,8 @@ async def test_bound_context_retrieval_is_isolated_across_agents_on_shared_runti
     )
 
     ctx_a, ctx_b = await asyncio.gather(
-        handle_a.retrieve_structured_context("shared keyword"),
-        handle_b.retrieve_structured_context("shared keyword"),
+        handle_a.retrieve_context("shared keyword"),
+        handle_b.retrieve_context("shared keyword"),
     )
 
     owner_pairs_a = {(getattr(chunk, "owner_type", None), getattr(chunk, "owner_id", None)) for chunk in ctx_a.get("chunks") or []}

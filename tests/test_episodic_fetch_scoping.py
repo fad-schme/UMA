@@ -7,7 +7,7 @@ import pytest
 from uma.adapters.db.sqlite_adapter import SQLiteAdapter
 from uma.adapters.vector.faiss_adapter import FaissIndex
 from uma.stores.episodic_sql import EpisodicSQLStore
-from uma.types import Episode
+from uma.common.types import Episode
 
 
 @pytest.mark.asyncio

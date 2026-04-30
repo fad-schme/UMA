@@ -1,4 +1,4 @@
-from uma.core.utils.dedupe import dedupe_by_id
+from uma.common.dedupe import dedupe_by_id
 
 
 class Obj:

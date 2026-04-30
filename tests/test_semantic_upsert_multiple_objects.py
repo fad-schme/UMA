@@ -2,8 +2,8 @@ from datetime import datetime
 
 import pytest
 
-from uma.core.utils.identity import normalize_user_id
-from uma.types import Fact
+from uma.common.identity import normalize_user_id
+from uma.common.types import Fact
 
 
 @pytest.mark.asyncio

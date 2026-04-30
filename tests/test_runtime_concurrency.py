@@ -9,12 +9,12 @@ import pytest
 import yaml
 
 from tests.helpers.runtime import build_test_config
-from uma.core.initializers import runtime as runtime_init
-from uma.core.uma_memory import UMAMemory
-from uma.core.utils.pipeline import MemoryPipeline
-from uma.core.memory_config import UMAConfig
+from uma.common.initializers import runtime as runtime_init
+from uma.api.memory import UMAMemory
+from uma.ingest.pipeline import MemoryPipeline
+from uma.common.config import UMAConfig
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
-from uma.types import RuntimeContext
+from uma.common.types import RuntimeContext
 
 
 def _build_uninitialized_memory(tmp_path: Path) -> UMAMemory:

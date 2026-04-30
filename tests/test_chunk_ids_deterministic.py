@@ -1,5 +1,5 @@
-from uma.core.ingest.chunker import chunk_sections
-from uma.core.ingest.types import NormalizedSection
+from uma.ingest.chunker import chunk_sections
+from uma.ingest.types import NormalizedSection
 
 
 def test_chunk_ids_are_deterministic():

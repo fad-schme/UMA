@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from uma.core.retrieval.rlm.intent import QueryIntent, classify_query_intent
-from uma.core.retrieval.rlm.domain import ensure_fact_domain, filter_facts_by_domains
-from uma.types.types_fact import Fact
+from uma.retrieve.rlm.intent import QueryIntent, classify_query_intent
+from uma.retrieve.rlm.domain import ensure_fact_domain, filter_facts_by_domains
+from uma.common.types.types_fact import Fact
 
 
 def _fact(*, predicate: str, subject: str = "user", obj: str = "x", source_ids=None, meta=None) -> Fact:
