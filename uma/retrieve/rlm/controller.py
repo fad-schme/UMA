@@ -133,12 +133,24 @@ class RLMController:
         )
         logger.info("RLM_INTENT trace_id=%s intent=%s", trace_id, intent.value)
 
-        if intent == QueryIntent.PERSONAL:
-            active_domains = ["user_profile", "procedural"]
-        elif intent == QueryIntent.MIXED:
-            active_domains = ["kb_doc", "user_profile", "procedural"]
-        else:
-            active_domains = ["kb_doc", "procedural"]
+        plan = getattr(request, "plan", None)
+        active_lanes = list(getattr(plan, "participating_lanes", ()) or ())
+        active_domains = list(getattr(plan, "active_domains", ()) or ())
+        if not active_domains:
+            if intent == QueryIntent.PERSONAL:
+                active_domains = ["user_profile", "procedural"]
+            elif intent == QueryIntent.MIXED:
+                active_domains = ["kb_doc", "user_profile", "procedural"]
+            else:
+                active_domains = ["kb_doc", "procedural"]
+        if not active_lanes:
+            if "kb_doc" in active_domains:
+                active_lanes.extend(["raw", "semantic"])
+            if "user_profile" in active_domains:
+                active_lanes.append("profile")
+            if "procedural" in active_domains:
+                active_lanes.append("procedural")
+            active_lanes.append("episodic")
         pack = ContextPack(
             user_id=normalized_user_id,
             query_text=query_text,
@@ -146,8 +158,18 @@ class RLMController:
             owner_id=None,
             agent_id=request.context.agent_id,
             intent=intent.value,
+            active_lanes=list(active_lanes),
             active_domains=list(active_domains),
+            lane_plan=plan.to_trace() if plan is not None else {},
         )
+        if plan is not None:
+            pack.steps.append(
+                {
+                    "step": 0,
+                    "phase": "plan",
+                    **plan.to_trace(),
+                }
+            )
 
         pack.working_memory = []
         if hasattr(self.env, "_memory"):
@@ -158,7 +180,8 @@ class RLMController:
                     pack.working_memory = wm.get_context(session_scope)
         query_embedding = await self.env.get_query_embedding(query_text)
 
-        # Lane decision: recall = user-only; KB = agent KB + user-owned KB docs.
+        # Owner scopes and lane participation are separate. Recall narrows owner
+        # scopes; the retrieval plan still controls which canonical lanes run.
         is_recall = policy.recall_score >= 0.75
 
         if is_recall:
@@ -172,6 +195,13 @@ class RLMController:
         # Keep these fields for telemetry/back-compat; primary execution uses `scopes`.
         pack.owner_type, pack.owner_id = scopes[0].owner_type, scopes[0].owner_id
         logger.info("RLM_LANE scopes=%s", [(scope.owner_type, scope.owner_id) for scope in scopes])
+        logger.info(
+            "RLM_PLAN trace_id=%s product=%s lanes=%s excluded=%s",
+            trace_id,
+            getattr(plan, "product", "context"),
+            active_lanes,
+            [dict(item) for item in getattr(plan, "excluded_lanes", ()) or ()],
+        )
         logger.info("RLM_DOMAINS trace_id=%s active_domains=%s", trace_id, pack.active_domains)
 
         # Baseline retrieval per-scope, then merge into the pack.
@@ -424,10 +454,19 @@ class RLMController:
             step_new_chunks = 0
             step_graph_expansions = 0
             for action in decision.actions[: self.max_actions_per_step]:
-                # Domain routing gates: keep behavior topic/data agnostic by intent.
+                # Lane plan is authoritative; domain routing remains subordinate.
                 active = set(getattr(pack, "active_domains", []) or [])
-                if action.action in {"search_chunks", "fetch_chunks"} and "kb_doc" not in active:
-                    logger.debug("RLMController: skipping %s (kb_doc not active)", action.action)
+                if action.action in {"search_chunks", "fetch_chunks"} and not self._lane_active(pack, "raw"):
+                    logger.debug("RLMController: skipping %s (raw lane not active)", action.action)
+                    continue
+                if action.action in {"search_semantic", "fetch_more_facts", "fetch_facts"} and not self._semantic_lanes_active(pack):
+                    logger.debug("RLMController: skipping %s (semantic/profile lanes not active)", action.action)
+                    continue
+                if action.action in {"episodic_clusters", "search_episodic", "fetch_episode_clusters"} and not self._lane_active(pack, "episodic"):
+                    logger.debug("RLMController: skipping %s (episodic lane not active)", action.action)
+                    continue
+                if action.action in {"search_procedural"} and not self._lane_active(pack, "procedural"):
+                    logger.debug("RLMController: skipping %s (procedural lane not active)", action.action)
                     continue
                 if action.action in {"graph_neighbors", "expand_graph"} and not (
                     ("kb_doc" in active) or ("user_profile" in active)
@@ -487,16 +526,19 @@ class RLMController:
                 if action.action in {"search_semantic", "fetch_more_facts", "fetch_facts"}:
                     try:
                         items = filter_facts_by_domains(list(items or []), set(getattr(pack, "active_domains", []) or []))
+                        items = self._filter_items_by_active_lanes(list(items or []), pack)
                     except Exception:
                         pass
                 if action.action in {"search_chunks", "fetch_chunks"}:
                     try:
                         ensure_domains_for_chunks(list(items or []))
+                        items = self._filter_items_by_active_lanes(list(items or []), pack)
                     except Exception:
                         pass
                 if action.action in {"search_procedural"}:
                     try:
                         ensure_domains_for_skills(list(items or []))
+                        items = self._filter_items_by_active_lanes(list(items or []), pack)
                     except Exception:
                         pass
                 store = _store_for_action(action.action)
@@ -673,38 +715,42 @@ class RLMController:
         start_episodes = len(pack.episodes)
         start_graph = len(pack.graph)
         if query_embedding:
-            results = await self.env.execute_action(
-                request=request,
-                action=RetrievalAction(action="search_semantic", k=self.max_items_per_type, reason="baseline"),
-                query_embedding=list(query_embedding),
-                query_text=pack.query_text,
-                owner_type=owner_type,
-                owner_id=owner_id,
-                default_k=self.max_items_per_type,
-                trace_id=trace_id,
-            )
-            results = self.ranker.rank_facts(results or [], query_text=pack.query_text)
-            # Ensure + filter by active domains (defaults domain for older data).
-            try:
-                ensure_domains_for_facts(list(results or []))
-                results = filter_facts_by_domains(list(results or []), set(getattr(pack, "active_domains", []) or []))
-            except Exception:
-                pass
-            pack.facts = _merge_unique(
-                pack.facts,
-                results,
-                self.max_items_per_type,
-            )
-            pack.facts = self._dedupe_facts_by_signature(pack.facts)
-            logger.debug(
-                "RLMController._baseline_retrieval: semantic facts=%d owner=%s:%s",
-                len(pack.facts),
-                owner_type,
-                owner_id,
-            )
-            if "kb_doc" not in set(getattr(pack, "active_domains", []) or []):
-                logger.debug("RLMController._baseline_retrieval: kb_doc not active; skipping chunk search")
+            if self._semantic_lanes_active(pack):
+                results = await self.env.execute_action(
+                    request=request,
+                    action=RetrievalAction(action="search_semantic", k=self.max_items_per_type, reason="baseline"),
+                    query_embedding=list(query_embedding),
+                    query_text=pack.query_text,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    default_k=self.max_items_per_type,
+                    trace_id=trace_id,
+                )
+                results = self.ranker.rank_facts(results or [], query_text=pack.query_text)
+                # Ensure + filter by active domains (defaults domain for older data).
+                try:
+                    ensure_domains_for_facts(list(results or []))
+                    results = filter_facts_by_domains(list(results or []), set(getattr(pack, "active_domains", []) or []))
+                    results = self._filter_items_by_active_lanes(list(results or []), pack)
+                except Exception:
+                    pass
+                pack.facts = _merge_unique(
+                    pack.facts,
+                    results,
+                    self.max_items_per_type,
+                )
+                pack.facts = self._dedupe_facts_by_signature(pack.facts)
+                logger.debug(
+                    "RLMController._baseline_retrieval: semantic facts=%d owner=%s:%s",
+                    len(pack.facts),
+                    owner_type,
+                    owner_id,
+                )
             else:
+                logger.debug(
+                    "RLMController._baseline_retrieval: semantic/profile lanes not active; skipping fact search"
+                )
+            if self._lane_active(pack, "raw"):
                 chunks = await self.env.execute_action(
                     request=request,
                     action=RetrievalAction(action="search_chunks", k=self.max_items_per_type, reason="baseline"),
@@ -718,6 +764,7 @@ class RLMController:
                 chunks = self.ranker.rank_chunks(chunks or [], query_text=pack.query_text)
                 try:
                     ensure_domains_for_chunks(list(chunks or []))
+                    chunks = self._filter_items_by_active_lanes(list(chunks or []), pack)
                 except Exception:
                     pass
                 pack.chunks = _merge_unique(
@@ -731,9 +778,11 @@ class RLMController:
                     len(chunks or []),
                     len(getattr(pack, "chunks", [])),
                 )
+            else:
+                logger.debug("RLMController._baseline_retrieval: raw lane not active; skipping chunk search")
 
         # Procedural baseline (skills)
-        if "procedural" not in set(getattr(pack, "active_domains", []) or []):
+        if not self._lane_active(pack, "procedural"):
             skills = []
         else:
             skills = await self.env.execute_action(
@@ -749,21 +798,25 @@ class RLMController:
         skills = self.ranker.rank_skills(skills or [], query_text=pack.query_text)
         try:
             ensure_domains_for_skills(list(skills or []))
+            skills = self._filter_items_by_active_lanes(list(skills or []), pack)
         except Exception:
             pass
         pack.skills = _merge_unique(pack.skills, skills, self.max_items_per_type)
 
-        episodes = await self.env.execute_action(
-            request=request,
-            action=RetrievalAction(action="episodic_clusters", k=self.cluster_k, reason="baseline"),
-            query_embedding=list(query_embedding),
-            query_text=pack.query_text,
-            owner_type=owner_type,
-            owner_id=owner_id,
-            default_k=self.max_items_per_type,
-            trace_id=trace_id,
-        )
+        episodes = []
+        if self._lane_active(pack, "episodic"):
+            episodes = await self.env.execute_action(
+                request=request,
+                action=RetrievalAction(action="episodic_clusters", k=self.cluster_k, reason="baseline"),
+                query_embedding=list(query_embedding),
+                query_text=pack.query_text,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                default_k=self.max_items_per_type,
+                trace_id=trace_id,
+            )
         episodes = self.ranker.rank_episodes(episodes or [], query_text=pack.query_text)
+        episodes = self._filter_items_by_active_lanes(list(episodes or []), pack)
         pack.episodes = _merge_unique(
             pack.episodes,
             episodes,
@@ -856,6 +909,35 @@ class RLMController:
         if not weights:
             return {}
         return {str(k).upper(): float(v) for k, v in weights.items() if isinstance(v, (int, float))}
+
+    @staticmethod
+    def _lane_active(pack: ContextPack, lane: str) -> bool:
+        active_lanes = set(getattr(pack, "active_lanes", []) or [])
+        return str(lane or "").strip().lower() in active_lanes
+
+    @classmethod
+    def _semantic_lanes_active(cls, pack: ContextPack) -> bool:
+        return cls._lane_active(pack, "semantic") or cls._lane_active(pack, "profile")
+
+    @classmethod
+    def _filter_items_by_active_lanes(cls, items: List[Any], pack: ContextPack) -> List[Any]:
+        active_lanes = set(getattr(pack, "active_lanes", []) or [])
+        if not active_lanes:
+            return list(items or [])
+        filtered: List[Any] = []
+        for item in items or []:
+            lane = cls._item_lane(item)
+            if lane is None or lane in active_lanes:
+                filtered.append(item)
+        return filtered
+
+    @staticmethod
+    def _item_lane(item: Any) -> Optional[str]:
+        meta = item.get("meta") if isinstance(item, dict) else getattr(item, "meta", None)
+        if not isinstance(meta, dict):
+            return None
+        lane = str(meta.get("kb_lane") or "").strip().lower()
+        return lane or None
 
     def _truncate_items(self, items: List[Any]) -> List[Any]:
         if not items:

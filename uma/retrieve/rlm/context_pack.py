@@ -35,7 +35,9 @@ class ContextPack:
 
     # Query routing (deterministic; for logging and decisions only)
     intent: Optional[str] = None
+    active_lanes: List[str] = field(default_factory=list)
     active_domains: List[str] = field(default_factory=list)
+    lane_plan: Dict[str, Any] = field(default_factory=dict)
     
 
     # Memory layers
@@ -70,7 +72,9 @@ class ContextPack:
             "user_id": self.user_id,
             "query": self.query_text,
             "intent": self.intent,
+            "active_lanes": list(self.active_lanes or []),
             "active_domains": list(self.active_domains or []),
+            "lane_plan": dict(self.lane_plan or {}),
             "counts": {
                 "wm": len(self.working_memory),
                 "episodes": len(self.episodes),

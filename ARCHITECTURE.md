@@ -45,6 +45,9 @@ Retrieval product split:
 - `retrieve_memory(...)`
   The canonical compiled/evidence-backed memory path for continuity-oriented retrieval.
   `memories` is the primary contract field. If compiled memory is unavailable, the result must surface an explicit fallback instead of silently returning chunk-style context output.
+- `uma.retrieve.planner.build_retrieval_plan(...)`
+  The small canonical lane planner for both product paths.
+  It selects participating lanes, marks excluded lanes with reasons, and keeps lane policy separate from backend execution mechanics.
 
 Canonical storage taxonomy:
 

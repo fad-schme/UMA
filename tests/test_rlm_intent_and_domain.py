@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 
 from uma.retrieve.rlm.intent import QueryIntent, classify_query_intent
 from uma.retrieve.rlm.domain import ensure_fact_domain, filter_facts_by_domains
+from uma.retrieve.rlm.context_pack import ContextPack
+from uma.retrieve.rlm.controller import RLMController
 from uma.common.types.types_fact import Fact
 
 
@@ -51,3 +53,25 @@ def test_domain_defaulting_otherwise_kb_doc() -> None:
     f = _fact(predicate="STATES", subject="Document(d1)", obj="x")
     assert ensure_fact_domain(f) == "kb_doc"
     assert f.meta.get("domain") == "kb_doc"
+
+
+def test_controller_candidate_filter_respects_explicit_active_lanes() -> None:
+    semantic = _fact(
+        predicate="STATES",
+        subject="Document(d1)",
+        obj="kb fact",
+        meta={"kb_lane": "semantic", "domain": "kb_doc"},
+    )
+    profile = _fact(
+        predicate="LIKES",
+        obj="sushi",
+        meta={"kb_lane": "profile", "domain": "user_profile"},
+    )
+    pack = ContextPack(
+        user_id="user:test",
+        query_text="What do I like?",
+        active_lanes=["profile"],
+        active_domains=["user_profile"],
+    )
+
+    assert RLMController._filter_items_by_active_lanes([semantic, profile], pack) == [profile]

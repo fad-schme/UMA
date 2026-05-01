@@ -192,6 +192,13 @@ UMA exposes two distinct retrieval products on `UMAMemory`.
   Compiled/evidence-backed memory retrieval for continuity-oriented use.
   `memories` is the primary field, `evidence` is mandatory, and any temporary evidence-only fallback is surfaced explicitly in the result instead of silently returning chunk retrieval under a different name.
 
+Both product paths run through one small lane-aware planner in `uma.retrieve.planner`.
+It decides which canonical lanes participate for the current product call, surfaces excluded lanes and reasons in retrieval trace data, and leaves backend mechanics such as hybrid or lexical retrieval below that boundary.
+
+- Context retrieval defaults toward evidence lanes: usually `raw` first, then `semantic` when available.
+- Memory retrieval defaults toward compiled-memory intent: `wiki` first in policy, then `raw` evidence expansion, with optional `semantic` and `episodic` support.
+- `profile` is its own lane. UMA does not treat user-owned KB and user profile as the same retrieval target.
+
 Short-term reality today: compiled memory retrieval is still fallback-first in runtime behavior. Callers should check `fallback.used` and consume attached `evidence` directly when no compiled memory artifacts are available.
 
 ```python

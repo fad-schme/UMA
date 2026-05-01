@@ -8,6 +8,7 @@ from uma.api.runtime import UMARuntime
 from uma.api.memory import UMAMemory
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
 from uma.common.types import RuntimeContext
+from uma.retrieve.rlm.context_pack import ContextPack
 
 
 @pytest.mark.asyncio
@@ -188,7 +189,7 @@ async def test_runtime_memory_retrieval_surfaces_explicit_evidence_only_fallback
         query_text: str,
         lane_filter=None,
     ) -> Dict[str, list]:
-        assert lane_filter is None
+        assert lane_filter == ["raw", "semantic", "episodic"]
         return {
             "product": "context",
             "query": query_text,
@@ -218,6 +219,47 @@ async def test_runtime_memory_retrieval_surfaces_explicit_evidence_only_fallback
     assert result["fallback"]["used"] is True
     assert result["fallback"]["mode"] == "evidence_only"
     assert result["fallback"]["reason"] == "no_compiled_memory_available"
+
+
+@pytest.mark.asyncio
+async def test_runtime_context_trace_surfaces_lane_plan(uma_memory) -> None:
+    runtime = UMARuntime.from_memory(uma_memory)
+    context = RuntimeContext(
+        tenant_id="tenant-1",
+        agent_id=uma_memory.agent_id or "agent-default",
+        request_id="req-context-plan",
+        user_id="user:u1",
+    )
+
+    class FakeController:
+        async def retrieve_context(self, request, query_text):
+            assert request.plan is not None
+            pack = ContextPack(
+                user_id=request.normalized_user_id,
+                query_text=query_text,
+                agent_id=request.context.agent_id,
+                intent=request.plan.query_intent,
+                active_lanes=list(request.plan.participating_lanes),
+                active_domains=list(request.plan.active_domains),
+                lane_plan=request.plan.to_trace(),
+            )
+            pack.steps.append({"step": 0, "phase": "plan", **request.plan.to_trace()})
+            return pack
+
+    runtime.ensure_retrieval_ready = lambda: None  # type: ignore[method-assign]
+    uma_memory._rlm_controller = FakeController()
+
+    result = await runtime.retrieve_context(
+        context,
+        query_text="What do I like?",
+    )
+
+    assert result["product"] == "context"
+    assert result["active_lanes"] == ["profile", "procedural"]
+    lane_plan = next(step for step in result["trace"] if step.get("event") == "lane_plan")
+    assert lane_plan["product"] == "context"
+    assert lane_plan["participating_lanes"] == ["profile", "procedural"]
+    assert lane_plan["active_domains"] == ["user_profile", "procedural"]
 
 def test_umamemory_retrieval_shims_are_removed() -> None:
     assert hasattr(UMAMemory, "retrieve_context")

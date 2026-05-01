@@ -5,6 +5,7 @@ from typing import Literal, Optional, Tuple
 
 from uma.common.types import RuntimeContext
 from uma.common.identity import normalize_user_id
+from uma.retrieve.planner import RetrievalPlan
 
 
 ScopedOwnerType = Literal["agent", "user"]
@@ -41,6 +42,7 @@ class RetrievalRequest:
     scopes: Tuple[RetrievalScope, ...]
     trace_id: Optional[str] = None
     include_legacy_turn_data: bool = False
+    plan: Optional[RetrievalPlan] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.context, RuntimeContext):
@@ -63,6 +65,7 @@ class RetrievalRequest:
         *,
         trace_id: Optional[str] = None,
         include_legacy_turn_data: bool = False,
+        plan: Optional[RetrievalPlan] = None,
     ) -> "RetrievalRequest":
         normalized_user_id = normalize_user_id(context.user_id or "")
         return cls(
@@ -74,6 +77,7 @@ class RetrievalRequest:
             ),
             trace_id=trace_id or context.request_id,
             include_legacy_turn_data=bool(include_legacy_turn_data),
+            plan=plan,
         )
 
     def scopes_for_owner_type(self, owner_type: Optional[str] = None) -> Tuple[RetrievalScope, ...]:

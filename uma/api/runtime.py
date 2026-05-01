@@ -14,7 +14,17 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional
 
 from uma.common.types import RuntimeContext
-from uma.common.storage_metadata import KB_LANES, normalize_chunk_metadata, shared_metadata_view
+from uma.common.storage_metadata import (
+    EPISODIC_LANE,
+    KB_LANES,
+    PROCEDURAL_LANE,
+    PROFILE_LANE,
+    RAW_LANE,
+    SEMANTIC_LANE,
+    normalize_chunk_metadata,
+    shared_metadata_view,
+)
+from uma.retrieve.planner import build_retrieval_plan
 from uma.retrieve.rlm.request import RetrievalRequest
 from uma.memory.working_memory.core import session_scope_from_runtime_context
 
@@ -317,12 +327,32 @@ class UMARuntime:
             raise TypeError("UMARuntime.bind requires a RuntimeContext instance.")
         return UMARequestHandle(runtime=self, context=context)
 
+    def _available_retrieval_lanes(self) -> List[str]:
+        memory = self.memory_bridge
+        stores = self.stores or {}
+        lanes: List[str] = []
+        if getattr(memory, "chunk_core", None) is not None or stores.get("chunk") is not None:
+            lanes.append(RAW_LANE)
+        if getattr(memory, "semantic_core", None) is not None or stores.get("semantic") is not None:
+            lanes.extend([SEMANTIC_LANE, PROFILE_LANE])
+        if getattr(memory, "episodic_core", None) is not None or stores.get("episodic") is not None:
+            lanes.append(EPISODIC_LANE)
+        if getattr(memory, "procedural_core", None) is not None or stores.get("procedural") is not None:
+            lanes.append(PROCEDURAL_LANE)
+        seen: set[str] = set()
+        return [lane for lane in lanes if not (lane in seen or seen.add(lane))]
+
     @staticmethod
-    def _build_retrieval_request(context: RuntimeContext) -> RetrievalRequest:
+    def _build_retrieval_request(
+        context: RuntimeContext,
+        *,
+        plan: Optional[Any] = None,
+    ) -> RetrievalRequest:
         """Convert a RuntimeContext into a RetrievalRequest."""
         return RetrievalRequest.from_runtime_context(
             context,
             trace_id=context.request_id,
+            plan=plan,
         )
 
     @staticmethod
@@ -380,6 +410,7 @@ class UMARuntime:
 
         Contract:
         - context retrieval is the canonical RAG/context path
+        - a small lane planner decides which persisted lanes participate before RLM runs
         - chunks/documents remain the primary evidence product
         - wiki/compiled memory state is not required by default
         - `lane_filter` applies only to persisted retrieval lanes, not working memory
@@ -395,9 +426,14 @@ class UMARuntime:
             raise ValueError(
                 "UMARuntime.retrieve_context: query_text must be a non-empty string."
             )
-        normalized_lane_filter = self._normalize_lane_filter(lane_filter)
-
         self.ensure_retrieval_ready()
+        normalized_lane_filter = self._normalize_lane_filter(lane_filter)
+        plan = build_retrieval_plan(
+            product="context",
+            query_text=query_text.strip(),
+            available_lanes=self._available_retrieval_lanes(),
+            lane_filter=normalized_lane_filter,
+        )
         memory = self._require_memory_bridge()
 
         with timed("uma.get_structured_context.latency"):
@@ -426,20 +462,22 @@ class UMARuntime:
                 )
 
             pack = await controller.retrieve_context(
-                request=self._build_retrieval_request(runtime_context),
+                request=self._build_retrieval_request(runtime_context, plan=plan),
                 query_text=query_text.strip(),
             )
             increment("uma.get_structured_context.calls", tags={"path": "rlm"})
             coverage = getattr(pack, "coverage", None)
-            episodic = self._filter_items_by_lanes(pack.episodes, normalized_lane_filter)
-            facts = self._filter_items_by_lanes(pack.facts or [], normalized_lane_filter)
-            chunks = self._filter_items_by_lanes(getattr(pack, "chunks", []), normalized_lane_filter)
-            skills = self._filter_items_by_lanes(pack.skills, normalized_lane_filter)
+            active_lanes = list(plan.participating_lanes)
+            episodic = self._filter_items_by_lanes(pack.episodes, active_lanes)
+            facts = self._filter_items_by_lanes(pack.facts or [], active_lanes)
+            chunks = self._filter_items_by_lanes(getattr(pack, "chunks", []), active_lanes)
+            skills = self._filter_items_by_lanes(pack.skills, active_lanes)
 
             return {
                 "product": "context",
                 "query": query_text.strip(),
                 "lane_filter": list(normalized_lane_filter),
+                "active_lanes": active_lanes,
                 "working_memory": wm_stored,
                 "episodic": episodic,
                 "facts": facts,
@@ -447,7 +485,7 @@ class UMARuntime:
                 "documents": self._group_memory_artifacts(chunks),
                 "skills": skills,
                 "graph": pack.graph,
-                "trace": pack.steps,
+                "trace": list(getattr(pack, "steps", []) or []),
                 "confidence": compute_confidence(coverage) if coverage is not None else {},
             }
 
@@ -510,15 +548,24 @@ class UMARuntime:
     ) -> Dict[str, Any]:
         """Retrieve compiled, evidence-backed memory results for one request scope.
 
-        This path may reuse context-path candidate gathering, but it must not
-        silently collapse into context retrieval. If compiled memory artifacts
-        are unavailable, the result surfaces an explicit evidence-only fallback.
+        This path uses its own lane plan, may reuse context-path candidate
+        gathering beneath that plan, and must not silently collapse into
+        context retrieval. If compiled memory artifacts are unavailable, the
+        result surfaces an explicit evidence-only fallback.
         """
         if not isinstance(memory_intent, str) or not memory_intent.strip():
             raise ValueError("UMARuntime.retrieve_memory: memory_intent must be a non-empty string.")
+        self.ensure_retrieval_ready()
+        plan = build_retrieval_plan(
+            product="memory",
+            query_text=query_text.strip(),
+            available_lanes=self._available_retrieval_lanes(),
+            memory_intent=memory_intent.strip(),
+        )
         context = await self.retrieve_context(
             runtime_context,
             query_text=query_text,
+            lane_filter=list(plan.participating_lanes),
         )
         chunks = list(context.get("chunks") or [])
         memories: List[Dict[str, Any]] = []
@@ -554,6 +601,18 @@ class UMARuntime:
             },
             "memory_sources": self._group_memory_artifacts(chunks),
             "confidence": dict(context.get("confidence") or {}),
+            "trace": list(context.get("trace") or [])
+            + [
+                {
+                    "event": "memory_plan",
+                    "product": "memory",
+                    "memory_intent": memory_intent.strip(),
+                    "requested_lanes": list(plan.requested_lanes),
+                    "participating_lanes": list(plan.participating_lanes),
+                    "excluded_lanes": [dict(item) for item in plan.excluded_lanes],
+                    "fallback_used": fallback_used,
+                }
+            ],
         }
 
     def _render_profile_overlay(self) -> str:
