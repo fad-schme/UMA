@@ -145,11 +145,17 @@ memory = UMAMemory.from_yaml("config/uma.local.yaml").set_context(
     session_id="session-1",
 )
 
-# Get UMA-RLM context (RLM retrieval) for the current user message:
-context = await memory.retrieve_context(query_text=user_message)
+# Get curated evidence-oriented context (RAG) for the current user message:
+context = await memory.retrieve_context(
+    query_text=user_message,
+    lane_filter=["raw", "semantic"],  # optional
+)
 
-# Retrieve durable evidence-backed memory artifacts when you want knowledge continuity:
-memory_result = await memory.retrieve_memory(query_text=user_message)
+# Retrieve compiled/evidence-backed memory results for continuity-oriented use:
+memory_result = await memory.retrieve_memory(
+    query_text=user_message,
+    memory_intent="continuity",
+)
 
 # Your agent controls the system prompt and the LLM call:
 messages = [{"role": "system", "content": system_prompt}, {"role": "system", "content": str(context)}]
@@ -175,6 +181,31 @@ Keeping them separate lets developers:
 
 If you want UMA to render a string snippet using its configured context settings,
 retrieve context first and render it explicitly with `uma.retrieve.ContextPackBuilder`.
+
+### Retrieval products
+UMA exposes two distinct retrieval products on `UMAMemory`.
+
+- `retrieve_context(...)`
+  Curated context retrieval for the LLM. This is the evidence-oriented RAG path.
+  Chunks/documents are primary, provenance is attached, and wiki state is not required by default.
+- `retrieve_memory(...)`
+  Compiled/evidence-backed memory retrieval for continuity-oriented use.
+  `memories` is the primary field, `evidence` is mandatory, and any temporary evidence-only fallback is surfaced explicitly in the result instead of silently returning chunk retrieval under a different name.
+
+Short-term reality today: compiled memory retrieval is still fallback-first in runtime behavior. Callers should check `fallback.used` and consume attached `evidence` directly when no compiled memory artifacts are available.
+
+```python
+memory_result = await memory.retrieve_memory(
+    query_text=user_message,
+    memory_intent="continuity",
+)
+
+if memory_result["fallback"]["used"]:
+    evidence_chunks = memory_result["evidence"]
+    # No compiled memories were available yet; use the evidence-backed fallback.
+else:
+    compiled_memories = memory_result["memories"]
+```
 
 
 

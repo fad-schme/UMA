@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional
 
 from uma.common.types import RuntimeContext
-from uma.common.storage_metadata import normalize_chunk_metadata, shared_metadata_view
+from uma.common.storage_metadata import KB_LANES, normalize_chunk_metadata, shared_metadata_view
 from uma.retrieve.rlm.request import RetrievalRequest
 from uma.memory.working_memory.core import session_scope_from_runtime_context
 
@@ -56,27 +56,47 @@ class UMARequestHandle:
     def session_id(self) -> Optional[str]:
         return self.context.session_id
 
-    async def retrieve_context(self, query_text: str) -> Dict[str, list]:
+    async def retrieve_context(
+        self,
+        query_text: str,
+        *,
+        lane_filter: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
         memory = getattr(self.runtime, "memory_bridge", None)
         delegate = getattr(memory, "_retrieve_context_for_context", None)
         if callable(delegate):
-            return await delegate(self.context, query_text=query_text)
+            return await delegate(
+                self.context,
+                query_text=query_text,
+                lane_filter=lane_filter,
+            )
         return await self.runtime.retrieve_context(
             self.context,
             query_text=query_text,
+            lane_filter=lane_filter,
         )
 
-    async def retrieve_memory(self, query_text: str) -> Dict[str, Any]:
+    async def retrieve_memory(
+        self,
+        query_text: str,
+        *,
+        memory_intent: str = "continuity",
+    ) -> Dict[str, Any]:
         memory = getattr(self.runtime, "memory_bridge", None)
         delegate = getattr(memory, "_retrieve_memory_for_context", None)
         if callable(delegate):
-            return await delegate(self.context, query_text=query_text)
+            return await delegate(
+                self.context,
+                query_text=query_text,
+                memory_intent=memory_intent,
+            )
         return await self.runtime.retrieve_memory(
             self.context,
             query_text=query_text,
+            memory_intent=memory_intent,
         )
 
-    async def retrieve_structured_context(self, query_text: str) -> Dict[str, list]:
+    async def retrieve_structured_context(self, query_text: str) -> Dict[str, Any]:
         """Compatibility shim for older context retrieval callers."""
         return await self.retrieve_context(query_text)
 
@@ -310,18 +330,59 @@ class UMARuntime:
         """Build the working-memory scope for a runtime context."""
         return session_scope_from_runtime_context(context)
 
+    @staticmethod
+    def _normalize_lane_filter(lane_filter: Optional[List[str]]) -> List[str]:
+        if lane_filter is None:
+            return []
+        normalized: List[str] = []
+        seen: set[str] = set()
+        for lane in lane_filter:
+            candidate = str(lane or "").strip().lower()
+            if not candidate:
+                continue
+            if candidate not in KB_LANES:
+                raise ValueError(f"UMARuntime.retrieve_context: invalid lane_filter value {lane!r}")
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            normalized.append(candidate)
+        return normalized
+
+    @staticmethod
+    def _item_lane(item: Any) -> Optional[str]:
+        meta = getattr(item, "meta", None)
+        if isinstance(item, dict):
+            meta = item.get("meta", meta)
+        if not isinstance(meta, dict):
+            return None
+        raw = meta.get("kb_lane")
+        if raw is None:
+            return None
+        lane = str(raw).strip().lower()
+        return lane or None
+
+    @classmethod
+    def _filter_items_by_lanes(cls, items: List[Any], lane_filter: List[str]) -> List[Any]:
+        if not lane_filter:
+            return list(items or [])
+        allowed = set(lane_filter)
+        return [item for item in (items or []) if cls._item_lane(item) in allowed]
+
     
     async def retrieve_context(
         self,
         runtime_context: RuntimeContext,
         *,
         query_text: str,
-    ) -> Dict[str, list]:
-        """Retrieve structured UMA context for one explicit request scope.
+        lane_filter: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Retrieve curated evidence-oriented UMA context for one explicit request scope.
 
-        Persisted artifacts returned here carry canonical UMA storage metadata
-        in their `meta` dict so callers do not need to infer lane/kind from
-        ownership or store-specific conventions.
+        Contract:
+        - context retrieval is the canonical RAG/context path
+        - chunks/documents remain the primary evidence product
+        - wiki/compiled memory state is not required by default
+        - `lane_filter` applies only to persisted retrieval lanes, not working memory
         """
         from uma.adapters.observability.metrics import increment, timed
         from uma.retrieve.rlm.coverage import compute_confidence
@@ -334,6 +395,7 @@ class UMARuntime:
             raise ValueError(
                 "UMARuntime.retrieve_context: query_text must be a non-empty string."
             )
+        normalized_lane_filter = self._normalize_lane_filter(lane_filter)
 
         self.ensure_retrieval_ready()
         memory = self._require_memory_bridge()
@@ -369,13 +431,21 @@ class UMARuntime:
             )
             increment("uma.get_structured_context.calls", tags={"path": "rlm"})
             coverage = getattr(pack, "coverage", None)
+            episodic = self._filter_items_by_lanes(pack.episodes, normalized_lane_filter)
+            facts = self._filter_items_by_lanes(pack.facts or [], normalized_lane_filter)
+            chunks = self._filter_items_by_lanes(getattr(pack, "chunks", []), normalized_lane_filter)
+            skills = self._filter_items_by_lanes(pack.skills, normalized_lane_filter)
 
             return {
+                "product": "context",
+                "query": query_text.strip(),
+                "lane_filter": list(normalized_lane_filter),
                 "working_memory": wm_stored,
-                "episodic": pack.episodes,
-                "facts": pack.facts or [],
-                "chunks": getattr(pack, "chunks", []),
-                "skills": pack.skills,
+                "episodic": episodic,
+                "facts": facts,
+                "chunks": chunks,
+                "documents": self._group_memory_artifacts(chunks),
+                "skills": skills,
                 "graph": pack.graph,
                 "trace": pack.steps,
                 "confidence": compute_confidence(coverage) if coverage is not None else {},
@@ -436,25 +506,53 @@ class UMARuntime:
         runtime_context: RuntimeContext,
         *,
         query_text: str,
+        memory_intent: str = "continuity",
     ) -> Dict[str, Any]:
-        """Retrieve durable, evidence-backed memory artifacts for one request scope.
+        """Retrieve compiled, evidence-backed memory results for one request scope.
 
-        This path currently reuses the canonical context retrieval internals to gather
-        owner-scoped evidence, then projects that evidence into a memory-oriented bundle.
-        The public contract is artifact-oriented even though the candidate gathering is shared.
-        Grouped artifacts expose canonical metadata directly.
+        This path may reuse context-path candidate gathering, but it must not
+        silently collapse into context retrieval. If compiled memory artifacts
+        are unavailable, the result surfaces an explicit evidence-only fallback.
         """
+        if not isinstance(memory_intent, str) or not memory_intent.strip():
+            raise ValueError("UMARuntime.retrieve_memory: memory_intent must be a non-empty string.")
         context = await self.retrieve_context(
             runtime_context,
             query_text=query_text,
         )
         chunks = list(context.get("chunks") or [])
+        memories: List[Dict[str, Any]] = []
+        fallback_used = not memories
+        fallback_reason = "no_compiled_memory_available" if fallback_used else None
+        if fallback_used:
+            logger.info(
+                "UMARuntime.retrieve_memory: explicit evidence-only fallback tenant=%s agent=%s user=%s intent=%s chunks=%d",
+                runtime_context.tenant_id,
+                runtime_context.agent_id,
+                runtime_context.user_id,
+                memory_intent,
+                len(chunks),
+            )
         return {
             "query": query_text.strip(),
-            "facts": list(context.get("facts") or []),
-            "skills": list(context.get("skills") or []),
+            "product": "memory",
+            "memory_intent": memory_intent.strip(),
+            "memories": memories,
             "evidence": chunks,
-            "artifacts": self._group_memory_artifacts(chunks),
+            "supporting_facts": list(context.get("facts") or []),
+            "supporting_skills": list(context.get("skills") or []),
+            "conflicts": [],
+            "fallback": {
+                "used": fallback_used,
+                "mode": "evidence_only" if fallback_used else "none",
+                "reason": fallback_reason,
+                "message": (
+                    "No compiled memory artifacts were available; returning evidence-only fallback."
+                    if fallback_used
+                    else ""
+                ),
+            },
+            "memory_sources": self._group_memory_artifacts(chunks),
             "confidence": dict(context.get("confidence") or {}),
         }
 
@@ -519,7 +617,7 @@ class UMARuntime:
         runtime_context: RuntimeContext,
         *,
         query_text: str,
-    ) -> Dict[str, list]:
+    ) -> Dict[str, Any]:
         """Compatibility shim for older callers of the pre-cleanup context API."""
         return await self.retrieve_context(
             runtime_context,

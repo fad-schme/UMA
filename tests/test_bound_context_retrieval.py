@@ -25,13 +25,46 @@ async def test_request_handle_retrieval_delegates_to_memory_bridge(uma_memory) -
     handle = runtime.bind(context)
     seen: List[tuple[str, RuntimeContext, str]] = []
 
-    async def fake_context(bound_context: RuntimeContext, *, query_text: str) -> Dict[str, list]:
+    async def fake_context(
+        bound_context: RuntimeContext,
+        *,
+        query_text: str,
+        lane_filter=None,
+    ) -> Dict[str, list]:
         seen.append(("context", bound_context, query_text))
-        return {"facts": [], "chunks": [], "working_memory": [], "episodic": [], "skills": [], "graph": []}
+        return {
+            "product": "context",
+            "query": query_text,
+            "lane_filter": list(lane_filter or []),
+            "facts": [],
+            "chunks": [],
+            "documents": [],
+            "working_memory": [],
+            "episodic": [],
+            "skills": [],
+            "graph": [],
+        }
 
-    async def fake_memory(bound_context: RuntimeContext, *, query_text: str) -> Dict[str, Any]:
+    async def fake_memory(
+        bound_context: RuntimeContext,
+        *,
+        query_text: str,
+        memory_intent: str = "continuity",
+    ) -> Dict[str, Any]:
         seen.append(("memory", bound_context, query_text))
-        return {"query": query_text, "facts": [], "skills": [], "evidence": [], "artifacts": [], "confidence": {}}
+        return {
+            "product": "memory",
+            "query": query_text,
+            "memory_intent": memory_intent,
+            "memories": [],
+            "evidence": [],
+            "supporting_facts": [],
+            "supporting_skills": [],
+            "conflicts": [],
+            "fallback": {"used": True, "mode": "evidence_only", "reason": "no_compiled_memory_available"},
+            "memory_sources": [],
+            "confidence": {},
+        }
 
     async def fake_messages(
         bound_context: RuntimeContext,
@@ -46,12 +79,16 @@ async def test_request_handle_retrieval_delegates_to_memory_bridge(uma_memory) -
     memory._retrieve_memory_for_context = fake_memory  # type: ignore[method-assign]
     memory._get_context_messages_for_context = fake_messages  # type: ignore[method-assign]
 
-    structured = await handle.retrieve_context("hello world")
+    structured = await handle.retrieve_context("hello world", lane_filter=["semantic"])
     memory_payload = await handle.retrieve_memory("hello world")
     messages = await handle.get_context_messages("hello world", render_mode="raw_rendered")
 
-    assert structured["facts"] == []
-    assert memory_payload["artifacts"] == []
+    assert structured["product"] == "context"
+    assert structured["lane_filter"] == ["semantic"]
+    assert structured["documents"] == []
+    assert memory_payload["product"] == "memory"
+    assert memory_payload["memories"] == []
+    assert memory_payload["fallback"]["used"] is True
     assert messages["meta"]["render_mode"] == "raw_rendered"
     assert seen == [
         ("context", context, "hello world"),
@@ -80,13 +117,46 @@ async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory
     memory = uma_memory
     seen: List[tuple[str, str]] = []
 
-    async def fake_context(bound_context: RuntimeContext, *, query_text: str) -> Dict[str, list]:
+    async def fake_context(
+        bound_context: RuntimeContext,
+        *,
+        query_text: str,
+        lane_filter=None,
+    ) -> Dict[str, list]:
         seen.append(("context", query_text))
-        return {"facts": [], "chunks": [], "working_memory": [], "episodic": [], "skills": [], "graph": []}
+        return {
+            "product": "context",
+            "query": query_text,
+            "lane_filter": list(lane_filter or []),
+            "facts": [],
+            "chunks": [],
+            "documents": [],
+            "working_memory": [],
+            "episodic": [],
+            "skills": [],
+            "graph": [],
+        }
 
-    async def fake_memory(bound_context: RuntimeContext, *, query_text: str) -> Dict[str, Any]:
+    async def fake_memory(
+        bound_context: RuntimeContext,
+        *,
+        query_text: str,
+        memory_intent: str = "continuity",
+    ) -> Dict[str, Any]:
         seen.append(("memory", query_text))
-        return {"query": query_text, "facts": [], "skills": [], "evidence": [], "artifacts": [], "confidence": {}}
+        return {
+            "product": "memory",
+            "query": query_text,
+            "memory_intent": memory_intent,
+            "memories": [],
+            "evidence": [],
+            "supporting_facts": [],
+            "supporting_skills": [],
+            "conflicts": [],
+            "fallback": {"used": True, "mode": "evidence_only", "reason": "no_compiled_memory_available"},
+            "memory_sources": [],
+            "confidence": {},
+        }
 
     memory.runtime.retrieve_context = fake_context  # type: ignore[method-assign]
     memory.runtime.retrieve_memory = fake_memory  # type: ignore[method-assign]
@@ -94,9 +164,60 @@ async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory
     context = await memory.retrieve_context(query_text="hello world")
     memory_result = await memory.retrieve_memory(query_text="hello world")
 
-    assert context["facts"] == []
-    assert memory_result["artifacts"] == []
+    assert context["product"] == "context"
+    assert context["documents"] == []
+    assert memory_result["product"] == "memory"
+    assert memory_result["memories"] == []
+    assert memory_result["fallback"]["used"] is True
     assert seen == [("context", "hello world"), ("memory", "hello world")]
+
+
+@pytest.mark.asyncio
+async def test_runtime_memory_retrieval_surfaces_explicit_evidence_only_fallback(uma_memory) -> None:
+    runtime = UMARuntime.from_memory(uma_memory)
+    context = RuntimeContext(
+        tenant_id="tenant-1",
+        agent_id=uma_memory.agent_id or "agent-default",
+        request_id="req-memory-fallback",
+        user_id="user:u1",
+    )
+
+    async def fake_context(
+        bound_context: RuntimeContext,
+        *,
+        query_text: str,
+        lane_filter=None,
+    ) -> Dict[str, list]:
+        assert lane_filter is None
+        return {
+            "product": "context",
+            "query": query_text,
+            "lane_filter": [],
+            "working_memory": [],
+            "episodic": [],
+            "facts": [],
+            "chunks": [],
+            "documents": [],
+            "skills": [],
+            "graph": [],
+            "trace": [],
+            "confidence": {},
+        }
+
+    runtime.retrieve_context = fake_context  # type: ignore[method-assign]
+
+    result = await runtime.retrieve_memory(
+        context,
+        query_text="memory query",
+        memory_intent="continuity",
+    )
+
+    assert result["product"] == "memory"
+    assert result["memory_intent"] == "continuity"
+    assert result["memories"] == []
+    assert result["fallback"]["used"] is True
+    assert result["fallback"]["mode"] == "evidence_only"
+    assert result["fallback"]["reason"] == "no_compiled_memory_available"
 
 def test_umamemory_retrieval_shims_are_removed() -> None:
     assert hasattr(UMAMemory, "retrieve_context")

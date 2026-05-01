@@ -338,12 +338,15 @@ class UMAMemory:
         self,
         *,
         query_text: str,
-    ) -> Dict[str, list]:
+        lane_filter: Optional[list[str]] = None,
+    ) -> Dict[str, Any]:
         """Return curated LLM context for the bound runtime scope.
 
         Contract:
         - intended for LLM context assembly, not durable memory projection
-        - returns the canonical multi-lane retrieval bundle
+        - returns the canonical evidence-oriented context bundle
+        - chunks/documents remain the primary retrieval product
+        - optional `lane_filter` narrows persisted retrieval lanes without requiring wiki state
         - persisted artifacts expose canonical UMA metadata through `meta`
         - lane contents remain source-traceable through facts, chunks, skills, and graph items
         """
@@ -351,27 +354,28 @@ class UMAMemory:
         return await self.runtime.retrieve_context(
             runtime_context,
             query_text=query_text,
+            lane_filter=lane_filter,
         )
 
     async def retrieve_memory(
         self,
         *,
         query_text: str,
+        memory_intent: str = "continuity",
     ) -> Dict[str, Any]:
-        """Return durable, evidence-backed memory artifacts for the bound runtime scope.
+        """Return compiled, evidence-backed memory results for the bound runtime scope.
 
         Contract:
-        - `facts`: memory facts relevant to the query
-        - `skills`: procedural memory artifacts relevant to the query
-        - `evidence`: supporting chunk objects backing the memory result
-        - `artifacts`: document-level groupings of supporting evidence for continuity-oriented use
-        - `confidence`: retrieval confidence metadata carried from the underlying retrieval pass
-        - evidence and grouped artifacts expose canonical UMA metadata instead of inferred lanes
+        - `memories` is the primary compiled-memory field
+        - `evidence` is mandatory and attached to every result path
+        - supporting facts/skills remain secondary evidence, not the product identity
+        - explicit `fallback` prevents silent degradation into chunk-only context retrieval
         """
         runtime_context = self._require_bound_runtime_context()
         return await self.runtime.retrieve_memory(
             runtime_context,
             query_text=query_text,
+            memory_intent=memory_intent,
         )
 
     async def _retrieve_context_for_context(
@@ -379,10 +383,12 @@ class UMAMemory:
         runtime_context: RuntimeContext,
         *,
         query_text: str,
-    ) -> Dict[str, list]:
+        lane_filter: Optional[list[str]] = None,
+    ) -> Dict[str, Any]:
         return await self.runtime.retrieve_context(
             runtime_context,
             query_text=query_text,
+            lane_filter=lane_filter,
         )
 
     async def _retrieve_memory_for_context(
@@ -390,10 +396,12 @@ class UMAMemory:
         runtime_context: RuntimeContext,
         *,
         query_text: str,
+        memory_intent: str = "continuity",
     ) -> Dict[str, Any]:
         return await self.runtime.retrieve_memory(
             runtime_context,
             query_text=query_text,
+            memory_intent=memory_intent,
         )
 
     async def _render_context_for_context(
@@ -412,7 +420,7 @@ class UMAMemory:
         runtime_context: RuntimeContext,
         *,
         query_text: str,
-    ) -> Dict[str, list]:
+    ) -> Dict[str, Any]:
         """Compatibility shim for pre-cleanup context callers."""
         return await self._retrieve_context_for_context(
             runtime_context,

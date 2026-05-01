@@ -37,6 +37,15 @@ Canonical entry points:
 - Retrieve context: `uma.api.UMAMemory.retrieve_context(...)`
 - Retrieve memory: `uma.api.UMAMemory.retrieve_memory(...)`
 
+Retrieval product split:
+
+- `retrieve_context(...)`
+  The canonical evidence-oriented context path for LLM context assembly.
+  Chunks/documents are primary, provenance stays attached, and wiki participation is not required by default.
+- `retrieve_memory(...)`
+  The canonical compiled/evidence-backed memory path for continuity-oriented retrieval.
+  `memories` is the primary contract field. If compiled memory is unavailable, the result must surface an explicit fallback instead of silently returning chunk-style context output.
+
 Canonical storage taxonomy:
 
 - Shared storage vocabulary lives in `uma.common.storage_metadata`.
