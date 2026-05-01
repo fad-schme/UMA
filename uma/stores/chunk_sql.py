@@ -16,6 +16,7 @@ from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from uma.stores.metadata import ensure_store_metadata
 from uma.common.types import Chunk, SCOPE_MODEL_VERSION
+from uma.common.storage_metadata import normalize_chunk_metadata
 
 logger = logging.getLogger(__name__)
 _DEBUG_LOGGED_PARSE_FAILURES: set[tuple[str, str]] = set()
@@ -126,6 +127,20 @@ class ChunkSQLStore(BaseVectorSQLStore):
         except Exception:
             _debug_once("lexical_score", str(chunk_id), "ChunkSQLStore: failed to parse lexical score id=%s")
 
+        normalized_meta = normalize_chunk_metadata(
+            meta,
+            chunk_id=row["id"],
+            doc_id=row["doc_id"],
+            owner_type=row["owner_type"],
+            owner_id=row["owner_id"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+            page_range=(int(row["page_start"]), int(row["page_end"])),
+            position=int(row["position"]),
+            source_path=row["source_path"],
+            source_hash=row["source_hash"],
+        )
+
         return Chunk(
             id=row["id"],
             doc_id=row["doc_id"],
@@ -144,7 +159,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
             origin_user_id=(row["origin_user_id"] if "origin_user_id" in row.keys() else None),
             origin_session_id=(row["origin_session_id"] if "origin_session_id" in row.keys() else None),
             scope_model_version=(row["scope_model_version"] if "scope_model_version" in row.keys() else None),
-            meta=meta,
+            meta=normalized_meta,
         )
 
     # ------------------------------------------------------------------ #
@@ -172,6 +187,19 @@ class ChunkSQLStore(BaseVectorSQLStore):
     async def upsert_chunk(self, chunk: Chunk, embedding: List[float]) -> None:
         conn = self._conn()
         try:
+            normalized_meta = normalize_chunk_metadata(
+                chunk.meta,
+                chunk_id=chunk.id,
+                doc_id=chunk.doc_id,
+                owner_type=chunk.owner_type,
+                owner_id=chunk.owner_id,
+                created_at=chunk.created_at,
+                updated_at=chunk.updated_at,
+                page_range=chunk.page_range,
+                position=chunk.position,
+                source_path=chunk.source_path,
+                source_hash=chunk.source_hash,
+            )
             payload = {
                 "id": chunk.id,
                 "doc_id": chunk.doc_id,
@@ -191,7 +219,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
                 "origin_user_id": getattr(chunk, "origin_user_id", None),
                 "origin_session_id": getattr(chunk, "origin_session_id", None),
                 "scope_model_version": getattr(chunk, "scope_model_version", None) or SCOPE_MODEL_VERSION,
-                "meta": json.dumps(chunk.meta or {}),
+                "meta": json.dumps(normalized_meta),
             }
 
             self._execute(
@@ -239,6 +267,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
                 vector_meta = {
                     "tenant_id": getattr(chunk, "tenant_id", None) or DEFAULT_TENANT_ID,
                     "doc_id": chunk.doc_id,
+                    "kb_lane": normalized_meta.get("kb_lane"),
                     "position": int(chunk.position),
                     "page_start": int(chunk.page_range[0]),
                     "page_end": int(chunk.page_range[1]),

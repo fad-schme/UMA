@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from uma.common.types import Fact
+from uma.common.storage_metadata import normalize_fact_metadata
 from uma.ingest.types import DocumentChunk
 from uma.retrieve.user_query_helper import get_generic_terms
 from .scorer import SalienceScorer
@@ -140,8 +141,9 @@ def _fallback_fact_for_chunk_as_fact(
     subj = _normalize_subject("", doc_id=doc_id)
     src_chunk_id = str(getattr(ch, "chunk_id", "") or "")
 
+    fact_id = f"fact_fallback_{src_chunk_id or 'chunk'}"
     fact = Fact(
-        id=f"fact_fallback_{src_chunk_id or 'chunk'}",
+        id=fact_id,
         subject=subj,
         predicate="STATES",
         object=obj,
@@ -152,16 +154,23 @@ def _fallback_fact_for_chunk_as_fact(
         salience=0.0,
         owner_type=owner_type,
         owner_id=owner_id,
-        meta={
-            "source_type": "pdf",
-            "domain": "kb_doc",
-            "doc_id": doc_id,
-            "source_path": source_path,
-            "source_hash": source_hash,
-            "fact_text": obj,
-            "fact_type": "claim",
-            "extractor_fallback": True,
-        },
+        meta=normalize_fact_metadata(
+            {
+                "doc_id": doc_id,
+                "source_path": source_path,
+                "source_hash": source_hash,
+                "fact_text": obj,
+                "fact_type": "claim",
+                "extractor_fallback": True,
+            },
+            fact_id=fact_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            created_at=now,
+            updated_at=now,
+            source_ids=[src_chunk_id] if src_chunk_id else [],
+            session_id=None,
+        ),
     )
     fact.salience = float(scorer.score(fact))
     return fact
@@ -734,18 +743,26 @@ def parse_facts_list_into_facts(
             if not subj or not obj:
                 continue
 
-            meta = {
-                "source_type": "pdf",
-                "domain": "kb_doc",
-                "doc_id": doc_id,
-                "source_path": source_path,
-                "source_hash": source_hash,
-                "fact_text": obj,
-                "fact_type": "summary" if pred == "SUMMARY" else "claim",
-            }
+            fact_id = f"fact_{uuid_from_text(f'{doc_id}:{src_chunk_id}:{subj}:{pred}:{obj}')}"
+            meta = normalize_fact_metadata(
+                {
+                    "doc_id": doc_id,
+                    "source_path": source_path,
+                    "source_hash": source_hash,
+                    "fact_text": obj,
+                    "fact_type": "summary" if pred == "SUMMARY" else "claim",
+                },
+                fact_id=fact_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                created_at=now,
+                updated_at=now,
+                source_ids=[src_chunk_id] if src_chunk_id else [],
+                session_id=None,
+            )
 
             f = Fact(
-                id=f"fact_{uuid_from_text(f'{doc_id}:{src_chunk_id}:{subj}:{pred}:{obj}')}",
+                id=fact_id,
                 subject=subj,
                 predicate=pred,
                 object=obj,

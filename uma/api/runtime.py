@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional
 
 from uma.common.types import RuntimeContext
+from uma.common.storage_metadata import normalize_chunk_metadata, shared_metadata_view
 from uma.retrieve.rlm.request import RetrievalRequest
 from uma.memory.working_memory.core import session_scope_from_runtime_context
 
@@ -316,7 +317,12 @@ class UMARuntime:
         *,
         query_text: str,
     ) -> Dict[str, list]:
-        """Retrieve structured UMA context for one explicit request scope."""
+        """Retrieve structured UMA context for one explicit request scope.
+
+        Persisted artifacts returned here carry canonical UMA storage metadata
+        in their `meta` dict so callers do not need to infer lane/kind from
+        ownership or store-specific conventions.
+        """
         from uma.adapters.observability.metrics import increment, timed
         from uma.retrieve.rlm.coverage import compute_confidence
 
@@ -383,13 +389,35 @@ class UMARuntime:
             doc_id = str(getattr(chunk, "doc_id", None) or chunk_id or "")
             if not doc_id:
                 continue
+            normalized_meta = normalize_chunk_metadata(
+                getattr(chunk, "meta", None),
+                chunk_id=str(chunk_id or ""),
+                doc_id=doc_id,
+                owner_type=str(getattr(chunk, "owner_type", None) or ""),
+                owner_id=str(getattr(chunk, "owner_id", None) or ""),
+                created_at=getattr(chunk, "created_at", None),
+                updated_at=getattr(chunk, "updated_at", None),
+                page_range=getattr(chunk, "page_range", None),
+                position=getattr(chunk, "position", None),
+                source_path=str(getattr(chunk, "source_path", None) or ""),
+                source_hash=str(getattr(chunk, "source_hash", None) or ""),
+            )
             artifact = grouped.setdefault(
                 doc_id,
                 {
                     "doc_id": doc_id,
+                    "kind": normalized_meta.get("kind"),
+                    "kb_lane": normalized_meta.get("kb_lane"),
                     "owner_type": getattr(chunk, "owner_type", None),
                     "owner_id": getattr(chunk, "owner_id", None),
                     "source_path": getattr(chunk, "source_path", None),
+                    "metadata": shared_metadata_view(
+                        meta=normalized_meta,
+                        owner_type=str(getattr(chunk, "owner_type", None) or ""),
+                        owner_id=str(getattr(chunk, "owner_id", None) or ""),
+                        created_at=getattr(chunk, "created_at", None),
+                        updated_at=getattr(chunk, "updated_at", None),
+                    ),
                     "page_ranges": [],
                     "chunk_ids": [],
                     "evidence": [],
@@ -414,6 +442,7 @@ class UMARuntime:
         This path currently reuses the canonical context retrieval internals to gather
         owner-scoped evidence, then projects that evidence into a memory-oriented bundle.
         The public contract is artifact-oriented even though the candidate gathering is shared.
+        Grouped artifacts expose canonical metadata directly.
         """
         context = await self.retrieve_context(
             runtime_context,

@@ -2,9 +2,14 @@
 uma.retrieve.rlm.domain
 =============================
 
-Minimal "domain/lane" tagging and defaulting for RLM routing.
+Minimal retrieval-domain tagging and defaulting for RLM routing.
 
-Domain is stored in item meta (no schema migrations):
+Important semantic boundary:
+- `kind` and `kb_lane` are UMA's canonical storage taxonomy.
+- `domain` is retrieval/routing metadata only.
+- This module must not be treated as the classifier for persisted records.
+
+Routing metadata is stored in item meta (no schema migrations):
 
     meta["domain"] ∈ {"kb_doc", "user_profile", "procedural", "system"}
 
@@ -86,6 +91,11 @@ def _preference_like_object(obj: Any) -> bool:
 
 def ensure_fact_domain(fact: Any) -> str:
     """
+    Ensure retrieval-domain metadata for routing decisions.
+
+    This is not part of the canonical storage taxonomy. It exists only so RLM
+    can distinguish retrieval intent buckets such as `kb_doc` vs `user_profile`.
+
     Defaulting rules (Phase 0):
     - If predicate in {LIKES, PREFERS, DISLIKES, ...} => user_profile
     - OR subject looks like user:<id> (or "user") and object is preference-like => user_profile
@@ -117,6 +127,8 @@ def ensure_fact_domain(fact: Any) -> str:
 
 def ensure_chunk_domain(chunk: Any) -> str:
     """
+    Ensure retrieval-domain metadata for routing decisions.
+
     Defaulting rules (Phase 0):
     - If chunk has source_path set => kb_doc
     - Otherwise => kb_doc (safe default)
@@ -138,6 +150,8 @@ def ensure_chunk_domain(chunk: Any) -> str:
 
 def ensure_skill_domain(skill: Any) -> str:
     """
+    Ensure retrieval-domain metadata for routing decisions.
+
     Defaulting rules (Phase 0): Skills => procedural.
     """
     meta = _get_meta(skill)
@@ -175,7 +189,7 @@ def ensure_domains_for_skills(skills: Iterable[Any]) -> None:
 
 def filter_facts_by_domains(facts: List[Any], allowed_domains: Set[str]) -> List[Any]:
     """
-    Filter facts by explicit domain metadata.
+    Filter facts by retrieval-domain metadata.
 
     Items missing meta['domain'] are defaulted deterministically.
     """

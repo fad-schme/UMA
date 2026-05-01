@@ -18,6 +18,7 @@ from .consolidation_trigger import maybe_trigger_consolidation
 from uma.common.types import Chunk, Fact, TargetOwner
 from uma.stores.document_sql import DocumentRecord
 from uma.common.ownership import resolve_target_owner
+from uma.common.storage_metadata import normalize_chunk_metadata, normalize_fact_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -358,19 +359,29 @@ async def ingest_document(
             owner_type=owner_type,
             owner_id=owner_id,
             workspace_id=workspace_id,
-            meta={
-                "source_type": "pdf",
-                "domain": "kb_doc",
-                "text_hash": text_hash,
-                "chunk_size_tokens": config.chunk_size_tokens,
-                "overlap_tokens": config.overlap_tokens,
-                "chunker_version": _CHUNKER_VERSION,
-                # Paragraph indices are scoped to the originating section/page_range (not doc-global).
-                # Any future paragraph-based expansion MUST use (doc_id, page_range, paragraph_index_*) together.
-                "paragraph_index_scope": "page_range",
-                "paragraph_index_start": chunk.paragraph_index_start,
-                "paragraph_index_end": chunk.paragraph_index_end,
-            },
+            meta=normalize_chunk_metadata(
+                {
+                    "text_hash": text_hash,
+                    "chunk_size_tokens": config.chunk_size_tokens,
+                    "overlap_tokens": config.overlap_tokens,
+                    "chunker_version": _CHUNKER_VERSION,
+                    # Paragraph indices are scoped to the originating section/page_range (not doc-global).
+                    # Any future paragraph-based expansion MUST use (doc_id, page_range, paragraph_index_*) together.
+                    "paragraph_index_scope": "page_range",
+                    "paragraph_index_start": chunk.paragraph_index_start,
+                    "paragraph_index_end": chunk.paragraph_index_end,
+                },
+                chunk_id=chunk.chunk_id,
+                doc_id=chunk.doc_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                created_at=now,
+                updated_at=now,
+                page_range=chunk.page_range,
+                position=chunk.position,
+                source_path=parsed.source_path,
+                source_hash=parsed.source_hash,
+            ),
         )
         chunk_rows[chunk.chunk_id] = row
 
@@ -441,16 +452,26 @@ async def ingest_document(
         f.workspace_id = workspace_id
         if f.meta is None:
             f.meta = {}
-        f.meta.setdefault("domain", "kb_doc")
-        f.meta.setdefault("source_type", "pdf")
-        f.meta.setdefault("doc_id", parsed.doc_id)
-        f.meta.setdefault("source_path", parsed.source_path)
-        f.meta.setdefault("source_hash", parsed.source_hash)
-        f.meta.setdefault("ingest_pipeline_version", _INGEST_PIPELINE_VERSION)
-        f.meta.setdefault("extractor_version", _EXTRACTOR_VERSION)
-        f.meta.setdefault("chunker_version", _CHUNKER_VERSION)
-        f.meta.setdefault("fact_text", f.object)
-        f.meta.setdefault("fact_type", "summary" if f.predicate == "SUMMARY" else "claim")
+        f.meta = normalize_fact_metadata(
+            {
+                **f.meta,
+                "doc_id": parsed.doc_id,
+                "source_path": parsed.source_path,
+                "source_hash": parsed.source_hash,
+                "ingest_pipeline_version": _INGEST_PIPELINE_VERSION,
+                "extractor_version": _EXTRACTOR_VERSION,
+                "chunker_version": _CHUNKER_VERSION,
+                "fact_text": f.object,
+                "fact_type": "summary" if f.predicate == "SUMMARY" else "claim",
+            },
+            fact_id=f.id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            created_at=f.created_at,
+            updated_at=f.updated_at,
+            source_ids=list(f.source_ids or []),
+            session_id=getattr(f, "session_id", None),
+        )
 
     # Embed + upsert extracted facts using core helper
     facts_created = 0

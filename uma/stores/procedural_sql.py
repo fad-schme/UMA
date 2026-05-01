@@ -28,6 +28,7 @@ from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from uma.stores.metadata import ensure_store_metadata
 from uma.common.types import Skill, SCOPE_MODEL_VERSION
+from uma.common.storage_metadata import normalize_skill_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,12 @@ class ProceduralSQLStore(BaseVectorSQLStore):
     • Maintain vector similarity index
     • Provide ranked semantic search (via BaseVectorSQLStore)
     • Expose CRUD: add_skill, get_skill, delete_skill
+
+    Provenance contract:
+    - canonical taxonomy is `kind="procedural_rule"` / `kb_lane="procedural"`
+    - minimum provenance always includes `skill_id`
+    - stronger source linkage is preserved only when the caller provides real
+      authored/import metadata such as `source`, `source_file`, or `import_mode`
     """
 
     def __init__(self, db_adapter: DBAdapter, vector_index: VectorIndex) -> None:
@@ -167,6 +174,15 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         except Exception:
             meta = {}
 
+        normalized_meta = normalize_skill_metadata(
+            meta,
+            skill_id=row["id"],
+            owner_type=owner_type,
+            owner_id=owner_id,
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
         return Skill(
             id=row["id"],
             name=row["name"],
@@ -186,7 +202,7 @@ class ProceduralSQLStore(BaseVectorSQLStore):
             plan=plan,
             tools=tools,
             example=row["example"],
-            meta=meta,
+            meta=normalized_meta,
         )
     # ------------------------------------------------------------------ #
     # Validation
@@ -232,15 +248,15 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         conn = self._conn()
         now = datetime.utcnow().isoformat()
 
-        # Phase 6: procedural skills must be explicitly tagged as procedural domain.
         try:
-            if not isinstance(skill.meta, dict):
-                skill.meta = {}
-            skill.meta.setdefault("domain", "procedural")
-        except Exception:
-            pass
-
-        try:
+            normalized_meta = normalize_skill_metadata(
+                skill.meta,
+                skill_id=skill.id,
+                owner_type=skill.owner_type or "user",
+                owner_id=skill.owner_id or "",
+                created_at=skill.created_at,
+                updated_at=skill.updated_at,
+            )
             payload = {
                 "id": skill.id,
                 "name": skill.name,
@@ -249,7 +265,7 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                 "plan": json.dumps(skill.plan),
                 "tools": json.dumps(skill.tools),
                 "example": skill.example,
-                "meta": json.dumps(skill.meta),
+                "meta": json.dumps(normalized_meta),
                 "created_at": now,
                 "updated_at": now,
                 "tenant_id": getattr(skill, "tenant_id", None) or DEFAULT_TENANT_ID,
@@ -304,6 +320,7 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                     vectors=[embedding],
                     metadata=[{
                         "name": skill.name,
+                        "kb_lane": normalized_meta.get("kb_lane"),
                         "tenant_id": getattr(skill, "tenant_id", None) or DEFAULT_TENANT_ID,
                         "owner_type": skill.owner_type or "user",
                         "owner_id": skill.owner_id or "",

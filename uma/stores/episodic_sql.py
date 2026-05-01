@@ -18,6 +18,7 @@ from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from uma.stores.metadata import ensure_store_metadata
 from uma.common.types import Episode, SCOPE_MODEL_VERSION
+from uma.common.storage_metadata import normalize_episode_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +173,15 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         owner_id = row["owner_id"]
         user_id = row["user_id"] if "user_id" in row.keys() else owner_id
 
+        normalized_meta = normalize_episode_metadata(
+            json.loads(row["meta"]),
+            episode_id=row["id"],
+            owner_type=owner_type,
+            owner_id=owner_id,
+            timestamp=row["timestamp"],
+            session_id=(row["session_id"] if "session_id" in row.keys() else None),
+        )
+
         return Episode(
             id=row["id"],
             timestamp=datetime.fromisoformat(row["timestamp"]),
@@ -179,7 +189,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             raw=row["raw"],
             tags=json.loads(row["tags"]),
             embedding=embedding,
-            meta=json.loads(row["meta"]),
+            meta=normalized_meta,
             tenant_id=(row["tenant_id"] if "tenant_id" in row.keys() else DEFAULT_TENANT_ID),
             owner_type=owner_type,
             owner_id=owner_id,
@@ -249,6 +259,14 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 # Never break ingestion due to idempotency guard issues.
                 logger.exception("EpisodicSQLStore.add_episode: idempotency guard failed; continuing.")
 
+            normalized_meta = normalize_episode_metadata(
+                ep.meta,
+                episode_id=ep.id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                timestamp=ep.timestamp,
+                session_id=getattr(ep, "session_id", None),
+            )
             payload = {
                 "id": ep.id,
                 "tenant_id": getattr(ep, "tenant_id", None) or DEFAULT_TENANT_ID,
@@ -266,7 +284,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 "origin_session_id": getattr(ep, "origin_session_id", None),
                 "scope_model_version": getattr(ep, "scope_model_version", None) or SCOPE_MODEL_VERSION,
                 "embedding": json.dumps(embedding),
-                "meta": json.dumps(ep.meta),
+                "meta": json.dumps(normalized_meta),
             }
 
             self._execute(
@@ -309,7 +327,12 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 self.vector_index.upsert(
                     ids=[ep.id],
                     vectors=[embedding],
-                    metadata=[{"tenant_id": tenant_id, "owner_type": owner_type, "owner_id": owner_id}],
+                    metadata=[{
+                        "tenant_id": tenant_id,
+                        "kb_lane": normalized_meta.get("kb_lane"),
+                        "owner_type": owner_type,
+                        "owner_id": owner_id,
+                    }],
                 )
             except Exception:
                 logger.exception("EpisodicSQLStore.add_episode: vector upsert failed for id=%s", ep.id)

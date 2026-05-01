@@ -58,6 +58,7 @@ async def test_chunk_vector_payload_is_minimal_and_excludes_text(tmp_path) -> No
 
     # Minimal, filterable fields only.
     assert meta.get("doc_id") == "doc_1"
+    assert meta.get("kb_lane") == "raw"
     assert meta.get("owner_type") == "user"
     assert meta.get("owner_id") == "user:u1"
     assert meta.get("position") == 7
@@ -67,4 +68,3 @@ async def test_chunk_vector_payload_is_minimal_and_excludes_text(tmp_path) -> No
     # Never duplicate full chunk text in vector payload.
     assert "text" not in meta
     assert "__text" not in meta
-

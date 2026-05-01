@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from uma.common.types import Episode
+from uma.common.storage_metadata import normalize_episode_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -53,14 +54,23 @@ async def write_document_episode(
         logger.exception("write_document_episode: embedding failed")
         return None
 
+    episode_id = str(uuid4())
+    episode_timestamp = datetime.now(timezone.utc)
     ep = Episode(
-        id=str(uuid4()),
-        timestamp=datetime.now(timezone.utc),
+        id=episode_id,
+        timestamp=episode_timestamp,
         summary=summary_text,
         user_id=str(user_id or owner_id),
         raw=f"Document ingested: {doc_id}",
         tags=["document_ingest"],
-        meta={"doc_id": doc_id},
+        meta=normalize_episode_metadata(
+            {"doc_id": doc_id, "source_type": "document_ingest"},
+            episode_id=episode_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            timestamp=episode_timestamp,
+            session_id=None,
+        ),
         owner_type=owner_type,
         owner_id=owner_id,
     )
@@ -135,19 +145,29 @@ async def write_daily_diary_episodes(
             )
             continue
 
+        episode_id = str(uuid4())
+        episode_timestamp = datetime.now(timezone.utc)
         episode = Episode(
-            id=str(uuid4()),
-            timestamp=datetime.now(timezone.utc),
+            id=episode_id,
+            timestamp=episode_timestamp,
             summary=entry_text,
             user_id=str(user_id or owner_id),
             raw=f"Daily diary import: {file_path}",
             tags=["daily_diary"],
-            meta={
-                "source_kind": "daily_diary",
-                "source_file": file_path,
-                "diary_date": diary_date,
-                "import_mode": "bootstrap",
-            },
+            meta=normalize_episode_metadata(
+                {
+                    "source_kind": "daily_diary",
+                    "source_file": file_path,
+                    "diary_date": diary_date,
+                    "import_mode": "bootstrap",
+                    "source_type": "daily_diary",
+                },
+                episode_id=episode_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                timestamp=episode_timestamp,
+                session_id=None,
+            ),
             owner_type=owner_type,
             owner_id=owner_id,
         )

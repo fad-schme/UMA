@@ -54,6 +54,7 @@ from uma.adapters.llm.controller import LLMCallContext, generate_json
 from uma.common.json_utils import try_parse_json_object
 from .scorer import SalienceScorer
 from . import extractor_utils as utils
+from uma.common.storage_metadata import normalize_fact_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +203,16 @@ class FactExtractor:
                 salience=0.0,
                 owner_type=owner_type,
                 owner_id=owner_id,
-                meta={"domain": "user_profile"},
+                meta=normalize_fact_metadata(
+                    {"domain": "user_profile"},
+                    fact_id=f"fact_{utils.uuid_from_text(f'userfact:v1:{owner_type}:{owner_id}:{subj_n}:{pred_n}:{obj_n}')}",
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    created_at=now,
+                    updated_at=now,
+                    source_ids=sid_list,
+                    session_id=None,
+                ),
             )
             if turn_id:
                 fact.meta["turn_id"] = turn_id

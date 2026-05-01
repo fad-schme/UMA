@@ -150,8 +150,13 @@ async def test_bound_context_workspace_id_does_not_broaden_retrieval_owner_suppo
 
     ctx = await handle.retrieve_context("hello world")
     owner_types = {getattr(chunk, "owner_type", None) for chunk in list(ctx.get("chunks") or [])}
+    chunk_lanes = {
+        (getattr(chunk, "meta", {}) or {}).get("kb_lane")
+        for chunk in list(ctx.get("chunks") or [])
+    }
 
     assert owner_types
     assert owner_types.issubset({"agent", "user"})
     assert "workspace" not in owner_types
     assert "system" not in owner_types
+    assert chunk_lanes == {"raw"}

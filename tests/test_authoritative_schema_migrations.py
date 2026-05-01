@@ -77,6 +77,8 @@ async def test_document_store_migrates_legacy_rows_and_persists_scope_fields(tmp
     assert record.doc_id == "doc_old"
     assert record.tenant_id == "default"
     assert record.workspace_id is None
+    assert record.meta["kind"] == "raw_source"
+    assert record.meta["kb_lane"] == "raw"
 
     await store.upsert_document(
         DocumentRecord(
@@ -196,6 +198,8 @@ async def test_chunk_store_migrates_legacy_rows_and_round_trips_scope_fields(tmp
     assert stored[0].workspace_id == "workspace:alpha"
     assert stored[0].origin_session_id == "session-1"
     assert stored[0].scope_model_version == SCOPE_MODEL_VERSION
+    assert stored[0].meta["kind"] == "raw_source"
+    assert stored[0].meta["kb_lane"] == "raw"
 
 
 @pytest.mark.asyncio
@@ -235,6 +239,8 @@ async def test_semantic_store_migrates_legacy_rows_and_persists_new_scope_column
     assert len(legacy) == 1
     assert legacy[0].tenant_id == "default"
     assert legacy[0].session_id is None
+    assert legacy[0].meta["kind"] == "semantic_fact"
+    assert legacy[0].meta["kb_lane"] == "semantic"
 
     now = datetime.now(timezone.utc)
     await store.upsert_fact(
@@ -271,6 +277,8 @@ async def test_semantic_store_migrates_legacy_rows_and_persists_new_scope_column
     assert stored[0].session_id == "session-1"
     assert stored[0].origin_agent_id == "agent-1"
     assert stored[0].scope_model_version == SCOPE_MODEL_VERSION
+    assert stored[0].meta["kind"] == "semantic_fact"
+    assert stored[0].meta["kb_lane"] == "semantic"
 
 
 @pytest.mark.asyncio
@@ -321,6 +329,8 @@ async def test_episodic_store_migrates_legacy_rows_and_persists_session_scope_fi
     assert len(legacy) == 1
     assert legacy[0].tenant_id == "default"
     assert legacy[0].session_id is None
+    assert legacy[0].meta["kind"] == "episodic_event"
+    assert legacy[0].meta["kb_lane"] == "episodic"
     assert {"tenant_id", "session_id", "scope_model_version"}.issubset(_columns(db_path, "episode_clusters"))
 
     now = datetime.now(timezone.utc)
@@ -352,6 +362,8 @@ async def test_episodic_store_migrates_legacy_rows_and_persists_session_scope_fi
     assert stored[0].session_id == "session-1"
     assert stored[0].origin_session_id == "session-1"
     assert stored[0].scope_model_version == SCOPE_MODEL_VERSION
+    assert stored[0].meta["kind"] == "episodic_event"
+    assert stored[0].meta["kb_lane"] == "episodic"
 
 
 @pytest.mark.asyncio
@@ -390,6 +402,8 @@ async def test_procedural_store_migrates_legacy_rows_and_persists_provenance_fie
     assert len(legacy) == 1
     assert legacy[0].tenant_id == "default"
     assert legacy[0].workspace_id is None
+    assert legacy[0].meta["kind"] == "procedural_rule"
+    assert legacy[0].meta["kb_lane"] == "procedural"
 
     now = datetime.now(timezone.utc)
     await store.add_skill(
@@ -423,3 +437,5 @@ async def test_procedural_store_migrates_legacy_rows_and_persists_provenance_fie
     assert stored[0].workspace_id == "workspace:alpha"
     assert stored[0].origin_user_id == "user-1"
     assert stored[0].scope_model_version == SCOPE_MODEL_VERSION
+    assert stored[0].meta["kind"] == "procedural_rule"
+    assert stored[0].meta["kb_lane"] == "procedural"

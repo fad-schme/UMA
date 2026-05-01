@@ -13,6 +13,7 @@ from .base_sql_store import BaseSQLStore, DEFAULT_TENANT_ID
 from ..adapters.db.base import DBAdapter
 from uma.stores.metadata import ensure_store_metadata
 from uma.common.types import SCOPE_MODEL_VERSION
+from uma.common.storage_metadata import normalize_document_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +160,15 @@ class DocumentSQLStore(BaseSQLStore):
                 origin_user_id=(row.get("origin_user_id") if hasattr(row, "get") else row["origin_user_id"]),
                 origin_session_id=(row.get("origin_session_id") if hasattr(row, "get") else row["origin_session_id"]),
                 scope_model_version=(row.get("scope_model_version") if hasattr(row, "get") else row["scope_model_version"]),
-                meta=meta,
+                meta=normalize_document_metadata(
+                    meta,
+                    doc_id=str((row.get("doc_id") if hasattr(row, "get") else row["doc_id"]) or ""),
+                    owner_type=str((row.get("owner_type") if hasattr(row, "get") else row["owner_type"]) or ""),
+                    owner_id=str((row.get("owner_id") if hasattr(row, "get") else row["owner_id"]) or ""),
+                    ingested_at=ingested_at,
+                    source_path=str((row.get("source_path") if hasattr(row, "get") else row["source_path"]) or ""),
+                    source_hash=str((row.get("source_hash") if hasattr(row, "get") else row["source_hash"]) or ""),
+                ),
             )
         except Exception:
             logger.exception(
@@ -174,6 +183,15 @@ class DocumentSQLStore(BaseSQLStore):
     async def upsert_document(self, record: DocumentRecord) -> None:
         conn = self._conn()
         try:
+            normalized_meta = normalize_document_metadata(
+                record.meta,
+                doc_id=record.doc_id,
+                owner_type=record.owner_type,
+                owner_id=record.owner_id,
+                ingested_at=record.ingested_at,
+                source_path=record.source_path,
+                source_hash=record.source_hash,
+            )
             payload = {
                 "doc_id": record.doc_id,
                 "source_path": record.source_path,
@@ -187,7 +205,7 @@ class DocumentSQLStore(BaseSQLStore):
                 "origin_user_id": getattr(record, "origin_user_id", None),
                 "origin_session_id": getattr(record, "origin_session_id", None),
                 "scope_model_version": getattr(record, "scope_model_version", None) or SCOPE_MODEL_VERSION,
-                "meta": json.dumps(record.meta or {}),
+                "meta": json.dumps(normalized_meta),
             }
             self._execute(
                 conn,

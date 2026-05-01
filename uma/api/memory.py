@@ -84,6 +84,7 @@ from uma.common.initializers.runtime import (
 )
 from uma.common.registry import FeatureLoader, FeaturePolicy, default_feature_registry
 from .runtime import AnimusProfileProvider, UMARuntime
+from uma.common.storage_metadata import normalize_document_metadata, normalize_fact_metadata
 from uma.common.types import Fact, RuntimeContext, TargetOwner
 from ..stores.document_sql import DocumentRecord
 
@@ -343,6 +344,7 @@ class UMAMemory:
         Contract:
         - intended for LLM context assembly, not durable memory projection
         - returns the canonical multi-lane retrieval bundle
+        - persisted artifacts expose canonical UMA metadata through `meta`
         - lane contents remain source-traceable through facts, chunks, skills, and graph items
         """
         runtime_context = self._require_bound_runtime_context()
@@ -364,6 +366,7 @@ class UMAMemory:
         - `evidence`: supporting chunk objects backing the memory result
         - `artifacts`: document-level groupings of supporting evidence for continuity-oriented use
         - `confidence`: retrieval confidence metadata carried from the underlying retrieval pass
+        - evidence and grouped artifacts expose canonical UMA metadata instead of inferred lanes
         """
         runtime_context = self._require_bound_runtime_context()
         return await self.runtime.retrieve_memory(
@@ -666,12 +669,22 @@ class UMAMemory:
                 updated_at=now,
                 source_ids=[f"memory_bootstrap:{source_hash}"],
                 confidence=1.0,
-                meta={
-                    "source_kind": "memory_bootstrap",
-                    "source_file": normalized_path,
-                    "import_mode": "bootstrap",
-                    "line_index": index,
-                },
+                meta=normalize_fact_metadata(
+                    {
+                        "source_kind": "memory_bootstrap",
+                        "source_file": normalized_path,
+                        "import_mode": "bootstrap",
+                        "line_index": index,
+                        "source_type": "memory_bootstrap",
+                    },
+                    fact_id=f"fact_mem_{fact_hash}",
+                    owner_type="user",
+                    owner_id=normalized_user_id,
+                    created_at=now,
+                    updated_at=now,
+                    source_ids=[f"memory_bootstrap:{source_hash}"],
+                    session_id=runtime_context.session_id,
+                ),
                 owner_type="user",
                 owner_id=normalized_user_id,
                 tenant_id=normalized_tenant_id,
@@ -723,13 +736,22 @@ class UMAMemory:
             source_path=normalized_path,
             source_hash=source_hash,
             runtime_context=runtime_context,
-            meta={
-                "source_kind": "memory_bootstrap",
-                "import_mode": "bootstrap",
-                "entries_found": len(entries),
-                "facts_created": len(persisted_fact_ids),
-                "ingest_signature": ingest_signature,
-            },
+            meta=normalize_document_metadata(
+                {
+                    "source_kind": "memory_bootstrap",
+                    "import_mode": "bootstrap",
+                    "entries_found": len(entries),
+                    "facts_created": len(persisted_fact_ids),
+                    "ingest_signature": ingest_signature,
+                    "source_type": "memory_bootstrap",
+                },
+                doc_id=f"memory-bootstrap:{source_hash}",
+                owner_type="user",
+                owner_id=normalized_user_id,
+                ingested_at=now,
+                source_path=normalized_path,
+                source_hash=source_hash,
+            ),
             api_name="load_memory_bootstrap",
         )
 
@@ -916,14 +938,23 @@ class UMAMemory:
                         owner_type="user",
                         owner_id=normalized_user_id,
                         workspace_id=workspace_id,
-                        meta={
-                            "source_kind": "daily_diary",
-                            "diary_date": diary_date,
-                            "import_mode": "bootstrap",
-                            "entries_found": len(entries),
-                            "episodes_created": len(episode_ids),
-                            "ingest_signature": ingest_signature,
-                        },
+                        meta=normalize_document_metadata(
+                            {
+                                "source_kind": "daily_diary",
+                                "diary_date": diary_date,
+                                "import_mode": "bootstrap",
+                                "entries_found": len(entries),
+                                "episodes_created": len(episode_ids),
+                                "ingest_signature": ingest_signature,
+                                "source_type": "daily_diary",
+                            },
+                            doc_id=f"daily-diary:{source_hash}",
+                            owner_type="user",
+                            owner_id=normalized_user_id,
+                            ingested_at=ingested_at,
+                            source_path=normalized_path,
+                            source_hash=source_hash,
+                        ),
                     )
                 )
             except Exception:

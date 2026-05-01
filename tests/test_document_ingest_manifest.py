@@ -30,5 +30,14 @@ async def test_document_manifest_persistence(uma_memory):
             log_context="test_document_manifest",
         )
         assert rows and rows[0]["source_hash"] == "hash123"
+        stored = await mem.document_store.get_by_owner_and_hash(
+            owner_type="user",
+            owner_id="user:u1",
+            source_hash="hash123",
+        )
+        assert stored is not None
+        stored_meta = stored.meta
+        assert stored_meta["kind"] == "raw_source"
+        assert stored_meta["kb_lane"] == "raw"
     finally:
         conn.close()

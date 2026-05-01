@@ -25,6 +25,46 @@ Violating these invariants leads to:
 	•	broken access control
 	•	unreliable RLM behavior
 
+Canonical Storage Taxonomy
+
+Persisted UMA artifacts use one explicit storage language defined in `uma.common.storage_metadata`.
+
+Kinds
+	•	raw_source — immutable source evidence stored through canonical ingest
+	•	wiki_page — mutable compiled wiki artifact backed by evidence
+	•	semantic_fact — durable semantic knowledge extracted from evidence
+	•	episodic_event — time-ordered episodic or import event
+	•	procedural_rule — durable procedural instruction or skill
+	•	profile_fact — profile-oriented continuity fact
+	•	decision_trace — persisted decision trace artifact
+	•	query_artifact — persisted query-oriented artifact
+
+Lanes
+	•	raw
+	•	wiki
+	•	semantic
+	•	episodic
+	•	procedural
+	•	profile
+	•	trace
+
+Shared metadata vocabulary
+	•	kind
+	•	kb_lane
+	•	owner_type
+	•	owner_id
+	•	scope
+	•	source_id
+	•	source_type
+	•	created_at
+	•	updated_at
+	•	provenance
+	•	status
+
+Projection rule
+	•	`wiki/*.md` is projection/export only
+	•	canonical wiki state must live in UMA records, not markdown files
+
 ⸻
 
 0. Global Invariants (Apply Everywhere)

@@ -45,6 +45,7 @@ from ..adapters.vector.base import VectorIndex
 from uma.common.conflict import FactResolver, LatestWinsFactResolver
 from uma.stores.metadata import ensure_store_metadata
 from uma.common.types import Fact, SCOPE_MODEL_VERSION
+from uma.common.storage_metadata import normalize_fact_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +210,17 @@ class SemanticSQLStore(BaseVectorSQLStore):
             logger.exception("SemanticSQLStore: failed to parse meta JSON for id=%s", row["id"])
             raise
 
+        normalized_meta = normalize_fact_metadata(
+            meta,
+            fact_id=row["id"],
+            owner_type=owner_type,
+            owner_id=owner_id,
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+            source_ids=source_ids,
+            session_id=(row["session_id"] if "session_id" in row.keys() else None),
+        )
+
         return Fact(
             id=row["id"],
             subject=row["subject"],
@@ -218,7 +230,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
             updated_at=datetime.fromisoformat(row["updated_at"]),
             source_ids=source_ids,
             confidence=confidence_val,
-            meta=meta,
+            meta=normalized_meta,
             salience=salience_val or 0.0,
             tenant_id=(row["tenant_id"] if "tenant_id" in row.keys() else DEFAULT_TENANT_ID),
             owner_type=owner_type,
@@ -341,6 +353,16 @@ class SemanticSQLStore(BaseVectorSQLStore):
             existing = [self._row_to_object(r) for r in rows]
 
             canonical, _archived = self.fact_resolver.resolve(existing, fact)
+            normalized_meta = normalize_fact_metadata(
+                canonical.meta,
+                fact_id=canonical.id,
+                owner_type=canonical.owner_type or owner_type_in,
+                owner_id=canonical.owner_id or owner_id_in,
+                created_at=canonical.created_at,
+                updated_at=canonical.updated_at,
+                source_ids=list(canonical.source_ids or []),
+                session_id=getattr(canonical, "session_id", None),
+            )
 
             payload = {
                 "id": canonical.id,
@@ -366,7 +388,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
                     if canonical.confidence is not None
                     else None
                 ),
-                "meta": json.dumps(canonical.meta),
+                "meta": json.dumps(normalized_meta),
             }
 
             # SQL upsert
@@ -412,7 +434,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
             )
             # Embedding upsert (commit after vector update)
             try:
-                meta = canonical.meta if isinstance(canonical.meta, dict) else {}
+                meta = normalized_meta
                 topic = meta.get("topic")
 
                 owner_type_out = canonical.owner_type or owner_type_in
@@ -421,6 +443,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
                     "tenant_id": tenant_id_in,
                     "subject": canonical.subject,
                     "predicate": canonical.predicate,
+                    "kb_lane": meta.get("kb_lane"),
                     "owner_type": owner_type_out,
                     "owner_id": owner_id_out,
                     "scope_key": f"{owner_type_out}:{owner_id_out}",

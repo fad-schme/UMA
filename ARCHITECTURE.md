@@ -36,3 +36,14 @@ Canonical entry points:
 - Ingest document: `uma.ingest.ingest_document(...)`
 - Retrieve context: `uma.api.UMAMemory.retrieve_context(...)`
 - Retrieve memory: `uma.api.UMAMemory.retrieve_memory(...)`
+
+Canonical storage taxonomy:
+
+- Shared storage vocabulary lives in `uma.common.storage_metadata`.
+- Persisted records use one kind taxonomy:
+  `raw_source`, `wiki_page`, `semantic_fact`, `episodic_event`,
+  `procedural_rule`, `profile_fact`, `decision_trace`, `query_artifact`.
+- Persisted and retrieved artifacts expose one lane taxonomy through `kb_lane`:
+  `raw`, `wiki`, `semantic`, `episodic`, `procedural`, `profile`, `trace`.
+- `wiki/*.md` is projection/export only. Canonical wiki state belongs in UMA records,
+  not markdown files.

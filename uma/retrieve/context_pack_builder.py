@@ -23,6 +23,13 @@ from uma.common.dedupe import dedupe_by_id
 from uma.common.accessors import get_attr_or_key
 from uma.common.serialization import chunk_to_dict
 from uma.common.identity import normalize_user_id
+from uma.common.storage_metadata import (
+    normalize_chunk_metadata,
+    normalize_episode_metadata,
+    normalize_fact_metadata,
+    normalize_skill_metadata,
+    shared_metadata_view,
+)
 from uma.common.text_bounds import trim_to_sentence_boundary
 
 logger = logging.getLogger(__name__)
@@ -129,13 +136,31 @@ class ContextPackBuilder:
         # -------------------------------
         for ep in ctx.get("episodic", []):
             try:
+                normalized_meta = normalize_episode_metadata(
+                    get_attr_or_key(ep, "meta", {}),
+                    episode_id=str(get_attr_or_key(ep, "id") or ""),
+                    owner_type=str(get_attr_or_key(ep, "owner_type") or owner_type),
+                    owner_id=str(get_attr_or_key(ep, "owner_id") or owner_id),
+                    timestamp=get_attr_or_key(ep, "timestamp"),
+                    session_id=get_attr_or_key(ep, "session_id"),
+                )
+                metadata = shared_metadata_view(
+                    meta=normalized_meta,
+                    owner_type=str(get_attr_or_key(ep, "owner_type") or owner_type),
+                    owner_id=str(get_attr_or_key(ep, "owner_id") or owner_id),
+                    created_at=get_attr_or_key(ep, "created_at") or get_attr_or_key(ep, "timestamp"),
+                    updated_at=get_attr_or_key(ep, "updated_at") or get_attr_or_key(ep, "timestamp"),
+                    session_id=get_attr_or_key(ep, "session_id"),
+                )
                 pack["episodic"].append(
                     {
                         "id": get_attr_or_key(ep, "id"),
                         "timestamp": get_attr_or_key(ep, "timestamp"),
                         "summary": get_attr_or_key(ep, "summary") or repr(ep),
                         "tags": get_attr_or_key(ep, "tags", []),
-                        "meta": get_attr_or_key(ep, "meta", {}),
+                        "kind": metadata["kind"],
+                        "kb_lane": metadata["kb_lane"],
+                        "meta": metadata,
                     }
                 )
             except Exception:
@@ -151,7 +176,24 @@ class ContextPackBuilder:
         # -------------------------------
         for fact in ctx.get("facts", []):
             try:
-                meta = get_attr_or_key(fact, "meta", {})
+                normalized_meta = normalize_fact_metadata(
+                    get_attr_or_key(fact, "meta", {}),
+                    fact_id=str(get_attr_or_key(fact, "id") or ""),
+                    owner_type=str(get_attr_or_key(fact, "owner_type") or owner_type),
+                    owner_id=str(get_attr_or_key(fact, "owner_id") or owner_id),
+                    created_at=get_attr_or_key(fact, "created_at"),
+                    updated_at=get_attr_or_key(fact, "updated_at"),
+                    source_ids=list(get_attr_or_key(fact, "source_ids", []) or []),
+                    session_id=get_attr_or_key(fact, "session_id"),
+                )
+                metadata = shared_metadata_view(
+                    meta=normalized_meta,
+                    owner_type=str(get_attr_or_key(fact, "owner_type") or owner_type),
+                    owner_id=str(get_attr_or_key(fact, "owner_id") or owner_id),
+                    created_at=get_attr_or_key(fact, "created_at"),
+                    updated_at=get_attr_or_key(fact, "updated_at"),
+                    session_id=get_attr_or_key(fact, "session_id"),
+                )
                 pack["facts"].append(
                     {
                         "id": get_attr_or_key(fact, "id"),
@@ -160,8 +202,10 @@ class ContextPackBuilder:
                         "object": get_attr_or_key(fact, "object"),
                         "confidence": get_attr_or_key(fact, "confidence", 0.0),
                         "source_ids": get_attr_or_key(fact, "source_ids", []),
-                        "meta": meta,
-                        "fact_text": meta.get("fact_text") if isinstance(meta, dict) else None,
+                        "kind": metadata["kind"],
+                        "kb_lane": metadata["kb_lane"],
+                        "meta": metadata,
+                        "fact_text": normalized_meta.get("fact_text"),
                     }
                 )
             except Exception:
@@ -177,6 +221,26 @@ class ContextPackBuilder:
         # -------------------------------
         for chunk in ctx.get("chunks", []):
             try:
+                normalized_meta = normalize_chunk_metadata(
+                    get_attr_or_key(chunk, "meta", {}),
+                    chunk_id=str(get_attr_or_key(chunk, "id") or ""),
+                    doc_id=str(get_attr_or_key(chunk, "doc_id") or ""),
+                    owner_type=str(get_attr_or_key(chunk, "owner_type") or owner_type),
+                    owner_id=str(get_attr_or_key(chunk, "owner_id") or owner_id),
+                    created_at=get_attr_or_key(chunk, "created_at"),
+                    updated_at=get_attr_or_key(chunk, "updated_at"),
+                    page_range=get_attr_or_key(chunk, "page_range"),
+                    position=get_attr_or_key(chunk, "position"),
+                    source_path=str(get_attr_or_key(chunk, "source_path") or ""),
+                    source_hash=str(get_attr_or_key(chunk, "source_hash") or ""),
+                )
+                metadata = shared_metadata_view(
+                    meta=normalized_meta,
+                    owner_type=str(get_attr_or_key(chunk, "owner_type") or owner_type),
+                    owner_id=str(get_attr_or_key(chunk, "owner_id") or owner_id),
+                    created_at=get_attr_or_key(chunk, "created_at"),
+                    updated_at=get_attr_or_key(chunk, "updated_at"),
+                )
                 pack["chunks"].append(
                     {
                         "id": get_attr_or_key(chunk, "id"),
@@ -185,7 +249,9 @@ class ContextPackBuilder:
                         "text": get_attr_or_key(chunk, "text", ""),
                         "page_range": get_attr_or_key(chunk, "page_range"),
                         "position": get_attr_or_key(chunk, "position", 0),
-                        "meta": get_attr_or_key(chunk, "meta", {}),
+                        "kind": metadata["kind"],
+                        "kb_lane": metadata["kb_lane"],
+                        "meta": metadata,
                     }
                 )
             except Exception:
@@ -201,6 +267,21 @@ class ContextPackBuilder:
         # -------------------------------
         for skill in ctx.get("skills", []):
             try:
+                normalized_meta = normalize_skill_metadata(
+                    get_attr_or_key(skill, "meta", {}),
+                    skill_id=str(get_attr_or_key(skill, "id") or ""),
+                    owner_type=str(get_attr_or_key(skill, "owner_type") or owner_type),
+                    owner_id=str(get_attr_or_key(skill, "owner_id") or owner_id),
+                    created_at=get_attr_or_key(skill, "created_at"),
+                    updated_at=get_attr_or_key(skill, "updated_at"),
+                )
+                metadata = shared_metadata_view(
+                    meta=normalized_meta,
+                    owner_type=str(get_attr_or_key(skill, "owner_type") or owner_type),
+                    owner_id=str(get_attr_or_key(skill, "owner_id") or owner_id),
+                    created_at=get_attr_or_key(skill, "created_at"),
+                    updated_at=get_attr_or_key(skill, "updated_at"),
+                )
                 pack["skills"].append(
                     {
                         "id": get_attr_or_key(skill, "id"),
@@ -208,6 +289,9 @@ class ContextPackBuilder:
                         "description": get_attr_or_key(skill, "description"),
                         "plan": get_attr_or_key(skill, "plan", {}),
                         "tools": get_attr_or_key(skill, "tools", []),
+                        "kind": metadata["kind"],
+                        "kb_lane": metadata["kb_lane"],
+                        "meta": metadata,
                     }
                 )
             except Exception:

@@ -122,6 +122,16 @@ The safe baseline may still require local setup for optional providers such as O
 `storage.db_root` supports `~` and environment variables. For relative paths, set
 `storage.db_root_base` to control resolution (`auto`, `cwd`, or `config`).
 
+### Canonical storage metadata
+UMA uses one shared storage vocabulary across ingest and retrieval.
+
+- `kind`: `raw_source`, `wiki_page`, `semantic_fact`, `episodic_event`, `procedural_rule`, `profile_fact`, `decision_trace`, `query_artifact`
+- `kb_lane`: `raw`, `wiki`, `semantic`, `episodic`, `procedural`, `profile`, `trace`
+- shared metadata fields on persisted artifacts:
+  `kind`, `kb_lane`, `owner_type`, `owner_id`, `scope`, `source_id`, `source_type`, `created_at`, `updated_at`, `provenance`, `status`
+
+`wiki/*.md` is projection-only output. Canonical wiki state belongs in UMA records with `kind="wiki_page"` and `kb_lane="wiki"`.
+
 ## Typical Usage
 
 ```python
