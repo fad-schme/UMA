@@ -57,10 +57,7 @@ class IngestConfig:
     extract_max_chunks: Optional[int] = None
     allow_empty_pages: bool = False
     doc_min_fact_words: int = 10
-    doc_summary_enabled: bool = True
-    doc_summary_max_facts: int = 5
     doc_episode_enabled: bool = True
     graph_update_concurrency: int = 8
-    fact_extraction_batch_enabled: bool = False
     fact_extraction_batch_size_chunks: int = 4
     fact_extraction_batch_max_chars: int = 12000

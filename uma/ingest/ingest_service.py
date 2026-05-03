@@ -18,8 +18,6 @@ from .consolidation_trigger import maybe_trigger_consolidation
 from uma.common.types import Chunk, Fact, TargetOwner
 from uma.stores.document_sql import DocumentRecord
 from uma.common.ownership import resolve_target_owner
-from uma.common.storage_metadata import normalize_fact_metadata
-
 logger = logging.getLogger(__name__)
 
 _INGEST_PIPELINE_VERSION = "doc_ingest_v1"
@@ -39,19 +37,10 @@ class _IngestRuntime(NamedTuple):
     embedding_cfg: Any
 
 
-def _coerce_ingest_target_owner(owner_type: str, owner_id: str) -> TargetOwner:
-    return resolve_target_owner(
-        owner_type=owner_type,
-        owner_id=owner_id,
-        allowed_owner_types=("agent", "user", "workspace"),
-    )
-
-
 def _merge_manifest_meta(
     *,
     existing: dict | None,
     ingest_signature: dict,
-    source_path: str,
     now: datetime,
     reingest_reason: str | None = None,
 ) -> dict:
@@ -60,7 +49,6 @@ def _merge_manifest_meta(
     meta.setdefault("first_seen_at", now.isoformat())
 
     meta["last_seen_at"] = now.isoformat()
-    meta["source_path"] = source_path
 
     prior_sig = meta.get("ingest_signature")
     if prior_sig and prior_sig != ingest_signature:
@@ -86,10 +74,6 @@ def _merge_manifest_meta(
     meta["ingest_history"] = history[-5:]
 
     return meta
-
-
-def _resolve_ingest_config(config: IngestConfig | None) -> IngestConfig:
-    return config or IngestConfig()
 
 
 def _resolve_ingest_runtime(memory: Any) -> _IngestRuntime:
@@ -146,7 +130,7 @@ def _build_ingest_signature(config: IngestConfig, runtime: _IngestRuntime) -> di
 
 async def _run_manifest_gate(
     *,
-    file_path: str,
+    parsed: ParsedDocument,
     config: IngestConfig,
     runtime: _IngestRuntime,
     owner_type: str,
@@ -154,15 +138,9 @@ async def _run_manifest_gate(
     tenant_id: str,
     workspace_id: str | None,
     warnings: List[str],
-) -> tuple[ParsedDocument, dict, Any | None, IngestReport | None]:
-    parsed = parse_file(file_path)
-    if not parsed.pages:
-        if config.allow_empty_pages:
-            warnings.append("document has no extractable pages")
-        else:
-            raise ValueError("ingest_document: document has no extractable pages")
-
+) -> tuple[dict, Any | None, IngestReport | None]:
     ingest_signature = _build_ingest_signature(config, runtime)
+
     existing_manifest = None
     try:
         if hasattr(runtime.document_store, "get_by_owner_and_hash"):
@@ -175,18 +153,12 @@ async def _run_manifest_gate(
         logger.exception("ingest_document: manifest lookup failed; continuing with ingest")
 
     if existing_manifest is None:
-        return parsed, ingest_signature, None, None
+        return ingest_signature, None, None
 
     existing_sig = (getattr(existing_manifest, "meta", None) or {}).get("ingest_signature") or {}
     if existing_sig == ingest_signature:
         try:
             now_refresh = datetime.now(timezone.utc)
-            refreshed_meta = _merge_manifest_meta(
-                existing=getattr(existing_manifest, "meta", None) or {},
-                ingest_signature=ingest_signature,
-                source_path=parsed.source_path,
-                now=now_refresh,
-            )
             await runtime.document_store.upsert_document(
                 DocumentRecord(
                     doc_id=existing_manifest.doc_id,
@@ -197,7 +169,11 @@ async def _run_manifest_gate(
                     owner_type=owner_type,
                     owner_id=owner_id,
                     workspace_id=workspace_id,
-                    meta=refreshed_meta,
+                    meta=_merge_manifest_meta(
+                        existing=getattr(existing_manifest, "meta", None) or {},
+                        ingest_signature=ingest_signature,
+                        now=now_refresh,
+                    ),
                 )
             )
         except Exception:
@@ -209,7 +185,6 @@ async def _run_manifest_gate(
 
         warnings.append(f"skipped ingest (idempotent): owner={owner_type}:{owner_id} hash={parsed.source_hash}")
         return (
-            parsed,
             ingest_signature,
             existing_manifest,
             IngestReport(
@@ -223,13 +198,6 @@ async def _run_manifest_gate(
 
     try:
         now_refresh = datetime.now(timezone.utc)
-        refreshed_meta = _merge_manifest_meta(
-            existing=getattr(existing_manifest, "meta", None) or {},
-            ingest_signature=ingest_signature,
-            source_path=parsed.source_path,
-            now=now_refresh,
-            reingest_reason="signature_changed",
-        )
         await runtime.document_store.upsert_document(
             DocumentRecord(
                 doc_id=existing_manifest.doc_id,
@@ -240,7 +208,12 @@ async def _run_manifest_gate(
                 owner_type=owner_type,
                 owner_id=owner_id,
                 workspace_id=workspace_id,
-                meta=refreshed_meta,
+                meta=_merge_manifest_meta(
+                    existing=getattr(existing_manifest, "meta", None) or {},
+                    ingest_signature=ingest_signature,
+                    now=now_refresh,
+                    reingest_reason="signature_changed",
+                ),
             )
         )
         warnings.append(f"re-ingesting existing manifest doc_id={existing_manifest.doc_id} (signature changed)")
@@ -251,7 +224,7 @@ async def _run_manifest_gate(
         )
         warnings.append(f"failed to refresh manifest for re-ingest {existing_manifest.doc_id}")
 
-    return parsed, ingest_signature, existing_manifest, None
+    return ingest_signature, existing_manifest, None
 
 
 def _prepare_document_chunks(
@@ -311,12 +284,6 @@ async def _persist_chunks(
     warnings: List[str],
 ) -> List[Chunk]:
     try:
-        merged_meta = _merge_manifest_meta(
-            existing=(getattr(existing_manifest, "meta", None) or {}) if existing_manifest is not None else {},
-            ingest_signature=ingest_signature,
-            source_path=parsed.source_path,
-            now=datetime.now(timezone.utc),
-        )
         await runtime.document_store.upsert_document(
             DocumentRecord(
                 doc_id=parsed.doc_id,
@@ -327,14 +294,45 @@ async def _persist_chunks(
                 owner_type=owner_type,
                 owner_id=owner_id,
                 workspace_id=workspace_id,
-                meta=merged_meta,
+                meta=_merge_manifest_meta(
+                    existing=(getattr(existing_manifest, "meta", None) or {}) if existing_manifest is not None else {},
+                    ingest_signature=ingest_signature,
+                    now=datetime.now(timezone.utc),
+                ),
             )
         )
     except Exception:
         warnings.append(f"failed to persist document manifest {parsed.doc_id}")
         logger.exception("ingest_document: document manifest upsert failed")
+    chunk_rows = _build_chunk_rows(
+        parsed=parsed,
+        final_chunks=final_chunks,
+        config=config,
+        tenant_id=tenant_id,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        workspace_id=workspace_id,
+    )
 
-    created_chunks: List[Chunk] = []
+    return await _embed_and_upsert_chunks(
+        final_chunks=final_chunks,
+        chunk_rows=chunk_rows,
+        config=config,
+        runtime=runtime,
+        warnings=warnings,
+    )
+
+
+def _build_chunk_rows(
+    *,
+    parsed: ParsedDocument,
+    final_chunks: List[DocumentChunk],
+    config: IngestConfig,
+    tenant_id: str,
+    owner_type: str,
+    owner_id: str,
+    workspace_id: str | None,
+) -> Dict[str, Chunk]:
     chunk_rows: Dict[str, Chunk] = {}
     now = datetime.now(timezone.utc)
     for chunk in final_chunks:
@@ -363,7 +361,18 @@ async def _persist_chunks(
                 "paragraph_index_end": chunk.paragraph_index_end,
             },
         )
+    return chunk_rows
 
+
+async def _embed_and_upsert_chunks(
+    *,
+    final_chunks: List[DocumentChunk],
+    chunk_rows: Dict[str, Chunk],
+    config: IngestConfig,
+    runtime: _IngestRuntime,
+    warnings: List[str],
+) -> List[Chunk]:
+    created_chunks: List[Chunk] = []
     logger.info(
         "DOC_CHUNK_EMBED_AND_PERSIST count=%d sample_ids=%s",
         len(final_chunks),
@@ -394,7 +403,6 @@ async def _persist_chunks(
         except Exception:
             warnings.append(f"failed to persist chunk {chunk_id}")
             logger.exception("ingest_document: failed to upsert chunk %s", chunk_id)
-
     return created_chunks
 
 
@@ -426,8 +434,8 @@ async def _extract_facts_and_update_graph(
         source_hash=parsed.source_hash,
         doc_id=parsed.doc_id,
         min_fact_words=int(config.doc_min_fact_words),
-        batch_size_chunks=4,
-        max_chars=12000,
+        batch_size_chunks=int(config.fact_extraction_batch_size_chunks),
+        max_chars=int(config.fact_extraction_batch_max_chars),
     )
 
     for fact in extracted_fact_records:
@@ -437,28 +445,15 @@ async def _extract_facts_and_update_graph(
             fact.owner_id = owner_id
         fact.tenant_id = tenant_id
         fact.workspace_id = workspace_id
-        if fact.meta is None:
-            fact.meta = {}
-        fact.meta = normalize_fact_metadata(
-            {
-                **fact.meta,
-                "doc_id": parsed.doc_id,
-                "source_path": parsed.source_path,
-                "source_hash": parsed.source_hash,
-                "ingest_pipeline_version": _INGEST_PIPELINE_VERSION,
-                "extractor_version": _EXTRACTOR_VERSION,
-                "chunker_version": _CHUNKER_VERSION,
-                "fact_text": fact.object,
-                "fact_type": "summary" if fact.predicate == "SUMMARY" else "claim",
-            },
-            fact_id=fact.id,
-            owner_type=owner_type,
-            owner_id=owner_id,
-            created_at=fact.created_at,
-            updated_at=fact.updated_at,
-            source_ids=list(fact.source_ids or []),
-            session_id=getattr(fact, "session_id", None),
-        )
+        fact.meta = dict(fact.meta or {})
+        fact.meta.setdefault("doc_id", parsed.doc_id)
+        fact.meta.setdefault("source_path", parsed.source_path)
+        fact.meta.setdefault("source_hash", parsed.source_hash)
+        fact.meta.setdefault("fact_text", fact.object)
+        fact.meta.setdefault("fact_type", "summary" if fact.predicate == "SUMMARY" else "claim")
+        fact.meta["ingest_pipeline_version"] = _INGEST_PIPELINE_VERSION
+        fact.meta["extractor_version"] = _EXTRACTOR_VERSION
+        fact.meta["chunker_version"] = _CHUNKER_VERSION
 
     facts_created = 0
     if extracted_fact_records:
@@ -500,33 +495,6 @@ async def _extract_facts_and_update_graph(
     return facts_created, graph_edges
 
 
-async def _run_post_ingest_hooks(
-    *,
-    parsed: ParsedDocument,
-    config: IngestConfig,
-    runtime: _IngestRuntime,
-    memory: Any,
-    owner_type: str,
-    owner_id: str,
-) -> None:
-    if getattr(config, "doc_episode_enabled", True):
-        await write_document_episode(
-            doc_id=parsed.doc_id,
-            summary_text=f"Document ingested: {parsed.source_path}",
-            owner_type=owner_type,
-            owner_id=owner_id,
-            user_id=owner_id if owner_type == "user" else None,
-            embedder=runtime.embedder,
-            episodic_core=runtime.episodic_core,
-        )
-
-    await maybe_trigger_consolidation(
-        memory=memory,
-        user_id=owner_id if owner_type == "user" else None,
-        enabled=False,
-    )
-
-
 async def ingest_document(
     file_path: str,
     *,
@@ -545,18 +513,17 @@ async def ingest_document(
     if memory is None:
         raise ValueError("ingest_document: memory is required")
 
-    config = _resolve_ingest_config(config)
+    config = config or IngestConfig()
     runtime = _resolve_ingest_runtime(memory)
 
-    if target_owner is None:
-        if not owner_type or not owner_id:
-            raise ValueError("ingest_document: target_owner or owner_type/owner_id is required")
-        target_owner = _coerce_ingest_target_owner(owner_type, owner_id)
-    else:
-        target_owner = resolve_target_owner(
-            target_owner=target_owner,
-            allowed_owner_types=("agent", "user", "workspace"),
-        )
+    if target_owner is None and (not owner_type or not owner_id):
+        raise ValueError("ingest_document: target_owner or owner_type/owner_id is required")
+    target_owner = resolve_target_owner(
+        target_owner=target_owner,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        allowed_owner_types=("agent", "user", "workspace"),
+    )
     owner_type = target_owner.owner_type
     owner_id = target_owner.owner_id
     tenant_id = target_owner.tenant_id
@@ -565,8 +532,14 @@ async def ingest_document(
     if not file_path or not isinstance(file_path, str):
         raise ValueError("ingest_document: file_path must be a non-empty string")
 
-    parsed, ingest_signature, existing_manifest, early_report = await _run_manifest_gate(
-        file_path=file_path,
+    parsed = parse_file(file_path)
+    if not parsed.pages:
+        if config.allow_empty_pages:
+            warnings.append("document has no extractable pages")
+        else:
+            raise ValueError("ingest_document: document has no extractable pages")
+    ingest_signature, existing_manifest, early_report = await _run_manifest_gate(
+        parsed=parsed,
         config=config,
         runtime=runtime,
         owner_type=owner_type,
@@ -612,13 +585,20 @@ async def ingest_document(
         warnings=warnings,
     )
 
-    await _run_post_ingest_hooks(
-        parsed=parsed,
-        config=config,
-        runtime=runtime,
+    if config.doc_episode_enabled:
+        await write_document_episode(
+            doc_id=parsed.doc_id,
+            summary_text=f"Document ingested: {parsed.source_path}",
+            owner_type=owner_type,
+            owner_id=owner_id,
+            user_id=owner_id if owner_type == "user" else None,
+            embedder=runtime.embedder,
+            episodic_core=runtime.episodic_core,
+        )
+    await maybe_trigger_consolidation(
         memory=memory,
-        owner_type=owner_type,
-        owner_id=owner_id,
+        user_id=owner_id if owner_type == "user" else None,
+        enabled=False,
     )
 
     return IngestReport(

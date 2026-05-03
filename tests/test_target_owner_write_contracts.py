@@ -4,21 +4,33 @@ from datetime import datetime, timezone
 
 import pytest
 
-from uma.ingest.ingest_service import _coerce_ingest_target_owner
+from uma.common.ownership import resolve_target_owner
 from uma.common.types import OwnershipRef, Skill, TargetOwner
 
 
 def test_ingest_target_owner_accepts_agent_user_and_workspace() -> None:
-    agent_owner = _coerce_ingest_target_owner("agent", "agent:alpha")
+    agent_owner = resolve_target_owner(
+        owner_type="agent",
+        owner_id="agent:alpha",
+        allowed_owner_types=("agent", "user", "workspace"),
+    )
     assert agent_owner.owner_type == "agent"
     assert agent_owner.owner_id == "agent:alpha"
 
-    user_owner = _coerce_ingest_target_owner("user", "u1")
+    user_owner = resolve_target_owner(
+        owner_type="user",
+        owner_id="u1",
+        allowed_owner_types=("agent", "user", "workspace"),
+    )
     assert user_owner.owner_type == "user"
     assert user_owner.owner_id == "user:u1"
     assert user_owner.workspace_id is None
 
-    workspace_owner = _coerce_ingest_target_owner("workspace", "workspace:alpha")
+    workspace_owner = resolve_target_owner(
+        owner_type="workspace",
+        owner_id="workspace:alpha",
+        allowed_owner_types=("agent", "user", "workspace"),
+    )
     assert workspace_owner.owner_type == "workspace"
     assert workspace_owner.owner_id == "workspace:alpha"
     assert workspace_owner.workspace_id == "workspace:alpha"
@@ -27,7 +39,11 @@ def test_ingest_target_owner_accepts_agent_user_and_workspace() -> None:
 @pytest.mark.parametrize("owner_type", ["system"])
 def test_ingest_target_owner_rejects_unsupported_owner_types(owner_type: str) -> None:
     with pytest.raises(ValueError, match="owner_type"):
-        _coerce_ingest_target_owner(owner_type, f"{owner_type}:alpha")
+        resolve_target_owner(
+            owner_type=owner_type,
+            owner_id=f"{owner_type}:alpha",
+            allowed_owner_types=("agent", "user", "workspace"),
+        )
 
 
 @pytest.mark.asyncio

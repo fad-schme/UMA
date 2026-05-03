@@ -4,18 +4,16 @@ import json
 
 import pytest
 
-from uma.ingest.ingest_service import _resolve_ingest_config
 from uma.ingest.types import IngestConfig
 
 
-def test_ingest_config_defaults_do_not_read_memory_semantic_overrides(uma_memory):
-    resolved = _resolve_ingest_config(None)
+def test_ingest_config_defaults_are_explicit() -> None:
+    resolved = IngestConfig()
 
     assert resolved == IngestConfig()
     assert resolved.doc_min_fact_words == 10
-    assert resolved.doc_summary_enabled is True
-    assert resolved.doc_summary_max_facts == 5
-    assert resolved.doc_min_fact_words != uma_memory.raw_config["semantic"]["doc_min_fact_words"]
+    assert resolved.fact_extraction_batch_size_chunks == 4
+    assert resolved.fact_extraction_batch_max_chars == 12000
 
 
 @pytest.mark.asyncio

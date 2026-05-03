@@ -82,7 +82,7 @@ def build_test_config(
                 "max_env_calls": 6,
             },
         },
-        "semantic": {"salience_threshold": 0.1, "doc_min_fact_words": 5, "doc_summary_enabled": False},
+        "semantic": {"salience_threshold": 0.1},
         "consolidation": {
             "enabled": False,
             "cluster_similarity": 0.75,
