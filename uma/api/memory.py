@@ -377,85 +377,6 @@ class UMAMemory:
             query_text=query_text,
             memory_intent=memory_intent,
         )
-
-    async def _retrieve_context_for_context(
-        self,
-        runtime_context: RuntimeContext,
-        *,
-        query_text: str,
-        lane_filter: Optional[list[str]] = None,
-    ) -> Dict[str, Any]:
-        return await self.runtime.retrieve_context(
-            runtime_context,
-            query_text=query_text,
-            lane_filter=lane_filter,
-        )
-
-    async def _retrieve_memory_for_context(
-        self,
-        runtime_context: RuntimeContext,
-        *,
-        query_text: str,
-        memory_intent: str = "continuity",
-    ) -> Dict[str, Any]:
-        return await self.runtime.retrieve_memory(
-            runtime_context,
-            query_text=query_text,
-            memory_intent=memory_intent,
-        )
-
-    async def _render_context_for_context(
-        self,
-        runtime_context: RuntimeContext,
-        *,
-        query_text: str,
-    ) -> str:
-        return await self.runtime.render_context(
-            runtime_context,
-            query_text=query_text,
-        )
-
-    async def _retrieve_structured_context_for_context(
-        self,
-        runtime_context: RuntimeContext,
-        *,
-        query_text: str,
-    ) -> Dict[str, Any]:
-        """Compatibility shim for pre-cleanup context callers."""
-        return await self._retrieve_context_for_context(
-            runtime_context,
-            query_text=query_text,
-        )
-
-    async def _retrieve_rendered_context_for_context(
-        self,
-        runtime_context: RuntimeContext,
-        *,
-        query_text: str,
-    ) -> str:
-        """Compatibility shim for pre-cleanup rendered callers."""
-        return await self._render_context_for_context(
-            runtime_context,
-            query_text=query_text,
-        )
-
-    async def _get_context_messages_for_context(
-        self,
-        runtime_context: RuntimeContext,
-        *,
-        query_text: str,
-        render_mode: str = "animus_v1",
-    ) -> Dict[str, Any]:
-        return await self.runtime.get_context_messages(
-            runtime_context,
-            query_text=query_text,
-            render_mode=render_mode,
-        )
-
-    def _build_retrieval_request(self, runtime_context: RuntimeContext) -> Any:
-        """Compatibility bridge to the canonical runtime request builder."""
-        return self.runtime._build_retrieval_request(runtime_context)
-    
     
     # ----------------------------------------------------------------------
     # Core API: Data Ingestion
@@ -494,21 +415,6 @@ class UMAMemory:
             extra_meta=extra_meta,
         )
 
-    async def sync_memory(
-        self,
-        *,
-        user_id: str,
-        user_msg: str,
-        assistant_reply: str,
-        extra_meta: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """Backward-compatible alias for `process_turn(...)`."""
-        await self.process_turn(
-            user_id=user_id,
-            user_msg=user_msg,
-            assistant_reply=assistant_reply,
-            extra_meta=extra_meta,
-        )
 
     async def ingest_document(
         self,

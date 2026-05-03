@@ -72,14 +72,6 @@ class UMARequestHandle:
         *,
         lane_filter: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        memory = getattr(self.runtime, "memory_bridge", None)
-        delegate = getattr(memory, "_retrieve_context_for_context", None)
-        if callable(delegate):
-            return await delegate(
-                self.context,
-                query_text=query_text,
-                lane_filter=lane_filter,
-            )
         return await self.runtime.retrieve_context(
             self.context,
             query_text=query_text,
@@ -92,29 +84,10 @@ class UMARequestHandle:
         *,
         memory_intent: str = "continuity",
     ) -> Dict[str, Any]:
-        memory = getattr(self.runtime, "memory_bridge", None)
-        delegate = getattr(memory, "_retrieve_memory_for_context", None)
-        if callable(delegate):
-            return await delegate(
-                self.context,
-                query_text=query_text,
-                memory_intent=memory_intent,
-            )
         return await self.runtime.retrieve_memory(
             self.context,
             query_text=query_text,
             memory_intent=memory_intent,
-        )
-
-    async def retrieve_structured_context(self, query_text: str) -> Dict[str, Any]:
-        """Compatibility shim for older context retrieval callers."""
-        return await self.retrieve_context(query_text)
-
-    async def retrieve_rendered_context(self, query_text: str) -> str:
-        """Compatibility shim for older presentation callers."""
-        return await self.runtime.render_context(
-            self.context,
-            query_text=query_text,
         )
 
     async def get_context_messages(
@@ -123,14 +96,6 @@ class UMARequestHandle:
         *,
         render_mode: str = "animus_v1",
     ) -> Dict[str, Any]:
-        memory = getattr(self.runtime, "memory_bridge", None)
-        delegate = getattr(memory, "_get_context_messages_for_context", None)
-        if callable(delegate):
-            return await delegate(
-                self.context,
-                query_text=query_text,
-                render_mode=render_mode,
-            )
         return await self.runtime.get_context_messages(
             self.context,
             query_text=query_text,
@@ -670,30 +635,6 @@ class UMARuntime:
         profile_overlay = self._render_profile_overlay()
         parts = [part.strip() for part in (profile_overlay, rendered_memory) if part and part.strip()]
         return "\n\n".join(parts).strip()
-
-    async def retrieve_structured_context(
-        self,
-        runtime_context: RuntimeContext,
-        *,
-        query_text: str,
-    ) -> Dict[str, Any]:
-        """Compatibility shim for older callers of the pre-cleanup context API."""
-        return await self.retrieve_context(
-            runtime_context,
-            query_text=query_text,
-        )
-
-    async def retrieve_rendered_context(
-        self,
-        runtime_context: RuntimeContext,
-        *,
-        query_text: str,
-    ) -> str:
-        """Compatibility shim for older callers of rendered context retrieval."""
-        return await self.render_context(
-            runtime_context,
-            query_text=query_text,
-        )
 
     async def get_context_messages(
         self,

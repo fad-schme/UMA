@@ -12,7 +12,7 @@ from uma.retrieve.rlm.context_pack import ContextPack
 
 
 @pytest.mark.asyncio
-async def test_request_handle_retrieval_delegates_to_memory_bridge(uma_memory) -> None:
+async def test_request_handle_retrieval_delegates_directly_to_runtime(uma_memory) -> None:
     memory = uma_memory
     runtime = UMARuntime.from_memory(memory)
     context = RuntimeContext(
@@ -76,9 +76,9 @@ async def test_request_handle_retrieval_delegates_to_memory_bridge(uma_memory) -
         seen.append(("messages", bound_context, f"{query_text}:{render_mode}"))
         return {"messages": [{"role": "system", "content": "rendered context"}], "meta": {"render_mode": render_mode}}
 
-    memory._retrieve_context_for_context = fake_context  # type: ignore[method-assign]
-    memory._retrieve_memory_for_context = fake_memory  # type: ignore[method-assign]
-    memory._get_context_messages_for_context = fake_messages  # type: ignore[method-assign]
+    runtime.retrieve_context = fake_context  # type: ignore[method-assign]
+    runtime.retrieve_memory = fake_memory  # type: ignore[method-assign]
+    runtime.get_context_messages = fake_messages  # type: ignore[method-assign]
 
     structured = await handle.retrieve_context("hello world", lane_filter=["semantic"])
     memory_payload = await handle.retrieve_memory("hello world")

@@ -109,7 +109,7 @@ async def test_retrieval_does_not_see_prior_session_turn_artifacts_by_default(um
     finally:
         sem_conn.close()
 
-    req_a = mem._build_retrieval_request(
+    req_a = mem.runtime._build_retrieval_request(
         RuntimeContext(
             tenant_id=DEFAULT_TENANT_ID,
             agent_id=mem.agent_id,
@@ -118,7 +118,7 @@ async def test_retrieval_does_not_see_prior_session_turn_artifacts_by_default(um
             session_id="session-a",
         )
     )
-    req_b = mem._build_retrieval_request(
+    req_b = mem.runtime._build_retrieval_request(
         RuntimeContext(
             tenant_id=DEFAULT_TENANT_ID,
             agent_id=mem.agent_id,
@@ -179,7 +179,7 @@ async def test_retrieval_does_not_share_turn_artifacts_across_agents(uma_memory)
     finally:
         sem_conn.close()
 
-    req_a = mem._build_retrieval_request(
+    req_a = mem.runtime._build_retrieval_request(
         RuntimeContext(
             tenant_id=DEFAULT_TENANT_ID,
             agent_id="agent-a",
@@ -188,7 +188,7 @@ async def test_retrieval_does_not_share_turn_artifacts_across_agents(uma_memory)
             session_id="shared-session",
         )
     )
-    req_b = mem._build_retrieval_request(
+    req_b = mem.runtime._build_retrieval_request(
         RuntimeContext(
             tenant_id=DEFAULT_TENANT_ID,
             agent_id="agent-b",

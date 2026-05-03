@@ -79,7 +79,7 @@ async def test_session_to_user_promotion_creates_new_fact_and_preserves_original
     assert promoted.meta["promotion"]["source_fact_id"] == source.id
     assert promoted.meta["promotion"]["target_owner_type"] == "user"
 
-    request = memory._build_retrieval_request(
+    request = memory.runtime._build_retrieval_request(
         RuntimeContext(
             tenant_id=DEFAULT_TENANT_ID,
             agent_id=memory.agent_id,
@@ -137,7 +137,7 @@ async def test_session_to_workspace_promotion_is_explicit_and_does_not_broaden_u
     )
     assert {fact.id for fact in workspace_facts} == {promoted.id}
 
-    request = memory._build_retrieval_request(
+    request = memory.runtime._build_retrieval_request(
         RuntimeContext(
             tenant_id=DEFAULT_TENANT_ID,
             agent_id=memory.agent_id,

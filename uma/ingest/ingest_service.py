@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import logging
 import hashlib
+import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, NamedTuple
 
-from .types import IngestConfig, IngestReport
+from .types import DocumentChunk, IngestConfig, IngestReport, ParsedDocument
 from .parser import parse_file
 from .normalizer import normalize_document
 from .chunker import chunk_sections, finalize_chunks
@@ -26,6 +26,17 @@ _INGEST_PIPELINE_VERSION = "doc_ingest_v1"
 _EXTRACTOR_VERSION = "doc_fact_extract_v1"
 _SPLITTER_VERSION = "doc_normalize_v1"
 _CHUNKER_VERSION = "doc_chunk_v2"
+
+
+class _IngestRuntime(NamedTuple):
+    embedder: Any
+    llm: Any
+    semantic_core: Any
+    chunk_core: Any
+    episodic_core: Any
+    graph_core: Any
+    document_store: Any
+    embedding_cfg: Any
 
 
 def _coerce_ingest_target_owner(owner_type: str, owner_id: str) -> TargetOwner:
@@ -77,212 +88,182 @@ def _merge_manifest_meta(
     return meta
 
 
-async def ingest_document(
-    pdf_path: str,
-    *,
-    target_owner: TargetOwner | None = None,
-    owner_type: str | None = None,
-    owner_id: str | None = None,
-    config: IngestConfig | None = None,
-    memory: Any | None = None,
-    embedder: Any | None = None,
-    llm: Any | None = None,
-    semantic_core: Any | None = None,
-    chunk_core: Any | None = None,
-    episodic_core: Any | None = None,
-    graph_core: Any | None = None,
-    document_store: Any | None = None,
-) -> IngestReport:
-    """
-    End-to-end ingestion of an unstructured document.
+def _resolve_ingest_config(config: IngestConfig | None) -> IngestConfig:
+    return config or IngestConfig()
 
-    Returns IngestReport with counts + warnings.
-    """
-    warnings: List[str] = []
-    if config is None:
-        config = IngestConfig()
-        if memory is not None:
-            semantic_cfg = None
-            try:
-                raw_cfg = getattr(memory, "raw_config", None)
-                semantic_cfg = raw_cfg.get("semantic") if raw_cfg else None
-            except Exception:
-                semantic_cfg = None
-            if isinstance(semantic_cfg, dict):
-                if "doc_min_fact_words" in semantic_cfg:
-                    config = IngestConfig(
-                        chunk_size_tokens=config.chunk_size_tokens,
-                        overlap_tokens=config.overlap_tokens,
-                        embed_batch_size=config.embed_batch_size,
-                        embed_max_retries=config.embed_max_retries,
-                        embed_initial_delay_s=config.embed_initial_delay_s,
-                        embed_backoff_factor=config.embed_backoff_factor,
-                        embed_max_delay_s=config.embed_max_delay_s,
-                        extract_max_chunks=config.extract_max_chunks,
-                        allow_empty_pages=config.allow_empty_pages,
-                        doc_min_fact_words=int(semantic_cfg.get("doc_min_fact_words", config.doc_min_fact_words)),
-                        doc_summary_enabled=bool(semantic_cfg.get("doc_summary_enabled", config.doc_summary_enabled)),
-                        doc_summary_max_facts=int(semantic_cfg.get("doc_summary_max_facts", config.doc_summary_max_facts)),
-                    )
 
-    # If memory is provided, resolve dependencies from it.
-    if memory is not None:
-        embedder = embedder or getattr(memory, "embedder", None)
-        llm = llm or getattr(memory, "llm", None)
-        semantic_core = semantic_core or getattr(memory, "semantic_core", None)
-        chunk_core = chunk_core or getattr(memory, "chunk_core", None)
-        episodic_core = episodic_core or getattr(memory, "episodic_core", None)
-        document_store = document_store or getattr(memory, "document_store", None)
-        graph_core = graph_core or getattr(memory, "graph_core", None)
+def _resolve_ingest_runtime(memory: Any) -> _IngestRuntime:
+    semantic_core = getattr(memory, "semantic_core", None)
+    chunk_core = getattr(memory, "chunk_core", None)
+    episodic_core = getattr(memory, "episodic_core", None)
+    graph_core = getattr(memory, "graph_core", None)
+    document_store = getattr(memory, "document_store", None)
+    embedder = getattr(memory, "embedder", None)
+    llm = getattr(memory, "llm", None)
+    embedding_cfg = getattr(memory, "embedding_cfg", None)
 
-    if target_owner is None:
-        if not owner_type or not owner_id:
-            raise ValueError("ingest_document: target_owner or owner_type/owner_id is required")
-        target_owner = _coerce_ingest_target_owner(owner_type, owner_id)
-    else:
-        target_owner = resolve_target_owner(
-            target_owner=target_owner,
-            allowed_owner_types=("agent", "user", "workspace"),
-        )
-    owner_type = target_owner.owner_type
-    owner_id = target_owner.owner_id
-    tenant_id = target_owner.tenant_id
-    workspace_id = target_owner.workspace_id
-
-    if not pdf_path or not isinstance(pdf_path, str):
-        raise ValueError("ingest_document: pdf_path must be a non-empty string")
     if semantic_core is None:
-        raise ValueError("ingest_document: semantic_core is required")
+        raise ValueError("ingest_document: memory.semantic_core is required")
     if chunk_core is None:
-        raise ValueError("ingest_document: chunk_core is required")
+        raise ValueError("ingest_document: memory.chunk_core is required")
     if episodic_core is None:
-        raise ValueError("ingest_document: episodic_core is required")
+        raise ValueError("ingest_document: memory.episodic_core is required")
     if document_store is None:
-        raise ValueError("ingest_document: document_store is required")
+        raise ValueError("ingest_document: memory.document_store is required")
     if embedder is None or not hasattr(embedder, "embed"):
-        raise ValueError("ingest_document: embedder with .embed() required")
+        raise ValueError("ingest_document: memory.embedder with .embed() required")
     if llm is None or not hasattr(llm, "generate"):
-        raise ValueError("ingest_document: llm with .generate() required")
+        raise ValueError("ingest_document: memory.llm with .generate() required")
+    if embedding_cfg is None:
+        raise ValueError("ingest_document: memory.embedding_cfg is required")
+    if not getattr(embedding_cfg, "model", None):
+        raise ValueError("ingest_document: memory.embedding_cfg.model is required for idempotent ingest signatures")
 
-    # 1) Parse
-    parsed = parse_file(pdf_path)
-    if not parsed.pages:
-        if config.allow_empty_pages:
-            warnings.append("document has no extractable pages")
-        else:
-            raise ValueError("ingest_document: document has no extractable pages")
+    return _IngestRuntime(
+        embedder=embedder,
+        llm=llm,
+        semantic_core=semantic_core,
+        chunk_core=chunk_core,
+        episodic_core=episodic_core,
+        graph_core=graph_core,
+        document_store=document_store,
+        embedding_cfg=embedding_cfg,
+    )
 
-    # --------------------------------------------------------------
-    # 1b) Manifest gate: idempotent ingest by (owner_type, owner_id, source_hash)
-    # --------------------------------------------------------------
-    embedding_cfg = getattr(memory, "embedding_cfg", None) if memory is not None else None
-    if memory is not None:
-        if embedding_cfg is None:
-            raise ValueError("ingest_document: memory.embedding_cfg is required when memory is provided")
-        if not getattr(embedding_cfg, "model", None):
-            raise ValueError("ingest_document: embedding_cfg.model is required for idempotent ingest signatures")
 
-    ingest_signature = {
+def _build_ingest_signature(config: IngestConfig, runtime: _IngestRuntime) -> dict:
+    return {
         "pipeline_version": _INGEST_PIPELINE_VERSION,
         "splitter_version": _SPLITTER_VERSION,
         "chunker_version": _CHUNKER_VERSION,
         "extractor_version": _EXTRACTOR_VERSION,
         "chunk_size_tokens": config.chunk_size_tokens,
         "overlap_tokens": config.overlap_tokens,
-        "embedding_model": embedding_cfg.model if embedding_cfg is not None else None,
-        "embedding_dim": getattr(embedder, "dimension", None),
+        "embedding_model": runtime.embedding_cfg.model,
+        "embedding_dim": getattr(runtime.embedder, "dimension", None),
     }
 
+
+async def _run_manifest_gate(
+    *,
+    file_path: str,
+    config: IngestConfig,
+    runtime: _IngestRuntime,
+    owner_type: str,
+    owner_id: str,
+    tenant_id: str,
+    workspace_id: str | None,
+    warnings: List[str],
+) -> tuple[ParsedDocument, dict, Any | None, IngestReport | None]:
+    parsed = parse_file(file_path)
+    if not parsed.pages:
+        if config.allow_empty_pages:
+            warnings.append("document has no extractable pages")
+        else:
+            raise ValueError("ingest_document: document has no extractable pages")
+
+    ingest_signature = _build_ingest_signature(config, runtime)
     existing_manifest = None
     try:
-        if hasattr(document_store, "get_by_owner_and_hash"):
-            existing_manifest = await document_store.get_by_owner_and_hash(
+        if hasattr(runtime.document_store, "get_by_owner_and_hash"):
+            existing_manifest = await runtime.document_store.get_by_owner_and_hash(
                 owner_type=owner_type,
                 owner_id=owner_id,
                 source_hash=parsed.source_hash,
             )
     except Exception:
-        existing_manifest = None
         logger.exception("ingest_document: manifest lookup failed; continuing with ingest")
 
-    if existing_manifest is not None:
-        existing_sig = (getattr(existing_manifest, "meta", None) or {}).get("ingest_signature") or {}
-        if existing_sig == ingest_signature:
-            # Relink/refresh only: update manifest timestamps/path/meta, but do not regenerate artifacts.
-            try:
-                now_refresh = datetime.now(timezone.utc)
-                refreshed_meta = _merge_manifest_meta(
-                    existing=getattr(existing_manifest, "meta", None) or {},
-                    ingest_signature=ingest_signature,
-                    source_path=parsed.source_path,
-                    now=now_refresh,
-                )
-                await document_store.upsert_document(
-                    DocumentRecord(
-                        doc_id=existing_manifest.doc_id,
-                        source_path=parsed.source_path,
-                        source_hash=parsed.source_hash,
-                        ingested_at=now_refresh,
-                        tenant_id=tenant_id,
-                        owner_type=owner_type,
-                        owner_id=owner_id,
-                        workspace_id=workspace_id,
-                        meta=refreshed_meta,
-                    )
-                )
-            except Exception:
-                logger.exception("ingest_document: failed to refresh existing manifest doc_id=%s", existing_manifest.doc_id)
-                warnings.append(f"failed to refresh existing manifest {existing_manifest.doc_id}")
+    if existing_manifest is None:
+        return parsed, ingest_signature, None, None
 
-            warnings.append(f"skipped ingest (idempotent): owner={owner_type}:{owner_id} hash={parsed.source_hash}")
-            return IngestReport(
+    existing_sig = (getattr(existing_manifest, "meta", None) or {}).get("ingest_signature") or {}
+    if existing_sig == ingest_signature:
+        try:
+            now_refresh = datetime.now(timezone.utc)
+            refreshed_meta = _merge_manifest_meta(
+                existing=getattr(existing_manifest, "meta", None) or {},
+                ingest_signature=ingest_signature,
+                source_path=parsed.source_path,
+                now=now_refresh,
+            )
+            await runtime.document_store.upsert_document(
+                DocumentRecord(
+                    doc_id=existing_manifest.doc_id,
+                    source_path=parsed.source_path,
+                    source_hash=parsed.source_hash,
+                    ingested_at=now_refresh,
+                    tenant_id=tenant_id,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    workspace_id=workspace_id,
+                    meta=refreshed_meta,
+                )
+            )
+        except Exception:
+            logger.exception(
+                "ingest_document: failed to refresh existing manifest doc_id=%s",
+                existing_manifest.doc_id,
+            )
+            warnings.append(f"failed to refresh existing manifest {existing_manifest.doc_id}")
+
+        warnings.append(f"skipped ingest (idempotent): owner={owner_type}:{owner_id} hash={parsed.source_hash}")
+        return (
+            parsed,
+            ingest_signature,
+            existing_manifest,
+            IngestReport(
                 doc_id=existing_manifest.doc_id,
                 chunks_created=0,
                 facts_created=0,
                 graph_edges_created=0,
                 warnings=warnings,
-            )
-        else:
-            # Manifest exists but signature differs; refresh manifest to reflect the new ingest signature
-            # and proceed with re-processing to regenerate derived artifacts.
-            try:
-                now_refresh = datetime.now(timezone.utc)
-                refreshed_meta = _merge_manifest_meta(
-                    existing=getattr(existing_manifest, "meta", None) or {},
-                    ingest_signature=ingest_signature,
-                    source_path=parsed.source_path,
-                    now=now_refresh,
-                    reingest_reason="signature_changed",
-                )
-                await document_store.upsert_document(
-                    DocumentRecord(
-                        doc_id=existing_manifest.doc_id,
-                        source_path=parsed.source_path,
-                        source_hash=parsed.source_hash,
-                        ingested_at=now_refresh,
-                        tenant_id=tenant_id,
-                        owner_type=owner_type,
-                        owner_id=owner_id,
-                        workspace_id=workspace_id,
-                        meta=refreshed_meta,
-                    )
-                )
-                warnings.append(
-                    f"re-ingesting existing manifest doc_id={existing_manifest.doc_id} (signature changed)"
-                )
-            except Exception:
-                logger.exception(
-                    "ingest_document: failed to refresh manifest for re-ingest doc_id=%s",
-                    existing_manifest.doc_id,
-                )
-                warnings.append(f"failed to refresh manifest for re-ingest {existing_manifest.doc_id}")
+            ),
+        )
 
-    # 2) Normalize
+    try:
+        now_refresh = datetime.now(timezone.utc)
+        refreshed_meta = _merge_manifest_meta(
+            existing=getattr(existing_manifest, "meta", None) or {},
+            ingest_signature=ingest_signature,
+            source_path=parsed.source_path,
+            now=now_refresh,
+            reingest_reason="signature_changed",
+        )
+        await runtime.document_store.upsert_document(
+            DocumentRecord(
+                doc_id=existing_manifest.doc_id,
+                source_path=parsed.source_path,
+                source_hash=parsed.source_hash,
+                ingested_at=now_refresh,
+                tenant_id=tenant_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                workspace_id=workspace_id,
+                meta=refreshed_meta,
+            )
+        )
+        warnings.append(f"re-ingesting existing manifest doc_id={existing_manifest.doc_id} (signature changed)")
+    except Exception:
+        logger.exception(
+            "ingest_document: failed to refresh manifest for re-ingest doc_id=%s",
+            existing_manifest.doc_id,
+        )
+        warnings.append(f"failed to refresh manifest for re-ingest {existing_manifest.doc_id}")
+
+    return parsed, ingest_signature, existing_manifest, None
+
+
+def _prepare_document_chunks(
+    *,
+    parsed: ParsedDocument,
+    config: IngestConfig,
+    warnings: List[str],
+) -> tuple[List[DocumentChunk], IngestReport | None]:
     sections = normalize_document(parsed)
     if not sections:
         warnings.append("no sections after normalization")
 
-    # 3) Chunk (raw emission; not yet strict-finalized)
     raw_chunks = chunk_sections(
         sections,
         chunk_size_tokens=config.chunk_size_tokens,
@@ -292,36 +273,51 @@ async def ingest_document(
     if not raw_chunks:
         warnings.append("no chunks created")
 
-    # 3a) Strict chunker gate (MUST run before any persistence)
     try:
-        # finalize_chunks re-ids/repositions deterministically if merges occur
         final_chunks = finalize_chunks(raw_chunks)
     except Exception as exc:
         logger.exception("ingest_document: strict chunk validation failed; refusing persistence")
         raise ValueError(f"ingest_document: strict chunk validation failed: {exc}") from exc
-    logger.info("DOC_CHUNK_FINAL count=%d", len(final_chunks))
 
-    if not final_chunks:
-        logger.warning("No final_chunks produced; skipping embedding/persistence.")
-        return IngestReport(
+    logger.info("DOC_CHUNK_FINAL count=%d", len(final_chunks))
+    if final_chunks:
+        return final_chunks, None
+
+    logger.warning("No final_chunks produced; skipping embedding/persistence.")
+    return (
+        final_chunks,
+        IngestReport(
             doc_id=parsed.doc_id,
             chunks_created=0,
             facts_created=0,
             graph_edges_created=0,
             warnings=warnings + ["no final chunks produced"],
-        )
+        ),
+    )
 
-    # 3b) Document manifest (authoritative)
+
+async def _persist_chunks(
+    *,
+    parsed: ParsedDocument,
+    final_chunks: List[DocumentChunk],
+    config: IngestConfig,
+    runtime: _IngestRuntime,
+    ingest_signature: dict,
+    existing_manifest: Any | None,
+    owner_type: str,
+    owner_id: str,
+    tenant_id: str,
+    workspace_id: str | None,
+    warnings: List[str],
+) -> List[Chunk]:
     try:
-        now_manifest = datetime.now(timezone.utc)
-        existing_meta = (getattr(existing_manifest, "meta", None) or {}) if existing_manifest is not None else {}
         merged_meta = _merge_manifest_meta(
-            existing=existing_meta,
+            existing=(getattr(existing_manifest, "meta", None) or {}) if existing_manifest is not None else {},
             ingest_signature=ingest_signature,
             source_path=parsed.source_path,
-            now=now_manifest,
+            now=datetime.now(timezone.utc),
         )
-        await document_store.upsert_document(
+        await runtime.document_store.upsert_document(
             DocumentRecord(
                 doc_id=parsed.doc_id,
                 source_path=parsed.source_path,
@@ -338,14 +334,12 @@ async def ingest_document(
         warnings.append(f"failed to persist document manifest {parsed.doc_id}")
         logger.exception("ingest_document: document manifest upsert failed")
 
-    # 4) Persist chunks into chunk store (authoritative)
     created_chunks: List[Chunk] = []
-
-    now = datetime.now(timezone.utc)
     chunk_rows: Dict[str, Chunk] = {}
+    now = datetime.now(timezone.utc)
     for chunk in final_chunks:
         text_hash = hashlib.sha256((chunk.text or "").encode("utf-8")).hexdigest()
-        row = Chunk(
+        chunk_rows[chunk.chunk_id] = Chunk(
             id=chunk.chunk_id,
             doc_id=chunk.doc_id,
             text=chunk.text,
@@ -365,8 +359,6 @@ async def ingest_document(
                     "chunk_size_tokens": config.chunk_size_tokens,
                     "overlap_tokens": config.overlap_tokens,
                     "chunker_version": _CHUNKER_VERSION,
-                    # Paragraph indices are scoped to the originating section/page_range (not doc-global).
-                    # Any future paragraph-based expansion MUST use (doc_id, page_range, paragraph_index_*) together.
                     "paragraph_index_scope": "page_range",
                     "paragraph_index_start": chunk.paragraph_index_start,
                     "paragraph_index_end": chunk.paragraph_index_end,
@@ -383,19 +375,16 @@ async def ingest_document(
                 source_hash=parsed.source_hash,
             ),
         )
-        chunk_rows[chunk.chunk_id] = row
 
-    # Embed + upsert chunk facts (authoritative SQL + vector)
-    expected_dim = getattr(embedder, "dimension", None)
     logger.info(
         "DOC_CHUNK_EMBED_AND_PERSIST count=%d sample_ids=%s",
         len(final_chunks),
-        [c.chunk_id for c in final_chunks[:3]],
+        [chunk.chunk_id for chunk in final_chunks[:3]],
     )
-
+    expected_dim = getattr(runtime.embedder, "dimension", None)
     chunk_embeddings = await embed_chunks(
         final_chunks,
-        embedder=embedder,
+        embedder=runtime.embedder,
         batch_size=config.embed_batch_size,
         expected_dim=expected_dim if isinstance(expected_dim, int) and expected_dim > 0 else None,
         max_attempts=config.embed_max_retries,
@@ -404,22 +393,35 @@ async def ingest_document(
         max_delay=config.embed_max_delay_s,
         strict=True,
     )
-
-    if set(chunk_embeddings.keys()) != {c.chunk_id for c in final_chunks}:
+    if set(chunk_embeddings.keys()) != {chunk.chunk_id for chunk in final_chunks}:
         raise RuntimeError("Embedding id mismatch; refusing to persist inconsistent chunk set.")
 
-    for chunk_id, emb in chunk_embeddings.items():
+    for chunk_id, embedding in chunk_embeddings.items():
         row = chunk_rows.get(chunk_id)
-        if not row:
+        if row is None:
             continue
         try:
-            await chunk_core.upsert_chunk(row, emb)
+            await runtime.chunk_core.upsert_chunk(row, embedding)
             created_chunks.append(row)
         except Exception:
             warnings.append(f"failed to persist chunk {chunk_id}")
             logger.exception("ingest_document: failed to upsert chunk %s", chunk_id)
 
-    # 5) Semantic extraction from chunks (optionally limit chunk count)
+    return created_chunks
+
+
+async def _extract_facts_and_update_graph(
+    *,
+    parsed: ParsedDocument,
+    final_chunks: List[DocumentChunk],
+    config: IngestConfig,
+    runtime: _IngestRuntime,
+    owner_type: str,
+    owner_id: str,
+    tenant_id: str,
+    workspace_id: str | None,
+    warnings: List[str],
+) -> tuple[int, int]:
     extract_chunks = final_chunks
     if config.extract_max_chunks is not None:
         extract_chunks = semantic_extractor.FactExtractor.select_chunks_for_fact_extraction(
@@ -427,9 +429,7 @@ async def ingest_document(
             max_chunks=int(config.extract_max_chunks),
         )
 
-    # Core behavior: always use batched semantic extraction for performance and predictable cost.
-    # Keep payload bounded to preserve JSON/schema compliance.
-    fact_extractor = semantic_extractor.FactExtractor(llm=llm)
+    fact_extractor = semantic_extractor.FactExtractor(llm=runtime.llm)
     extracted_fact_records: List[Fact] = await fact_extractor.extract_chunk_facts_batch(
         extract_chunks,
         owner_type=owner_type,
@@ -442,95 +442,195 @@ async def ingest_document(
         max_chars=12000,
     )
 
-    # Ensure all extracted facts carry ingest metadata expected downstream.
-    for f in extracted_fact_records:
-        if f.owner_type != owner_type:
-            f.owner_type = owner_type
-        if f.owner_id != owner_id:
-            f.owner_id = owner_id
-        f.tenant_id = tenant_id
-        f.workspace_id = workspace_id
-        if f.meta is None:
-            f.meta = {}
-        f.meta = normalize_fact_metadata(
+    for fact in extracted_fact_records:
+        if fact.owner_type != owner_type:
+            fact.owner_type = owner_type
+        if fact.owner_id != owner_id:
+            fact.owner_id = owner_id
+        fact.tenant_id = tenant_id
+        fact.workspace_id = workspace_id
+        if fact.meta is None:
+            fact.meta = {}
+        fact.meta = normalize_fact_metadata(
             {
-                **f.meta,
+                **fact.meta,
                 "doc_id": parsed.doc_id,
                 "source_path": parsed.source_path,
                 "source_hash": parsed.source_hash,
                 "ingest_pipeline_version": _INGEST_PIPELINE_VERSION,
                 "extractor_version": _EXTRACTOR_VERSION,
                 "chunker_version": _CHUNKER_VERSION,
-                "fact_text": f.object,
-                "fact_type": "summary" if f.predicate == "SUMMARY" else "claim",
+                "fact_text": fact.object,
+                "fact_type": "summary" if fact.predicate == "SUMMARY" else "claim",
             },
-            fact_id=f.id,
+            fact_id=fact.id,
             owner_type=owner_type,
             owner_id=owner_id,
-            created_at=f.created_at,
-            updated_at=f.updated_at,
-            source_ids=list(f.source_ids or []),
-            session_id=getattr(f, "session_id", None),
+            created_at=fact.created_at,
+            updated_at=fact.updated_at,
+            source_ids=list(fact.source_ids or []),
+            session_id=getattr(fact, "session_id", None),
         )
 
-    # Embed + upsert extracted facts using core helper
     facts_created = 0
     if extracted_fact_records:
         from uma.retrieve.user_query_helper import build_fact_embedding_text
-        texts = [build_fact_embedding_text(f) for f in extracted_fact_records]
+
+        texts = [build_fact_embedding_text(fact) for fact in extracted_fact_records]
         try:
-            vectors = await embedder.embed(texts)
+            vectors = await runtime.embedder.embed(texts)
         except Exception:
             vectors = []
             logger.exception("ingest_document: fact embedding failed")
             warnings.append("failed to embed extracted facts")
 
-        expected_dim = getattr(embedder, "dimension", None)
+        expected_dim = getattr(runtime.embedder, "dimension", None)
         if not isinstance(expected_dim, int) or expected_dim <= 0:
             raise ValueError("ingest_document: embedder.dimension must be a positive integer")
 
         if vectors and isinstance(vectors, list) and len(vectors) == len(extracted_fact_records):
-            for fact, vec in zip(extracted_fact_records, vectors):
-                if not isinstance(vec, list) or len(vec) != expected_dim:
+            for fact, vector in zip(extracted_fact_records, vectors):
+                if not isinstance(vector, list) or len(vector) != expected_dim:
                     raise ValueError(
                         f"ingest_document: invalid fact embedding dim for fact_id={fact.id} "
-                        f"(expected={expected_dim} got={len(vec) if isinstance(vec, list) else None})"
+                        f"(expected={expected_dim} got={len(vector) if isinstance(vector, list) else None})"
                     )
                 try:
-                    await semantic_core.upsert_fact(fact, vec)
+                    await runtime.semantic_core.upsert_fact(fact, vector)
                     facts_created += 1
                 except Exception:
                     logger.exception("ingest_document: failed to upsert extracted fact %s", fact.id)
                     warnings.append(f"failed to persist extracted fact {fact.id}")
         else:
-            if extracted_fact_records:
-                warnings.append("embedding returned invalid shape for extracted facts")
+            warnings.append("embedding returned invalid shape for extracted facts")
 
-    # 7) Graph update (derived store; bounded concurrency for latency)
     graph_edges = await update_graph(
         extracted_fact_records,
-        graph_core=graph_core,
+        graph_core=runtime.graph_core,
         concurrency=getattr(config, "graph_update_concurrency", 8),
     )
+    return facts_created, graph_edges
 
-    # 8) Episodic entry for document ingest (optional)
+
+async def _run_post_ingest_hooks(
+    *,
+    parsed: ParsedDocument,
+    config: IngestConfig,
+    runtime: _IngestRuntime,
+    memory: Any,
+    owner_type: str,
+    owner_id: str,
+) -> None:
     if getattr(config, "doc_episode_enabled", True):
-        summary_text = f"Document ingested: {parsed.source_path}"
         await write_document_episode(
             doc_id=parsed.doc_id,
-            summary_text=summary_text,
+            summary_text=f"Document ingested: {parsed.source_path}",
             owner_type=owner_type,
             owner_id=owner_id,
             user_id=owner_id if owner_type == "user" else None,
-            embedder=embedder,
-            episodic_core=episodic_core,
+            embedder=runtime.embedder,
+            episodic_core=runtime.episodic_core,
         )
 
-    # 9) Optional consolidation trigger
     await maybe_trigger_consolidation(
         memory=memory,
         user_id=owner_id if owner_type == "user" else None,
         enabled=False,
+    )
+
+
+async def ingest_document(
+    file_path: str,
+    *,
+    target_owner: TargetOwner | None = None,
+    owner_type: str | None = None,
+    owner_id: str | None = None,
+    config: IngestConfig | None = None,
+    memory: Any,
+) -> IngestReport:
+    """
+    End-to-end ingestion of an unstructured document.
+
+    Returns IngestReport with counts + warnings.
+    """
+    warnings: List[str] = []
+    if memory is None:
+        raise ValueError("ingest_document: memory is required")
+
+    config = _resolve_ingest_config(config)
+    runtime = _resolve_ingest_runtime(memory)
+
+    if target_owner is None:
+        if not owner_type or not owner_id:
+            raise ValueError("ingest_document: target_owner or owner_type/owner_id is required")
+        target_owner = _coerce_ingest_target_owner(owner_type, owner_id)
+    else:
+        target_owner = resolve_target_owner(
+            target_owner=target_owner,
+            allowed_owner_types=("agent", "user", "workspace"),
+        )
+    owner_type = target_owner.owner_type
+    owner_id = target_owner.owner_id
+    tenant_id = target_owner.tenant_id
+    workspace_id = target_owner.workspace_id
+
+    if not file_path or not isinstance(file_path, str):
+        raise ValueError("ingest_document: file_path must be a non-empty string")
+
+    parsed, ingest_signature, existing_manifest, early_report = await _run_manifest_gate(
+        file_path=file_path,
+        config=config,
+        runtime=runtime,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        warnings=warnings,
+    )
+    if early_report is not None:
+        return early_report
+
+    final_chunks, early_report = _prepare_document_chunks(
+        parsed=parsed,
+        config=config,
+        warnings=warnings,
+    )
+    if early_report is not None:
+        return early_report
+
+    created_chunks = await _persist_chunks(
+        parsed=parsed,
+        final_chunks=final_chunks,
+        config=config,
+        runtime=runtime,
+        ingest_signature=ingest_signature,
+        existing_manifest=existing_manifest,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        warnings=warnings,
+    )
+
+    facts_created, graph_edges = await _extract_facts_and_update_graph(
+        parsed=parsed,
+        final_chunks=final_chunks,
+        config=config,
+        runtime=runtime,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        warnings=warnings,
+    )
+
+    await _run_post_ingest_hooks(
+        parsed=parsed,
+        config=config,
+        runtime=runtime,
+        memory=memory,
+        owner_type=owner_type,
+        owner_id=owner_id,
     )
 
     return IngestReport(

@@ -4,6 +4,19 @@ import json
 
 import pytest
 
+from uma.ingest.ingest_service import _resolve_ingest_config
+from uma.ingest.types import IngestConfig
+
+
+def test_ingest_config_defaults_do_not_read_memory_semantic_overrides(uma_memory):
+    resolved = _resolve_ingest_config(None)
+
+    assert resolved == IngestConfig()
+    assert resolved.doc_min_fact_words == 10
+    assert resolved.doc_summary_enabled is True
+    assert resolved.doc_summary_max_facts == 5
+    assert resolved.doc_min_fact_words != uma_memory.raw_config["semantic"]["doc_min_fact_words"]
+
 
 @pytest.mark.asyncio
 async def test_ingest_document_is_idempotent_by_owner_and_hash(uma_memory, tmp_path):
@@ -91,7 +104,6 @@ async def test_ingest_document_reingests_when_signature_changes(uma_memory, tmp_
 
     # Re-run ingest with a different chunk_size_tokens so the ingest signature changes.
     from uma.ingest.ingest_service import ingest_document as _ingest
-    from uma.ingest.types import IngestConfig
 
     report2 = await _ingest(
         str(p),

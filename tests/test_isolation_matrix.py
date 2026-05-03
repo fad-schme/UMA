@@ -148,8 +148,8 @@ async def test_multi_tenant_isolation_holds_with_matching_scope_tokens(tmp_path:
             handle_a.retrieve_context("tenant isolation"),
             handle_b.retrieve_context("tenant isolation"),
         )
-        req_a = memory._build_retrieval_request(handle_a.context)
-        req_b = memory._build_retrieval_request(handle_b.context)
+        req_a = memory.runtime._build_retrieval_request(handle_a.context)
+        req_b = memory.runtime._build_retrieval_request(handle_b.context)
         facts_a = await memory.memory_env.fetch_facts_by_ids(req_a, [fact_a.id, fact_b.id], owner_type="user", owner_id="user:u1")
         facts_b = await memory.memory_env.fetch_facts_by_ids(req_b, [fact_a.id, fact_b.id], owner_type="user", owner_id="user:u1")
 
@@ -269,7 +269,7 @@ async def test_retrieval_and_process_turn_overlap_preserve_session_isolation(tmp
         release.set()
         await asyncio.wait_for(turn_task, timeout=2.0)
 
-        req_a = memory._build_retrieval_request(
+        req_a = memory.runtime._build_retrieval_request(
             RuntimeContext(
                 tenant_id=DEFAULT_TENANT_ID,
                 agent_id="agent-overlap",
@@ -278,7 +278,7 @@ async def test_retrieval_and_process_turn_overlap_preserve_session_isolation(tmp
                 session_id="session-a",
             )
         )
-        req_b = memory._build_retrieval_request(
+        req_b = memory.runtime._build_retrieval_request(
             RuntimeContext(
                 tenant_id=DEFAULT_TENANT_ID,
                 agent_id="agent-overlap",
@@ -319,7 +319,7 @@ async def test_cross_agent_visibility_requires_explicit_promotion(uma_memory) ->
     )
     await memory.semantic_core.upsert_fact(source, embedding)
 
-    cross_agent_request = memory._build_retrieval_request(
+    cross_agent_request = memory.runtime._build_retrieval_request(
         RuntimeContext(
             tenant_id=DEFAULT_TENANT_ID,
             agent_id="agent-b",

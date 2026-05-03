@@ -164,16 +164,6 @@ class UMAConfig(dict):
         if "keep_recent_token_fraction" in wm_section:
             self._require_ratio("working_memory", "keep_recent_token_fraction")
 
-        # -----------------------
-        # SECURITY
-        # -----------------------
-        # Deprecated: config-embedded code execution has been removed.
-        if "security" in self:
-            sec = self.security
-            if not isinstance(sec, dict):
-                raise ValueError("'security' section must be a mapping")
-            if "allow_config_code" in sec:
-                logger.warning("'security.allow_config_code' is deprecated and ignored.")
         
         # -----------------------
         # EMBEDDING
