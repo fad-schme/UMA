@@ -21,7 +21,6 @@ from uma.common.storage_metadata import (
     PROFILE_LANE,
     RAW_LANE,
     SEMANTIC_LANE,
-    normalize_chunk_metadata,
     shared_metadata_view,
 )
 from uma.retrieve.planner import build_retrieval_plan
@@ -480,30 +479,18 @@ class UMARuntime:
             doc_id = str(getattr(chunk, "doc_id", None) or chunk_id or "")
             if not doc_id:
                 continue
-            normalized_meta = normalize_chunk_metadata(
-                getattr(chunk, "meta", None),
-                chunk_id=str(chunk_id or ""),
-                doc_id=doc_id,
-                owner_type=str(getattr(chunk, "owner_type", None) or ""),
-                owner_id=str(getattr(chunk, "owner_id", None) or ""),
-                created_at=getattr(chunk, "created_at", None),
-                updated_at=getattr(chunk, "updated_at", None),
-                page_range=getattr(chunk, "page_range", None),
-                position=getattr(chunk, "position", None),
-                source_path=str(getattr(chunk, "source_path", None) or ""),
-                source_hash=str(getattr(chunk, "source_hash", None) or ""),
-            )
+            meta = dict(getattr(chunk, "meta", None) or {})
             artifact = grouped.setdefault(
                 doc_id,
                 {
                     "doc_id": doc_id,
-                    "kind": normalized_meta.get("kind"),
-                    "kb_lane": normalized_meta.get("kb_lane"),
+                    "kind": meta.get("kind"),
+                    "kb_lane": meta.get("kb_lane"),
                     "owner_type": getattr(chunk, "owner_type", None),
                     "owner_id": getattr(chunk, "owner_id", None),
                     "source_path": getattr(chunk, "source_path", None),
                     "metadata": shared_metadata_view(
-                        meta=normalized_meta,
+                        meta=meta,
                         owner_type=str(getattr(chunk, "owner_type", None) or ""),
                         owner_id=str(getattr(chunk, "owner_id", None) or ""),
                         created_at=getattr(chunk, "created_at", None),

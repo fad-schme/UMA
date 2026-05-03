@@ -1,5 +1,6 @@
 from uma.retrieve.context_pack_builder import ContextPackBuilder
 from uma.retrieve.cot_memory_builder import CoTMemoryBuilder
+from uma.common.storage_metadata import normalize_episode_metadata
 
 
 class DummyMsg:
@@ -45,6 +46,19 @@ def test_context_pack_builder_dedupes_by_id():
 
 
 def test_context_pack_builder_preserves_episode_provenance_in_serialized_output():
+    meta = normalize_episode_metadata(
+        {
+            "source_type": "daily_diary",
+            "source_file": "/tmp/diary.md",
+            "diary_date": "2026-05-01",
+            "import_mode": "bootstrap",
+        },
+        episode_id="ep-import-1",
+        owner_type="user",
+        owner_id="user:u1",
+        timestamp="2026-05-01T10:00:00+00:00",
+        session_id=None,
+    )
     ctx = {
         "episodic": [
             {
@@ -54,12 +68,7 @@ def test_context_pack_builder_preserves_episode_provenance_in_serialized_output(
                 "tags": ["daily_diary"],
                 "owner_type": "user",
                 "owner_id": "user:u1",
-                "meta": {
-                    "source_type": "daily_diary",
-                    "source_file": "/tmp/diary.md",
-                    "diary_date": "2026-05-01",
-                    "import_mode": "bootstrap",
-                },
+                "meta": meta,
             }
         ]
     }

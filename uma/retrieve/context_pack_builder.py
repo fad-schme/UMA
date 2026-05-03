@@ -24,10 +24,6 @@ from uma.common.accessors import get_attr_or_key
 from uma.common.serialization import chunk_to_dict
 from uma.common.identity import normalize_user_id
 from uma.common.storage_metadata import (
-    normalize_chunk_metadata,
-    normalize_episode_metadata,
-    normalize_fact_metadata,
-    normalize_skill_metadata,
     shared_metadata_view,
 )
 from uma.common.text_bounds import trim_to_sentence_boundary
@@ -97,9 +93,6 @@ class ContextPackBuilder:
             "confidence": {},
         }
 
-        # -------------------------------
-        # Working Memory (WM + LT nodes)
-        # -------------------------------
         for msg in ctx.get("working_memory", []):
             try:
                 role = getattr(msg, "role", None)
@@ -114,7 +107,6 @@ class ContextPackBuilder:
                 tokens = getattr(msg, "token_estimate", None)
                 if tokens is None and isinstance(msg, dict):
                     tokens = msg.get("tokens", 0)
-
                 pack["working_memory"].append(
                     {
                         "role": role,
@@ -131,23 +123,12 @@ class ContextPackBuilder:
                     trace_id,
                 )
 
-        # -------------------------------
-        # Episodic
-        # -------------------------------
         for ep in ctx.get("episodic", []):
             try:
-                normalized_meta = normalize_episode_metadata(
-                    get_attr_or_key(ep, "meta", {}),
-                    episode_id=str(get_attr_or_key(ep, "id") or ""),
-                    owner_type=str(get_attr_or_key(ep, "owner_type") or owner_type),
-                    owner_id=str(get_attr_or_key(ep, "owner_id") or owner_id),
-                    timestamp=get_attr_or_key(ep, "timestamp"),
-                    session_id=get_attr_or_key(ep, "session_id"),
-                )
-                metadata = shared_metadata_view(
-                    meta=normalized_meta,
-                    owner_type=str(get_attr_or_key(ep, "owner_type") or owner_type),
-                    owner_id=str(get_attr_or_key(ep, "owner_id") or owner_id),
+                _meta, metadata = _artifact_metadata(
+                    ep,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
                     created_at=get_attr_or_key(ep, "created_at") or get_attr_or_key(ep, "timestamp"),
                     updated_at=get_attr_or_key(ep, "updated_at") or get_attr_or_key(ep, "timestamp"),
                     session_id=get_attr_or_key(ep, "session_id"),
@@ -171,25 +152,12 @@ class ContextPackBuilder:
                     trace_id,
                 )
 
-        # -------------------------------
-        # Facts
-        # -------------------------------
         for fact in ctx.get("facts", []):
             try:
-                normalized_meta = normalize_fact_metadata(
-                    get_attr_or_key(fact, "meta", {}),
-                    fact_id=str(get_attr_or_key(fact, "id") or ""),
-                    owner_type=str(get_attr_or_key(fact, "owner_type") or owner_type),
-                    owner_id=str(get_attr_or_key(fact, "owner_id") or owner_id),
-                    created_at=get_attr_or_key(fact, "created_at"),
-                    updated_at=get_attr_or_key(fact, "updated_at"),
-                    source_ids=list(get_attr_or_key(fact, "source_ids", []) or []),
-                    session_id=get_attr_or_key(fact, "session_id"),
-                )
-                metadata = shared_metadata_view(
-                    meta=normalized_meta,
-                    owner_type=str(get_attr_or_key(fact, "owner_type") or owner_type),
-                    owner_id=str(get_attr_or_key(fact, "owner_id") or owner_id),
+                meta, metadata = _artifact_metadata(
+                    fact,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
                     created_at=get_attr_or_key(fact, "created_at"),
                     updated_at=get_attr_or_key(fact, "updated_at"),
                     session_id=get_attr_or_key(fact, "session_id"),
@@ -205,7 +173,7 @@ class ContextPackBuilder:
                         "kind": metadata["kind"],
                         "kb_lane": metadata["kb_lane"],
                         "meta": metadata,
-                        "fact_text": normalized_meta.get("fact_text"),
+                        "fact_text": meta.get("fact_text"),
                     }
                 )
             except Exception:
@@ -216,28 +184,12 @@ class ContextPackBuilder:
                     trace_id,
                 )
 
-        # -------------------------------
-        # Document Chunks
-        # -------------------------------
         for chunk in ctx.get("chunks", []):
             try:
-                normalized_meta = normalize_chunk_metadata(
-                    get_attr_or_key(chunk, "meta", {}),
-                    chunk_id=str(get_attr_or_key(chunk, "id") or ""),
-                    doc_id=str(get_attr_or_key(chunk, "doc_id") or ""),
-                    owner_type=str(get_attr_or_key(chunk, "owner_type") or owner_type),
-                    owner_id=str(get_attr_or_key(chunk, "owner_id") or owner_id),
-                    created_at=get_attr_or_key(chunk, "created_at"),
-                    updated_at=get_attr_or_key(chunk, "updated_at"),
-                    page_range=get_attr_or_key(chunk, "page_range"),
-                    position=get_attr_or_key(chunk, "position"),
-                    source_path=str(get_attr_or_key(chunk, "source_path") or ""),
-                    source_hash=str(get_attr_or_key(chunk, "source_hash") or ""),
-                )
-                metadata = shared_metadata_view(
-                    meta=normalized_meta,
-                    owner_type=str(get_attr_or_key(chunk, "owner_type") or owner_type),
-                    owner_id=str(get_attr_or_key(chunk, "owner_id") or owner_id),
+                _meta, metadata = _artifact_metadata(
+                    chunk,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
                     created_at=get_attr_or_key(chunk, "created_at"),
                     updated_at=get_attr_or_key(chunk, "updated_at"),
                 )
@@ -262,23 +214,12 @@ class ContextPackBuilder:
                     trace_id,
                 )
 
-        # -------------------------------
-        # Skills
-        # -------------------------------
         for skill in ctx.get("skills", []):
             try:
-                normalized_meta = normalize_skill_metadata(
-                    get_attr_or_key(skill, "meta", {}),
-                    skill_id=str(get_attr_or_key(skill, "id") or ""),
-                    owner_type=str(get_attr_or_key(skill, "owner_type") or owner_type),
-                    owner_id=str(get_attr_or_key(skill, "owner_id") or owner_id),
-                    created_at=get_attr_or_key(skill, "created_at"),
-                    updated_at=get_attr_or_key(skill, "updated_at"),
-                )
-                metadata = shared_metadata_view(
-                    meta=normalized_meta,
-                    owner_type=str(get_attr_or_key(skill, "owner_type") or owner_type),
-                    owner_id=str(get_attr_or_key(skill, "owner_id") or owner_id),
+                _meta, metadata = _artifact_metadata(
+                    skill,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
                     created_at=get_attr_or_key(skill, "created_at"),
                     updated_at=get_attr_or_key(skill, "updated_at"),
                 )
@@ -302,46 +243,8 @@ class ContextPackBuilder:
                     trace_id,
                 )
 
-        # -------------------------------
-        # Graph Items
-        # -------------------------------
-        for node in ctx.get("graph", []):
-            try:
-                if isinstance(node, dict):
-                    pack["graph"].append(node)
-                else:
-                    pack["graph"].append({"node": repr(node)})
-            except Exception:
-                logger.exception(
-                    "ContextPackBuilder: failed to pack graph node owner_type=%s owner_id=%s trace_id=%s",
-                    owner_type,
-                    owner_id,
-                    trace_id,
-                )
-
-        # Best-effort trace/confidence if present on ctx
-        try:
-            trace = ctx.get("trace") if isinstance(ctx, dict) else None
-            if isinstance(trace, list):
-                pack["trace"] = trace
-        except Exception:
-            logger.exception(
-                "ContextPackBuilder: failed to pack retrieval trace owner_type=%s owner_id=%s trace_id=%s",
-                owner_type,
-                owner_id,
-                trace_id,
-            )
-        try:
-            conf = ctx.get("confidence") if isinstance(ctx, dict) else None
-            if isinstance(conf, dict):
-                pack["confidence"] = conf
-        except Exception:
-            logger.exception(
-                "ContextPackBuilder: failed to pack confidence metadata owner_type=%s owner_id=%s trace_id=%s",
-                owner_type,
-                owner_id,
-                trace_id,
-            )
+        _pack_graph(pack, ctx, owner_type=owner_type, owner_id=owner_id, trace_id=trace_id)
+        _pack_trace_and_confidence(pack, ctx, owner_type=owner_type, owner_id=owner_id, trace_id=trace_id)
 
         # Pack-level hygiene: prevent duplicates wasting budgets downstream.
         pack["episodic"] = dedupe_by_id(pack.get("episodic", []))
@@ -366,13 +269,7 @@ class ContextPackBuilder:
 
         lines, facts = _render_common_sections(pack, cfg, query_text)
         _append_chunk_snippets(lines, pack, cfg, query_text, facts, heading="Document chunks:")
-
-        sources = _collect_source_filenames(pack, final_snippets=pack.get("final_snippets"))
-        if sources:
-            lines.append("\nSources:")
-            for i, s in enumerate(sources, start=1):
-                lines.append(f"{i}. {s}")
-
+        _append_sources(lines, pack, final_snippets=pack.get("final_snippets"))
         _append_skills_and_graph(lines, pack, cfg)
         return "\n".join(lines).strip()
 
@@ -399,49 +296,16 @@ class ContextPackBuilder:
         query_text = (pack.get("query") or "").lower()
 
         lines, facts = _render_common_sections(pack, cfg, query_text)
-
-        # Final evidence snippets (via SnippetRefiner)
-        final_snippets = []
-        refiner_failed = False
-        if cfg.snippet_refiner_enabled:
-            try:
-                refiner = SnippetRefiner(llm=llm, cfg=cfg)
-                final_snippets = await refiner.refine(
-                    query_text=query_text,
-                    facts=facts,
-                    chunks=pack.get("chunks", []),
-                )
-            except Exception:
-                logger.exception(
-                    "ContextPackBuilder: SnippetRefiner failed owner_type=%s owner_id=%s trace_id=%s",
-                    owner_type,
-                    owner_id,
-                    trace_id,
-                )
-                refiner_failed = True
-                final_snippets = []
-
-        if final_snippets:
-            # Enforce context config: bound snippet length and count here as a final gate.
-            # SnippetRefiner focuses on quality; ContextPackBuilder enforces budgets.
-            bounded: List[Dict[str, Any]] = []
-            for sn in final_snippets:
-                if not isinstance(sn, dict):
-                    continue
-                text = (sn.get("text") or "").strip()
-                if not text:
-                    continue
-                sn = dict(sn)
-                sn["text"] = trim_to_sentence_boundary(text, max_chars=int(cfg.snippet_max_chars or 240))
-                bounded.append(sn)
-                if len(bounded) >= int(cfg.max_chunks or 3):
-                    break
-            final_snippets = bounded
-
-        if not final_snippets:
-            final_snippets = _build_fallback_snippets(pack, cfg, query_text, facts, refiner_failed)
-
-        # Always render final_snippets as a single consistent evidence section.
+        final_snippets = await _compute_final_snippets(
+            pack,
+            cfg,
+            query_text,
+            facts,
+            llm=llm,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            trace_id=trace_id,
+        )
         if final_snippets:
             lines.append("\nDocument snippets:")
             for snip in final_snippets[: int(cfg.max_chunks or 3)]:
@@ -450,18 +314,87 @@ class ContextPackBuilder:
                 text = (snip.get("text") or "").strip()
                 if text:
                     lines.append(f"- {text}")
-
         pack["final_snippets"] = final_snippets
-        
-        sources = _collect_source_filenames(pack, final_snippets=final_snippets)
-        if sources:
-            lines.append("\nSources:")
-            for i, s in enumerate(sources, start=1):
-                lines.append(f"{i}. {s}")
-
+        _append_sources(lines, pack, final_snippets=final_snippets)
         _append_skills_and_graph(lines, pack, cfg)
 
         return "\n".join(lines).strip()
+
+
+def _artifact_metadata(
+    artifact: Any,
+    *,
+    owner_type: Any,
+    owner_id: Any,
+    created_at: Any,
+    updated_at: Any,
+    session_id: Any = None,
+) -> tuple[dict, dict]:
+    meta = dict(get_attr_or_key(artifact, "meta", {}) or {})
+    metadata = shared_metadata_view(
+        meta=meta,
+        owner_type=str(get_attr_or_key(artifact, "owner_type") or owner_type),
+        owner_id=str(get_attr_or_key(artifact, "owner_id") or owner_id),
+        created_at=created_at,
+        updated_at=updated_at,
+        session_id=session_id,
+    )
+    return meta, metadata
+
+
+def _pack_graph(
+    pack: Dict[str, Any],
+    ctx: Dict[str, Any],
+    *,
+    owner_type: Any,
+    owner_id: Any,
+    trace_id: Any,
+) -> None:
+    for node in ctx.get("graph", []):
+        try:
+            if isinstance(node, dict):
+                pack["graph"].append(node)
+            else:
+                pack["graph"].append({"node": repr(node)})
+        except Exception:
+            logger.exception(
+                "ContextPackBuilder: failed to pack graph node owner_type=%s owner_id=%s trace_id=%s",
+                owner_type,
+                owner_id,
+                trace_id,
+            )
+
+
+def _pack_trace_and_confidence(
+    pack: Dict[str, Any],
+    ctx: Dict[str, Any],
+    *,
+    owner_type: Any,
+    owner_id: Any,
+    trace_id: Any,
+) -> None:
+    try:
+        trace = ctx.get("trace") if isinstance(ctx, dict) else None
+        if isinstance(trace, list):
+            pack["trace"] = trace
+    except Exception:
+        logger.exception(
+            "ContextPackBuilder: failed to pack retrieval trace owner_type=%s owner_id=%s trace_id=%s",
+            owner_type,
+            owner_id,
+            trace_id,
+        )
+    try:
+        conf = ctx.get("confidence") if isinstance(ctx, dict) else None
+        if isinstance(conf, dict):
+            pack["confidence"] = conf
+    except Exception:
+        logger.exception(
+            "ContextPackBuilder: failed to pack confidence metadata owner_type=%s owner_id=%s trace_id=%s",
+            owner_type,
+            owner_id,
+            trace_id,
+        )
 
 
 def _basename(path: Any) -> str:
@@ -511,6 +444,20 @@ def _collect_source_filenames(pack: Dict[str, Any], final_snippets: Optional[Lis
                     out.append(name)
 
     return out
+
+
+def _append_sources(
+    lines: List[str],
+    pack: Dict[str, Any],
+    *,
+    final_snippets: Optional[List[Dict[str, Any]]] = None,
+) -> None:
+    sources = _collect_source_filenames(pack, final_snippets=final_snippets)
+    if not sources:
+        return
+    lines.append("\nSources:")
+    for i, source_name in enumerate(sources, start=1):
+        lines.append(f"{i}. {source_name}")
 
 def _extract_relevant_excerpt(text: str, query_text: str, max_chars: int = 240) -> str:
     if not text:
@@ -828,6 +775,54 @@ def _build_fallback_snippets(
                 len(raw_snippets),
             )
     return final_snippets
+
+
+async def _compute_final_snippets(
+    pack: Dict[str, Any],
+    cfg: "RetrievalContextConfig",
+    query_text: str,
+    facts: List[Dict[str, Any]],
+    *,
+    llm: Any,
+    owner_type: Any,
+    owner_id: Any,
+    trace_id: Any,
+) -> List[Dict[str, Any]]:
+    final_snippets: List[Dict[str, Any]] = []
+    refiner_failed = False
+    if cfg.snippet_refiner_enabled:
+        try:
+            refiner = SnippetRefiner(llm=llm, cfg=cfg)
+            final_snippets = await refiner.refine(
+                query_text=query_text,
+                facts=facts,
+                chunks=pack.get("chunks", []),
+            )
+        except Exception:
+            logger.exception(
+                "ContextPackBuilder: SnippetRefiner failed owner_type=%s owner_id=%s trace_id=%s",
+                owner_type,
+                owner_id,
+                trace_id,
+            )
+            refiner_failed = True
+            final_snippets = []
+
+    if final_snippets:
+        bounded: List[Dict[str, Any]] = []
+        for sn in final_snippets:
+            if not isinstance(sn, dict):
+                continue
+            text = (sn.get("text") or "").strip()
+            if not text:
+                continue
+            snippet = dict(sn)
+            snippet["text"] = trim_to_sentence_boundary(text, max_chars=int(cfg.snippet_max_chars or 240))
+            bounded.append(snippet)
+            if len(bounded) >= int(cfg.max_chunks or 3):
+                break
+        return bounded
+    return _build_fallback_snippets(pack, cfg, query_text, facts, refiner_failed)
 
 
 def _append_chunk_snippets(
