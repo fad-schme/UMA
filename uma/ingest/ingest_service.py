@@ -18,7 +18,7 @@ from .consolidation_trigger import maybe_trigger_consolidation
 from uma.common.types import Chunk, Fact, TargetOwner
 from uma.stores.document_sql import DocumentRecord
 from uma.common.ownership import resolve_target_owner
-from uma.common.storage_metadata import normalize_chunk_metadata, normalize_fact_metadata
+from uma.common.storage_metadata import normalize_fact_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -353,27 +353,15 @@ async def _persist_chunks(
             owner_type=owner_type,
             owner_id=owner_id,
             workspace_id=workspace_id,
-            meta=normalize_chunk_metadata(
-                {
-                    "text_hash": text_hash,
-                    "chunk_size_tokens": config.chunk_size_tokens,
-                    "overlap_tokens": config.overlap_tokens,
-                    "chunker_version": _CHUNKER_VERSION,
-                    "paragraph_index_scope": "page_range",
-                    "paragraph_index_start": chunk.paragraph_index_start,
-                    "paragraph_index_end": chunk.paragraph_index_end,
-                },
-                chunk_id=chunk.chunk_id,
-                doc_id=chunk.doc_id,
-                owner_type=owner_type,
-                owner_id=owner_id,
-                created_at=now,
-                updated_at=now,
-                page_range=chunk.page_range,
-                position=chunk.position,
-                source_path=parsed.source_path,
-                source_hash=parsed.source_hash,
-            ),
+            meta={
+                "text_hash": text_hash,
+                "chunk_size_tokens": config.chunk_size_tokens,
+                "overlap_tokens": config.overlap_tokens,
+                "chunker_version": _CHUNKER_VERSION,
+                "paragraph_index_scope": "page_range",
+                "paragraph_index_start": chunk.paragraph_index_start,
+                "paragraph_index_end": chunk.paragraph_index_end,
+            },
         )
 
     logger.info(
