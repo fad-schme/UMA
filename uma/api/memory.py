@@ -190,11 +190,9 @@ class UMAMemory:
 
     @property
     def runtime(self) -> UMARuntime:
-        """Return the shared internal runtime, refreshing lazy-owned services."""
+        """Return the shared internal runtime view over this memory instance."""
         if self._runtime is None:
             self._runtime = UMARuntime.from_memory(self)
-        else:
-            self._runtime.refresh_from_memory()
         return self._runtime
 
     @property

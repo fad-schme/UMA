@@ -193,9 +193,9 @@ class AnimusProfileProvider:
 class UMARuntime:
     """Shared UMA infrastructure container.
 
-    Request scope must never be stored on this object. Shared runtime state is
-    refreshed from the attached UMAMemory facade when needed, while retrieval
-    execution remains canonical here.
+    Request scope must never be stored on this object. UMAMemory owns
+    initialized services; this runtime reads them through the attached memory
+    bridge when present while keeping request-scoped execution canonical here.
     """
 
     def __init__(
@@ -214,35 +214,23 @@ class UMARuntime:
         memory_bridge: Any = None,
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> None:
-        self.config = config
-        self.raw_config = raw_config
-        self.stores: Dict[str, Any] = dict(stores or {})
-        self.llm = llm
-        self.agent_llm = agent_llm
-        self.embedder = embedder
-        self.document_store = document_store
-        self.graph_service = graph_service
-        self.ranking_service = ranking_service
-        self.feature_registry: Dict[str, Any] = dict(feature_registry or {})
+        self._config = config
+        self._stores: Dict[str, Any] = dict(stores or {})
+        self._llm = llm
         self.memory_bridge = memory_bridge
         self.metadata: Dict[str, Any] = dict(metadata or {})
+        del raw_config
+        del agent_llm
+        del embedder
+        del document_store
+        del graph_service
+        del ranking_service
+        del feature_registry
 
     @classmethod
     def from_memory(cls, memory: Any) -> "UMARuntime":
         """Build a runtime view over an existing UMAMemory instance."""
-        graph_service = getattr(memory, "graph_core", None)
-        ranking_service = getattr(getattr(memory, "_rlm_controller", None), "ranker", None)
         return cls(
-            config=getattr(memory, "cfg", None),
-            raw_config=getattr(memory, "raw_config", None),
-            stores=getattr(memory, "_stores", None) or {},
-            llm=getattr(memory, "llm", None),
-            agent_llm=getattr(memory, "agent_llm", None),
-            embedder=getattr(memory, "embedder", None),
-            document_store=getattr(memory, "document_store", None),
-            graph_service=graph_service,
-            ranking_service=ranking_service,
-            feature_registry=getattr(memory, "features", None) or {},
             memory_bridge=memory,
             metadata={"source": "UMAMemory"},
         )
@@ -253,6 +241,27 @@ class UMARuntime:
         if memory is None:
             raise RuntimeError("UMARuntime operation requires a memory_bridge.")
         return memory
+
+    @property
+    def config(self) -> Any:
+        memory = self.memory_bridge
+        if memory is not None:
+            return getattr(memory, "cfg", None)
+        return self._config
+
+    @property
+    def stores(self) -> Dict[str, Any]:
+        memory = self.memory_bridge
+        if memory is not None:
+            return dict(getattr(memory, "_stores", None) or {})
+        return self._stores
+
+    @property
+    def llm(self) -> Any:
+        memory = self.memory_bridge
+        if memory is not None:
+            return getattr(memory, "llm", None)
+        return self._llm
 
     @property
     def agent_id(self) -> Optional[str]:
@@ -266,25 +275,10 @@ class UMARuntime:
             return normalized or None
         return None
 
-    def refresh_from_memory(self) -> None:
-        """Refresh runtime-owned shared service references from UMAMemory."""
-        memory = self._require_memory_bridge()
-        self.config = getattr(memory, "cfg", None)
-        self.raw_config = getattr(memory, "raw_config", None)
-        self.stores = dict(getattr(memory, "_stores", None) or {})
-        self.llm = getattr(memory, "llm", None)
-        self.agent_llm = getattr(memory, "agent_llm", None)
-        self.embedder = getattr(memory, "embedder", None)
-        self.document_store = getattr(memory, "document_store", None)
-        self.graph_service = getattr(memory, "graph_core", None)
-        self.ranking_service = getattr(getattr(memory, "_rlm_controller", None), "ranker", None)
-        self.feature_registry = dict(getattr(memory, "features", None) or {})
-
     def ensure_retrieval_ready(self) -> None:
         """Ensure retrieval-only dependencies are initialized."""
         memory = self._require_memory_bridge()
         memory._ensure_retrieval_ready()
-        self.refresh_from_memory()
 
     def bind(self, context: RuntimeContext) -> UMARequestHandle:
         """Bind one explicit request context without mutating shared runtime state."""
@@ -363,6 +357,63 @@ class UMARuntime:
         allowed = set(lane_filter)
         return [item for item in (items or []) if cls._item_lane(item) in allowed]
 
+    def _load_working_memory_for_context(
+        self,
+        runtime_context: RuntimeContext,
+    ) -> List[Any]:
+        memory = self._require_memory_bridge()
+        try:
+            wm_scope = self._working_memory_scope_set_context(runtime_context)
+            wm_core = getattr(memory, "working_memory", None)
+            return (
+                wm_core.get_context(wm_scope)
+                if wm_core is not None and wm_scope is not None
+                else []
+            )
+        except Exception:
+            logger.exception(
+                "UMARuntime.retrieve_context: failed to load WM "
+                "tenant=%s agent=%s session=%s",
+                runtime_context.tenant_id,
+                runtime_context.agent_id,
+                runtime_context.session_id,
+            )
+            return []
+
+    def _assemble_public_context_result(
+        self,
+        *,
+        query_text: str,
+        lane_filter: List[str],
+        plan: Any,
+        working_memory: List[Any],
+        pack: Any,
+    ) -> Dict[str, Any]:
+        from uma.retrieve.rlm.coverage import compute_confidence
+
+        coverage = getattr(pack, "coverage", None)
+        active_lanes = list(plan.participating_lanes)
+        episodic = self._filter_items_by_lanes(pack.episodes, active_lanes)
+        facts = self._filter_items_by_lanes(pack.facts or [], active_lanes)
+        chunks = self._filter_items_by_lanes(getattr(pack, "chunks", []), active_lanes)
+        skills = self._filter_items_by_lanes(pack.skills, active_lanes)
+
+        return {
+            "product": "context",
+            "query": query_text,
+            "lane_filter": list(lane_filter),
+            "active_lanes": active_lanes,
+            "working_memory": working_memory,
+            "episodic": episodic,
+            "facts": facts,
+            "chunks": chunks,
+            "documents": self._group_memory_artifacts(chunks),
+            "skills": skills,
+            "graph": pack.graph,
+            "trace": list(getattr(pack, "steps", []) or []),
+            "confidence": compute_confidence(coverage) if coverage is not None else {},
+        }
+
     
     async def retrieve_context(
         self,
@@ -381,7 +432,6 @@ class UMARuntime:
         - `lane_filter` applies only to persisted retrieval lanes, not working memory
         """
         from uma.adapters.observability.metrics import increment, timed
-        from uma.retrieve.rlm.coverage import compute_confidence
 
         if not isinstance(runtime_context, RuntimeContext):
             raise TypeError("UMARuntime retrieval requires a RuntimeContext instance.")
@@ -391,68 +441,36 @@ class UMARuntime:
             raise ValueError(
                 "UMARuntime.retrieve_context: query_text must be a non-empty string."
             )
+        normalized_query_text = query_text.strip()
         self.ensure_retrieval_ready()
         normalized_lane_filter = self._normalize_lane_filter(lane_filter)
         plan = build_retrieval_plan(
             product="context",
-            query_text=query_text.strip(),
+            query_text=normalized_query_text,
             available_lanes=self._available_retrieval_lanes(),
             lane_filter=normalized_lane_filter,
         )
-        memory = self._require_memory_bridge()
 
         with timed("uma.get_structured_context.latency"):
-            try:
-                wm_scope = self._working_memory_scope_set_context(runtime_context)
-                wm_core = getattr(memory, "working_memory", None)
-                wm_stored = (
-                    wm_core.get_context(wm_scope)
-                    if wm_core is not None and wm_scope is not None
-                    else []
-                )
-            except Exception:
-                logger.exception(
-                    "UMARuntime.retrieve_context: failed to load WM "
-                    "tenant=%s agent=%s session=%s",
-                    runtime_context.tenant_id,
-                    runtime_context.agent_id,
-                    runtime_context.session_id,
-                )
-                wm_stored = []
-
+            working_memory = self._load_working_memory_for_context(runtime_context)
+            memory = self._require_memory_bridge()
             controller = getattr(memory, "_rlm_controller", None)
             if controller is None:
                 raise RuntimeError(
                     "UMARuntime.retrieve_context: RLM controller not initialized."
                 )
-
             pack = await controller.retrieve_context(
                 request=self._build_retrieval_request(runtime_context, plan=plan),
-                query_text=query_text.strip(),
+                query_text=normalized_query_text,
             )
             increment("uma.get_structured_context.calls", tags={"path": "rlm"})
-            coverage = getattr(pack, "coverage", None)
-            active_lanes = list(plan.participating_lanes)
-            episodic = self._filter_items_by_lanes(pack.episodes, active_lanes)
-            facts = self._filter_items_by_lanes(pack.facts or [], active_lanes)
-            chunks = self._filter_items_by_lanes(getattr(pack, "chunks", []), active_lanes)
-            skills = self._filter_items_by_lanes(pack.skills, active_lanes)
-
-            return {
-                "product": "context",
-                "query": query_text.strip(),
-                "lane_filter": list(normalized_lane_filter),
-                "active_lanes": active_lanes,
-                "working_memory": wm_stored,
-                "episodic": episodic,
-                "facts": facts,
-                "chunks": chunks,
-                "documents": self._group_memory_artifacts(chunks),
-                "skills": skills,
-                "graph": pack.graph,
-                "trace": list(getattr(pack, "steps", []) or []),
-                "confidence": compute_confidence(coverage) if coverage is not None else {},
-            }
+            return self._assemble_public_context_result(
+                query_text=normalized_query_text,
+                lane_filter=normalized_lane_filter,
+                plan=plan,
+                working_memory=working_memory,
+                pack=pack,
+            )
 
     @staticmethod
     def _group_memory_artifacts(chunks: List[Any]) -> List[Dict[str, Any]]:

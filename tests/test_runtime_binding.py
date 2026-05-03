@@ -91,7 +91,6 @@ def test_runtime_bind_requires_runtime_context() -> None:
 
 def test_runtime_constructor_preserves_shared_infrastructure_references() -> None:
     stores = {"semantic": object()}
-    features = {"procedural": object()}
     runtime = UMARuntime(
         config=object(),
         raw_config=object(),
@@ -102,12 +101,13 @@ def test_runtime_constructor_preserves_shared_infrastructure_references() -> Non
         document_store=object(),
         graph_service=object(),
         ranking_service=object(),
-        feature_registry=features,
+        feature_registry={"procedural": object()},
         metadata={"version": "test"},
     )
 
     assert runtime.stores.keys() == stores.keys()
-    assert runtime.feature_registry.keys() == features.keys()
+    assert runtime.config is not None
+    assert runtime.llm is not None
     assert runtime.metadata["version"] == "test"
 
 
@@ -116,9 +116,6 @@ def test_runtime_from_memory_coexists_with_umamemory_fixture(uma_memory) -> None
 
     assert runtime.memory_bridge is uma_memory
     assert runtime.config is getattr(uma_memory, "cfg", None)
-    assert runtime.raw_config is getattr(uma_memory, "raw_config", None)
-    assert runtime.document_store is getattr(uma_memory, "document_store", None)
-    assert runtime.graph_service is getattr(uma_memory, "graph_core", None)
     assert runtime.metadata.get("source") == "UMAMemory"
 
     handle = runtime.bind(
