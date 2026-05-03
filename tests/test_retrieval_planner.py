@@ -55,3 +55,33 @@ def test_memory_plan_prefers_wiki_but_surfaces_runtime_unavailability_explicitly
     assert plan.requires_compiled_memory is True
     assert plan.evidence_expansion is True
     assert _excluded_reason(plan, WIKI_LANE) == "lane_not_available_in_runtime"
+
+
+def test_memory_plan_uses_wiki_when_runtime_supports_compiled_memory_lane() -> None:
+    plan = build_retrieval_plan(
+        product="memory",
+        query_text="What decisions did I make earlier about the rollout?",
+        available_lanes=[WIKI_LANE, RAW_LANE, SEMANTIC_LANE, EPISODIC_LANE, PROCEDURAL_LANE, PROFILE_LANE],
+        memory_intent="continuity",
+    )
+
+    assert plan.participating_lanes[:4] == (WIKI_LANE, RAW_LANE, SEMANTIC_LANE, EPISODIC_LANE)
+    assert plan.requires_compiled_memory is True
+    assert plan.evidence_expansion is True
+
+
+def test_memory_plan_uses_profile_lane_only_for_profile_style_requests() -> None:
+    plan = build_retrieval_plan(
+        product="memory",
+        query_text="What do I like?",
+        available_lanes=[WIKI_LANE, RAW_LANE, SEMANTIC_LANE, EPISODIC_LANE, PROCEDURAL_LANE, PROFILE_LANE],
+        memory_intent="profile",
+    )
+
+    assert plan.participating_lanes == (
+        WIKI_LANE,
+        RAW_LANE,
+        SEMANTIC_LANE,
+        PROFILE_LANE,
+    )
+    assert plan.active_domains == ("kb_doc", "user_profile")

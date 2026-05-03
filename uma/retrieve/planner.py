@@ -76,6 +76,13 @@ def build_retrieval_plan(
     lane_filter: Optional[Sequence[str]] = None,
     memory_intent: Optional[str] = None,
 ) -> RetrievalPlan:
+    """Build the single canonical lane plan for one retrieval call.
+
+    `wiki` is planned as a first-class compiled-memory lane. Whether the current
+    runtime serves that lane from a dedicated compiled-memory source or from the
+    existing retrievable document/evidence stack is a runtime capability detail,
+    not a second planner path.
+    """
     query = str(query_text or "").strip()
     if not query:
         raise ValueError("build_retrieval_plan requires a non-empty query_text")

@@ -134,23 +134,10 @@ class RLMController:
         logger.info("RLM_INTENT trace_id=%s intent=%s", trace_id, intent.value)
 
         plan = getattr(request, "plan", None)
-        active_lanes = list(getattr(plan, "participating_lanes", ()) or ())
-        active_domains = list(getattr(plan, "active_domains", ()) or ())
-        if not active_domains:
-            if intent == QueryIntent.PERSONAL:
-                active_domains = ["user_profile", "procedural"]
-            elif intent == QueryIntent.MIXED:
-                active_domains = ["kb_doc", "user_profile", "procedural"]
-            else:
-                active_domains = ["kb_doc", "procedural"]
-        if not active_lanes:
-            if "kb_doc" in active_domains:
-                active_lanes.extend(["raw", "semantic"])
-            if "user_profile" in active_domains:
-                active_lanes.append("profile")
-            if "procedural" in active_domains:
-                active_lanes.append("procedural")
-            active_lanes.append("episodic")
+        if plan is None:
+            raise ValueError("RLMController.retrieve_context requires request.plan")
+        active_lanes = list(plan.participating_lanes)
+        active_domains = list(plan.active_domains)
         pack = ContextPack(
             user_id=normalized_user_id,
             query_text=query_text,
@@ -160,16 +147,15 @@ class RLMController:
             intent=intent.value,
             active_lanes=list(active_lanes),
             active_domains=list(active_domains),
-            lane_plan=plan.to_trace() if plan is not None else {},
+            lane_plan=plan.to_trace(),
         )
-        if plan is not None:
-            pack.steps.append(
-                {
-                    "step": 0,
-                    "phase": "plan",
-                    **plan.to_trace(),
-                }
-            )
+        pack.steps.append(
+            {
+                "step": 0,
+                "phase": "plan",
+                **plan.to_trace(),
+            }
+        )
 
         pack.working_memory = []
         if hasattr(self.env, "_memory"):

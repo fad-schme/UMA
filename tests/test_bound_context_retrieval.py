@@ -189,7 +189,7 @@ async def test_runtime_memory_retrieval_surfaces_explicit_evidence_only_fallback
         query_text: str,
         lane_filter=None,
     ) -> Dict[str, list]:
-        assert lane_filter == ["raw", "semantic", "episodic"]
+        assert lane_filter == ["wiki", "raw", "semantic", "episodic"]
         return {
             "product": "context",
             "query": query_text,

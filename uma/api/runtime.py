@@ -21,6 +21,7 @@ from uma.common.storage_metadata import (
     PROFILE_LANE,
     RAW_LANE,
     SEMANTIC_LANE,
+    WIKI_LANE,
     shared_metadata_view,
 )
 from uma.retrieve.planner import build_retrieval_plan
@@ -286,11 +287,19 @@ class UMARuntime:
         return UMARequestHandle(runtime=self, context=context)
 
     def _available_retrieval_lanes(self) -> List[str]:
+        """Advertise the retrieval lanes this runtime can execute today.
+
+        `wiki` currently means the runtime can participate in the compiled-memory
+        lane policy using the existing retrievable document/evidence stack. It is
+        not a separate wiki engine guarantee here; planner/runtime still surface
+        `wiki` explicitly so memory-path lane selection is honest about the
+        compiled-memory-first intent.
+        """
         memory = self.memory_bridge
         stores = self.stores or {}
         lanes: List[str] = []
         if getattr(memory, "chunk_core", None) is not None or stores.get("chunk") is not None:
-            lanes.append(RAW_LANE)
+            lanes.extend([RAW_LANE, WIKI_LANE])
         if getattr(memory, "semantic_core", None) is not None or stores.get("semantic") is not None:
             lanes.extend([SEMANTIC_LANE, PROFILE_LANE])
         if getattr(memory, "episodic_core", None) is not None or stores.get("episodic") is not None:
