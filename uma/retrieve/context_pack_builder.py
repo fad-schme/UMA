@@ -141,6 +141,7 @@ class ContextPackBuilder:
                         "tags": get_attr_or_key(ep, "tags", []),
                         "kind": metadata["kind"],
                         "kb_lane": metadata["kb_lane"],
+                        "provenance": dict(metadata.get("provenance") or {}),
                         "meta": metadata,
                     }
                 )
@@ -172,6 +173,7 @@ class ContextPackBuilder:
                         "source_ids": get_attr_or_key(fact, "source_ids", []),
                         "kind": metadata["kind"],
                         "kb_lane": metadata["kb_lane"],
+                        "provenance": dict(metadata.get("provenance") or {}),
                         "meta": metadata,
                         "fact_text": meta.get("fact_text"),
                     }
@@ -203,6 +205,7 @@ class ContextPackBuilder:
                         "position": get_attr_or_key(chunk, "position", 0),
                         "kind": metadata["kind"],
                         "kb_lane": metadata["kb_lane"],
+                        "provenance": dict(metadata.get("provenance") or {}),
                         "meta": metadata,
                     }
                 )
@@ -232,6 +235,7 @@ class ContextPackBuilder:
                         "tools": get_attr_or_key(skill, "tools", []),
                         "kind": metadata["kind"],
                         "kb_lane": metadata["kb_lane"],
+                        "provenance": dict(metadata.get("provenance") or {}),
                         "meta": metadata,
                     }
                 )

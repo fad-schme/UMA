@@ -13,6 +13,20 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional
 
+from uma.common.compiled_memory import (
+    build_compiled_memory_artifact,
+    build_compiled_memory_index_entry,
+    build_compiled_memory_log_event,
+)
+from uma.common.ownership import validate_explicit_owner
+from uma.common.provenance import (
+    build_provenance,
+    collect_parent_artifact_ids,
+    collect_direct_source_chunk_ids,
+    collect_source_chunk_ids,
+    collect_transitive_source_chunk_ids,
+    provenance_for_artifact,
+)
 from uma.common.types import RuntimeContext
 from uma.common.storage_metadata import (
     EPISODIC_LANE,
@@ -88,6 +102,52 @@ class UMARequestHandle:
             self.context,
             query_text=query_text,
             memory_intent=memory_intent,
+        )
+
+    async def expand_evidence(self, artifact: Any) -> Dict[str, Any]:
+        return await self.runtime.expand_evidence(self.context, artifact)
+
+    def compile_memory_artifact(
+        self,
+        *,
+        artifact_id: str,
+        title: str,
+        owner_type: str,
+        owner_id: str,
+        text: str | None = None,
+        summary: str | None = None,
+        topic_key: str | None = None,
+        direct_source_chunk_ids: Optional[List[str]] = None,
+        direct_source_document_ids: Optional[List[str]] = None,
+        parent_artifacts: Optional[List[Any]] = None,
+        related_artifact_ids: Optional[List[str]] = None,
+        retrieval_tags: Optional[List[str]] = None,
+        retrieval_path: Optional[List[Mapping[str, Any]]] = None,
+        support_density: float | None = None,
+        confidence: float | None = None,
+        conflicts: Optional[List[Mapping[str, Any]]] = None,
+        manual: bool = False,
+        operation: str = "wiki_artifact_created",
+    ) -> Dict[str, Any]:
+        return self.runtime.compile_memory_artifact(
+            artifact_id=artifact_id,
+            title=title,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            text=text,
+            summary=summary,
+            topic_key=topic_key,
+            direct_source_chunk_ids=direct_source_chunk_ids,
+            direct_source_document_ids=direct_source_document_ids,
+            parent_artifacts=parent_artifacts,
+            related_artifact_ids=related_artifact_ids,
+            retrieval_tags=retrieval_tags,
+            retrieval_path=retrieval_path,
+            support_density=support_density,
+            confidence=confidence,
+            conflicts=conflicts,
+            manual=manual,
+            operation=operation,
         )
 
     async def get_context_messages(
@@ -405,6 +465,8 @@ class UMARuntime:
         facts = self._filter_items_by_lanes(pack.facts or [], active_lanes)
         chunks = self._filter_items_by_lanes(getattr(pack, "chunks", []), active_lanes)
         skills = self._filter_items_by_lanes(pack.skills, active_lanes)
+        trace = list(getattr(pack, "steps", []) or [])
+        confidence = compute_confidence(coverage) if coverage is not None else {}
 
         return {
             "product": "context",
@@ -418,8 +480,19 @@ class UMARuntime:
             "documents": self._group_memory_artifacts(chunks),
             "skills": skills,
             "graph": pack.graph,
-            "trace": list(getattr(pack, "steps", []) or []),
-            "confidence": compute_confidence(coverage) if coverage is not None else {},
+            "trace": trace,
+            "confidence": confidence,
+            "provenance": build_provenance(
+                source_chunk_ids=[getattr(chunk, "id", None) for chunk in chunks],
+                source_document_ids=[getattr(chunk, "doc_id", None) for chunk in chunks],
+                derived_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                derivation_type="context_retrieval",
+                retrieval_path=trace,
+                support_density=(1.0 if chunks else 0.0),
+                confidence=confidence.get("score"),
+                conflicts=[],
+                require_source_chunks=True,
+            ),
         }
 
     
@@ -516,7 +589,204 @@ class UMARuntime:
             if chunk_id and chunk_id not in artifact["chunk_ids"]:
                 artifact["chunk_ids"].append(chunk_id)
             artifact["evidence"].append(chunk)
-        return list(grouped.values())
+        out = list(grouped.values())
+        for artifact in out:
+            metadata = dict(artifact.get("metadata") or {})
+            artifact["provenance"] = build_provenance(
+                existing=metadata.get("provenance"),
+                source_chunk_ids=artifact.get("chunk_ids") or [],
+                source_document_ids=[artifact.get("doc_id")],
+                derived_at=metadata.get("updated_at") or metadata.get("created_at"),
+                derivation_type="memory_source_group",
+                support_density=(1.0 if artifact.get("chunk_ids") else 0.0),
+                conflicts=metadata.get("provenance", {}).get("conflicts") if isinstance(metadata.get("provenance"), dict) else [],
+                require_source_chunks=(metadata.get("kb_lane") == WIKI_LANE),
+            )
+            if metadata.get("kb_lane") == WIKI_LANE:
+                page_title = metadata.get("page_title") or metadata.get("title") or artifact.get("doc_id")
+                compiled_artifact = build_compiled_memory_artifact(
+                    artifact_id=str(artifact.get("doc_id") or ""),
+                    title=str(page_title or artifact.get("doc_id") or ""),
+                    owner_type=str(artifact.get("owner_type") or ""),
+                    owner_id=str(artifact.get("owner_id") or ""),
+                    artifact_kind=str(artifact.get("kind") or "wiki_page"),
+                    summary=metadata.get("summary"),
+                    topic_key=metadata.get("page_slug") or page_title,
+                    derived_at=artifact["provenance"].get("derived_at"),
+                    derivation_type="wiki_artifact_created",
+                    direct_source_chunk_ids=artifact.get("chunk_ids") or [],
+                    direct_source_document_ids=[artifact.get("doc_id")] if artifact.get("doc_id") else [],
+                    related_artifact_ids=metadata.get("related_artifact_ids") or [],
+                    retrieval_tags=[
+                        item
+                        for item in [
+                            metadata.get("page_slug"),
+                            metadata.get("category"),
+                            metadata.get("page_title"),
+                        ]
+                        if item
+                    ],
+                    retrieval_path=artifact["provenance"].get("retrieval_path") or [],
+                    support_density=artifact["provenance"].get("support_density"),
+                    confidence=artifact["provenance"].get("confidence"),
+                    conflicts=artifact["provenance"].get("conflicts") if isinstance(artifact["provenance"].get("conflicts"), list) else [],
+                    manual=bool(artifact["provenance"].get("manual")),
+                    metadata=metadata,
+                    event_type="wiki_artifact_created",
+                )
+                compiled_artifact["evidence"] = list(artifact.get("evidence") or [])
+                compiled_artifact["page_ranges"] = list(artifact.get("page_ranges") or [])
+                compiled_artifact["source_path"] = artifact.get("source_path")
+                artifact.clear()
+                artifact.update(compiled_artifact)
+        return out
+
+    def compile_memory_artifact(
+        self,
+        *,
+        artifact_id: str,
+        title: str,
+        owner_type: str,
+        owner_id: str,
+        text: str | None = None,
+        summary: str | None = None,
+        topic_key: str | None = None,
+        direct_source_chunk_ids: Optional[List[str]] = None,
+        direct_source_document_ids: Optional[List[str]] = None,
+        parent_artifacts: Optional[List[Any]] = None,
+        related_artifact_ids: Optional[List[str]] = None,
+        retrieval_tags: Optional[List[str]] = None,
+        retrieval_path: Optional[List[Mapping[str, Any]]] = None,
+        support_density: float | None = None,
+        confidence: float | None = None,
+        conflicts: Optional[List[Mapping[str, Any]]] = None,
+        manual: bool = False,
+        operation: str = "wiki_artifact_created",
+    ) -> Dict[str, Any]:
+        owner = validate_explicit_owner(
+            owner_type=owner_type,
+            owner_id=owner_id,
+        )
+        return build_compiled_memory_artifact(
+            artifact_id=artifact_id,
+            title=title,
+            owner_type=str(owner["owner_type"]),
+            owner_id=str(owner["owner_id"]),
+            artifact_kind="wiki_page",
+            text=text,
+            summary=summary,
+            topic_key=topic_key,
+            derivation_type=operation,
+            direct_source_chunk_ids=direct_source_chunk_ids or [],
+            direct_source_document_ids=direct_source_document_ids or [],
+            parent_artifacts=parent_artifacts or [],
+            related_artifact_ids=related_artifact_ids or [],
+            retrieval_tags=retrieval_tags or [],
+            retrieval_path=retrieval_path or [],
+            support_density=support_density,
+            confidence=confidence,
+            conflicts=conflicts or [],
+            manual=manual,
+            event_type=operation,
+        )
+
+    async def expand_evidence(
+        self,
+        runtime_context: RuntimeContext,
+        artifact: Any,
+    ) -> Dict[str, Any]:
+        self.ensure_retrieval_ready()
+        request = self._build_retrieval_request(runtime_context)
+        memory = self._require_memory_bridge()
+        env = getattr(memory, "memory_env", None)
+        if env is None:
+            raise RuntimeError("UMARuntime.expand_evidence: memory environment is not initialized.")
+
+        artifacts = artifact if isinstance(artifact, list) else [artifact]
+        by_scope: dict[tuple[str, str], list[str]] = {}
+        expanded_provenance: list[dict[str, Any]] = []
+        lineage: list[dict[str, Any]] = []
+        direct_chunk_ids: list[str] = []
+        unresolved_parent_artifact_ids: list[str] = []
+
+        for item in artifacts:
+            provenance = provenance_for_artifact(item)
+            chunk_ids = collect_transitive_source_chunk_ids(item)
+            direct_ids = collect_direct_source_chunk_ids(item)
+            parent_artifact_ids = collect_parent_artifact_ids(item)
+            if not chunk_ids and parent_artifact_ids and not bool(provenance.get("manual")):
+                for parent_artifact_id in parent_artifact_ids:
+                    if parent_artifact_id not in unresolved_parent_artifact_ids:
+                        unresolved_parent_artifact_ids.append(parent_artifact_id)
+            owner_type = _artifact_value(item, "owner_type")
+            owner_id = _artifact_value(item, "owner_id")
+            for chunk_id in direct_ids:
+                if chunk_id not in direct_chunk_ids:
+                    direct_chunk_ids.append(chunk_id)
+            if chunk_ids and owner_type and owner_id:
+                by_scope.setdefault((str(owner_type), str(owner_id)), [])
+                for chunk_id in chunk_ids:
+                    if chunk_id not in by_scope[(str(owner_type), str(owner_id))]:
+                        by_scope[(str(owner_type), str(owner_id))].append(chunk_id)
+            normalized = build_provenance(
+                existing=provenance,
+                source_chunk_ids=chunk_ids,
+                derivation_type=str(provenance.get("derivation_type") or _artifact_value(item, "kind") or "artifact"),
+                derived_at=provenance.get("derived_at") or _artifact_value(item, "updated_at") or _artifact_value(item, "created_at"),
+                support_density=provenance.get("support_density"),
+                confidence=provenance.get("confidence"),
+                conflicts=provenance.get("conflicts") if isinstance(provenance.get("conflicts"), list) else [],
+                parent_artifact_ids=parent_artifact_ids,
+                require_source_chunks=not bool(provenance.get("manual")),
+            )
+            if parent_artifact_ids and not chunk_ids and not bool(provenance.get("manual")):
+                invalid_reasons = list(normalized.get("invalid_reasons") or [])
+                if "unreachable_raw_source_chunks" not in invalid_reasons:
+                    invalid_reasons.append("unreachable_raw_source_chunks")
+                normalized["invalid_reasons"] = invalid_reasons
+                normalized["valid"] = False
+            expanded_provenance.append(normalized)
+            lineage.append(
+                {
+                    "artifact_id": _artifact_value(item, "id") or _artifact_value(item, "doc_id"),
+                    "kind": _artifact_value(item, "kind"),
+                    "parent_artifact_ids": parent_artifact_ids,
+                    "direct_source_chunk_ids": direct_ids,
+                    "transitive_source_chunk_ids": chunk_ids,
+                }
+            )
+
+        evidence: list[dict[str, Any]] = []
+        for (owner_type, owner_id), ids in by_scope.items():
+            chunks = await env.fetch_chunks(
+                request,
+                ids=ids,
+                owner_type=owner_type,
+                owner_id=owner_id,
+            )
+            for chunk in chunks or []:
+                payload = _chunk_payload(chunk)
+                payload["retrieval_score"] = ((payload.get("meta") or {}).get("vector_score"))
+                evidence.append(payload)
+
+        event = build_compiled_memory_log_event(
+            event_type="evidence_expanded",
+            artifact=artifacts[0] if len(artifacts) == 1 else None,
+            source_chunk_ids=[item["id"] for item in evidence if item.get("id")],
+            parent_artifact_ids=unresolved_parent_artifact_ids,
+        )
+
+        return {
+            "artifacts": artifacts,
+            "provenance": expanded_provenance,
+            "evidence": evidence,
+            "direct_chunk_ids": direct_chunk_ids,
+            "chunk_ids": [item["id"] for item in evidence if item.get("id")],
+            "unresolved_parent_artifact_ids": unresolved_parent_artifact_ids,
+            "lineage": lineage,
+            "mode": "raw_chunk_evidence" if evidence else "invalid",
+            "compiled_memory_log": [event],
+        }
 
     async def retrieve_memory(
         self,
@@ -547,8 +817,42 @@ class UMARuntime:
             lane_filter=list(plan.participating_lanes),
         )
         chunks = list(context.get("chunks") or [])
-        memories: List[Dict[str, Any]] = []
-        fallback_used = not memories
+        memory_sources = self._group_memory_artifacts(chunks)
+        support_density = 1.0 if chunks else 0.0
+        confidence = dict(context.get("confidence") or {})
+        trace = list(context.get("trace") or [])
+        compiled_conflicts: list[dict[str, Any]] = []
+        supporting_evidence = [_chunk_payload(chunk) for chunk in chunks]
+        compiled_answer = build_compiled_memory_artifact(
+            artifact_id=f"memory:{runtime_context.request_id}:{memory_intent.strip()}",
+            title=f"Memory {memory_intent.strip()}",
+            owner_type="user",
+            owner_id=str(runtime_context.user_id or ""),
+            artifact_kind="compiled_memory_answer",
+            text=None,
+            summary=None,
+            topic_key=memory_intent.strip(),
+            derived_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            derivation_type="memory_compiled",
+            direct_source_chunk_ids=[item["id"] for item in supporting_evidence if item.get("id")],
+            direct_source_document_ids=[item.get("doc_id") for item in supporting_evidence if item.get("doc_id")],
+            parent_artifacts=[artifact for artifact in memory_sources if artifact.get("artifact_type") == "compiled_memory_artifact"],
+            parent_artifact_ids=[artifact.get("id") or artifact.get("doc_id") for artifact in memory_sources if artifact.get("id") or artifact.get("doc_id")],
+            related_artifact_ids=[artifact.get("id") or artifact.get("doc_id") for artifact in memory_sources if artifact.get("id") or artifact.get("doc_id")],
+            retrieval_tags=[memory_intent.strip()],
+            retrieval_path=trace,
+            support_density=support_density,
+            confidence=confidence.get("score"),
+            conflicts=compiled_conflicts,
+            manual=False,
+            metadata={"memory_intent": memory_intent.strip()},
+            event_type="memory_compiled",
+        )
+        compiled_answer["memory_intent"] = memory_intent.strip()
+        compiled_answer["status"] = "evidence_only" if chunks else "invalid"
+        compiled_answer["supporting_evidence"] = supporting_evidence
+        memories: List[Dict[str, Any]] = [compiled_answer]
+        fallback_used = not chunks
         fallback_reason = "no_compiled_memory_available" if fallback_used else None
         if fallback_used:
             logger.info(
@@ -559,15 +863,32 @@ class UMARuntime:
                 memory_intent,
                 len(chunks),
             )
+        semantic_retrieved_event = build_compiled_memory_log_event(
+            event_type="semantic_retrieved",
+            artifact=compiled_answer,
+            source_chunk_ids=[item["id"] for item in supporting_evidence if item.get("id")],
+            retrieval_path=trace,
+        )
+        compiled_memory_index = [
+            build_compiled_memory_index_entry(artifact)
+            for artifact in [*memory_sources, compiled_answer]
+            if artifact.get("artifact_type") == "compiled_memory_artifact"
+        ]
+        compiled_memory_log = [semantic_retrieved_event]
+        for artifact in [*memory_sources, compiled_answer]:
+            compiled_memory_log.extend(list(artifact.get("compiled_memory_log") or []))
         return {
             "query": query_text.strip(),
             "product": "memory",
             "memory_intent": memory_intent.strip(),
             "memories": memories,
+            "compiled_answer": compiled_answer,
             "evidence": chunks,
+            "supporting_evidence": compiled_answer["supporting_evidence"],
             "supporting_facts": list(context.get("facts") or []),
             "supporting_skills": list(context.get("skills") or []),
             "conflicts": [],
+            "support_density": support_density,
             "fallback": {
                 "used": fallback_used,
                 "mode": "evidence_only" if fallback_used else "none",
@@ -578,9 +899,13 @@ class UMARuntime:
                     else ""
                 ),
             },
-            "memory_sources": self._group_memory_artifacts(chunks),
-            "confidence": dict(context.get("confidence") or {}),
-            "trace": list(context.get("trace") or [])
+            "memory_sources": memory_sources,
+            "compiled_memory_index": compiled_memory_index,
+            "compiled_memory_log": compiled_memory_log,
+            "confidence": confidence,
+            "provenance": compiled_answer["provenance"],
+            "retrieval_path": trace,
+            "trace": trace
             + [
                 {
                     "event": "memory_plan",
@@ -595,12 +920,7 @@ class UMARuntime:
         }
 
     def _render_profile_overlay(self) -> str:
-        """Render cached USER.md and SOUL.md overlays for every response.
-
-        The integration loads the files explicitly through UMAMemory. Retrieval
-        remains deterministic here: if a profile is loaded, it is prepended to
-        the rendered context on every request.
-        """
+        """Render cached USER.md and SOUL.md overlays for every response."""
         memory = self._require_memory_bridge()
         provider = getattr(memory, "animus_profile_provider", None)
         if provider is None:
@@ -619,7 +939,6 @@ class UMARuntime:
         if user_profile:
             sections.append("## User Profile\n" + user_profile)
         return "\n\n".join(sections).strip()
-
 
     async def render_context(
         self,
@@ -711,4 +1030,25 @@ class UMARuntime:
                 "message_count": len(messages),
             },
         }
+
+
+def _artifact_value(artifact: Any, field_name: str) -> Any:
+    if isinstance(artifact, dict):
+        return artifact.get(field_name)
+    return getattr(artifact, field_name, None)
+
+
+def _chunk_payload(chunk: Any) -> Dict[str, Any]:
+    return {
+        "id": getattr(chunk, "id", None),
+        "doc_id": getattr(chunk, "doc_id", None),
+        "text": getattr(chunk, "text", None),
+        "page_range": getattr(chunk, "page_range", None),
+        "position": getattr(chunk, "position", None),
+        "owner_type": getattr(chunk, "owner_type", None),
+        "owner_id": getattr(chunk, "owner_id", None),
+        "source_path": getattr(chunk, "source_path", None),
+        "meta": dict(getattr(chunk, "meta", None) or {}),
+        "provenance": provenance_for_artifact(chunk),
+    }
     

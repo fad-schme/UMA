@@ -78,10 +78,40 @@ def test_context_pack_builder_preserves_episode_provenance_in_serialized_output(
 
     assert episode["kind"] == "episodic_event"
     assert episode["kb_lane"] == "episodic"
+    assert episode["provenance"]["derived_at"] == "2026-05-01T10:00:00+00:00"
     assert episode["meta"]["provenance"]["episode_id"] == "ep-import-1"
     assert episode["meta"]["provenance"]["source_file"] == "/tmp/diary.md"
     assert episode["meta"]["provenance"]["diary_date"] == "2026-05-01"
     assert episode["meta"]["provenance"]["import_mode"] == "bootstrap"
+
+
+def test_context_pack_builder_surfaces_fact_provenance_top_level():
+    ctx = {
+        "facts": [
+            {
+                "id": "fact-1",
+                "subject": "team",
+                "predicate": "USES",
+                "object": "kubernetes",
+                "source_ids": ["chunk-1"],
+                "meta": {
+                    "kind": "semantic_fact",
+                    "kb_lane": "semantic",
+                    "provenance": {
+                        "source_chunk_ids": ["chunk-1"],
+                        "derived_at": "2026-05-01T10:00:00+00:00",
+                        "derivation_type": "semantic_extract",
+                        "support_density": 1.0,
+                        "valid": True,
+                        "invalid_reasons": [],
+                    },
+                },
+            }
+        ]
+    }
+    pack = ContextPackBuilder.build("q", ctx)
+    assert pack["facts"][0]["provenance"]["source_chunk_ids"] == ["chunk-1"]
+    assert pack["facts"][0]["provenance"]["valid"] is True
 
 
 def test_cot_memory_builder_accepts_dicts_and_objects():

@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping
+from uma.common.provenance import build_provenance
 
 RECORD_KINDS = (
     "raw_source",
@@ -233,7 +234,15 @@ def normalize_document_metadata(
         updated_at=ingested_at,
         source_id=doc_id,
         source_type=existing.get("source_type") or "document",
-        provenance={
+        provenance=build_provenance(
+            existing=existing.get("provenance"),
+            source_document_ids=[doc_id],
+            derived_at=ingested_at,
+            derivation_type="document_ingest",
+            manual=(kind == WIKI_PAGE_KIND and explicit_source_kind == WIKI_PAGE_KIND),
+            require_source_chunks=False,
+        )
+        | {
             "doc_id": doc_id,
             "source_path": source_path,
             "source_hash": source_hash,
@@ -267,7 +276,16 @@ def normalize_chunk_metadata(
         updated_at=updated_at,
         source_id=doc_id,
         source_type="document_chunk",
-        provenance={
+        provenance=build_provenance(
+            existing=(meta or {}).get("provenance") if isinstance(meta, Mapping) else None,
+            source_chunk_ids=[chunk_id],
+            source_document_ids=[doc_id],
+            derived_at=updated_at or created_at,
+            derivation_type="chunk_ingest",
+            support_density=1.0,
+            require_source_chunks=True,
+        )
+        | {
             "chunk_id": chunk_id,
             "doc_id": doc_id,
             "source_path": source_path,
@@ -313,7 +331,21 @@ def normalize_fact_metadata(
         source_id=(source_ids[0] if source_ids else existing.get("doc_id") or fact_id),
         source_type=existing.get("source_type") or ("chunk" if source_ids else "fact"),
         session_id=session_id,
-        provenance={
+        provenance=build_provenance(
+            existing=existing.get("provenance"),
+            source_chunk_ids=list(source_ids or []),
+            source_document_ids=([existing.get("doc_id")] if existing.get("doc_id") else []),
+            derived_at=updated_at or created_at,
+            derivation_type=("promotion" if (existing.get("promotion") or existing.get("promoted_from")) else "semantic_extract"),
+            parent_artifact_ids=(
+                [existing.get("promotion", {}).get("source_fact_id")]
+                if isinstance(existing.get("promotion"), Mapping) and existing.get("promotion", {}).get("source_fact_id")
+                else ([existing.get("promoted_from", {}).get("fact_id")] if isinstance(existing.get("promoted_from"), Mapping) and existing.get("promoted_from", {}).get("fact_id") else [])
+            ),
+            support_density=(1.0 if source_ids else 0.0),
+            require_source_chunks=True,
+        )
+        | {
             "fact_id": fact_id,
             "source_ids": list(source_ids or []),
             "doc_id": existing.get("doc_id"),
@@ -349,7 +381,16 @@ def normalize_episode_metadata(
         source_id=episode_id,
         source_type=(existing.get("source_type") or "episode"),
         session_id=session_id,
-        provenance={
+        provenance=build_provenance(
+            existing=existing.get("provenance"),
+            source_document_ids=([existing.get("doc_id")] if existing.get("doc_id") else []),
+            derived_at=timestamp,
+            derivation_type=str(existing.get("import_mode") or "episode_event"),
+            manual=(existing.get("import_mode") == "manual"),
+            support_density=(1.0 if existing.get("doc_id") else None),
+            require_source_chunks=False,
+        )
+        | {
             "episode_id": episode_id,
             "doc_id": existing.get("doc_id"),
             "source_file": existing.get("source_file"),
@@ -392,7 +433,14 @@ def normalize_skill_metadata(
         updated_at=updated_at,
         source_id=skill_id,
         source_type=existing.get("source_type") or "skill",
-        provenance={
+        provenance=build_provenance(
+            existing=existing.get("provenance"),
+            derived_at=updated_at or created_at,
+            derivation_type=str(existing.get("import_mode") or "manual"),
+            manual=True,
+            require_source_chunks=False,
+        )
+        | {
             "skill_id": skill_id,
             "source": existing.get("source"),
             "source_file": existing.get("source_file"),

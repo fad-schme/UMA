@@ -57,14 +57,21 @@ async def test_request_handle_retrieval_delegates_directly_to_runtime(uma_memory
             "product": "memory",
             "query": query_text,
             "memory_intent": memory_intent,
-            "memories": [],
+            "memories": [{"id": "mem-1", "provenance": {"valid": True, "source_chunk_ids": ["chunk-1"]}}],
+            "compiled_answer": {"id": "mem-1", "provenance": {"valid": True, "source_chunk_ids": ["chunk-1"]}},
             "evidence": [],
+            "supporting_evidence": [],
             "supporting_facts": [],
             "supporting_skills": [],
             "conflicts": [],
+            "support_density": 0.0,
             "fallback": {"used": True, "mode": "evidence_only", "reason": "no_compiled_memory_available"},
             "memory_sources": [],
+            "compiled_memory_index": [],
+            "compiled_memory_log": [],
             "confidence": {},
+            "provenance": {"valid": True, "source_chunk_ids": ["chunk-1"]},
+            "retrieval_path": [],
         }
 
     async def fake_messages(
@@ -88,7 +95,7 @@ async def test_request_handle_retrieval_delegates_directly_to_runtime(uma_memory
     assert structured["lane_filter"] == ["semantic"]
     assert structured["documents"] == []
     assert memory_payload["product"] == "memory"
-    assert memory_payload["memories"] == []
+    assert memory_payload["memories"][0]["id"] == "mem-1"
     assert memory_payload["fallback"]["used"] is True
     assert messages["meta"]["render_mode"] == "raw_rendered"
     assert seen == [
@@ -149,14 +156,21 @@ async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory
             "product": "memory",
             "query": query_text,
             "memory_intent": memory_intent,
-            "memories": [],
+            "memories": [{"id": "mem-1", "provenance": {"valid": True, "source_chunk_ids": ["chunk-1"]}}],
+            "compiled_answer": {"id": "mem-1", "provenance": {"valid": True, "source_chunk_ids": ["chunk-1"]}},
             "evidence": [],
+            "supporting_evidence": [],
             "supporting_facts": [],
             "supporting_skills": [],
             "conflicts": [],
+            "support_density": 0.0,
             "fallback": {"used": True, "mode": "evidence_only", "reason": "no_compiled_memory_available"},
             "memory_sources": [],
+            "compiled_memory_index": [],
+            "compiled_memory_log": [],
             "confidence": {},
+            "provenance": {"valid": True, "source_chunk_ids": ["chunk-1"]},
+            "retrieval_path": [],
         }
 
     memory.runtime.retrieve_context = fake_context  # type: ignore[method-assign]
@@ -168,7 +182,7 @@ async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory
     assert context["product"] == "context"
     assert context["documents"] == []
     assert memory_result["product"] == "memory"
-    assert memory_result["memories"] == []
+    assert memory_result["memories"][0]["id"] == "mem-1"
     assert memory_result["fallback"]["used"] is True
     assert seen == [("context", "hello world"), ("memory", "hello world")]
 
@@ -203,6 +217,7 @@ async def test_runtime_memory_retrieval_surfaces_explicit_evidence_only_fallback
             "graph": [],
             "trace": [],
             "confidence": {},
+            "provenance": {"valid": False, "source_chunk_ids": [], "invalid_reasons": ["missing_source_chunk_ids"]},
         }
 
     runtime.retrieve_context = fake_context  # type: ignore[method-assign]
@@ -215,10 +230,12 @@ async def test_runtime_memory_retrieval_surfaces_explicit_evidence_only_fallback
 
     assert result["product"] == "memory"
     assert result["memory_intent"] == "continuity"
-    assert result["memories"] == []
+    assert len(result["memories"]) == 1
     assert result["fallback"]["used"] is True
     assert result["fallback"]["mode"] == "evidence_only"
     assert result["fallback"]["reason"] == "no_compiled_memory_available"
+    assert result["compiled_answer"]["provenance"]["valid"] is False
+    assert "missing_source_chunk_ids" in result["compiled_answer"]["provenance"]["invalid_reasons"]
 
 
 @pytest.mark.asyncio
