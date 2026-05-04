@@ -85,7 +85,7 @@ from uma.common.initializers.runtime import (
 from uma.common.registry import FeatureLoader, FeaturePolicy, default_feature_registry
 from .runtime import AnimusProfileProvider, UMARuntime
 from uma.common.storage_metadata import normalize_document_metadata, normalize_fact_metadata
-from uma.common.types import Fact, RuntimeContext, TargetOwner
+from uma.common.types import Fact, RuntimeContext
 from ..stores.document_sql import DocumentRecord
 
 logger = logging.getLogger(__name__)
@@ -418,7 +418,6 @@ class UMAMemory:
         self,
         file_path: str,
         *,
-        target_owner: Optional[TargetOwner] = None,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
         config: Optional[Any] = None,
@@ -429,7 +428,6 @@ class UMAMemory:
         from uma.ingest.ingest_service import ingest_document as _ingest
         return await _ingest(
             file_path,
-            target_owner=target_owner,
             owner_type=owner_type,
             owner_id=owner_id,
             config=config,

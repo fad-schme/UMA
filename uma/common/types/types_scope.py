@@ -5,18 +5,14 @@ This module defines the canonical immutable vocabulary for:
 - runtime context (tenant / workspace / agent / user / session / request)
 - session-local identity
 - persistent ownership references
-- explicit write targets
 
-These types are intentionally additive in PR 1:
-- they do not change runtime execution behavior
-- they do not encode authorization or lane policy
-- they validate only structural invariants
+These types validate structural scope invariants only.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Collection, Optional
+from typing import Optional
 
 from .types_owner import OwnerType
 
@@ -117,41 +113,3 @@ class OwnershipRef:
         object.__setattr__(self, "tenant_id", validate_tenant_id(self.tenant_id))
         object.__setattr__(self, "owner_type", validate_owner_type(self.owner_type))
         object.__setattr__(self, "owner_id", validate_owner_id(self.owner_id))
-
-
-@dataclass(frozen=True)
-class TargetOwner:
-    tenant_id: str
-    owner_type: OwnerType
-    owner_id: str
-    workspace_id: Optional[str] = None
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "tenant_id", validate_tenant_id(self.tenant_id))
-        object.__setattr__(self, "owner_type", validate_owner_type(self.owner_type))
-        object.__setattr__(self, "owner_id", validate_owner_id(self.owner_id))
-        object.__setattr__(self, "workspace_id", validate_workspace_id(self.workspace_id))
-
-
-def make_target_owner(
-    *,
-    tenant_id: str,
-    owner_type: str,
-    owner_id: str,
-    workspace_id: Optional[str] = None,
-    allowed_owner_types: Optional[Collection[str]] = None,
-) -> TargetOwner:
-    target = TargetOwner(
-        tenant_id=tenant_id,
-        owner_type=owner_type,
-        owner_id=owner_id,
-        workspace_id=workspace_id,
-    )
-    if allowed_owner_types is None:
-        return target
-
-    normalized_allowed = {validate_owner_type(value) for value in allowed_owner_types}
-    if target.owner_type not in normalized_allowed:
-        allowed_display = ", ".join(sorted(normalized_allowed))
-        raise ValueError(f"owner_type must be one of: {allowed_display}")
-    return target

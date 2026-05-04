@@ -15,9 +15,9 @@ from .graph_updater import update_graph
 from .episodic_writer import write_document_episode
 from .consolidation_trigger import maybe_trigger_consolidation
 
-from uma.common.types import Chunk, Fact, TargetOwner
+from uma.common.types import Chunk, Fact
 from uma.stores.document_sql import DocumentRecord
-from uma.common.ownership import resolve_target_owner
+from uma.common.ownership import validate_explicit_owner
 logger = logging.getLogger(__name__)
 
 _INGEST_PIPELINE_VERSION = "doc_ingest_v1"
@@ -498,7 +498,6 @@ async def _extract_facts_and_update_graph(
 async def ingest_document(
     file_path: str,
     *,
-    target_owner: TargetOwner | None = None,
     owner_type: str | None = None,
     owner_id: str | None = None,
     config: IngestConfig | None = None,
@@ -516,18 +515,18 @@ async def ingest_document(
     config = config or IngestConfig()
     runtime = _resolve_ingest_runtime(memory)
 
-    if target_owner is None and (not owner_type or not owner_id):
-        raise ValueError("ingest_document: target_owner or owner_type/owner_id is required")
-    target_owner = resolve_target_owner(
-        target_owner=target_owner,
+    if not owner_type or not owner_id:
+        raise ValueError("ingest_document: owner_type and owner_id are required")
+    owner = validate_explicit_owner(
         owner_type=owner_type,
         owner_id=owner_id,
-        allowed_owner_types=("agent", "user", "workspace"),
     )
-    owner_type = target_owner.owner_type
-    owner_id = target_owner.owner_id
-    tenant_id = target_owner.tenant_id
-    workspace_id = target_owner.workspace_id
+    if owner["owner_type"] not in {"agent", "user", "workspace"}:
+        raise ValueError("owner_type must be one of: agent, user, workspace")
+    tenant_id = str(owner["tenant_id"])
+    owner_type = str(owner["owner_type"])
+    owner_id = str(owner["owner_id"])
+    workspace_id = owner["workspace_id"]
 
     if not file_path or not isinstance(file_path, str):
         raise ValueError("ingest_document: file_path must be a non-empty string")

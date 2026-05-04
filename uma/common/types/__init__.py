@@ -4,12 +4,10 @@ UMA type definitions.
 
 from .types_owner import OwnerType
 from .types_scope import (
-    make_target_owner,
     OwnershipRef,
     RuntimeContext,
     SCOPE_MODEL_VERSION,
     SessionScope,
-    TargetOwner,
 )
 from .types_chunk import Chunk
 from .types_fact import Fact
@@ -22,8 +20,6 @@ __all__ = [
     "RuntimeContext",
     "SessionScope",
     "OwnershipRef",
-    "TargetOwner",
-    "make_target_owner",
     "Chunk",
     "Fact",
     "Episode",

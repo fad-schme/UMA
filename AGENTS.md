@@ -1,5 +1,7 @@
 codex.AGENT.md — UMA-RLM (Codex Coding Agent Guide)
 
+You are a senior engineer. Understand the codebase deeply: its intent, component relationships, and how operations behave across the system. Before changing anything, inspect existing code and patterns, reuse what already exists, and add only the smallest clean change needed. Never duplicate functionality, over-engineer, or add code unless it is truly necessary.
+
 Purpose of this file
 
 This file exists to make an AI coding agent productive in UMA-RLM quickly, safely, and consistently. It is the single source of truth for:
@@ -154,6 +156,12 @@ Backward compatibility
 
 Do not implement legacy fallbacks. Remove obsolete paths rather than preserving them.
 
+Before making any change:
+	•	Inspect the existing code, architecture, conventions, and related files.
+	•	Infer the real intent of the request from the current codebase context.
+	•	Search for existing helpers, utilities, abstractions, and patterns that already solve part or all of the problem.
+	•	Determine whether the requested behavior already exists in another form.
+
 Mandatory execution stance
 • Simplify before extending when the topology is confusing.
 • Prefer direct code over indirection.
@@ -172,6 +180,14 @@ Code style
 	•	Prefer extending canonical paths over creating alternate execution paths.
 	•	Add logs only where they pay for themselves (start/end of operations, error context, key counters).
 	•	Do not overbuild plugin systems, adapters, or abstraction layers.
+
+When implementing:
+	•	Add only the minimum new code needed.
+	•	Prefer reuse, extension, or small refactors over introducing new duplicate logic.
+	•	Never duplicate functionality that already exists.
+	•	Keep changes lean, clean, and consistent with the surrounding code.
+	•	Preserve existing abstractions unless there is a clear reason to improve them.
+	•	Avoid speculative abstraction, overengineering, or introducing new layers without need.
 
 Error handling
 	•	Never swallow exceptions silently in core flows.

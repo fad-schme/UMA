@@ -9,8 +9,6 @@ from .types import (
     SCOPE_MODEL_VERSION,
     SessionScope,
     Skill,
-    TargetOwner,
-    make_target_owner,
 )
 
 __all__ = [
@@ -23,7 +21,5 @@ __all__ = [
     "SCOPE_MODEL_VERSION",
     "SessionScope",
     "Skill",
-    "TargetOwner",
     "UMAConfig",
-    "make_target_owner",
 ]

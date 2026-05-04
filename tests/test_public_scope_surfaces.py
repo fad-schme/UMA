@@ -9,7 +9,7 @@ import yaml
 
 from uma.api.memory import UMAMemory
 from uma.retrieve.rlm.request import RetrievalRequest
-from uma.common.types import RuntimeContext, TargetOwner, Skill
+from uma.common.types import RuntimeContext, Skill
 
 from tests.helpers.runtime import build_test_config
 
@@ -123,12 +123,8 @@ async def test_public_procedural_reads_accept_explicit_workspace_scope_without_b
         add_result = await memory.procedural_add_skill(
             skill,
             embedding,
-            target_owner=TargetOwner(
-                tenant_id="default",
-                owner_type="workspace",
-                owner_id="workspace:alpha",
-                workspace_id="workspace:alpha",
-            ),
+            owner_type="workspace",
+            owner_id="workspace:alpha",
         )
         assert add_result.ok
 
@@ -167,4 +163,3 @@ async def test_public_procedural_reads_accept_explicit_workspace_scope_without_b
 def test_agent_id_setter_is_removed_from_public_surface(uma_memory) -> None:
     with pytest.raises(AttributeError):
         uma_memory.agent_id = "agent-deprecated-test"
-

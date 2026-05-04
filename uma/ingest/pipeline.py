@@ -417,8 +417,8 @@ class MemoryPipeline:
             try:
                 if not policy.is_eligible(fact):
                     continue
-                target_owner = policy.select_target_owner(fact)
-                if target_owner is None:
+                target = policy.select_promotion_target(fact)
+                if target is None:
                     continue
             except Exception:
                 logger.exception("PromotionPolicy target selection failed; skipping fact.")
@@ -436,7 +436,10 @@ class MemoryPipeline:
             try:
                 promoted = policy.promote(
                     fact,
-                    target_owner=target_owner,
+                    tenant_id=target[0],
+                    owner_type=target[1],
+                    owner_id=target[2],
+                    workspace_id=target[3],
                     reason="pipeline_policy",
                 )
             except Exception:

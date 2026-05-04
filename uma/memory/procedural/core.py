@@ -18,9 +18,9 @@ import logging
 from typing import Any, List, Optional
 
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
-from uma.common.types import OwnershipRef, Skill, TargetOwner
+from uma.common.types import OwnershipRef, Skill
 from uma.common.dedupe import dedupe_by_id
-from uma.common.ownership import resolve_ownership_ref, resolve_target_owner
+from uma.common.ownership import validate_explicit_owner
 
 logger = logging.getLogger(__name__)
 
@@ -38,50 +38,33 @@ class ProceduralCore:
     # PUBLIC API — ingest / CRUD
     # ------------------------------------------------------------------
 
-    def _target_owner_from_skill(self, skill: Skill) -> TargetOwner:
-        return resolve_target_owner(
-            tenant_id=getattr(skill, "tenant_id", None) or DEFAULT_TENANT_ID,
-            owner_type=getattr(skill, "owner_type", None) or "user",
-            owner_id=getattr(skill, "owner_id", None) or "",
-            workspace_id=getattr(skill, "workspace_id", None),
-            allowed_owner_types=("agent", "user", "workspace"),
-        )
-
-    def _read_owner_ref(
-        self,
-        *,
-        owner: OwnershipRef | None = None,
-        owner_type: str | None = None,
-        owner_id: str | None = None,
-    ) -> OwnershipRef:
-        return resolve_ownership_ref(
-            owner=owner,
-            tenant_id=(owner.tenant_id if owner is not None else DEFAULT_TENANT_ID),
-            owner_type=owner_type,
-            owner_id=owner_id,
-            allowed_owner_types=("agent", "user", "workspace"),
-        )
-
     async def add_skill_for_owner(
         self,
         skill: Skill,
         embedding: List[float],
         *,
-        target_owner: TargetOwner,
+        owner_type: str,
+        owner_id: str,
+        tenant_id: str | None = None,
+        workspace_id: str | None = None,
     ) -> Optional[Skill]:
         if self.store is None:
             return None
         try:
-            normalized_owner = resolve_target_owner(
-                target_owner=target_owner,
-                allowed_owner_types=("agent", "user", "workspace"),
+            normalized_owner = validate_explicit_owner(
+                tenant_id=tenant_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                workspace_id=workspace_id,
             )
+            if normalized_owner["owner_type"] not in {"agent", "user", "workspace"}:
+                raise ValueError("owner_type must be one of: agent, user, workspace")
             normalized_skill = replace(
                 skill,
-                tenant_id=normalized_owner.tenant_id,
-                owner_type=normalized_owner.owner_type,
-                owner_id=normalized_owner.owner_id,
-                workspace_id=normalized_owner.workspace_id,
+                tenant_id=str(normalized_owner["tenant_id"]),
+                owner_type=str(normalized_owner["owner_type"]),
+                owner_id=str(normalized_owner["owner_id"]),
+                workspace_id=normalized_owner["workspace_id"],
             )
             return await self.store.add_skill(normalized_skill, embedding)
         except Exception:
@@ -92,8 +75,14 @@ class ProceduralCore:
         if self.store is None:
             return None
         try:
-            target_owner = self._target_owner_from_skill(skill)
-            return await self.add_skill_for_owner(skill, embedding, target_owner=target_owner)
+            return await self.add_skill_for_owner(
+                skill,
+                embedding,
+                tenant_id=getattr(skill, "tenant_id", None) or DEFAULT_TENANT_ID,
+                owner_type=getattr(skill, "owner_type", None) or "user",
+                owner_id=getattr(skill, "owner_id", None) or "",
+                workspace_id=getattr(skill, "workspace_id", None),
+            )
         except Exception:
             logger.exception("ProceduralCore.add_skill failed for id=%s", getattr(skill, "id", None))
             return None
@@ -102,6 +91,7 @@ class ProceduralCore:
         self,
         skill_id: str,
         *,
+        tenant_id: str | None = None,
         owner: OwnershipRef | None = None,
         owner_type: str | None = None,
         owner_id: str | None = None,
@@ -109,7 +99,13 @@ class ProceduralCore:
         if self.store is None or not skill_id:
             return None
         try:
-            read_owner = self._read_owner_ref(owner=owner, owner_type=owner_type, owner_id=owner_id)
+            normalized_owner = validate_explicit_owner(
+                tenant_id=(owner.tenant_id if owner is not None else tenant_id or DEFAULT_TENANT_ID),
+                owner_type=(owner.owner_type if owner is not None else owner_type or ""),
+                owner_id=(owner.owner_id if owner is not None else owner_id or ""),
+            )
+            if normalized_owner["owner_type"] not in {"agent", "user", "workspace"}:
+                raise ValueError("owner_type must be one of: agent, user, workspace")
         except ValueError:
             raise
         except Exception:
@@ -118,9 +114,9 @@ class ProceduralCore:
         try:
             return await self.store.get_skill(
                 skill_id,
-                tenant_id=read_owner.tenant_id,
-                owner_type=read_owner.owner_type,
-                owner_id=read_owner.owner_id,
+                tenant_id=str(normalized_owner["tenant_id"]),
+                owner_type=str(normalized_owner["owner_type"]),
+                owner_id=str(normalized_owner["owner_id"]),
             )
         except Exception:
             logger.exception("ProceduralCore.get_skill failed for id=%s", skill_id)
@@ -130,6 +126,7 @@ class ProceduralCore:
         self,
         ids: List[str],
         *,
+        tenant_id: str | None = None,
         owner: OwnershipRef | None = None,
         owner_type: str | None = None,
         owner_id: str | None = None,
@@ -137,7 +134,13 @@ class ProceduralCore:
         if self.store is None or not ids:
             return []
         try:
-            read_owner = self._read_owner_ref(owner=owner, owner_type=owner_type, owner_id=owner_id)
+            normalized_owner = validate_explicit_owner(
+                tenant_id=(owner.tenant_id if owner is not None else tenant_id or DEFAULT_TENANT_ID),
+                owner_type=(owner.owner_type if owner is not None else owner_type or ""),
+                owner_id=(owner.owner_id if owner is not None else owner_id or ""),
+            )
+            if normalized_owner["owner_type"] not in {"agent", "user", "workspace"}:
+                raise ValueError("owner_type must be one of: agent, user, workspace")
         except ValueError:
             raise
         except Exception:
@@ -147,9 +150,9 @@ class ProceduralCore:
             if hasattr(self.store, "fetch_skills_by_ids"):
                 return await self.store.fetch_skills_by_ids(
                     ids,
-                    tenant_id=read_owner.tenant_id,
-                    owner_type=read_owner.owner_type,
-                    owner_id=read_owner.owner_id,
+                    tenant_id=str(normalized_owner["tenant_id"]),
+                    owner_type=str(normalized_owner["owner_type"]),
+                    owner_id=str(normalized_owner["owner_id"]),
                 )
             logger.error("ProceduralCore.fetch_by_ids requires fetch_skills_by_ids support")
             raise RuntimeError("ProceduralCore.fetch_by_ids requires fetch_skills_by_ids support")
@@ -160,6 +163,7 @@ class ProceduralCore:
     async def list_skills(
         self,
         *,
+        tenant_id: str | None = None,
         owner: OwnershipRef | None = None,
         owner_type: str | None = None,
         owner_id: str | None = None,
@@ -168,7 +172,13 @@ class ProceduralCore:
         if self.store is None:
             return []
         try:
-            read_owner = self._read_owner_ref(owner=owner, owner_type=owner_type, owner_id=owner_id)
+            normalized_owner = validate_explicit_owner(
+                tenant_id=(owner.tenant_id if owner is not None else tenant_id or DEFAULT_TENANT_ID),
+                owner_type=(owner.owner_type if owner is not None else owner_type or ""),
+                owner_id=(owner.owner_id if owner is not None else owner_id or ""),
+            )
+            if normalized_owner["owner_type"] not in {"agent", "user", "workspace"}:
+                raise ValueError("owner_type must be one of: agent, user, workspace")
         except ValueError:
             raise
         except Exception:
@@ -176,9 +186,9 @@ class ProceduralCore:
             return []
         try:
             return await self.store.list_skills(
-                tenant_id=read_owner.tenant_id,
-                owner_type=read_owner.owner_type,
-                owner_id=read_owner.owner_id,
+                tenant_id=str(normalized_owner["tenant_id"]),
+                owner_type=str(normalized_owner["owner_type"]),
+                owner_id=str(normalized_owner["owner_id"]),
                 limit=limit,
             )
         except Exception:
@@ -189,6 +199,7 @@ class ProceduralCore:
         self,
         skill_id: str,
         *,
+        tenant_id: str | None = None,
         owner: OwnershipRef | None = None,
         owner_type: str | None = None,
         owner_id: str | None = None,
@@ -196,7 +207,13 @@ class ProceduralCore:
         if self.store is None or not skill_id:
             return False
         try:
-            read_owner = self._read_owner_ref(owner=owner, owner_type=owner_type, owner_id=owner_id)
+            normalized_owner = validate_explicit_owner(
+                tenant_id=(owner.tenant_id if owner is not None else tenant_id or DEFAULT_TENANT_ID),
+                owner_type=(owner.owner_type if owner is not None else owner_type or ""),
+                owner_id=(owner.owner_id if owner is not None else owner_id or ""),
+            )
+            if normalized_owner["owner_type"] not in {"agent", "user", "workspace"}:
+                raise ValueError("owner_type must be one of: agent, user, workspace")
         except ValueError:
             raise
         except Exception:
@@ -205,9 +222,9 @@ class ProceduralCore:
         try:
             await self.store.delete_skill(
                 skill_id,
-                tenant_id=read_owner.tenant_id,
-                owner_type=read_owner.owner_type,
-                owner_id=read_owner.owner_id,
+                tenant_id=str(normalized_owner["tenant_id"]),
+                owner_type=str(normalized_owner["owner_type"]),
+                owner_id=str(normalized_owner["owner_id"]),
             )
             return True
         except Exception:
@@ -222,6 +239,7 @@ class ProceduralCore:
         self,
         query_embedding: List[float],
         *,
+        tenant_id: str | None = None,
         owner: OwnershipRef | None = None,
         owner_type: str | None = None,
         owner_id: str | None = None,
@@ -231,7 +249,13 @@ class ProceduralCore:
             return []
         skills: List[Skill] = []
         try:
-            read_owner = self._read_owner_ref(owner=owner, owner_type=owner_type, owner_id=owner_id)
+            normalized_owner = validate_explicit_owner(
+                tenant_id=(owner.tenant_id if owner is not None else tenant_id or DEFAULT_TENANT_ID),
+                owner_type=(owner.owner_type if owner is not None else owner_type or ""),
+                owner_id=(owner.owner_id if owner is not None else owner_id or ""),
+            )
+            if normalized_owner["owner_type"] not in {"agent", "user", "workspace"}:
+                raise ValueError("owner_type must be one of: agent, user, workspace")
         except ValueError:
             raise
         except Exception:
@@ -244,9 +268,9 @@ class ProceduralCore:
         try:
             found = await self.store.search(
                 query_embedding=query_embedding,
-                tenant_id=read_owner.tenant_id,
-                owner_type=read_owner.owner_type,
-                owner_id=read_owner.owner_id,
+                tenant_id=str(normalized_owner["tenant_id"]),
+                owner_type=str(normalized_owner["owner_type"]),
+                owner_id=str(normalized_owner["owner_id"]),
                 k=int(k),
             )
             if found:

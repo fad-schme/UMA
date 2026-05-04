@@ -14,7 +14,7 @@ from uma.retrieve.rlm.context_pack import ContextPack
 from uma.memory.promotion import PromotionPolicy
 from uma.memory.working_memory.core import SessionScope
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
-from uma.common.types import Fact, RuntimeContext, SCOPE_MODEL_VERSION, TargetOwner
+from uma.common.types import Fact, RuntimeContext, SCOPE_MODEL_VERSION
 
 
 def _build_fact(
@@ -340,11 +340,9 @@ async def test_cross_agent_visibility_requires_explicit_promotion(uma_memory) ->
     policy = PromotionPolicy(agent_id="agent-a")
     promoted = policy.promote(
         source,
-        target_owner=TargetOwner(
-            tenant_id=DEFAULT_TENANT_ID,
-            owner_type="user",
-            owner_id="user:u1",
-        ),
+        tenant_id=DEFAULT_TENANT_ID,
+        owner_type="user",
+        owner_id="user:u1",
         reason="test_cross_agent_visibility_requires_explicit_promotion",
     )
     await memory.semantic_core.upsert_fact(promoted, embedding)

@@ -6,7 +6,7 @@ import pytest
 
 from uma.memory.promotion import PromotionPolicy
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
-from uma.common.types import Fact, RuntimeContext, SCOPE_MODEL_VERSION, TargetOwner
+from uma.common.types import Fact, RuntimeContext, SCOPE_MODEL_VERSION
 
 
 def _build_fact(
@@ -61,11 +61,9 @@ async def test_session_to_user_promotion_creates_new_fact_and_preserves_original
     policy = PromotionPolicy(agent_id=memory.agent_id)
     promoted = policy.promote(
         source,
-        target_owner=TargetOwner(
-            tenant_id=DEFAULT_TENANT_ID,
-            owner_type="user",
-            owner_id="user:u1",
-        ),
+        tenant_id=DEFAULT_TENANT_ID,
+        owner_type="user",
+        owner_id="user:u1",
         reason="test_session_to_user",
     )
     await memory.semantic_core.upsert_fact(promoted, embedding)
@@ -77,7 +75,7 @@ async def test_session_to_user_promotion_creates_new_fact_and_preserves_original
     assert promoted.origin_session_id == "session-a"
     assert promoted.scope_model_version == SCOPE_MODEL_VERSION
     assert promoted.meta["promotion"]["source_fact_id"] == source.id
-    assert promoted.meta["promotion"]["target_owner_type"] == "user"
+    assert promoted.meta["promotion"]["promoted_owner_type"] == "user"
 
     request = memory.runtime._build_retrieval_request(
         RuntimeContext(
@@ -113,12 +111,10 @@ async def test_session_to_workspace_promotion_is_explicit_and_does_not_broaden_u
     policy = PromotionPolicy(agent_id=memory.agent_id)
     promoted = policy.promote(
         source,
-        target_owner=TargetOwner(
-            tenant_id=DEFAULT_TENANT_ID,
-            owner_type="workspace",
-            owner_id="workspace-1",
-            workspace_id="workspace-1",
-        ),
+        tenant_id=DEFAULT_TENANT_ID,
+        owner_type="workspace",
+        owner_id="workspace-1",
+        workspace_id="workspace-1",
         reason="test_session_to_workspace",
     )
     await memory.semantic_core.upsert_fact(promoted, embedding)
@@ -129,7 +125,7 @@ async def test_session_to_workspace_promotion_is_explicit_and_does_not_broaden_u
     assert promoted.workspace_id == "workspace-1"
     assert promoted.session_id is None
     assert promoted.meta["promotion"]["source_scope_kind"] == "session"
-    assert promoted.meta["promotion"]["target_owner_type"] == "workspace"
+    assert promoted.meta["promotion"]["promoted_owner_type"] == "workspace"
 
     workspace_facts = await memory.semantic_core.list_facts_for_owner(
         owner_type="workspace",
@@ -169,13 +165,20 @@ async def test_user_to_agent_promotion_is_copy_based_and_idempotent(uma_memory) 
     await memory.semantic_core.upsert_fact(source, embedding)
 
     policy = PromotionPolicy(agent_id=memory.agent_id)
-    target_owner = TargetOwner(
+    promoted_a = policy.promote(
+        source,
         tenant_id=DEFAULT_TENANT_ID,
         owner_type="agent",
         owner_id=memory.agent_id,
+        reason="test_user_to_agent",
     )
-    promoted_a = policy.promote(source, target_owner=target_owner, reason="test_user_to_agent")
-    promoted_b = policy.promote(source, target_owner=target_owner, reason="test_user_to_agent")
+    promoted_b = policy.promote(
+        source,
+        tenant_id=DEFAULT_TENANT_ID,
+        owner_type="agent",
+        owner_id=memory.agent_id,
+        reason="test_user_to_agent",
+    )
     assert promoted_a.id == promoted_b.id
     assert promoted_a.id != source.id
     assert promoted_a.owner_type == "agent"
@@ -213,31 +216,25 @@ async def test_invalid_promotion_targets_are_rejected(uma_memory) -> None:
     with pytest.raises(ValueError, match="tenant_id"):
         policy.promote(
             session_fact,
-            target_owner=TargetOwner(
-                tenant_id="other-tenant",
-                owner_type="user",
-                owner_id="user:u1",
-            ),
+            tenant_id="other-tenant",
+            owner_type="user",
+            owner_id="user:u1",
         )
 
     with pytest.raises(ValueError, match="system scope"):
         policy.promote(
             session_fact,
-            target_owner=TargetOwner(
-                tenant_id=DEFAULT_TENANT_ID,
-                owner_type="system",
-                owner_id="system-global",
-            ),
+            tenant_id=DEFAULT_TENANT_ID,
+            owner_type="system",
+            owner_id="system-global",
         )
 
     with pytest.raises(ValueError, match="only be promoted to user or workspace"):
         policy.promote(
             session_fact,
-            target_owner=TargetOwner(
-                tenant_id=DEFAULT_TENANT_ID,
-                owner_type="agent",
-                owner_id=memory.agent_id,
-            ),
+            tenant_id=DEFAULT_TENANT_ID,
+            owner_type="agent",
+            owner_id=memory.agent_id,
         )
 
 

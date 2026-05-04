@@ -21,8 +21,8 @@ import logging
 from typing import Iterable, Optional, Set
 
 from uma.common.accessors import get_attr_or_key
-
-from uma.common.types import Fact, SCOPE_MODEL_VERSION, TargetOwner, make_target_owner
+from uma.common.ownership import validate_explicit_owner
+from uma.common.types import Fact, SCOPE_MODEL_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +160,7 @@ class PromotionPolicy:
 
         return True
 
-    def select_target_owner(self, fact: Fact) -> Optional[TargetOwner]:
+    def select_promotion_target(self, fact: Fact) -> Optional[tuple[str, str, str, str | None]]:
         """
         Return the explicit promotion target for the current policy, if any.
 
@@ -171,23 +171,19 @@ class PromotionPolicy:
         if not self.is_eligible(fact):
             return None
 
-        tenant_id = str(getattr(fact, "tenant_id", None) or "default")
-        workspace_id = getattr(fact, "workspace_id", None)
         if getattr(fact, "session_id", None):
-            return make_target_owner(
-                tenant_id=tenant_id,
-                owner_type="user",
-                owner_id=str(getattr(fact, "owner_id", "") or ""),
-                workspace_id=workspace_id,
-                allowed_owner_types={"user"},
+            return (
+                str(getattr(fact, "tenant_id", None) or "default"),
+                "user",
+                str(getattr(fact, "owner_id", "") or ""),
+                getattr(fact, "workspace_id", None),
             )
         if getattr(fact, "owner_type", None) == "user":
-            return make_target_owner(
-                tenant_id=tenant_id,
-                owner_type="agent",
-                owner_id=self.agent_id,
-                workspace_id=workspace_id,
-                allowed_owner_types={"agent"},
+            return (
+                str(getattr(fact, "tenant_id", None) or "default"),
+                "agent",
+                self.agent_id,
+                getattr(fact, "workspace_id", None),
             )
         return None
 
@@ -198,40 +194,53 @@ class PromotionPolicy:
         return str(getattr(fact, "owner_type", "") or "")
 
     @staticmethod
-    def _promotion_id(fact: Fact, target_owner: TargetOwner) -> str:
+    def _promotion_id(
+        fact: Fact,
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+    ) -> str:
         digest = hashlib.sha256(
             "|".join(
                 [
                     str(getattr(fact, "id", "") or ""),
-                    str(target_owner.tenant_id),
-                    str(target_owner.owner_type),
-                    str(target_owner.owner_id),
+                    tenant_id,
+                    owner_type,
+                    owner_id,
                 ]
             ).encode("utf-8")
         ).hexdigest()
         return f"fact_prom_{digest[:24]}"
 
-    def _validate_target_owner(self, fact: Fact, target_owner: TargetOwner) -> None:
+    def _validate_promotion_target(
+        self,
+        fact: Fact,
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+    ) -> None:
         source_tenant_id = str(getattr(fact, "tenant_id", None) or "default")
-        if target_owner.tenant_id != source_tenant_id:
+        if tenant_id != source_tenant_id:
             raise ValueError("Promotion target tenant_id must match source fact tenant_id")
 
-        if target_owner.owner_type == "system":
+        if owner_type == "system":
             raise ValueError("Promotion to system scope is not supported")
 
         source_scope = self._source_scope_kind(fact)
         if source_scope == "session":
-            if target_owner.owner_type == "user":
+            if owner_type == "user":
                 source_owner_id = str(getattr(fact, "owner_id", "") or "")
-                if target_owner.owner_id != source_owner_id:
+                if owner_id != source_owner_id:
                     raise ValueError("Session -> user promotion must preserve the source user owner_id")
                 return
-            if target_owner.owner_type == "workspace":
+            if owner_type == "workspace":
                 return
             raise ValueError("Session-local facts may only be promoted to user or workspace scope")
 
         if source_scope == "user":
-            if target_owner.owner_type != "agent":
+            if owner_type != "agent":
                 raise ValueError("User-scoped facts may only be promoted to agent scope")
             return
 
@@ -245,7 +254,10 @@ class PromotionPolicy:
         self,
         fact: Fact,
         *,
-        target_owner: Optional[TargetOwner] = None,
+        tenant_id: str | None = None,
+        owner_type: str | None = None,
+        owner_id: str | None = None,
+        workspace_id: str | None = None,
         reason: str = "promotion_policy_v2",
     ) -> Fact:
         """
@@ -255,18 +267,44 @@ class PromotionPolicy:
         - Does NOT modify the original fact
         - Preserves provenance and lineage via meta
         """
-        if target_owner is None:
-            target_owner = self.select_target_owner(fact)
-        if target_owner is None:
+        if owner_type is None and owner_id is None and tenant_id is None and workspace_id is None:
+            target = self.select_promotion_target(fact)
+            if target is None:
+                raise ValueError("No explicit promotion target available for fact")
+            tenant_id, owner_type, owner_id, workspace_id = target
+        elif not owner_type or not owner_id:
+            raise ValueError("Promotion target owner_type and owner_id are required")
+
+        if owner_type is None or owner_id is None:
             raise ValueError("No explicit promotion target available for fact")
 
         if not self.is_eligible(fact):
             raise ValueError("Fact is not eligible for promotion")
-        self._validate_target_owner(fact, target_owner)
+        owner = validate_explicit_owner(
+            tenant_id=tenant_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            workspace_id=workspace_id,
+        )
+        tenant_id = str(owner["tenant_id"])
+        owner_type = str(owner["owner_type"])
+        owner_id = str(owner["owner_id"])
+        workspace_id = owner["workspace_id"]
+        self._validate_promotion_target(
+            fact,
+            tenant_id=tenant_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+        )
 
         source_session_id = getattr(fact, "session_id", None)
         source_workspace_id = getattr(fact, "workspace_id", None)
-        promotion_id = self._promotion_id(fact, target_owner)
+        promotion_id = self._promotion_id(
+            fact,
+            tenant_id=tenant_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+        )
         promoted_meta = dict(getattr(fact, "meta", None) or {})
         promoted_meta["promotion"] = {
             "source_fact_id": fact.id,
@@ -274,9 +312,9 @@ class PromotionPolicy:
             "source_owner_id": fact.owner_id,
             "source_scope_kind": self._source_scope_kind(fact),
             "source_session_id": source_session_id,
-            "target_owner_type": target_owner.owner_type,
-            "target_owner_id": target_owner.owner_id,
-            "tenant_id": target_owner.tenant_id,
+            "promoted_owner_type": owner_type,
+            "promoted_owner_id": owner_id,
+            "tenant_id": tenant_id,
             "policy": "v2",
             "reason": reason,
         }
@@ -299,13 +337,13 @@ class PromotionPolicy:
             confidence=fact.confidence,
             meta=promoted_meta,
             salience=fact.salience,
-            owner_type=target_owner.owner_type,
-            owner_id=target_owner.owner_id,
-            tenant_id=target_owner.tenant_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            tenant_id=tenant_id,
             workspace_id=(
-                target_owner.workspace_id
-                if target_owner.workspace_id is not None
-                else (target_owner.owner_id if target_owner.owner_type == "workspace" else source_workspace_id)
+                workspace_id
+                if workspace_id is not None
+                else (owner_id if owner_type == "workspace" else source_workspace_id)
             ),
             session_id=None,
             origin_agent_id=getattr(fact, "origin_agent_id", None),
@@ -317,8 +355,8 @@ class PromotionPolicy:
         logger.info(
             "Promoted fact source_id=%s to %s:%s",
             fact.id,
-            target_owner.owner_type,
-            target_owner.owner_id,
+            owner_type,
+            owner_id,
         )
 
         return promoted
@@ -328,7 +366,10 @@ class PromotionPolicy:
         fact: Fact,
         graph_core,
         *,
-        target_owner: Optional[TargetOwner] = None,
+        tenant_id: str | None = None,
+        owner_type: str | None = None,
+        owner_id: str | None = None,
+        workspace_id: str | None = None,
         reason: str = "promotion_policy_v2",
     ) -> Fact:
         """
@@ -338,7 +379,14 @@ class PromotionPolicy:
         - promoted facts have corresponding graph edges in the promoted scope
         - original facts remain untouched
         """
-        promoted = self.promote(fact, target_owner=target_owner, reason=reason)
+        promoted = self.promote(
+            fact,
+            tenant_id=tenant_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            workspace_id=workspace_id,
+            reason=reason,
+        )
 
         try:
             graph_core.insert_fact_triplet(

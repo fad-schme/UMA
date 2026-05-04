@@ -4,7 +4,7 @@ ProceduralFeature: UMA plugin for skill-based procedural memory.
 After attaching to UMAMemory, the agent gains:
 
 - procedural_health() -> FeatureResult
-- procedural_add_skill(skill: Skill, embedding: List[float], *, target_owner: TargetOwner | None = None) -> FeatureResult
+- procedural_add_skill(skill: Skill, embedding: List[float], *, owner_type: str | None = None, owner_id: str | None = None) -> FeatureResult
 - procedural_find_skills(query_text: str, *, user_id: str | None = None, owner_type: str | None = None, owner_id: str | None = None, k: int = 5) -> FeatureResult
 - procedural_get_skill(skill_id: str, *, user_id: str | None = None, owner_type: str | None = None, owner_id: str | None = None) -> FeatureResult
 
@@ -23,9 +23,9 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, List, Optional
 
-from uma.common.ownership import resolve_ownership_ref
+from uma.common.ownership import validate_explicit_owner
 from uma.common.registry import FeatureContext, FeatureHandle, FeatureResult, UMAFeature
-from uma.common.types import OwnershipRef, Skill, TargetOwner
+from uma.common.types import Skill
 from .matcher import SkillMatcher
 
 if TYPE_CHECKING:
@@ -98,33 +98,12 @@ class ProceduralFeature(UMAFeature):
             ok = self.core is not None and self.embedder is not None
             return FeatureResult.success() if ok else FeatureResult.failure(["missing dependencies"])
 
-        def _resolve_owner(
-            *,
-            user_id: str | None = None,
-            owner_type: str | None = None,
-            owner_id: str | None = None,
-        ) -> OwnershipRef:
-            if user_id and user_id.strip():
-                if owner_type or owner_id:
-                    raise ValueError("provide either user_id or owner_type/owner_id, not both")
-                return resolve_ownership_ref(
-                    owner_type="user",
-                    owner_id=user_id,
-                    allowed_owner_types=("agent", "user", "workspace"),
-                )
-            if not owner_type or not owner_id:
-                raise ValueError("missing scoped owner")
-            return resolve_ownership_ref(
-                owner_type=owner_type,
-                owner_id=owner_id,
-                allowed_owner_types=("agent", "user", "workspace"),
-            )
-
         async def procedural_add_skill(
             skill: Skill,
             embedding: List[float],
             *,
-            target_owner: TargetOwner | None = None,
+            owner_type: str | None = None,
+            owner_id: str | None = None,
         ) -> FeatureResult:
             """
             Store a new procedural skill via ProceduralCore.
@@ -136,8 +115,15 @@ class ProceduralFeature(UMAFeature):
                 logger.warning("ProceduralFeature.add_skill: invalid embedding.")
                 return FeatureResult.failure(["invalid embedding"])
             try:
-                if target_owner is not None:
-                    await self.core.add_skill_for_owner(skill, embedding, target_owner=target_owner)
+                if owner_type is not None or owner_id is not None:
+                    if not owner_type or not owner_id:
+                        raise ValueError("owner_type and owner_id are required together")
+                    await self.core.add_skill_for_owner(
+                        skill,
+                        embedding,
+                        owner_type=owner_type,
+                        owner_id=owner_id,
+                    )
                 else:
                     await self.core.add_skill(skill, embedding)
                 logger.info("ProceduralFeature.add_skill: stored skill id=%s", skill.id)
@@ -172,7 +158,16 @@ class ProceduralFeature(UMAFeature):
                 logger.debug("ProceduralFeature.find_skills: empty query_text.")
                 return FeatureResult.success([])
             try:
-                owner = _resolve_owner(user_id=user_id, owner_type=owner_type, owner_id=owner_id)
+                if user_id and user_id.strip():
+                    if owner_type or owner_id:
+                        raise ValueError("provide either user_id or owner_type/owner_id, not both")
+                    normalized_owner = validate_explicit_owner(owner_type="user", owner_id=user_id)
+                else:
+                    if not owner_type or not owner_id:
+                        raise ValueError("missing scoped owner")
+                    normalized_owner = validate_explicit_owner(owner_type=owner_type, owner_id=owner_id)
+                if normalized_owner["owner_type"] not in {"agent", "user", "workspace"}:
+                    raise ValueError("owner_type must be one of: agent, user, workspace")
             except Exception as exc:
                 logger.error("ProceduralFeature.find_skills: invalid owner scope.")
                 message = str(exc)
@@ -205,7 +200,9 @@ class ProceduralFeature(UMAFeature):
             try:
                 candidates = await self.core.search(
                     query_embedding=query_emb,
-                    owner=owner,
+                    tenant_id=str(normalized_owner["tenant_id"]),
+                    owner_type=str(normalized_owner["owner_type"]),
+                    owner_id=str(normalized_owner["owner_id"]),
                     k=k_clamped,
                 )
             except Exception as exc:
@@ -243,7 +240,16 @@ class ProceduralFeature(UMAFeature):
                 logger.debug("ProceduralFeature.get_skill: empty skill_id.")
                 return FeatureResult.failure(["empty skill_id"], data=None)
             try:
-                owner = _resolve_owner(user_id=user_id, owner_type=owner_type, owner_id=owner_id)
+                if user_id and user_id.strip():
+                    if owner_type or owner_id:
+                        raise ValueError("provide either user_id or owner_type/owner_id, not both")
+                    normalized_owner = validate_explicit_owner(owner_type="user", owner_id=user_id)
+                else:
+                    if not owner_type or not owner_id:
+                        raise ValueError("missing scoped owner")
+                    normalized_owner = validate_explicit_owner(owner_type=owner_type, owner_id=owner_id)
+                if normalized_owner["owner_type"] not in {"agent", "user", "workspace"}:
+                    raise ValueError("owner_type must be one of: agent, user, workspace")
             except Exception as exc:
                 logger.error("ProceduralFeature.get_skill: invalid owner scope.")
                 message = str(exc)
@@ -254,7 +260,9 @@ class ProceduralFeature(UMAFeature):
             try:
                 skill = await self.core.get_skill(
                     skill_id,
-                    owner=owner,
+                    tenant_id=str(normalized_owner["tenant_id"]),
+                    owner_type=str(normalized_owner["owner_type"]),
+                    owner_id=str(normalized_owner["owner_id"]),
                 )
                 if skill is None:
                     logger.info("ProceduralFeature.get_skill: no skill for id=%s", skill_id)
