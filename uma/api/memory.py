@@ -400,6 +400,7 @@ class UMAMemory:
         support_density: float | None = None,
         confidence: float | None = None,
         conflicts: Optional[list[Mapping[str, Any]]] = None,
+        existing_artifact: Any | None = None,
         manual: bool = False,
         operation: str = "wiki_artifact_created",
     ) -> Dict[str, Any]:
@@ -421,6 +422,7 @@ class UMAMemory:
             support_density=support_density,
             confidence=confidence,
             conflicts=conflicts,
+            existing_artifact=existing_artifact,
             manual=manual,
             operation=operation,
         )

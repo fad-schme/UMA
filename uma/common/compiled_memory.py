@@ -44,6 +44,7 @@ def build_compiled_memory_artifact(
     manual: bool = False,
     status: str = "active",
     metadata: Mapping[str, Any] | None = None,
+    existing_artifact: Any | None = None,
     actor: Mapping[str, Any] | None = None,
     event_type: str | None = None,
 ) -> dict[str, Any]:
@@ -97,8 +98,9 @@ def build_compiled_memory_artifact(
         "metadata": dict(metadata or {}),
         "is_terminal_truth": False,
     }
+    existing_provenance = provenance_for_artifact(existing_artifact) if existing_artifact is not None else provenance_for_artifact(metadata or {})
     artifact["provenance"] = build_provenance(
-        existing=provenance_for_artifact(metadata or {}),
+        existing=existing_provenance,
         source_chunk_ids=transitive_source_chunk_ids,
         source_document_ids=transitive_source_document_ids,
         derived_at=derived_at or _utcnow_isoformat(),
@@ -114,7 +116,8 @@ def build_compiled_memory_artifact(
     if normalized_parent_artifact_ids and not transitive_source_chunk_ids and not manual:
         _invalidate_provenance(artifact["provenance"], "unreachable_raw_source_chunks")
     artifact["compiled_memory_index"] = build_compiled_memory_index_entry(artifact)
-    artifact["compiled_memory_log"] = build_compiled_memory_log(
+    existing_log = _existing_log_events(existing_artifact)
+    artifact["compiled_memory_log"] = existing_log + build_compiled_memory_log(
         artifact,
         event_type=event_type or derivation_type,
         actor=actor,
@@ -218,6 +221,8 @@ def build_compiled_memory_log_event(
         "derivation_type": str(derivation_type or provenance.get("derivation_type") or event_type or ""),
         "retrieval_path": [dict(item) for item in (retrieval_path or provenance.get("retrieval_path") or []) if isinstance(item, Mapping)],
         "conflicts": normalized_conflicts,
+        "manual": bool(provenance.get("manual")),
+        "provenance_valid": bool(provenance.get("valid", True)),
         "actor": dict(actor or {}),
     }
 
@@ -267,3 +272,13 @@ def _string_list(values: Sequence[Any] | Any) -> list[str]:
 
 def _utcnow_isoformat() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _existing_log_events(artifact: Any | None) -> list[dict[str, Any]]:
+    if artifact is None:
+        return []
+    if isinstance(artifact, dict):
+        raw_events = artifact.get("compiled_memory_log") or []
+    else:
+        raw_events = getattr(artifact, "compiled_memory_log", None) or []
+    return [dict(item) for item in raw_events if isinstance(item, Mapping)]

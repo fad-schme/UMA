@@ -126,6 +126,7 @@ class UMARequestHandle:
         support_density: float | None = None,
         confidence: float | None = None,
         conflicts: Optional[List[Mapping[str, Any]]] = None,
+        existing_artifact: Any | None = None,
         manual: bool = False,
         operation: str = "wiki_artifact_created",
     ) -> Dict[str, Any]:
@@ -146,6 +147,7 @@ class UMARequestHandle:
             support_density=support_density,
             confidence=confidence,
             conflicts=conflicts,
+            existing_artifact=existing_artifact,
             manual=manual,
             operation=operation,
         )
@@ -660,6 +662,7 @@ class UMARuntime:
         support_density: float | None = None,
         confidence: float | None = None,
         conflicts: Optional[List[Mapping[str, Any]]] = None,
+        existing_artifact: Any | None = None,
         manual: bool = False,
         operation: str = "wiki_artifact_created",
     ) -> Dict[str, Any]:
@@ -686,6 +689,7 @@ class UMARuntime:
             support_density=support_density,
             confidence=confidence,
             conflicts=conflicts or [],
+            existing_artifact=existing_artifact,
             manual=manual,
             event_type=operation,
         )
@@ -757,6 +761,7 @@ class UMARuntime:
             )
 
         evidence: list[dict[str, Any]] = []
+        missing_chunk_ids: list[str] = []
         for (owner_type, owner_id), ids in by_scope.items():
             chunks = await env.fetch_chunks(
                 request,
@@ -764,10 +769,16 @@ class UMARuntime:
                 owner_type=owner_type,
                 owner_id=owner_id,
             )
+            found_ids: list[str] = []
             for chunk in chunks or []:
                 payload = _chunk_payload(chunk)
                 payload["retrieval_score"] = ((payload.get("meta") or {}).get("vector_score"))
                 evidence.append(payload)
+                if payload.get("id"):
+                    found_ids.append(str(payload["id"]))
+            for chunk_id in ids:
+                if chunk_id not in found_ids and chunk_id not in missing_chunk_ids:
+                    missing_chunk_ids.append(chunk_id)
 
         event = build_compiled_memory_log_event(
             event_type="evidence_expanded",
@@ -781,10 +792,16 @@ class UMARuntime:
             "provenance": expanded_provenance,
             "evidence": evidence,
             "direct_chunk_ids": direct_chunk_ids,
+            "transitive_chunk_ids": [item["id"] for item in evidence if item.get("id")],
             "chunk_ids": [item["id"] for item in evidence if item.get("id")],
+            "missing_chunk_ids": missing_chunk_ids,
             "unresolved_parent_artifact_ids": unresolved_parent_artifact_ids,
             "lineage": lineage,
-            "mode": "raw_chunk_evidence" if evidence else "invalid",
+            "mode": (
+                "manual_audit"
+                if not evidence and expanded_provenance and all(bool(item.get("manual")) for item in expanded_provenance)
+                else ("raw_chunk_evidence" if evidence else "invalid")
+            ),
             "compiled_memory_log": [event],
         }
 
@@ -821,7 +838,12 @@ class UMARuntime:
         support_density = 1.0 if chunks else 0.0
         confidence = dict(context.get("confidence") or {})
         trace = list(context.get("trace") or [])
-        compiled_conflicts: list[dict[str, Any]] = []
+        compiled_conflicts = [
+            dict(conflict)
+            for artifact in memory_sources
+            for conflict in (artifact.get("conflicts") or [])
+            if isinstance(conflict, Mapping)
+        ]
         supporting_evidence = [_chunk_payload(chunk) for chunk in chunks]
         compiled_answer = build_compiled_memory_artifact(
             artifact_id=f"memory:{runtime_context.request_id}:{memory_intent.strip()}",

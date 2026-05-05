@@ -292,3 +292,81 @@ def test_manual_compiled_memory_artifact_keeps_audit_without_fake_chunks(uma_mem
     assert artifact["provenance"]["source_chunk_ids"] == []
     assert artifact["provenance"]["valid"] is True
     assert artifact["compiled_memory_log"][0]["event_type"] == "manual_update"
+    assert artifact["compiled_memory_log"][0]["manual"] is True
+
+
+def test_compiled_memory_artifact_update_appends_log_event_instead_of_replacing_history(uma_memory) -> None:
+    original = uma_memory.compile_memory_artifact(
+        artifact_id="wiki:ops/platform",
+        title="Ops Platform",
+        owner_type="user",
+        owner_id="user:u1",
+        direct_source_chunk_ids=["chunk-1"],
+        direct_source_document_ids=["doc-1"],
+        operation="wiki_artifact_created",
+    )
+    updated = uma_memory.compile_memory_artifact(
+        artifact_id="wiki:ops/platform",
+        title="Ops Platform",
+        owner_type="user",
+        owner_id="user:u1",
+        direct_source_chunk_ids=["chunk-1"],
+        direct_source_document_ids=["doc-1"],
+        existing_artifact=original,
+        operation="wiki_artifact_updated",
+    )
+
+    assert [event["event_type"] for event in updated["compiled_memory_log"]] == [
+        "wiki_artifact_created",
+        "wiki_artifact_updated",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_expand_evidence_is_cycle_safe_for_parent_artifact_lineage(uma_memory, tmp_path) -> None:
+    memory = uma_memory
+    path = tmp_path / "cycle-safe-doc.txt"
+    path.write_text(
+        "Grafana dashboards summarize service health and operational trends. "
+        "Teams use them alongside alerts to inspect incidents and capacity changes.\n"
+    )
+    report = await memory.ingest_document(str(path), owner_type="user", owner_id="user:u1")
+    chunk_store = getattr(memory.chunk_core, "store", None)
+    assert chunk_store is not None
+    conn = chunk_store._conn()
+    try:
+        rows = chunk_store._query_all(
+            conn,
+            "SELECT id FROM chunks WHERE tenant_id=? AND owner_type=? AND owner_id=? AND doc_id=? ORDER BY position ASC",
+            params=["default", "user", "user:u1", report.doc_id],
+            log_context="test_expand_evidence_cycle_safe_lookup_chunks",
+        )
+    finally:
+        conn.close()
+    assert rows
+    chunk_id = rows[0]["id"]
+
+    artifact_a = memory.compile_memory_artifact(
+        artifact_id="wiki:cycle/a",
+        title="Cycle A",
+        owner_type="user",
+        owner_id="user:u1",
+        direct_source_chunk_ids=[chunk_id],
+        direct_source_document_ids=[report.doc_id],
+        operation="wiki_artifact_created",
+    )
+    artifact_b = memory.compile_memory_artifact(
+        artifact_id="wiki:cycle/b",
+        title="Cycle B",
+        owner_type="user",
+        owner_id="user:u1",
+        parent_artifacts=[artifact_a],
+        operation="wiki_artifact_created",
+    )
+    artifact_a["parent_artifacts"] = [artifact_b]
+    artifact_a["parent_artifact_ids"] = [artifact_b["id"]]
+
+    expanded = await memory.expand_evidence(artifact_b)
+    assert expanded["chunk_ids"] == [chunk_id]
+    assert expanded["transitive_chunk_ids"] == [chunk_id]
+    assert expanded["missing_chunk_ids"] == []
