@@ -5,7 +5,15 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, NamedTuple
 
-from .types import DocumentChunk, IngestConfig, IngestReport, ParsedDocument
+from .types import (
+    CaptureSourceResult,
+    CurateCompiledMemoryResult,
+    DeriveMemoryArtifactsResult,
+    DocumentChunk,
+    IngestConfig,
+    IngestReport,
+    ParsedDocument,
+)
 from .parser import parse_file
 from .normalizer import normalize_document
 from .chunker import chunk_sections, finalize_chunks
@@ -269,6 +277,56 @@ def _prepare_document_chunks(
     )
 
 
+def _chunk_records_to_inputs(chunks: List[Chunk]) -> List[DocumentChunk]:
+    out: List[DocumentChunk] = []
+    for chunk in chunks or []:
+        meta = dict(getattr(chunk, "meta", None) or {})
+        out.append(
+            DocumentChunk(
+                chunk_id=str(getattr(chunk, "id", "") or ""),
+                doc_id=str(getattr(chunk, "doc_id", "") or ""),
+                text=str(getattr(chunk, "text", "") or ""),
+                page_range=getattr(chunk, "page_range", (1, 1)),
+                position=int(getattr(chunk, "position", 0) or 0),
+                paragraph_index_start=meta.get("paragraph_index_start"),
+                paragraph_index_end=meta.get("paragraph_index_end"),
+            )
+        )
+    return out
+
+
+async def _fetch_existing_chunks_for_doc(
+    *,
+    runtime: _IngestRuntime,
+    tenant_id: str,
+    owner_type: str,
+    owner_id: str,
+    doc_id: str,
+) -> List[Chunk]:
+    chunk_store = getattr(runtime.chunk_core, "store", None)
+    if chunk_store is None:
+        return []
+    conn = chunk_store._conn()
+    try:
+        rows = chunk_store._query_all(
+            conn,
+            """
+            SELECT *
+            FROM chunks
+            WHERE tenant_id = ?
+              AND owner_type = ?
+              AND owner_id = ?
+              AND doc_id = ?
+            ORDER BY position ASC
+            """,
+            params=[tenant_id, owner_type, owner_id, doc_id],
+            log_context="ingest_capture_existing_chunks",
+        )
+        return [chunk_store._row_to_object(row) for row in (rows or [])]
+    finally:
+        conn.close()
+
+
 async def _persist_chunks(
     *,
     parsed: ParsedDocument,
@@ -417,7 +475,7 @@ async def _extract_facts_and_update_graph(
     tenant_id: str,
     workspace_id: str | None,
     warnings: List[str],
-) -> tuple[int, int]:
+) -> tuple[List[Fact], int, int]:
     extract_chunks = final_chunks
     if config.extract_max_chunks is not None:
         extract_chunks = semantic_extractor.FactExtractor.select_chunks_for_fact_extraction(
@@ -492,7 +550,245 @@ async def _extract_facts_and_update_graph(
         graph_core=runtime.graph_core,
         concurrency=getattr(config, "graph_update_concurrency", 8),
     )
-    return facts_created, graph_edges
+    return extracted_fact_records, facts_created, graph_edges
+
+
+async def capture_source(
+    file_path: str,
+    *,
+    owner_type: str | None = None,
+    owner_id: str | None = None,
+    config: IngestConfig | None = None,
+    memory: Any,
+) -> CaptureSourceResult:
+    """Stage 1: capture raw input into normalized source records and terminal chunks."""
+    warnings: List[str] = []
+    if memory is None:
+        raise ValueError("capture_source: memory is required")
+
+    config = config or IngestConfig()
+    runtime = _resolve_ingest_runtime(memory)
+
+    if not owner_type or not owner_id:
+        raise ValueError("capture_source: owner_type and owner_id are required")
+    owner = validate_explicit_owner(
+        owner_type=owner_type,
+        owner_id=owner_id,
+    )
+    if owner["owner_type"] not in {"agent", "user", "workspace"}:
+        raise ValueError("owner_type must be one of: agent, user, workspace")
+    tenant_id = str(owner["tenant_id"])
+    owner_type = str(owner["owner_type"])
+    owner_id = str(owner["owner_id"])
+    workspace_id = owner["workspace_id"]
+
+    if not file_path or not isinstance(file_path, str):
+        raise ValueError("capture_source: file_path must be a non-empty string")
+
+    parsed = parse_file(file_path)
+    if not parsed.pages:
+        if config.allow_empty_pages:
+            warnings.append("document has no extractable pages")
+        else:
+            raise ValueError("capture_source: document has no extractable pages")
+
+    ingest_signature, existing_manifest, early_report = await _run_manifest_gate(
+        parsed=parsed,
+        config=config,
+        runtime=runtime,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        warnings=warnings,
+    )
+    if early_report is not None:
+        source_chunks = await _fetch_existing_chunks_for_doc(
+            runtime=runtime,
+            tenant_id=tenant_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            doc_id=parsed.doc_id,
+        )
+        return CaptureSourceResult(
+            parsed=parsed,
+            ingest_signature=ingest_signature,
+            captured_chunk_inputs=_chunk_records_to_inputs(source_chunks),
+            captured_chunks=source_chunks,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            warnings=list(warnings),
+            skipped=True,
+            early_report=early_report,
+        )
+
+    source_chunk_inputs, early_report = _prepare_document_chunks(
+        parsed=parsed,
+        config=config,
+        warnings=warnings,
+    )
+    if early_report is not None:
+        return CaptureSourceResult(
+            parsed=parsed,
+            ingest_signature=ingest_signature,
+            captured_chunk_inputs=source_chunk_inputs,
+            captured_chunks=[],
+            owner_type=owner_type,
+            owner_id=owner_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            warnings=list(warnings),
+            early_report=early_report,
+        )
+
+    source_chunks = await _persist_chunks(
+        parsed=parsed,
+        final_chunks=source_chunk_inputs,
+        config=config,
+        runtime=runtime,
+        ingest_signature=ingest_signature,
+        existing_manifest=existing_manifest,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        warnings=warnings,
+    )
+    return CaptureSourceResult(
+        parsed=parsed,
+        ingest_signature=ingest_signature,
+        captured_chunk_inputs=source_chunk_inputs,
+        captured_chunks=source_chunks,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        warnings=list(warnings),
+    )
+
+
+async def derive_memory_artifacts(
+    capture: CaptureSourceResult,
+    *,
+    config: IngestConfig | None = None,
+    memory: Any,
+) -> DeriveMemoryArtifactsResult:
+    """Stage 2: derive facts, graph edges, and episodic artifacts from captured chunks."""
+    if memory is None:
+        raise ValueError("derive_memory_artifacts: memory is required")
+    config = config or IngestConfig()
+    runtime = _resolve_ingest_runtime(memory)
+    warnings = list(capture.warnings)
+    derived_facts, facts_created, graph_edges = await _extract_facts_and_update_graph(
+        parsed=capture.parsed,
+        final_chunks=capture.captured_chunk_inputs,
+        config=config,
+        runtime=runtime,
+        owner_type=capture.owner_type,
+        owner_id=capture.owner_id,
+        tenant_id=capture.tenant_id,
+        workspace_id=capture.workspace_id,
+        warnings=warnings,
+    )
+
+    if config.doc_episode_enabled:
+        await write_document_episode(
+            doc_id=capture.parsed.doc_id,
+            summary_text=f"Document ingested: {capture.parsed.source_path}",
+            owner_type=capture.owner_type,
+            owner_id=capture.owner_id,
+            user_id=capture.owner_id if capture.owner_type == "user" else None,
+            embedder=runtime.embedder,
+            episodic_core=runtime.episodic_core,
+        )
+    await maybe_trigger_consolidation(
+        memory=memory,
+        user_id=capture.owner_id if capture.owner_type == "user" else None,
+        enabled=False,
+    )
+
+    return DeriveMemoryArtifactsResult(
+        parsed=capture.parsed,
+        captured_chunk_inputs=capture.captured_chunk_inputs,
+        captured_chunks=capture.captured_chunks,
+        derived_facts=derived_facts,
+        facts_created=facts_created,
+        graph_edges_created=graph_edges,
+        owner_type=capture.owner_type,
+        owner_id=capture.owner_id,
+        tenant_id=capture.tenant_id,
+        workspace_id=capture.workspace_id,
+        warnings=warnings,
+    )
+
+
+async def curate_compiled_memory(
+    capture: CaptureSourceResult,
+    derive: DeriveMemoryArtifactsResult,
+    *,
+    memory: Any,
+) -> CurateCompiledMemoryResult:
+    """Stage 3: curate compiled-memory/wiki artifacts from derived artifacts and evidence."""
+    if memory is None:
+        raise ValueError("curate_compiled_memory: memory is required")
+    warnings = list(derive.warnings)
+    if not capture.captured_chunks:
+        return CurateCompiledMemoryResult(
+            parsed=capture.parsed,
+            compiled_artifacts=[],
+            index_entries=[],
+            log_events=[],
+            owner_type=capture.owner_type,
+            owner_id=capture.owner_id,
+            tenant_id=capture.tenant_id,
+            workspace_id=capture.workspace_id,
+            warnings=warnings,
+        )
+
+    summary_fact = next((fact for fact in derive.derived_facts if getattr(fact, "predicate", None) == "SUMMARY"), None)
+    summary_text = str(getattr(summary_fact, "object", "") or "").strip() if summary_fact is not None else None
+    summary_text = summary_text or None
+    retrieval_tags = [
+        item
+        for item in dict.fromkeys(
+            [
+                capture.parsed.source_path.rsplit("/", 1)[-1],
+                capture.parsed.doc_id,
+                *[
+                    str(getattr(fact, "subject", "") or "").strip()
+                    for fact in derive.derived_facts[:5]
+                    if getattr(fact, "subject", None)
+                ],
+            ]
+        )
+        if item
+    ]
+    compiled_artifact = memory.compile_memory_artifact(
+        artifact_id=f"wiki:{capture.parsed.doc_id}",
+        title=capture.parsed.source_path.rsplit("/", 1)[-1] or capture.parsed.doc_id,
+        owner_type=capture.owner_type,
+        owner_id=capture.owner_id,
+        summary=summary_text,
+        topic_key=capture.parsed.doc_id,
+        direct_source_chunk_ids=[chunk.id for chunk in capture.captured_chunks if getattr(chunk, "id", None)],
+        direct_source_document_ids=[capture.parsed.doc_id],
+        related_artifact_ids=[fact.id for fact in derive.derived_facts if getattr(fact, "id", None)],
+        retrieval_tags=retrieval_tags,
+        operation="wiki_artifact_created",
+    )
+    return CurateCompiledMemoryResult(
+        parsed=capture.parsed,
+        compiled_artifacts=[compiled_artifact],
+        index_entries=[compiled_artifact["compiled_memory_index"]],
+        log_events=list(compiled_artifact.get("compiled_memory_log") or []),
+        owner_type=capture.owner_type,
+        owner_id=capture.owner_id,
+        tenant_id=capture.tenant_id,
+        workspace_id=capture.workspace_id,
+        warnings=warnings,
+    )
 
 
 async def ingest_document(
@@ -508,102 +804,34 @@ async def ingest_document(
 
     Returns IngestReport with counts + warnings.
     """
-    warnings: List[str] = []
-    if memory is None:
-        raise ValueError("ingest_document: memory is required")
-
     config = config or IngestConfig()
-    runtime = _resolve_ingest_runtime(memory)
-
-    if not owner_type or not owner_id:
-        raise ValueError("ingest_document: owner_type and owner_id are required")
-    owner = validate_explicit_owner(
+    capture = await capture_source(
+        file_path,
         owner_type=owner_type,
         owner_id=owner_id,
-    )
-    if owner["owner_type"] not in {"agent", "user", "workspace"}:
-        raise ValueError("owner_type must be one of: agent, user, workspace")
-    tenant_id = str(owner["tenant_id"])
-    owner_type = str(owner["owner_type"])
-    owner_id = str(owner["owner_id"])
-    workspace_id = owner["workspace_id"]
-
-    if not file_path or not isinstance(file_path, str):
-        raise ValueError("ingest_document: file_path must be a non-empty string")
-
-    parsed = parse_file(file_path)
-    if not parsed.pages:
-        if config.allow_empty_pages:
-            warnings.append("document has no extractable pages")
-        else:
-            raise ValueError("ingest_document: document has no extractable pages")
-    ingest_signature, existing_manifest, early_report = await _run_manifest_gate(
-        parsed=parsed,
         config=config,
-        runtime=runtime,
-        owner_type=owner_type,
-        owner_id=owner_id,
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-        warnings=warnings,
-    )
-    if early_report is not None:
-        return early_report
-
-    final_chunks, early_report = _prepare_document_chunks(
-        parsed=parsed,
-        config=config,
-        warnings=warnings,
-    )
-    if early_report is not None:
-        return early_report
-
-    created_chunks = await _persist_chunks(
-        parsed=parsed,
-        final_chunks=final_chunks,
-        config=config,
-        runtime=runtime,
-        ingest_signature=ingest_signature,
-        existing_manifest=existing_manifest,
-        owner_type=owner_type,
-        owner_id=owner_id,
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-        warnings=warnings,
-    )
-
-    facts_created, graph_edges = await _extract_facts_and_update_graph(
-        parsed=parsed,
-        final_chunks=final_chunks,
-        config=config,
-        runtime=runtime,
-        owner_type=owner_type,
-        owner_id=owner_id,
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-        warnings=warnings,
-    )
-
-    if config.doc_episode_enabled:
-        await write_document_episode(
-            doc_id=parsed.doc_id,
-            summary_text=f"Document ingested: {parsed.source_path}",
-            owner_type=owner_type,
-            owner_id=owner_id,
-            user_id=owner_id if owner_type == "user" else None,
-            embedder=runtime.embedder,
-            episodic_core=runtime.episodic_core,
-        )
-    await maybe_trigger_consolidation(
         memory=memory,
-        user_id=owner_id if owner_type == "user" else None,
-        enabled=False,
+    )
+    if capture.early_report is not None and capture.skipped:
+        return capture.early_report
+    if capture.early_report is not None and not capture.captured_chunks:
+        return capture.early_report
+
+    derive = await derive_memory_artifacts(
+        capture,
+        config=config,
+        memory=memory,
+    )
+    await curate_compiled_memory(
+        capture,
+        derive,
+        memory=memory,
     )
 
     return IngestReport(
-        doc_id=parsed.doc_id,
-        chunks_created=len(created_chunks),
-        facts_created=facts_created,
-        graph_edges_created=graph_edges,
-        warnings=warnings,
+        doc_id=capture.parsed.doc_id,
+        chunks_created=len(capture.captured_chunks),
+        facts_created=derive.facts_created,
+        graph_edges_created=derive.graph_edges_created,
+        warnings=derive.warnings,
     )

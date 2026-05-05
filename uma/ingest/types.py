@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Tuple, Optional
+from typing import Any, List, Tuple, Optional
+
+from uma.common.types import Chunk, Fact
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,49 @@ class IngestReport:
     chunks_created: int
     facts_created: int
     graph_edges_created: int
+    warnings: List[str]
+
+
+@dataclass(frozen=True)
+class CaptureSourceResult:
+    parsed: ParsedDocument
+    ingest_signature: dict[str, Any]
+    captured_chunk_inputs: List[DocumentChunk]
+    captured_chunks: List[Chunk]
+    owner_type: str
+    owner_id: str
+    tenant_id: str
+    workspace_id: Optional[str]
+    warnings: List[str]
+    skipped: bool = False
+    early_report: Optional[IngestReport] = None
+
+
+@dataclass(frozen=True)
+class DeriveMemoryArtifactsResult:
+    parsed: ParsedDocument
+    captured_chunk_inputs: List[DocumentChunk]
+    captured_chunks: List[Chunk]
+    derived_facts: List[Fact]
+    facts_created: int
+    graph_edges_created: int
+    owner_type: str
+    owner_id: str
+    tenant_id: str
+    workspace_id: Optional[str]
+    warnings: List[str]
+
+
+@dataclass(frozen=True)
+class CurateCompiledMemoryResult:
+    parsed: ParsedDocument
+    compiled_artifacts: List[dict[str, Any]]
+    index_entries: List[dict[str, Any]]
+    log_events: List[dict[str, Any]]
+    owner_type: str
+    owner_id: str
+    tenant_id: str
+    workspace_id: Optional[str]
     warnings: List[str]
 
 
