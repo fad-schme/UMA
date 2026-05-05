@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from uma.api.management import explain_result, update_wiki_page
 from uma.api.runtime import UMARuntime
 from uma.common.storage_metadata import normalize_fact_metadata
 from uma.common.storage_metadata import normalize_chunk_metadata
@@ -95,11 +96,11 @@ async def test_provenance_chain_supports_fact_memory_and_wiki_artifact_expansion
     assert memory_result["compiled_memory_log"]
     assert memory_result["compiled_memory_index"][0]["navigation_only"] is True
 
-    fact_evidence = await memory.expand_evidence(fact)
+    fact_evidence = await explain_result(memory, fact)
     assert fact_evidence["evidence"]
     assert fact_evidence["chunk_ids"]
 
-    answer_evidence = await memory.expand_evidence(memory_result["compiled_answer"])
+    answer_evidence = await explain_result(memory, memory_result["compiled_answer"])
     assert answer_evidence["evidence"]
     assert answer_evidence["chunk_ids"]
 
@@ -145,7 +146,7 @@ async def test_provenance_chain_supports_fact_memory_and_wiki_artifact_expansion
     assert wiki_artifact["compiled_memory_index"]["artifact_id"] == wiki_artifact["id"]
     assert wiki_artifact["compiled_memory_log"][0]["event_type"] == "wiki_artifact_created"
 
-    wiki_evidence = await memory.expand_evidence(wiki_artifact)
+    wiki_evidence = await explain_result(memory, wiki_artifact)
     assert wiki_evidence["chunk_ids"] == [raw_chunk.id]
 
 
@@ -172,7 +173,8 @@ async def test_compiled_memory_artifact_builds_index_log_and_transitive_raw_evid
         memory_intent="continuity",
     )
 
-    artifact = memory.compile_memory_artifact(
+    artifact = update_wiki_page(
+        memory,
         artifact_id="wiki:operations/monitoring",
         title="Operations Monitoring",
         owner_type="user",
@@ -182,7 +184,7 @@ async def test_compiled_memory_artifact_builds_index_log_and_transitive_raw_evid
         parent_artifacts=[memory_result["compiled_answer"]],
         related_artifact_ids=[memory_result["compiled_answer"]["id"]],
         retrieval_tags=["ops", "monitoring"],
-    )
+    )["artifact"]
 
     assert artifact["artifact_type"] == "compiled_memory_artifact"
     assert artifact["provenance"]["valid"] is True
@@ -192,7 +194,7 @@ async def test_compiled_memory_artifact_builds_index_log_and_transitive_raw_evid
     assert artifact["compiled_memory_log"][0]["event_type"] == "wiki_artifact_created"
     assert artifact["compiled_memory_log"][0]["parent_artifact_ids"] == [memory_result["compiled_answer"]["id"]]
 
-    expanded = await memory.expand_evidence(artifact)
+    expanded = await explain_result(memory, artifact)
     assert expanded["chunk_ids"] == artifact["provenance"]["source_chunk_ids"]
     assert expanded["direct_chunk_ids"] == []
     assert expanded["lineage"][0]["parent_artifact_ids"] == [memory_result["compiled_answer"]["id"]]
@@ -232,7 +234,17 @@ async def test_compiled_memory_artifact_update_and_conflicts_remain_visible(uma_
         ],
     }
 
-    artifact = memory.compile_memory_artifact(
+    original = update_wiki_page(
+        memory,
+        artifact_id="wiki:operations/paging",
+        title="Operations Paging",
+        owner_type="user",
+        owner_id="user:u1",
+        direct_source_chunk_ids=[chunk_id],
+        direct_source_document_ids=[report.doc_id],
+    )["artifact"]
+    artifact = update_wiki_page(
+        memory,
         artifact_id="wiki:operations/paging",
         title="Operations Paging",
         owner_type="user",
@@ -240,38 +252,41 @@ async def test_compiled_memory_artifact_update_and_conflicts_remain_visible(uma_
         direct_source_chunk_ids=[chunk_id],
         direct_source_document_ids=[report.doc_id],
         conflicts=[conflict],
-        operation="wiki_artifact_updated",
-    )
+        existing_artifact=original,
+    )["artifact"]
 
     assert artifact["conflicts"] == [conflict]
     assert artifact["compiled_memory_index"]["has_conflicts"] is True
-    assert artifact["compiled_memory_log"][0]["event_type"] == "wiki_artifact_updated"
-    assert artifact["compiled_memory_log"][1]["event_type"] == "conflict_detected"
+    assert [event["event_type"] for event in artifact["compiled_memory_log"]] == [
+        "wiki_artifact_created",
+        "wiki_artifact_updated",
+        "conflict_detected",
+    ]
 
-    expanded = await memory.expand_evidence(artifact)
-    assert expanded["provenance"][0]["conflicts"] == [conflict]
+    expanded = await explain_result(memory, artifact)
+    assert expanded["provenance"]["conflicts"] == [conflict]
     assert expanded["chunk_ids"] == [chunk_id]
 
 
 def test_compiled_memory_artifact_without_reachable_raw_chunks_is_invalid(uma_memory) -> None:
     memory = uma_memory
-    orphan_parent = memory.compile_memory_artifact(
+    orphan_parent = update_wiki_page(
+        memory,
         artifact_id="wiki:orphan-parent",
         title="Orphan Parent",
         owner_type="user",
         owner_id="user:u1",
         related_artifact_ids=["wiki:missing-raw"],
-        operation="wiki_artifact_created",
-        manual=False,
-    )
-    child = memory.compile_memory_artifact(
+        manual=True,
+    )["artifact"]
+    child = update_wiki_page(
+        memory,
         artifact_id="wiki:orphan-child",
         title="Orphan Child",
         owner_type="user",
         owner_id="user:u1",
         parent_artifacts=[orphan_parent],
-        operation="wiki_artifact_created",
-    )
+    )["artifact"]
 
     assert child["provenance"]["valid"] is False
     assert "missing_source_chunk_ids" in child["provenance"]["invalid_reasons"]
@@ -279,14 +294,14 @@ def test_compiled_memory_artifact_without_reachable_raw_chunks_is_invalid(uma_me
 
 
 def test_manual_compiled_memory_artifact_keeps_audit_without_fake_chunks(uma_memory) -> None:
-    artifact = uma_memory.compile_memory_artifact(
+    artifact = update_wiki_page(
+        uma_memory,
         artifact_id="wiki:manual/notes",
         title="Manual Notes",
         owner_type="user",
         owner_id="user:u1",
         manual=True,
-        operation="manual_update",
-    )
+    )["artifact"]
 
     assert artifact["provenance"]["manual"] is True
     assert artifact["provenance"]["source_chunk_ids"] == []
@@ -296,16 +311,17 @@ def test_manual_compiled_memory_artifact_keeps_audit_without_fake_chunks(uma_mem
 
 
 def test_compiled_memory_artifact_update_appends_log_event_instead_of_replacing_history(uma_memory) -> None:
-    original = uma_memory.compile_memory_artifact(
+    original = update_wiki_page(
+        uma_memory,
         artifact_id="wiki:ops/platform",
         title="Ops Platform",
         owner_type="user",
         owner_id="user:u1",
         direct_source_chunk_ids=["chunk-1"],
         direct_source_document_ids=["doc-1"],
-        operation="wiki_artifact_created",
-    )
-    updated = uma_memory.compile_memory_artifact(
+    )["artifact"]
+    updated = update_wiki_page(
+        uma_memory,
         artifact_id="wiki:ops/platform",
         title="Ops Platform",
         owner_type="user",
@@ -313,8 +329,7 @@ def test_compiled_memory_artifact_update_appends_log_event_instead_of_replacing_
         direct_source_chunk_ids=["chunk-1"],
         direct_source_document_ids=["doc-1"],
         existing_artifact=original,
-        operation="wiki_artifact_updated",
-    )
+    )["artifact"]
 
     assert [event["event_type"] for event in updated["compiled_memory_log"]] == [
         "wiki_artifact_created",
@@ -346,27 +361,27 @@ async def test_expand_evidence_is_cycle_safe_for_parent_artifact_lineage(uma_mem
     assert rows
     chunk_id = rows[0]["id"]
 
-    artifact_a = memory.compile_memory_artifact(
+    artifact_a = update_wiki_page(
+        memory,
         artifact_id="wiki:cycle/a",
         title="Cycle A",
         owner_type="user",
         owner_id="user:u1",
         direct_source_chunk_ids=[chunk_id],
         direct_source_document_ids=[report.doc_id],
-        operation="wiki_artifact_created",
-    )
-    artifact_b = memory.compile_memory_artifact(
+    )["artifact"]
+    artifact_b = update_wiki_page(
+        memory,
         artifact_id="wiki:cycle/b",
         title="Cycle B",
         owner_type="user",
         owner_id="user:u1",
         parent_artifacts=[artifact_a],
-        operation="wiki_artifact_created",
-    )
+    )["artifact"]
     artifact_a["parent_artifacts"] = [artifact_b]
     artifact_a["parent_artifact_ids"] = [artifact_b["id"]]
 
-    expanded = await memory.expand_evidence(artifact_b)
+    expanded = await explain_result(memory, artifact_b)
     assert expanded["chunk_ids"] == [chunk_id]
     assert expanded["transitive_chunk_ids"] == [chunk_id]
     assert expanded["missing_chunk_ids"] == []

@@ -765,7 +765,7 @@ async def curate_compiled_memory(
         )
         if item
     ]
-    compiled_artifact = memory.compile_memory_artifact(
+    compiled_artifact = memory.runtime.compile_memory_artifact(
         artifact_id=f"wiki:{capture.parsed.doc_id}",
         title=capture.parsed.source_path.rsplit("/", 1)[-1] or capture.parsed.doc_id,
         owner_type=capture.owner_type,

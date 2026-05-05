@@ -62,7 +62,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 import threading
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Optional
 
 from uma.common.config import UMAConfig
 from uma.common.config_types import RuntimeConfig, parse_plugin_spec
@@ -374,57 +374,6 @@ class UMAMemory:
             runtime_context,
             query_text=query_text,
             memory_intent=memory_intent,
-        )
-
-    async def expand_evidence(self, artifact: Any) -> Dict[str, Any]:
-        """Expand an artifact's provenance back into supporting raw evidence."""
-        runtime_context = self._require_bound_runtime_context()
-        return await self.runtime.expand_evidence(runtime_context, artifact)
-
-    def compile_memory_artifact(
-        self,
-        *,
-        artifact_id: str,
-        title: str,
-        owner_type: str,
-        owner_id: str,
-        text: str | None = None,
-        summary: str | None = None,
-        topic_key: str | None = None,
-        direct_source_chunk_ids: Optional[list[str]] = None,
-        direct_source_document_ids: Optional[list[str]] = None,
-        parent_artifacts: Optional[list[Any]] = None,
-        related_artifact_ids: Optional[list[str]] = None,
-        retrieval_tags: Optional[list[str]] = None,
-        retrieval_path: Optional[list[Mapping[str, Any]]] = None,
-        support_density: float | None = None,
-        confidence: float | None = None,
-        conflicts: Optional[list[Mapping[str, Any]]] = None,
-        existing_artifact: Any | None = None,
-        manual: bool = False,
-        operation: str = "wiki_artifact_created",
-    ) -> Dict[str, Any]:
-        """Build an explicit compiled-memory/wiki artifact from evidence or parent artifacts."""
-        return self.runtime.compile_memory_artifact(
-            artifact_id=artifact_id,
-            title=title,
-            owner_type=owner_type,
-            owner_id=owner_id,
-            text=text,
-            summary=summary,
-            topic_key=topic_key,
-            direct_source_chunk_ids=direct_source_chunk_ids,
-            direct_source_document_ids=direct_source_document_ids,
-            parent_artifacts=parent_artifacts,
-            related_artifact_ids=related_artifact_ids,
-            retrieval_tags=retrieval_tags,
-            retrieval_path=retrieval_path,
-            support_density=support_density,
-            confidence=confidence,
-            conflicts=conflicts,
-            existing_artifact=existing_artifact,
-            manual=manual,
-            operation=operation,
         )
     
     # ----------------------------------------------------------------------
