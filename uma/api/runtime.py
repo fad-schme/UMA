@@ -129,6 +129,8 @@ class UMARequestHandle:
         existing_artifact: Any | None = None,
         manual: bool = False,
         operation: str = "wiki_artifact_created",
+        metadata: Mapping[str, Any] | None = None,
+        status: str = "active",
     ) -> Dict[str, Any]:
         return self.runtime.compile_memory_artifact(
             artifact_id=artifact_id,
@@ -150,6 +152,8 @@ class UMARequestHandle:
             existing_artifact=existing_artifact,
             manual=manual,
             operation=operation,
+            metadata=metadata,
+            status=status,
         )
 
     async def get_context_messages(
@@ -665,6 +669,8 @@ class UMARuntime:
         existing_artifact: Any | None = None,
         manual: bool = False,
         operation: str = "wiki_artifact_created",
+        metadata: Mapping[str, Any] | None = None,
+        status: str = "active",
     ) -> Dict[str, Any]:
         owner = validate_explicit_owner(
             owner_type=owner_type,
@@ -689,6 +695,8 @@ class UMARuntime:
             support_density=support_density,
             confidence=confidence,
             conflicts=conflicts or [],
+            status=status,
+            metadata=metadata,
             existing_artifact=existing_artifact,
             manual=manual,
             event_type=operation,

@@ -731,6 +731,8 @@ async def curate_compiled_memory(
     memory: Any,
 ) -> CurateCompiledMemoryResult:
     """Stage 3: curate compiled-memory/wiki artifacts from derived artifacts and evidence."""
+    from uma.memory import wiki as wiki_module
+
     if memory is None:
         raise ValueError("curate_compiled_memory: memory is required")
     warnings = list(derive.warnings)
@@ -765,19 +767,20 @@ async def curate_compiled_memory(
         )
         if item
     ]
-    compiled_artifact = memory.runtime.compile_memory_artifact(
-        artifact_id=f"wiki:{capture.parsed.doc_id}",
+    wiki_page = wiki_module.regenerate_wiki_page(
+        memory=memory,
+        page_key=capture.parsed.doc_id,
         title=capture.parsed.source_path.rsplit("/", 1)[-1] or capture.parsed.doc_id,
         owner_type=capture.owner_type,
         owner_id=capture.owner_id,
         summary=summary_text,
-        topic_key=capture.parsed.doc_id,
+        category="ingest",
         direct_source_chunk_ids=[chunk.id for chunk in capture.captured_chunks if getattr(chunk, "id", None)],
         direct_source_document_ids=[capture.parsed.doc_id],
         related_artifact_ids=[fact.id for fact in derive.derived_facts if getattr(fact, "id", None)],
         retrieval_tags=retrieval_tags,
-        operation="wiki_artifact_created",
     )
+    compiled_artifact = wiki_page["compiled_artifact"]
     return CurateCompiledMemoryResult(
         parsed=capture.parsed,
         compiled_artifacts=[compiled_artifact],
