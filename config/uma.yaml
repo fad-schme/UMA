@@ -9,14 +9,14 @@ storage:
   db_root: "./data/"         # UMA will create SQL DBs inside here
   # db_root_base: "auto"   # auto | cwd | config (controls relative path resolution)
   sql_backend: "sqlite"    # or plugin spec "db.postgres_adapter:PostgresAdapter"
-  vector_backend: "vector.qdrant_adapter:QdrantIndex"
+  vector_backend: "vector.qdrant_adapter:QdrantIndex"  # requires qdrant-client and a reachable Qdrant service
   graph_backend: "graph.neo4j_adapter:Neo4jAdapter"  # plugin spec or "disabled"
   # Vector backend configuration (adapter-specific)
   vector_config:
     # Qdrant (custom adapter)
-    url: "http://192.168.178.101:6333"
+    url: "http://qdrant:6333"   # replace for your deployment
     collection: "uma-rlm"
-    #api_key: ""
+    api_key: ""                 # set via environment or secret manager if required
     prefer_grpc: false
     timeout_s: 10.0
     distance: "cosine"
@@ -24,11 +24,10 @@ storage:
     bm25_enabled: false
 
   graph_config:
-    # Neo4j (custom adapter)
-    #uri: "neo4j://127.0.0.1:7687" 
-    uri: "neo4j://192.168.178.101:7687" 
+    # Neo4j (custom adapter); requires a reachable graph backend
+    uri: "neo4j://neo4j:7687"   # replace for your deployment
     user: "neo4j"
-    password: "umaisthebest"
+    password: ""                # set via environment or secret manager
     max_pool_size: 50
     # Note: The Community Edition of Neo4j supports running a single database at a time. 
     # Additionally, the Community version does not include the capability to assign roles and permissions to users.
@@ -51,13 +50,12 @@ working_memory:
 # Embeddings
 # ------------------------------
 embedding:
-  provider: "ollama"
+  provider: "ollama"            # requires a local or remote Ollama-compatible embedding provider
   model: "nomic-embed-text:latest"
   #model: "all-minilm"
   dimension: 768 # all-minilm 384 768
   config:
-   host: "http://192.168.178.101:11434"
-    #host: "http://localhost:11434"
+    host: "http://ollama:11434" # replace for your deployment
 
 # ------------------------------
 # LLMs (Agent + UMA internal)
@@ -72,19 +70,17 @@ embedding:
 # Generation Length: Capable of generating up to 8,192 tokens.
 llms:
   agent:
-    provider: "ollama"
+    provider: "ollama"          # requires a local or remote Ollama-compatible LLM provider
     model: "qwen2.5:3b"
     config:
       timeout: 60
-      host: "http://192.168.178.101:11434"
-      #host: "http://localhost:11434"
+      host: "http://ollama:11434"  # replace for your deployment
   uma:
     provider: "ollama"
     model: "qwen2.5:3b"
     config:
       timeout: 60
-      host: "http://192.168.178.101:11434"
-      #host: "http://localhost:11434"
+      host: "http://ollama:11434"  # replace for your deployment
 # ------------------------------
 # Retrieval
 # ------------------------------

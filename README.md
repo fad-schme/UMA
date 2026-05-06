@@ -123,7 +123,7 @@ pip install -e '.[dev,vector,graph,ollama,parsers]'
 
 ### Config baseline
 
-`config/uma.yaml` is the committed safe baseline config. It is intentionally shareable and does not contain secrets, private LAN endpoints, or personal infrastructure settings.
+`config/uma.yaml` is the committed production-shaped example configuration. It is safe to commit, shows the intended UMA wiring, and avoids committed secrets. It may still require local or remote services, optional extras, and deployment-specific endpoints or credentials before it will run in your environment.
 
 For local development:
 
@@ -131,7 +131,13 @@ For local development:
 2. Add your real provider settings, endpoints, and secrets there
 3. Run UMA with `--config config/uma.local.yaml` or `UMAMemory.from_yaml("config/uma.local.yaml")`
 
-Keep secrets out of committed YAML configs. Use environment variables or a secret manager. The safe baseline may still require local setup for optional providers such as Ollama or custom vector/graph backends.
+Keep secrets out of committed YAML configs. Use environment variables or a secret manager. Operators should copy or adapt `config/uma.yaml` for their deployment rather than assuming it runs unchanged.
+
+`requirements.txt` is the development baseline only. Selected backends may require optional extras or provider packages, for example:
+
+- Qdrant or other vector backends: install the matching vector/provider packages
+- Neo4j or other graph backends: install the graph extra and run a reachable graph service
+- Ollama/OpenAI-compatible providers: run or configure the selected LLM and embedding providers
 
 ### Storage paths
 
