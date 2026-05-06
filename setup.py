@@ -1,6 +1,8 @@
 from pathlib import Path
+import shutil
 
 from setuptools import find_packages, setup
+from setuptools.command.build_py import build_py as _build_py
 
 
 ROOT = Path(__file__).parent
@@ -10,6 +12,16 @@ version_ns = {}
 exec((ROOT / "uma" / "version.py").read_text(encoding="utf-8"), version_ns)
 
 
+class build_py(_build_py):
+    """Clear stale generated package trees before copying current sources."""
+
+    def run(self):
+        build_root = Path(self.build_lib) / "uma"
+        if build_root.exists():
+            shutil.rmtree(build_root)
+        super().run()
+
+
 setup(
     name="uma",
     version=version_ns["__version__"],
@@ -17,7 +29,7 @@ setup(
     long_description=README,
     long_description_content_type="text/markdown",
     author="a.Diaz-Schmeier",
-    author_email="ad-schme@memory-engineering.com",
+    author_email="ad-schme@ai-mem-engineering.com",
     license="MIT",
     python_requires=">=3.9",
     packages=find_packages(include=["uma", "uma.*"]),
@@ -38,4 +50,5 @@ setup(
         "ollama": ["ollama"],
         "parsers": ["PyPDF2", "beautifulsoup4", "markdown", "pandas"],
     },
+    cmdclass={"build_py": build_py},
 )
