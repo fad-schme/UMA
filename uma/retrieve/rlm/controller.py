@@ -178,7 +178,7 @@ class RLMController:
             logger.error("RLMController.retrieve_context: no retrieval scopes available")
             raise ValueError("RLMController.retrieve_context: no retrieval scopes available")
 
-        # Keep these fields for telemetry/back-compat; primary execution uses `scopes`.
+        # Keep these fields for telemetry; primary execution uses `scopes`.
         pack.owner_type, pack.owner_id = scopes[0].owner_type, scopes[0].owner_id
         logger.info("RLM_LANE scopes=%s", [(scope.owner_type, scope.owner_id) for scope in scopes])
         logger.info(

@@ -104,22 +104,6 @@ class UMAMemoryEnvironment:
         return sanitized or None
 
     @staticmethod
-    def _limit_fact_ids(fact_ids: List[str], limit: int = 50) -> List[str]:
-        out: List[str] = []
-        seen = set()
-        for fid in fact_ids or []:
-            if not isinstance(fid, str):
-                continue
-            fid = fid.strip()
-            if not fid or fid in seen:
-                continue
-            seen.add(fid)
-            out.append(fid)
-            if len(out) >= limit:
-                break
-        return out
-
-    @staticmethod
     def _filter_time_range(episodes: List[Any], time_range: Optional[Dict[str, Any]]) -> List[Any]:
         if not time_range:
             return episodes
