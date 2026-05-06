@@ -334,8 +334,8 @@ async def interactive_chat(
                     reply = "Snippet evaluation unavailable."
 
                 print("Assistant>", reply)
-                # Update UMA memory with the turn
-                await memory.sync_memory(
+                # Update UMA memory with the turn through the canonical public API.
+                await memory.process_turn(
                     user_id=user_id,
                     user_msg=user_message,
                     assistant_reply=reply,

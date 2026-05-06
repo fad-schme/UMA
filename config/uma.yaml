@@ -8,8 +8,8 @@
 storage:
   db_root: "./data/"         # UMA will create SQL DBs inside here
   # db_root_base: "auto"   # auto | cwd | config (controls relative path resolution)
-  sql_backend: "sqlite"    # or plugin spec "db.postgres_adapter:PostgresAdapter"
-  vector_backend: "vector.qdrant_adapter:QdrantIndex"  # requires qdrant-client and a reachable Qdrant service
+  sql_backend: "sqlite"    # built-in or plugin spec "db.some_adapter:Factory"
+  vector_backend: "vector.qdrant_adapter:QdrantIndex"  # plugin spec; resolved from Python path, UMA_ADAPTER_ROOTS, or config-adjacent extensions/plugins
   graph_backend: "graph.neo4j_adapter:Neo4jAdapter"  # plugin spec or "disabled"
   # Vector backend configuration (adapter-specific)
   vector_config:
@@ -24,7 +24,7 @@ storage:
     bm25_enabled: false
 
   graph_config:
-    # Neo4j (custom adapter); requires a reachable graph backend
+    # Neo4j (custom adapter); requires a reachable graph backend and graph adapter dependency installed by the operator
     uri: "neo4j://neo4j:7687"   # replace for your deployment
     user: "neo4j"
     password: ""                # set via environment or secret manager

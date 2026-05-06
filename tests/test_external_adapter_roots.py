@@ -41,6 +41,35 @@ def _write_vector_adapter(
     )
 
 
+def _write_graph_adapter(
+    adapter_root: Path,
+    *,
+    module_name: str = "neo4j_adapter",
+    class_name: str = "Neo4jAdapter",
+) -> None:
+    graph_dir = adapter_root / "graph"
+    graph_dir.mkdir(parents=True, exist_ok=True)
+    (graph_dir / "__init__.py").write_text("")
+    (graph_dir / f"{module_name}.py").write_text(
+        "\n".join(
+            [
+                "from uma.adapters.graph.base import GraphAdapter",
+                "",
+                f"class {class_name}(GraphAdapter):",
+                "    def __init__(self, **config):",
+                "        self.config = dict(config)",
+                "",
+                "    def run_query(self, cypher, params=None):",
+                "        return []",
+                "",
+                "    def close(self):",
+                "        return None",
+                "",
+            ]
+        )
+    )
+
+
 def test_load_yaml_registers_external_adapter_root_from_env(tmp_path, monkeypatch):
     adapter_root = tmp_path / "vendor_adapters"
     config_root = tmp_path / "runtime_config"
@@ -148,3 +177,42 @@ def test_env_adapter_roots_override_config_adjacent_and_preserve_declared_order(
     assert plugin.MARKER == "env-first"
     assert sys.path.index(str(env_root_first)) < sys.path.index(str(env_root_second))
     assert sys.path.index(str(env_root_second)) < sys.path.index(str(project_root / "extensions"))
+
+
+def test_from_yaml_resolves_graph_backend_plugin_and_passes_graph_config(tmp_path, monkeypatch):
+    adapter_root = tmp_path / "external_graph_root"
+    runtime_root = tmp_path / "runtime"
+    db_root = tmp_path / "db"
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    db_root.mkdir(parents=True, exist_ok=True)
+    _write_graph_adapter(adapter_root)
+
+    cfg = build_test_config(
+        db_root=db_root,
+        graph_backend="graph.neo4j_adapter:Neo4jAdapter",
+        graph_config={
+            "uri": "neo4j://neo4j:7687",
+            "user": "neo4j",
+            "password": "placeholder-secret",
+            "database": "neo4j",
+        },
+    )
+    cfg_path = runtime_root / "uma.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg))
+
+    monkeypatch.setenv("UMA_ADAPTER_ROOTS", str(adapter_root))
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    _clear_plugin_module("graph")
+
+    memory = UMAMemory.from_yaml(str(cfg_path))
+    try:
+        adapter = getattr(memory.graph_core, "adapter", None)
+        assert type(adapter).__module__ == "graph.neo4j_adapter"
+        assert adapter.config == {
+            "uri": "neo4j://neo4j:7687",
+            "user": "neo4j",
+            "password": "placeholder-secret",
+            "database": "neo4j",
+        }
+    finally:
+        memory.shutdown()

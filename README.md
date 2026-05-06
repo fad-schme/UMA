@@ -213,6 +213,17 @@ await memory.process_turn(
 )
 ```
 
+### Public API summary
+
+The current public surface is intentionally small.
+
+- `UMAMemory`
+  `set_context(...)`, `ingest_document(...)`, `retrieve_context(...)`, `retrieve_memory(...)`, `process_turn(...)`
+- Required Animus support on `UMAMemory`
+  `load_userprofile(...)`, `load_agentprofile(...)`, `load_memory_bootstrap(...)`, `load_daily_diary_bootstrap(...)`
+- Developer/admin management APIs
+  `uma.api.management.explain_result(...)`, `update_wiki_page(...)`, `export_wiki_projection(...)`, `lint_memory_drift(...)`
+
 ### Structured retrieval vs rendering
 
 UMA retrieval returns structured data products, not final prompts.
@@ -269,6 +280,38 @@ Developer/debug and admin/internal operations live in `uma.api.management`, not 
 - `lint_memory_drift(...)` reports stale, unsupported, conflicted, or invalid memory/wiki state without silently rewriting it.
 
 These APIs inspect, curate, project, or lint. They do not replace the core ingest, retrieval, provenance, or wiki subsystems.
+
+Example: update or refresh a wiki page from an existing memory result.
+
+```python
+from uma.api.management import update_wiki_page
+
+artifact_result = update_wiki_page(
+    memory,
+    artifact_id="wiki:ops/metrics",
+    title="Ops Metrics",
+    owner_type="user",
+    owner_id="user:u1",
+    parent_artifacts=[memory_result["compiled_answer"]],
+)
+```
+
+Example: lint compiled memory or wiki artifacts for drift.
+
+```python
+from uma.api.management import lint_memory_drift
+
+drift = await lint_memory_drift(
+    memory,
+    [artifact_result["artifact"]],
+)
+if drift["findings"]:
+    print("Memory drift findings:", drift["findings"])
+```
+
+`update_wiki_page(...)` is a controlled curation operation. It should use UMA’s canonical wiki/compiled-memory path and preserve provenance, index, and log metadata.
+
+`lint_memory_drift(...)` is inspection-only. It reports stale, unsupported, conflicted, or invalid memory/wiki state; it should not silently rewrite memory.
 
 ### Observability: Telemetry and Timing
 
@@ -371,7 +414,13 @@ The published `uma` package contains UMA core only. Adapters remain external to 
 UMA resolves external adapter modules in two ways:
 
 - Explicit adapter roots from `UMA_ADAPTER_ROOTS`. Multiple roots may be separated by `os.pathsep`; earlier entries win.
-- Backward-compatible project-local `extensions/` or `plugins/` directories alongside your config root.
+- Supported config-adjacent `extensions/` or `plugins/` directories alongside your config root.
+
+Adapter extensions are configured on the storage backend keys, not under `features.load`:
+
+- `storage.sql_backend`
+- `storage.vector_backend`
+- `storage.graph_backend`
 
 Folder layout:
 
@@ -395,10 +444,25 @@ storage:
     collection: "uma_vectors"
 ```
 
+Config example, graph:
+
+```yaml
+storage:
+  graph_backend: "graph.neo4j_adapter:Neo4jAdapter"
+  graph_config:
+    uri: "neo4j://neo4j:7687"
+    user: "neo4j"
+    password: "${UMA_GRAPH_PASSWORD}"
+    database: "neo4j"
+```
+
 Notes:
 
 - `vector_backend` accepts a plugin spec `module:callable`.
 - The callable must accept `dim` as the first argument and return a `VectorIndex`.
+- `graph_backend` accepts a plugin spec `module:callable`.
+- The graph callable must accept `**graph_config` and return a `GraphAdapter`.
+- Built-in short names like `neo4j` or `memgraph` are no longer supported; use a plugin spec.
 - For installed use, make the directory that contains `vector/`, `graph/`, `db/`, or `llm/` import packages available via `UMA_ADAPTER_ROOTS` if it is not in Python's import path already.
 
 #### Consolidation feature usage

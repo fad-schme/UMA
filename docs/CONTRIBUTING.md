@@ -1,14 +1,22 @@
 Contributing to UMA-RLM
 
-This guide explains how to validate, debug, and extend UMA-RLM using Gold Context Packs. It is written for engineers and coding agents working on memory ingestion, retrieval, and the RLM controller.
+This guide explains how to validate, debug, and extend UMA-RLM using Gold Retrieval Packs. It is written for engineers and coding agents working on memory ingestion, retrieval, and the RLM controller.
 
 Rule #0: UMA-RLM is a memory and context manager, not a QA system. You debug retrieval quality by inspecting context, not answers.
 
 ⸻
 
-1. What a Gold Context Pack Is
+### Gold Retrieval Packs
 
-A Gold Context Pack is the expected retrieval outcome for a given user prompt.
+Gold Retrieval Packs validate UMA retrieval behavior against expected evidence, provenance, and lane coverage. They do not score answer quality.
+Use them to verify that UMA retrieves the expected raw chunks, semantic facts, graph edges, compiled-memory artifacts, wiki evidence links, and provenance signals for a prompt.
+A failing Gold Retrieval Pack means retrieval, evidence coverage, provenance, or lane selection drifted. It does not necessarily mean the final assistant answer is wrong.
+
+⸻
+
+1. What a Gold Retrieval Pack Is
+
+A Gold Retrieval Pack is the expected retrieval outcome for a given user prompt.
 
 It defines:
 	•	Which facts must be present
@@ -41,7 +49,7 @@ Canonical Schema
 
 ⸻
 
-2. How to Use Gold Context Packs
+2. How to Use Gold Retrieval Packs
 
 Step 1 — Run Retrieval Only
 
@@ -120,7 +128,7 @@ Excessive Looping
 
 ⸻
 
-4. Writing New Gold Context Packs
+4. Writing New Gold Retrieval Packs
 	1.	Identify what an expert must know
 	2.	Define facts first, not text
 	3.	Add minimal grounding chunks
@@ -157,7 +165,7 @@ UMA-RLM retrieval is correct when:
 7. Final Principle
 
 Never debug UMA-RLM by looking at answers.
-Always debug it by comparing retrieved context to the Gold Context Pack.
+Always debug it by comparing retrieved context to the Gold Retrieval Pack.
 
 If the context is right, the agent can reason.
 If the context is wrong, no prompt engineering will help.
