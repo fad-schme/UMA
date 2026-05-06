@@ -85,3 +85,21 @@ def test_memory_plan_uses_profile_lane_only_for_profile_style_requests() -> None
         PROFILE_LANE,
     )
     assert plan.active_domains == ("kb_doc", "user_profile")
+
+
+def test_planner_trace_stays_backend_agnostic() -> None:
+    plan = build_retrieval_plan(
+        product="memory",
+        query_text="What decisions did I make earlier about the rollout?",
+        available_lanes=[WIKI_LANE, RAW_LANE, SEMANTIC_LANE, EPISODIC_LANE, PROCEDURAL_LANE, PROFILE_LANE],
+        memory_intent="continuity",
+    )
+
+    trace = plan.to_trace()
+
+    assert "participating_lanes" in trace
+    assert "active_domains" in trace
+    assert "fusion_strategy" not in trace
+    assert "top_k_dense" not in trace
+    assert "top_k_sparse" not in trace
+    assert "backend" not in trace

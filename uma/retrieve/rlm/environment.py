@@ -703,7 +703,6 @@ class UMAMemoryEnvironment:
         owner_type: str,
         owner_id: Optional[str],
         default_k: int,
-        trace_id: Optional[str] = None,
     ) -> List[Any]:
         """
         Execute a single RetrievalAction via the environment.

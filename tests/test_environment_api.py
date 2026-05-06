@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from uma.retrieve.rlm.environment import UMAMemoryEnvironment
+from uma.retrieve.rlm.decisions import RetrievalAction
 from uma.retrieve.rlm.request import RetrievalRequest
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
 from uma.common.types import RuntimeContext
@@ -165,3 +166,68 @@ def test_environment_time_range_helpers():
     ]
     filtered = UMAMemoryEnvironment._filter_time_range(eps, {"start": now - timedelta(days=1)})
     assert [e.id for e in filtered] == ["e2"]
+
+
+@pytest.mark.asyncio
+async def test_environment_execute_action_delegates_semantic_search_to_core(uma_memory):
+    memory = uma_memory
+    env = UMAMemoryEnvironment(memory)
+    request = RetrievalRequest.from_runtime_context(
+        RuntimeContext(
+            tenant_id="tenant-test",
+            agent_id=memory.agent_id or "agent-default",
+            request_id="req-env-execute-semantic",
+            user_id="user:u1",
+        )
+    )
+
+    captured = {}
+
+    async def fake_search(
+        query_embedding,
+        *,
+        tenant_id,
+        owner_type,
+        owner_id,
+        k,
+        offset=0,
+        filters=None,
+        query_text=None,
+    ):
+        captured.update(
+            {
+                "query_embedding": list(query_embedding),
+                "tenant_id": tenant_id,
+                "owner_type": owner_type,
+                "owner_id": owner_id,
+                "k": k,
+                "offset": offset,
+                "filters": filters,
+                "query_text": query_text,
+            }
+        )
+        return ["fact-native"]
+
+    memory.semantic_core.search = fake_search  # type: ignore[method-assign]
+
+    result = await env.execute_action(
+        request=request,
+        action=RetrievalAction(action="search_semantic", k=7, filters={"predicate": "LIKES"}),
+        query_embedding=[1, 2, 3],
+        query_text="coffee",
+        owner_type="user",
+        owner_id="user:u1",
+        default_k=5,
+    )
+
+    assert result == ["fact-native"]
+    assert captured == {
+        "query_embedding": [1.0, 2.0, 3.0],
+        "tenant_id": "tenant-test",
+        "owner_type": "user",
+        "owner_id": "user:u1",
+        "k": 7,
+        "offset": 0,
+        "filters": {"predicate": "LIKES"},
+        "query_text": "coffee",
+    }

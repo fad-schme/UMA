@@ -494,7 +494,6 @@ class RLMController:
                         owner_type=scope.owner_type,
                         owner_id=scope.owner_id,
                         default_k=self.max_items_per_type,
-                        trace_id=trace_id,
                     )
                     scope_results.extend(list(scope_items or []))
                 items = scope_results
@@ -710,7 +709,6 @@ class RLMController:
                     owner_type=owner_type,
                     owner_id=owner_id,
                     default_k=self.max_items_per_type,
-                    trace_id=trace_id,
                 )
                 results = self.ranker.rank_facts(results or [], query_text=pack.query_text)
                 # Ensure + filter by active domains (defaults domain for older data).
@@ -745,7 +743,6 @@ class RLMController:
                     owner_type=owner_type,
                     owner_id=owner_id,
                     default_k=self.max_items_per_type,
-                    trace_id=trace_id,
                 )
                 chunks = self.ranker.rank_chunks(chunks or [], query_text=pack.query_text)
                 try:
@@ -779,7 +776,6 @@ class RLMController:
                 owner_type=owner_type,
                 owner_id=owner_id,
                 default_k=self.max_items_per_type,
-                trace_id=trace_id,
             )
         skills = self.ranker.rank_skills(skills or [], query_text=pack.query_text)
         try:
@@ -799,7 +795,6 @@ class RLMController:
                 owner_type=owner_type,
                 owner_id=owner_id,
                 default_k=self.max_items_per_type,
-                trace_id=trace_id,
             )
         episodes = self.ranker.rank_episodes(episodes or [], query_text=pack.query_text)
         episodes = self._filter_items_by_active_lanes(list(episodes or []), pack)
