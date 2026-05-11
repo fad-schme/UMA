@@ -20,11 +20,11 @@ def test_config_profile_files_have_expected_shapes() -> None:
     assert cont_cfg.profile == "cont"
 
     assert lite_cfg.storage.sql_backend == "sqlite"
-    assert lite_cfg.storage.vector_backend == "lancedb"
+    assert lite_cfg.storage.vector_backend == "uma.adapters.vector.lancedb:LanceDBIndex"
     assert lite_cfg.storage.graph_backend == "disabled"
 
     assert cont_cfg.storage.sql_backend == "sqlite"
-    assert cont_cfg.storage.vector_backend == "qdrant"
+    assert cont_cfg.storage.vector_backend == "vector.qdrant_adapter:QdrantIndex"
     assert cont_cfg.storage.graph_backend == "disabled"
 
 

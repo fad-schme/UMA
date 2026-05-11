@@ -4,7 +4,7 @@ storage:
   db_root: ".uma/db"
   db_root_base: "cwd"
   sql_backend: "sqlite"
-  vector_backend: "lancedb"
+  vector_backend: "uma.adapters.vector.lancedb:LanceDBIndex"
   vector_config:
     path: ".uma/vectors"
   graph_backend: "disabled"

@@ -4,7 +4,7 @@ storage:
   db_root: ".uma/db"
   db_root_base: "cwd"
   sql_backend: "sqlite"
-  vector_backend: "qdrant"
+  vector_backend: "vector.qdrant_adapter:QdrantIndex"
   vector_config:
     url: "http://localhost:6333"
     collection: "uma_vectors"

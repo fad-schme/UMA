@@ -41,6 +41,7 @@ setup(
         "charset-normalizer",
         "pydantic>=2",
         "openai>=1.0.0",
+        "lancedb",
     ],
     extras_require={
         "vector": ["faiss-cpu", "weaviate-client", "pinecone-client", "qdrant-client", "fastembed"],
