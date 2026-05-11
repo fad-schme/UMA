@@ -1,3 +1,36 @@
 UMA-RLM
-Copyright 2026 Analia Diaz-Schmeier
-This product includes software developed by the UMA-RLM project.
+Universal Memory Architecture — Recursive Language Model Runtime
+
+Copyright 2026 Fernanda Analia Diaz-Schmeier
+All rights reserved except as granted under the open source license
+governing this project.
+
+This product is licensed under the Apache License, Version 2.0
+(the "License"). You may not use this product except in compliance
+with the License. You may obtain a copy of the License at:
+
+    https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+implied. See the License for the specific language governing
+permissions and limitations under the License.
+
+------------------------------------------------------------------------
+
+This product includes software developed by contributors to UMA-RLM.
+Contributor signatures are recorded in signatures/cla.json.
+
+------------------------------------------------------------------------
+
+The UMA-RLM open source distribution (uma-lite and uma-cont profiles)
+is covered by this license. The production distribution (uma-prod
+profile) is a separate commercial product governed by its own license
+terms. See the uma-rlm-prod repository for details.
+
+------------------------------------------------------------------------
+
+Third-party components used by this product retain their own copyright
+notices and license terms. Refer to the individual package metadata
+for details.
