@@ -24,7 +24,7 @@ def test_config_profile_files_have_expected_shapes() -> None:
     assert lite_cfg.storage.graph_backend == "disabled"
 
     assert cont_cfg.storage.sql_backend == "sqlite"
-    assert cont_cfg.storage.vector_backend == "vector.qdrant_adapter:QdrantIndex"
+    assert cont_cfg.storage.vector_backend == "uma.adapters.vector.qdrant:QdrantIndex"
     assert cont_cfg.storage.vector_config["url"] == "http://qdrant:6333"
     assert cont_cfg.storage.vector_config["collection"] == "uma_vectors"
     assert cont_cfg.storage.graph_backend == "disabled"

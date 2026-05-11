@@ -661,7 +661,7 @@ def _parse_facts_list(
         )
         if dropped_object_previews:
             logger.debug(
-                "_parse_facts_list: chunk_id=%s dropped_below_min_fact_words_examples=%s",
+                "_parse_facts_list: chunk_id=%s dropped_below_min_fact_words_samples=%s",
                 chunk_id,
                 [{"words": wc, "fact": sent} for sent, wc in dropped_object_previews],
             )

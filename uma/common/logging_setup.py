@@ -100,7 +100,7 @@ def _configure_uma_logger() -> logging.Logger:
     logger.addHandler(console_handler)
     logger.propagate = False
 
-    # Ensure non-"uma" loggers (e.g., extensions/*) are captured.
+    # Ensure non-"uma" loggers from configured third-party adapters are captured.
     root_logger = logging.getLogger()
     if not root_logger.handlers:
         root_logger.setLevel(getattr(logging, ROOT_LOG_LEVEL, logging.INFO))

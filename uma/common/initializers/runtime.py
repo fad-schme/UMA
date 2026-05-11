@@ -73,7 +73,6 @@ def _iter_adapter_roots(cfg: object) -> Iterable[str]:
 
     Order matters:
       1. Explicit external adapter roots from the environment.
-      2. Backward-compatible config-adjacent `extensions/` and `plugins/` roots.
     """
     seen: set[str] = set()
 
@@ -88,21 +87,6 @@ def _iter_adapter_roots(cfg: object) -> Iterable[str]:
         seen.add(normalized)
         yield normalized
 
-    source_dir = getattr(cfg, "_source_dir", None)
-    if not source_dir:
-        return
-
-    root_dir = os.path.dirname(source_dir)
-    for path in (
-        os.path.join(root_dir, "extensions"),
-        os.path.join(root_dir, "plugins"),
-    ):
-        normalized = os.path.abspath(path)
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        yield normalized
-
 
 def init_runtime_env(cfg: object) -> None:
     """
@@ -110,7 +94,6 @@ def init_runtime_env(cfg: object) -> None:
 
     Intentionally lightweight:
       - register explicit external adapter roots on sys.path
-      - keep config-adjacent plugin/extension roots working
       - DO NOT initialize providers, DBs, vector indexes, or other heavy services
     """
     try:

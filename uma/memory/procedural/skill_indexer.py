@@ -6,7 +6,7 @@ This class converts skill definitions into:
 - A Skill model instance
 - A semantic embedding vector (for vector search)
 
-Future extensions may:
+Future additions may:
 - Auto-generate skills from successful episodes via LLM analysis
 - Cluster related skills
 - Maintain versioned skill definitions

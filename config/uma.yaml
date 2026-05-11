@@ -20,23 +20,26 @@ working_memory:
   keep_recent_token_fraction: 0.1
 
 embedding:
-  provider: "extensions.llm.openai_embedding:OpenAIEmbedder"
-  model: "text-embedding-3-small"
+  provider: "ollama"
+  model: "nomic-embed-text"
   dimension: 1536
   config:
+    host: "http://localhost:11434"
     batch_size: 32
     timeout: 20.0
 
 llms:
   agent:
-    provider: "extensions.llm.openai_llm:OpenAILLM"
-    model: "gpt-4.1-mini"
+    provider: "ollama"
+    model: "llama3"
     config:
+      host: "http://localhost:11434"
       timeout: 20.0
   uma:
-    provider: "extensions.llm.openai_llm:OpenAILLM"
-    model: "gpt-4.1-mini"
+    provider: "ollama"
+    model: "llama3"
     config:
+      host: "http://localhost:11434"
       timeout: 20.0
 
 retrieval:

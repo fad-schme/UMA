@@ -656,7 +656,7 @@ class UMAMemory:
         # --------------------------------------------------------------
         if backend in {"neo4j", "memgraph"}:
             raise ValueError(
-                "Graph backends are now loaded via extensions. "
+                "Graph backends must be loaded via a plugin spec. "
                 "Set storage.graph_backend to a plugin spec 'module:callable'."
             )
 

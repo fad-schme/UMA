@@ -1,0 +1,99 @@
+name: CLA Assistant
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+# Explicit permissions required by the action.
+# contents: write is needed to commit signatures/cla.json to main.
+# pull-requests: write is needed to post and update bot comments.
+# statuses: write is needed to set the PR status check to pass/fail.
+# actions: write is needed to re-trigger the workflow on recheck.
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  cla-assistant:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: CLA Assistant
+        # Only run when:
+        # - a contributor posts the sign-off comment, or
+        # - a maintainer posts 'recheck' to re-evaluate an open PR, or
+        # - a pull_request_target event fires (opened, closed, synchronize)
+        if: |
+          (
+            github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA' ||
+            github.event.comment.body == 'recheck'
+          ) ||
+          github.event_name == 'pull_request_target'
+
+        uses: contributor-assistant/github-action@v2.6.1
+
+        env:
+          # GITHUB_TOKEN is sufficient for repos where signatures are stored
+          # in the same repository. It is provided automatically by GitHub
+          # Actions and does not need to be added as a secret.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+        with:
+          # Path to the CLA document in this repository.
+          # Contributors can read the full text before signing.
+          path-to-document: 'CLA.md'
+
+          # Path where contributor signatures are stored.
+          # The action commits a JSON record for each new signatory.
+          # This file must exist in the repo (initialize as {}).
+          path-to-signatures: 'signatures/cla.json'
+
+          # Branch where signature commits are written.
+          branch: 'main'
+
+          # Bots that cannot sign a CLA and should be excluded from the check.
+          # Add any additional bot accounts your project uses, separated by commas.
+          # Glob patterns are supported (e.g. bot*).
+          allowlist: dependabot[bot],github-actions[bot],renovate[bot]
+
+          # Message posted on the PR when one or more contributors have not signed.
+          # Keep it welcoming and link directly to the sign-off instruction.
+          custom-notsigned-prcomment: |
+            Thank you for your contribution to UMA-RLM.
+
+            Before we can review and merge this pull request, you need to sign
+            the Contributor License Agreement (CLA). This is a one-time step
+            that covers all your future contributions to this project.
+
+            **To sign, post the following comment on this pull request:**
+
+            ```
+            I have read the CLA Document and I hereby sign the CLA
+            ```
+
+            You can read the full CLA here: [CLA.md](../blob/main/CLA.md)
+
+            If you believe you have already signed and are seeing this in error,
+            post `recheck` as a comment and the bot will re-evaluate.
+
+          # Message posted when all contributors on the PR have signed.
+          custom-allsigned-prcomment: |
+            All contributors have signed the CLA. Thank you!
+            This pull request is cleared for review.
+
+          # The exact comment body a contributor must post to sign.
+          # Must match the if-condition above and the instruction in
+          # custom-notsigned-prcomment exactly.
+          custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'
+
+          # Commit message written to signatures/cla.json when a new
+          # contributor signs.
+          signed-commit-message: '$contributorName has signed the CLA in $owner/$repo#$pullRequestNo'
+
+          # Commit message written when the signatures file is created
+          # for the first time (only fires if the file does not yet exist).
+          create-file-commit-message: 'chore: initialize CLA signatures file'

@@ -110,7 +110,7 @@ async def init_uma_for_tests(
     """
     Initialize a fully bootstrapped UMAMemory instance for tests.
 
-    Uses the same entrypoint as production/examples (`UMAMemory.from_yaml`)
+    Uses the same public entrypoint (`UMAMemory.from_yaml`)
     and then forces ingestion-ready initialization to avoid background warmup
     races in CI.
     """
