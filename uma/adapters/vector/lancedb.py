@@ -10,16 +10,6 @@ from .base import VectorIndex
 logger = logging.getLogger(__name__)
 
 try:
-    import lance_namespace  # type: ignore
-
-    # Narrow import-time compatibility for the currently published lancedb wheel
-    # set in this environment. Keep this local to the LanceDB adapter boundary.
-    if (
-        not hasattr(lance_namespace, "CreateEmptyTableRequest")
-        and hasattr(lance_namespace, "CreateTableRequest")
-    ):
-        lance_namespace.CreateEmptyTableRequest = lance_namespace.CreateTableRequest
-
     import lancedb  # type: ignore
 except Exception as exc:  # pragma: no cover
     lancedb = None  # type: ignore
