@@ -37,8 +37,26 @@ def get_embedder_factory(name: str) -> Optional[EmbeddingFactory]:
 
 
 # Register builtin providers automatically.
-from .ollama_llm import OllamaLLM  # noqa: E402
-from .ollama_embedding import OllamaEmbedder  # noqa: E402
+from .anthropic import AnthropicLLM  # noqa: E402
+from .openai_compatible import OpenAICompatibleEmbedder, OpenAICompatibleLLM  # noqa: E402
 
-register_llm_provider("ollama", OllamaLLM.from_config)
-register_embedder_provider("ollama", OllamaEmbedder.from_config)
+register_llm_provider(
+    "ollama",
+    lambda cfg: OpenAICompatibleLLM.from_config(cfg, provider_name="ollama"),
+)
+register_llm_provider(
+    "openai",
+    lambda cfg: OpenAICompatibleLLM.from_config(cfg, provider_name="openai"),
+)
+register_llm_provider(
+    "anthropic",
+    lambda cfg: AnthropicLLM.from_config(cfg),
+)
+register_embedder_provider(
+    "ollama",
+    lambda cfg: OpenAICompatibleEmbedder.from_config(cfg, provider_name="ollama"),
+)
+register_embedder_provider(
+    "openai",
+    lambda cfg: OpenAICompatibleEmbedder.from_config(cfg, provider_name="openai"),
+)

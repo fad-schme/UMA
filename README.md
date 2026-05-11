@@ -23,6 +23,7 @@ The public Apache-2.0 repo now exposes two open-source runtime profiles.
 | UMA Container | `config/uma_cont.yaml` | SQLite + Qdrant Docker Compose service | Local service-style development |
 
 `config/uma.yaml` is the default runnable profile and is equivalent to `config/uma_lite.yaml`.
+If you install the public vector extras, you can also point `vector_backend` at `uma.adapters.vector.faiss_adapter:FaissIndex` for an in-process FAISS alternative.
 
 ## Quickstart: UMA Lite
 
@@ -57,6 +58,7 @@ UMA Container is the local service-style profile. It keeps SQLite embedded in th
 Start Qdrant with:
 
 ```bash
+pip install -e '.[vector]'
 docker compose -f docker/uma_cont/docker-compose.yml up -d
 ```
 
@@ -73,6 +75,7 @@ http://localhost:6333
 ```
 
 UMA Container is not an all-in-one container. Qdrant runs as a separate service, and Docker Compose keeps the local stack easy to start with one command.
+Container describes the runtime topology, not a fixed vector engine. The default container profile uses Qdrant, and you can also configure LanceDB or the packaged FAISS adapter if you want the UMA process to keep vectors in-process.
 
 ## Configuration Files
 
@@ -113,7 +116,9 @@ For development and test workflows:
 pip install -r requirements.txt
 ```
 
-Optional extras remain available for additional providers and development workflows, but the default UMA Lite path does not require users to install separate vector or graph infrastructure before trying UMA.
+Optional extras remain available for additional providers and development workflows. In particular, `pip install -e '.[vector]'` adds the public Qdrant and FAISS client dependencies for alternate vector backends, while the default UMA Lite path does not require users to install separate vector or graph infrastructure before trying UMA.
+
+Supported LLM providers are `ollama`, `openai`, and `anthropic`. Supported embedding providers are `ollama` and `openai`. Anthropic/Claude is LLM-only in the public repo; install `pip install -e '.[llm]'` if you want to configure `provider: anthropic`.
 
 ## Typical Usage
 

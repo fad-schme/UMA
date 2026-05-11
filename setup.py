@@ -44,6 +44,7 @@ setup(
         "lancedb>=0.25.3,<0.26",
     ],
     extras_require={
+        "llm": ["anthropic"],
         "vector": ["faiss-cpu", "weaviate-client", "pinecone-client", "qdrant-client", "fastembed"],
         "graph": ["neo4j"],
         "postgres": ["psycopg2-binary>=2.9"],

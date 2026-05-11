@@ -22,12 +22,14 @@ def test_config_profile_files_have_expected_shapes() -> None:
     assert lite_cfg.storage.sql_backend == "sqlite"
     assert lite_cfg.storage.vector_backend == "uma.adapters.vector.lancedb:LanceDBIndex"
     assert lite_cfg.storage.graph_backend == "disabled"
+    assert lite_cfg.storage.vector_backend.startswith("uma.adapters.vector.")
 
     assert cont_cfg.storage.sql_backend == "sqlite"
     assert cont_cfg.storage.vector_backend == "uma.adapters.vector.qdrant:QdrantIndex"
     assert cont_cfg.storage.vector_config["url"] == "http://qdrant:6333"
     assert cont_cfg.storage.vector_config["collection"] == "uma_vectors"
     assert cont_cfg.storage.graph_backend == "disabled"
+    assert cont_cfg.storage.vector_backend.startswith("uma.adapters.vector.")
 
 
 def test_missing_profile_defaults_to_lite(tmp_path) -> None:

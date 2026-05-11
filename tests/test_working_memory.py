@@ -2,12 +2,21 @@ from __future__ import annotations
 
 import asyncio
 
-from uma.adapters.llm.callable_adapter import CallableLLMAdapter
 from uma.common.config_types import WorkingMemorySettings
 from uma.memory.working_memory.core import WorkingMemoryCore, legacy_session_scope_for_user
 from uma.common.types import SessionScope
 
 from tests.helpers.providers import fake_llm
+
+
+class FakeLLM:
+    async def generate(self, messages, max_tokens=256, temperature=0.0, **kwargs):
+        return await fake_llm(
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            **kwargs,
+        )
 
 
 class _MemoryClient:
@@ -16,7 +25,7 @@ class _MemoryClient:
 
 
 def test_working_memory_chunked_compaction_produces_summary():
-    llm = CallableLLMAdapter(callable_fn=fake_llm, name="tests.fake_llm")
+    llm = FakeLLM()
     wm_cfg = WorkingMemorySettings(
         max_tokens=120,
         warning_ratio=0.2,
@@ -45,7 +54,7 @@ def test_working_memory_chunked_compaction_produces_summary():
 
 
 def test_working_memory_emergency_prune_keeps_recent_messages():
-    llm = CallableLLMAdapter(callable_fn=fake_llm, name="tests.fake_llm")
+    llm = FakeLLM()
     wm_cfg = WorkingMemorySettings(
         max_tokens=20,
         warning_ratio=0.1,
@@ -74,7 +83,7 @@ def test_working_memory_emergency_prune_keeps_recent_messages():
 
 
 def test_working_memory_isolated_across_sessions_for_same_user_and_agent():
-    llm = CallableLLMAdapter(callable_fn=fake_llm, name="tests.fake_llm")
+    llm = FakeLLM()
     wm_cfg = WorkingMemorySettings(
         max_tokens=120,
         warning_ratio=0.2,
@@ -107,7 +116,7 @@ def test_working_memory_isolated_across_sessions_for_same_user_and_agent():
 
 
 def test_working_memory_isolated_across_agents_for_same_user_and_session_token():
-    llm = CallableLLMAdapter(callable_fn=fake_llm, name="tests.fake_llm")
+    llm = FakeLLM()
     wm_cfg = WorkingMemorySettings(
         max_tokens=120,
         warning_ratio=0.2,
@@ -140,7 +149,7 @@ def test_working_memory_isolated_across_agents_for_same_user_and_session_token()
 
 
 def test_working_memory_isolated_across_tenants():
-    llm = CallableLLMAdapter(callable_fn=fake_llm, name="tests.fake_llm")
+    llm = FakeLLM()
     wm_cfg = WorkingMemorySettings(
         max_tokens=120,
         warning_ratio=0.2,
@@ -180,7 +189,7 @@ def test_legacy_session_scope_bridge_is_agent_scoped():
 
 
 def test_compaction_only_mutates_current_session_bucket():
-    llm = CallableLLMAdapter(callable_fn=fake_llm, name="tests.fake_llm")
+    llm = FakeLLM()
     wm_cfg = WorkingMemorySettings(
         max_tokens=120,
         warning_ratio=0.2,
@@ -206,7 +215,7 @@ def test_compaction_only_mutates_current_session_bucket():
 
 
 def test_reset_only_clears_current_session_bucket():
-    llm = CallableLLMAdapter(callable_fn=fake_llm, name="tests.fake_llm")
+    llm = FakeLLM()
     wm_cfg = WorkingMemorySettings(
         max_tokens=120,
         warning_ratio=0.2,

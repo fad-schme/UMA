@@ -1,12 +1,32 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
+from uma.adapters.llm import openai_compatible as shared_module
 from uma.adapters.vector.lancedb import LanceDBIndex
 from uma.api.memory import UMAMemory
+
+
+class _FakeAsyncOpenAI:
+    def __init__(self, **kwargs):
+        self.init_kwargs = kwargs
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._chat_create))
+        self.embeddings = SimpleNamespace(create=self._embedding_create)
+
+    async def _chat_create(self, **kwargs):
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))]
+        )
+
+    async def _embedding_create(self, **kwargs):
+        input_items = list(kwargs.get("input") or [])
+        return SimpleNamespace(
+            data=[SimpleNamespace(embedding=[0.0] * 64) for _ in input_items]
+        )
 
 
 def test_lancedb_index_upsert_query_and_filters(tmp_path) -> None:
@@ -42,25 +62,28 @@ def test_lancedb_index_upsert_query_and_filters(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_lite_config_initializes_sqlite_and_lancedb_without_graph_services(tmp_path) -> None:
+async def test_lite_config_initializes_sqlite_and_lancedb_without_graph_services(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(shared_module, "AsyncOpenAI", _FakeAsyncOpenAI)
+
     config_data = yaml.safe_load(Path("config/uma_lite.yaml").read_text(encoding="utf-8"))
     config_data["storage"]["db_root"] = str(tmp_path / "db")
     config_data["storage"]["vector_config"]["path"] = str(tmp_path / "vectors")
     config_data["embedding"] = {
-        "provider": "tests.helpers.providers:fake_embed",
-        "model": "fake-embed",
+        "provider": "ollama",
+        "model": "nomic-embed-text",
         "dimension": 64,
+        "config": {"host": "http://localhost:11434"},
     }
     config_data["llms"] = {
         "agent": {
-            "provider": "tests.helpers.providers:fake_llm",
-            "model": "fake-llm",
-            "config": {},
+            "provider": "ollama",
+            "model": "llama3",
+            "config": {"host": "http://localhost:11434"},
         },
         "uma": {
-            "provider": "tests.helpers.providers:fake_llm",
-            "model": "fake-llm",
-            "config": {},
+            "provider": "ollama",
+            "model": "llama3",
+            "config": {"host": "http://localhost:11434"},
         },
     }
     config_data["consolidation"]["enabled"] = False

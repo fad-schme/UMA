@@ -6,8 +6,9 @@ storage:
   sql_backend: "sqlite"
   vector_backend: "uma.adapters.vector.qdrant:QdrantIndex"
   vector_config:
-    # Docker Compose network default. If UMA runs on the host instead,
-    # override this to http://localhost:6333.
+    # `http://qdrant:6333` is for UMA running inside the Docker Compose network.
+    # If UMA runs on the host while Qdrant runs in Docker, override this to
+    # `http://localhost:6333`.
     url: "http://qdrant:6333"
     collection: "uma_vectors"
   graph_backend: "disabled"

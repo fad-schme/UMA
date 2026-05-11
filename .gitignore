@@ -11,6 +11,8 @@ ENV/
 .codex/
 .gold_runs/
 .ruff_cache/
+# Pytest
+.pytest_cache/
 
 # Byte-compiled / optimized / DLL files
 *.pyc
@@ -31,8 +33,7 @@ dist/
 # OneDrive
 *.onetoc2
 
-# Pytest
-.pytest_cache/
+
 
 # Logs
 *.log

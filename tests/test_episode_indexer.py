@@ -2,20 +2,32 @@ from __future__ import annotations
 
 import asyncio
 
-from uma.adapters.llm.callable_adapter import CallableEmbedderAdapter, CallableLLMAdapter
 from uma.memory.episodic.indexer import EpisodeIndexer
 
 from tests.helpers.providers import fake_embed, fake_llm
 
 
+class FakeLLM:
+    async def generate(self, messages, max_tokens=256, temperature=0.0, **kwargs):
+        return await fake_llm(
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            **kwargs,
+        )
+
+
+class FakeEmbedder:
+    def __init__(self, dimension: int) -> None:
+        self.dimension = dimension
+
+    async def embed(self, texts):
+        return await fake_embed(texts=list(texts), dimension=self.dimension)
+
+
 def test_episode_indexer_builds_episode_with_valid_embedding_shape():
-    llm = CallableLLMAdapter(callable_fn=fake_llm, name="tests.fake_llm")
-    embedder = CallableEmbedderAdapter(
-        callable_fn=fake_embed,
-        dimension=16,
-        name="tests.fake_embed",
-        default_kwargs={"dimension": 16},
-    )
+    llm = FakeLLM()
+    embedder = FakeEmbedder(dimension=16)
     indexer = EpisodeIndexer(llm=llm, embedder=embedder)
 
     wm_entries = [

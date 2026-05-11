@@ -84,6 +84,43 @@ def should_retry_openai(exc: Exception) -> bool:
     return should_retry_network_only(exc)
 
 
+def should_retry_anthropic(exc: Exception) -> bool:
+    """
+    Retry on Anthropic transient errors only (timeouts, rate limit, 5xx).
+    Do NOT retry on auth/permission/bad request/not found/validation errors.
+    """
+    try:
+        import anthropic  # type: ignore
+
+        non_retryable = (
+            anthropic.BadRequestError,
+            anthropic.AuthenticationError,
+            anthropic.PermissionDeniedError,
+            anthropic.NotFoundError,
+            anthropic.UnprocessableEntityError,
+        )
+        if isinstance(exc, non_retryable):
+            return False
+
+        retryable = (
+            anthropic.RateLimitError,
+            anthropic.APIConnectionError,
+            anthropic.APITimeoutError,
+            anthropic.InternalServerError,
+        )
+        if isinstance(exc, retryable):
+            return True
+
+        if isinstance(exc, anthropic.APIStatusError):
+            status = getattr(exc, "status_code", None)
+            if isinstance(status, int):
+                return status in (408, 429) or 500 <= status < 600
+    except Exception:
+        return should_retry_network_only(exc)
+
+    return should_retry_network_only(exc)
+
+
 def retryable(
     max_attempts: int = 3,
     initial_delay: float = 0.5,
