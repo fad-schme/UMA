@@ -1,12 +1,13 @@
-profile: lite
+profile: cont
 
 storage:
   db_root: ".uma/db"
   db_root_base: "cwd"
   sql_backend: "sqlite"
-  vector_backend: "lancedb"
+  vector_backend: "qdrant"
   vector_config:
-    path: ".uma/vectors"
+    url: "http://localhost:6333"
+    collection: "uma_vectors"
   graph_backend: "disabled"
   graph_config:
     enabled: false

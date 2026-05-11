@@ -30,7 +30,7 @@ setup(
     long_description_content_type="text/markdown",
     author="a.Diaz-Schmeier",
     author_email="ad-schme@ai-mem-engineering.com",
-    license="MIT",
+    license="Apache-2.0",
     python_requires=">=3.9",
     packages=find_packages(include=["uma", "uma.*"]),
     include_package_data=True,

@@ -100,14 +100,3 @@ Canonical storage taxonomy:
 - Derived semantic, episodic, procedural, profile, and trace records must preserve provenance
   to raw chunks or be explicitly invalid/manual-audited according to the provenance model.
 
-PR 5-8 invariants:
-
-- Ownership for write-facing and promotion-facing paths is explicit primitive ownership.
-- Ingest does not blend capture, derivation, and curation.
-- Curation is the only ingest stage that creates or refreshes compiled wiki/memory artifacts.
-- Management APIs inspect, export, curate, or lint; they do not replace core ingest, retrieval,
-  provenance, or wiki subsystems.
-- Canonical wiki state must be rebuildable from evidence, derived artifacts, provenance,
-  compiled-memory index entries, and compiled-memory log events.
-- A memory answer, compiled artifact, or wiki page is trustworthy only if its evidence path
-  can expand back to raw chunks or is explicitly manual/audited.

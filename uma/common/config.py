@@ -33,6 +33,7 @@ class UMAConfig(dict):
         if not isinstance(data, dict):
             raise ValueError("UMA config must be a dict at top-level")
 
+        data.setdefault("profile", "lite")
         cfg = cls(data)
         try:
             cfg._source_path = os.path.abspath(path)
@@ -121,7 +122,6 @@ class UMAConfig(dict):
         # STORAGE
         # -----------------------
         self._require_nonempty_str("storage", "db_root")
-
         sql_backend = self.storage.get("sql_backend")
         known_sql = ("sqlite",)
         is_sql_plugin = isinstance(sql_backend, str) and ":" in sql_backend
@@ -131,17 +131,11 @@ class UMAConfig(dict):
             )
 
         vector_backend = self.storage.get("vector_backend")
-        known_backends = ("faiss", "inmemory")
-        is_plugin_spec = isinstance(vector_backend, str) and ":" in vector_backend
-        if vector_backend not in known_backends and not is_plugin_spec:
-            raise ValueError(
-                "'storage.vector_backend' must be one of: faiss, inmemory "
-                "or a plugin spec 'module:callable'"
-            )
+        if not isinstance(vector_backend, str) or not vector_backend.strip():
+            raise ValueError("'storage.vector_backend' must be a non-empty string")
         vector_cfg = self.storage.get("vector_config") or {}
-        if is_plugin_spec and not isinstance(vector_cfg, dict):
+        if not isinstance(vector_cfg, dict):
             raise ValueError("'storage.vector_config' must be a mapping for plugin vector backends")
-        # pinecone/weaviate are plugin-based now; plugin itself validates config
 
         graph_backend = self.storage.get("graph_backend")
         is_graph_plugin = isinstance(graph_backend, str) and ":" in graph_backend
