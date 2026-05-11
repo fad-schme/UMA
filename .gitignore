@@ -54,3 +54,12 @@ PLANS.md
 PR_EXEC*
 PRs.md
 chat_inputs.txt
+docs/*
+!docs/docs.html
+!docs/llms.txt
+ARCHITECTURE.md
+AGENTS.md
+PRODUCTION.md
+scripts/
+examples/
+.codex
