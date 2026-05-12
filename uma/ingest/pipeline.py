@@ -28,6 +28,7 @@ Coding Agent Instructions
 from __future__ import annotations
 
 from collections import deque
+import copy
 from dataclasses import dataclass
 import logging
 import hashlib
@@ -155,8 +156,8 @@ class MemoryPipeline:
             user_id=payload["user_id"],
             user_msg=payload["user_msg"],
             assistant_reply=payload["assistant_reply"],
-            episode=payload["episode"],
-            facts=payload["facts"],
+            episode=copy.deepcopy(payload["episode"]),
+            facts=copy.deepcopy(payload["facts"]),
             turn_context=payload["turn_context"],
             extra_meta=dict(payload.get("extra_meta") or {}),
         )

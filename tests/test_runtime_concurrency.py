@@ -390,6 +390,55 @@ async def test_deferred_queue_captures_immutable_payload_copy() -> None:
 
 
 @pytest.mark.asyncio
+async def test_deferred_queue_snapshots_episode_object_at_enqueue_time() -> None:
+    pipeline = MemoryPipeline(memory_client=_DummyPipelineMemory(), hooks=object())
+    seen: list[dict] = []
+    episode = {"id": "ep-1", "meta": {"state": "original"}}
+
+    async def fake_run_post_turn_tasks(**kwargs):
+        seen.append(kwargs["episode"])
+
+    pipeline._run_post_turn_tasks = fake_run_post_turn_tasks  # type: ignore[method-assign]
+
+    payload = _payload(session_id="session-a", index=1)
+    payload["episode"] = episode
+
+    assert pipeline._enqueue_post_turn(payload)
+    episode["id"] = "ep-mutated"
+    episode["meta"]["state"] = "mutated"
+
+    processed = await pipeline.process_post_turn_queue()
+
+    assert processed == 1
+    assert seen == [{"id": "ep-1", "meta": {"state": "original"}}]
+
+
+@pytest.mark.asyncio
+async def test_deferred_queue_snapshots_facts_at_enqueue_time() -> None:
+    pipeline = MemoryPipeline(memory_client=_DummyPipelineMemory(), hooks=object())
+    seen: list[list[dict]] = []
+    facts = [{"id": "fact-1", "meta": {"score": 1.0}}]
+
+    async def fake_run_post_turn_tasks(**kwargs):
+        seen.append(kwargs["facts"])
+
+    pipeline._run_post_turn_tasks = fake_run_post_turn_tasks  # type: ignore[method-assign]
+
+    payload = _payload(session_id="session-a", index=1)
+    payload["facts"] = facts
+
+    assert pipeline._enqueue_post_turn(payload)
+    facts[0]["id"] = "fact-mutated"
+    facts[0]["meta"]["score"] = 9.0
+    facts.append({"id": "fact-2", "meta": {"score": 2.0}})
+
+    processed = await pipeline.process_post_turn_queue()
+
+    assert processed == 1
+    assert seen == [[{"id": "fact-1", "meta": {"score": 1.0}}]]
+
+
+@pytest.mark.asyncio
 async def test_post_turn_queue_enqueue_is_not_blocked_by_running_task() -> None:
     pipeline = MemoryPipeline(memory_client=_DummyPipelineMemory(), hooks=object())
     started = asyncio.Event()
