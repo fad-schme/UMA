@@ -1,11 +1,13 @@
 # Python
 __pycache__/
+.pycache*
 *.py[cod]
 *.so
 .Python
 env/
 venv/
 .venv/
+.venv*
 ENV/
 .agents/
 .codex/
@@ -13,7 +15,7 @@ ENV/
 .ruff_cache/
 # Pytest
 .pytest_cache/
-
+.codex/
 # Byte-compiled / optimized / DLL files
 *.pyc
 *.pyo
@@ -21,7 +23,7 @@ ENV/
 
 # Distribution / packaging
 build/
-dist/
+# dist/
 *.egg-info/
 
 # VSCode

@@ -1,7 +1,7 @@
 from pathlib import Path
 import shutil
 
-from setuptools import find_packages, setup
+from setuptools import find_namespace_packages, setup
 from setuptools.command.build_py import build_py as _build_py
 
 
@@ -32,7 +32,7 @@ setup(
     author_email="ad-schme@ai-mem-engineering.com",
     license="Apache-2.0",
     python_requires=">=3.9",
-    packages=find_packages(include=["uma", "uma.*"]),
+    packages=find_namespace_packages(include=["uma", "uma.*"]),
     include_package_data=True,
     install_requires=[
         "pyyaml",

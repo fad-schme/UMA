@@ -35,5 +35,6 @@ parsers = ["PyPDF2", "beautifulsoup4", "markdown", "pandas"]
 version = {attr = "uma.version.__version__"}
 
 [tool.setuptools.packages.find]
+namespaces = true
 include = ["uma*"]
 exclude = [".venv*", ".pytest_cache*"]
