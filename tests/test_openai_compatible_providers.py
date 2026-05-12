@@ -190,7 +190,6 @@ def test_public_configs_remain_ollama_based() -> None:
     for path in ("config/uma.yaml", "config/uma_lite.yaml", "config/uma_cont.yaml"):
         cfg = UMAConfig.load_yaml(path)
         assert cfg.embedding.provider == "ollama"
-        assert cfg.llms.agent.provider == "ollama"
         assert cfg.llms.uma.provider == "ollama"
 
 

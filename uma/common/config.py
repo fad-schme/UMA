@@ -177,9 +177,11 @@ class UMAConfig(dict):
         # LLM / LLMS
         # -----------------------
         if "llms" in self and isinstance(self.llms, dict):
-            for key in ("agent", "uma"):
+            if "uma" not in self.llms:
+                raise ValueError("'llms.uma' section is required")
+            for key in ("uma", "agent"):
                 if key not in self.llms:
-                    raise ValueError(f"'llms.{key}' section is required")
+                    continue
                 section = self.llms.get(key)
                 if not isinstance(section, dict):
                     raise ValueError(f"'llms.{key}' must be a mapping")
@@ -304,16 +306,17 @@ class UMAConfig(dict):
         # -----------------------
         # CONSOLIDATION
         # -----------------------
-        self._require("consolidation", "enabled")
-        self._require_positive_int("consolidation", "max_episodes_per_cycle")
+        if "consolidation" in self:
+            self._require("consolidation", "enabled")
+            self._require_positive_int("consolidation", "max_episodes_per_cycle")
 
-        cs = self.consolidation.get("cluster_similarity")
-        if cs is None or not (0 < cs <= 1):
-            raise ValueError("'consolidation.cluster_similarity' must be 0 < x <= 1")
+            cs = self.consolidation.get("cluster_similarity")
+            if cs is None or not (0 < cs <= 1):
+                raise ValueError("'consolidation.cluster_similarity' must be 0 < x <= 1")
 
-        p = self.consolidation.get("prune_min_fact_salience")
-        if p is None or not (0 <= p <= 1):
-            raise ValueError("'consolidation.prune_min_fact_salience' must be between 0 and 1")
+            p = self.consolidation.get("prune_min_fact_salience")
+            if p is None or not (0 <= p <= 1):
+                raise ValueError("'consolidation.prune_min_fact_salience' must be between 0 and 1")
 
         # -----------------------
         # SEMANTIC (optional overrides)

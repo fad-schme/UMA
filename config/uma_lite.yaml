@@ -1,12 +1,15 @@
+# Default embedded profile. No external vector database is required.
 profile: lite
 
 storage:
   db_root: ".uma/db"
   db_root_base: "cwd"
   sql_backend: "sqlite"
+  # LanceDB stores vectors locally under .uma/vectors.
   vector_backend: "uma.adapters.vector.lancedb:LanceDBIndex"
   vector_config:
     path: ".uma/vectors"
+  # Graph is optional and disabled in the public profiles.
   graph_backend: "disabled"
   graph_config:
     enabled: false
@@ -22,19 +25,14 @@ working_memory:
 embedding:
   provider: "ollama"
   model: "nomic-embed-text"
-  dimension: 1536
+  dimension: 768
   config:
     host: "http://localhost:11434"
     batch_size: 32
     timeout: 20.0
 
 llms:
-  agent:
-    provider: "ollama"
-    model: "llama3"
-    config:
-      host: "http://localhost:11434"
-      timeout: 20.0
+  # UMA uses this LLM internally for memory extraction and summarization.
   uma:
     provider: "ollama"
     model: "llama3"
@@ -50,11 +48,6 @@ retrieval:
   max_evidence_chunks: 10
   strict: true
   debug_scores: false
-  hybrid:
-    enabled: true
-    top_k_dense: 0
-    top_k_sparse: 0
-    fusion_strategy: rrf
   context:
     max_working_messages: 6
     max_episodic: 2
@@ -64,30 +57,13 @@ retrieval:
     snippet_refiner_enabled: true
     snippet_refiner_top_k: 6
     max_procedural: 2
-    max_graph: 2
     include_working_memory: true
     include_episodic: true
-    include_graph: true
+    include_graph: false
     include_procedural: true
-  rlm:
-    test_mode: true
-    max_steps: 2
-    max_actions_per_step: 1
-    max_items_per_type: 30
-    timeout_s: 45.0
-    max_env_calls: 8
-    predicate_weights:
-      LIKES: 1.0
-      PREFERS: 0.8
 
 semantic:
   salience_threshold: 0.45
-
-consolidation:
-  enabled: true
-  cluster_similarity: 0.75
-  max_episodes_per_cycle: 200
-  prune_min_fact_salience: 0.2
 
 features:
   load:
@@ -96,12 +72,6 @@ features:
       provider: "uma.memory.procedural.feature:ProceduralFeature"
       config:
         max_k: 50
-    - name: consolidation
-      enabled: true
-      provider: "uma.memory.consolidation.feature:ConsolidationFeature"
-      config:
-        cluster_similarity: 0.75
-        max_episodes_per_cycle: 200
   policy:
     on_attach_error: "log_and_skip"
     allow_method_override: false

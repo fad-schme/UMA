@@ -75,18 +75,12 @@ async def test_lite_config_initializes_sqlite_and_lancedb_without_graph_services
         "config": {"host": "http://localhost:11434"},
     }
     config_data["llms"] = {
-        "agent": {
-            "provider": "ollama",
-            "model": "llama3",
-            "config": {"host": "http://localhost:11434"},
-        },
         "uma": {
             "provider": "ollama",
             "model": "llama3",
             "config": {"host": "http://localhost:11434"},
         },
     }
-    config_data["consolidation"]["enabled"] = False
     config_data["features"]["load"] = []
 
     config_path = tmp_path / "uma_lite_test.yaml"

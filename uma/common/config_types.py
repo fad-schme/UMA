@@ -85,9 +85,10 @@ class LLMsConfig:
         # If explicit llms section exists, use it.
         if "llms" in d and isinstance(d["llms"], dict):
             llms = d["llms"]
+            uma_cfg = LLMConfig.from_dict(llms["uma"])
             return cls(
-                agent=LLMConfig.from_dict(llms.get("agent", {})),
-                uma=LLMConfig.from_dict(llms.get("uma", {})),
+                agent=LLMConfig.from_dict(llms["agent"]) if isinstance(llms.get("agent"), dict) else uma_cfg,
+                uma=uma_cfg,
             )
         # Fallback to single llm section for UMA.
         if "llm" in d and isinstance(d["llm"], dict):
@@ -491,12 +492,13 @@ class ConsolidationConfig:
     prune_min_fact_salience: float    # ← REQUIRED FIELD
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "ConsolidationConfig":
+    def from_dict(cls, d: Optional[Dict[str, Any]]) -> "ConsolidationConfig":
+        d = d or {}
         return cls(
             enabled=d.get("enabled", False),
-            cluster_similarity=d["cluster_similarity"],
-            max_episodes_per_cycle=d["max_episodes_per_cycle"],
-            prune_min_fact_salience=d["prune_min_fact_salience"],   # ← REQUIRED FIELD
+            cluster_similarity=float(d.get("cluster_similarity", 0.75)),
+            max_episodes_per_cycle=int(d.get("max_episodes_per_cycle", 200)),
+            prune_min_fact_salience=float(d.get("prune_min_fact_salience", 0.2)),
         )
 
 
@@ -527,7 +529,7 @@ class RuntimeConfig:
         working_memory_cfg = WorkingMemorySettings.from_dict(cfg["working_memory"])
         retrieval_cfg = RetrievalConfig.from_dict(cfg["retrieval"])
         features_cfg = FeaturesConfig.from_dict(cfg.get("features") or {})
-        consolidation_cfg = ConsolidationConfig.from_dict(cfg["consolidation"])
+        consolidation_cfg = ConsolidationConfig.from_dict(cfg.get("consolidation"))
         storage_cfg = StorageConfig.from_dict(cfg["storage"])
         pipeline_cfg = PipelineConfig.from_dict(cfg.get("pipeline") or {})
 
