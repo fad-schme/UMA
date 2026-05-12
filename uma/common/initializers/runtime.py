@@ -185,6 +185,29 @@ def ensure_rlm(memory: "UMAMemory") -> None:
         raise
 
 
+def init_base_ready(memory: "UMAMemory") -> None:
+    """
+    Initialize shared retrieval/ingestion base components once.
+
+    This coordinates the common cold-start path across retrieval and ingestion so
+    stores/providers/cores cannot duplicate when both paths overlap.
+    """
+
+    def _initialize() -> None:
+        ensure_stores(memory)
+        ensure_llm(memory)
+        ensure_embedder(memory)
+        ensure_cores(memory)
+        memory._base_ready = True
+
+    _run_singleflight_initializer(
+        memory,
+        key="base",
+        ready_attr="_base_ready",
+        initializer=_initialize,
+    )
+
+
 # ---------------------------------------------------------------------
 # Startup: predictable retrieval-ready init
 # ---------------------------------------------------------------------
@@ -203,10 +226,7 @@ def init_retrieval_ready(memory: "UMAMemory") -> None:
     MUST NOT initialize ingestion pipeline/features.
     """
     def _initialize() -> None:
-        ensure_stores(memory)
-        ensure_llm(memory)
-        ensure_embedder(memory)
-        ensure_cores(memory)
+        init_base_ready(memory)
 
         # Graph is optional; never fail retrieval startup because of graph.
         try:
@@ -242,11 +262,7 @@ def init_ingestion_ready(memory: "UMAMemory") -> None:
     Safe to call multiple times.
     """
     def _initialize() -> None:
-        ensure_stores(memory)
-        ensure_llm(memory)
-        ensure_embedder(memory)
-
-        ensure_cores(memory)
+        init_base_ready(memory)
 
         # features optional; should not abort readiness
         try:
@@ -287,6 +303,9 @@ def schedule_ingestion_warmup(memory: "UMAMemory") -> None:
             init_ingestion_ready(memory)
             logger.info("UMA ingestion warmup completed.")
         except Exception:
+            with memory._lifecycle_lock:
+                if not getattr(memory, "_ingestion_ready", False):
+                    memory._warmup_scheduled = False
             logger.exception("UMA ingestion warmup failed (non-fatal).")
 
     # Prefer scheduling on a running loop if present.
@@ -308,6 +327,9 @@ def schedule_ingestion_warmup(memory: "UMAMemory") -> None:
             init_ingestion_ready(memory)
             logger.info("UMA ingestion warmup completed (thread).")
         except Exception:
+            with memory._lifecycle_lock:
+                if not getattr(memory, "_ingestion_ready", False):
+                    memory._warmup_scheduled = False
             logger.exception("UMA ingestion warmup failed (thread, non-fatal).")
 
     t = threading.Thread(target=_warmup_thread, name="uma-ingestion-warmup", daemon=True)

@@ -123,6 +123,7 @@ class UMAMemory:
         self._config_dir = getattr(config, "_source_dir", None)
         self.initialized: bool = False
         self._features_initialized: bool = False
+        self._base_ready: bool = False
         self._retrieval_ready: bool = False
         self._ingestion_ready: bool = False
         self._warmup_scheduled: bool = False
@@ -596,9 +597,17 @@ class UMAMemory:
                 "before core subsystems."
             )
 
+        # Build all core subsystems first so a failed init cannot leave a
+        # partially-ready core graph on the shared memory instance.
+        working_memory: Optional[WorkingMemoryCore] = None
+        episodic_core: Optional[EpisodicCore] = None
+        semantic_core: Optional[SemanticCore] = None
+        procedural_core: Optional[ProceduralCore] = None
+        chunk_core: Optional[ChunkCore] = None
+
         # ---------------------- Working Memory Core ----------------------
         try:
-            self.working_memory = WorkingMemoryCore(
+            working_memory = WorkingMemoryCore(
                 llm=self.llm,
                 memory_client=self,
             )
@@ -618,7 +627,7 @@ class UMAMemory:
                 max_episodes=self.consolidation_cfg.max_episodes_per_cycle
             )
 
-            self.episodic_core = EpisodicCore(
+            episodic_core = EpisodicCore(
                 episodic_store=self._stores["episodic"],
                 episode_indexer=indexer,
                 retention_policy=retention,
@@ -631,7 +640,7 @@ class UMAMemory:
         # ---------------------- Semantic Core ---------------------------
         try:
             salience = self.semantic_salience_threshold
-            self.semantic_core = SemanticCore(
+            semantic_core = SemanticCore(
                 llm=self.llm,
                 embedder=self.embedder,
                 semantic_store=self._stores["semantic"],
@@ -648,7 +657,7 @@ class UMAMemory:
 
         # ---------------------- Procedural Core -------------------------
         try:
-            self.procedural_core = ProceduralCore(self._stores["procedural"])
+            procedural_core = ProceduralCore(self._stores["procedural"])
             logger.debug("ProceduralCore initialized.")
         except Exception:
             logger.exception("UMAMemory: failed to initialize ProceduralCore.")
@@ -656,11 +665,17 @@ class UMAMemory:
 
         # ---------------------- Chunk Core ------------------------------
         try:
-            self.chunk_core = ChunkCore(self._stores["chunk"], memory=self)
+            chunk_core = ChunkCore(self._stores["chunk"], memory=self)
             logger.debug("ChunkCore initialized.")
         except Exception:
             logger.exception("UMAMemory: failed to initialize ChunkCore.")
             raise
+
+        self.working_memory = working_memory
+        self.episodic_core = episodic_core
+        self.semantic_core = semantic_core
+        self.procedural_core = procedural_core
+        self.chunk_core = chunk_core
 
     # ----------------------------------------------------------------------
     # Graph subsystem initialization

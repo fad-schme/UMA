@@ -33,25 +33,27 @@ def initialize_llm(memory: Any) -> None:
 
     llm_factory = get_llm_factory(llm_cfg.provider)
     if llm_factory:
-        memory.llm = llm_factory(llm_cfg)
+        llm = llm_factory(llm_cfg)
         logger.info(
             "Loaded %s LLM (model=%s)",
             llm_cfg.provider,
-            getattr(memory.llm, "model", "unknown"),
+            getattr(llm, "model", "unknown"),
         )
     else:
         raise _unsupported_llm_provider_error(llm_cfg.provider)
 
     # Agent LLM (optional; defaults to UMA LLM)
+    agent_llm = llm
     agent_cfg = getattr(memory, "agent_llm_cfg", None)
     if agent_cfg and agent_cfg != llm_cfg:
         agent_factory = get_llm_factory(agent_cfg.provider)
         if agent_factory:
-            memory.agent_llm = agent_factory(agent_cfg)
+            agent_llm = agent_factory(agent_cfg)
         else:
             raise _unsupported_llm_provider_error(agent_cfg.provider)
-    if memory.agent_llm is None:
-        memory.agent_llm = memory.llm
+
+    memory.llm = llm
+    memory.agent_llm = agent_llm
 
     logger.info("LLM initialization successful.")
 
@@ -65,18 +67,18 @@ def initialize_embedder(memory: Any) -> None:
         raise ValueError("embedding.dimension must be a positive integer")
     embed_factory = get_embedder_factory(embedding_cfg.provider)
     if embed_factory:
-        memory.embedder = embed_factory(embedding_cfg)
+        embedder = embed_factory(embedding_cfg)
         logger.info(
             "Loaded %s embedder (model=%s, dimension=%s)",
             embedding_cfg.provider,
-            getattr(memory.embedder, "model", embedding_cfg.model),
-            getattr(memory.embedder, "dimension", embedding_cfg.dimension),
+            getattr(embedder, "model", embedding_cfg.model),
+            getattr(embedder, "dimension", embedding_cfg.dimension),
         )
     else:
         raise _unsupported_embedding_provider_error(embedding_cfg.provider)
 
     # Enforce the global invariant: every embedder must expose a valid dimension and match config.
-    embedder_dim = getattr(memory.embedder, "dimension", None)
+    embedder_dim = getattr(embedder, "dimension", None)
     if not isinstance(embedder_dim, int) or embedder_dim <= 0:
         raise ValueError(f"Embedder returned invalid dimension={embedder_dim!r}")
     if embedder_dim != embedding_cfg.dimension:
@@ -84,9 +86,11 @@ def initialize_embedder(memory: Any) -> None:
             f"Embedder dimension mismatch: embedder={embedder_dim} config={embedding_cfg.dimension}"
         )
 
+    memory.embedder = embedder
+
     # Best-effort preflight if the embedder supports it.
     try:
-        preflight = getattr(memory.embedder, "preflight", None)
+        preflight = getattr(embedder, "preflight", None)
         if callable(preflight):
             preflight()
     except Exception:

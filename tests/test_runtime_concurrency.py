@@ -9,7 +9,9 @@ import pytest
 import yaml
 
 from tests.helpers.runtime import build_test_config
+from uma.common.initializers import providers as provider_init
 from uma.common.initializers import runtime as runtime_init
+import uma.api.memory as memory_module
 from uma.api.memory import UMAMemory
 from uma.ingest.pipeline import MemoryPipeline
 from uma.common.config import UMAConfig
@@ -135,6 +137,206 @@ def test_overlapping_ingestion_first_use_is_singleflight(tmp_path: Path, monkeyp
 
     assert calls["features"] == 1
     assert sorted(completions) == ["first", "second"]
+    assert memory._ingestion_ready is True
+
+
+def test_cold_retrieval_and_ingestion_share_base_singleflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    memory = _build_uninitialized_memory(tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+    calls = {"stores": 0}
+    completions: list[str] = []
+
+    def slow_ensure_stores(mem: UMAMemory) -> None:
+        calls["stores"] += 1
+        entered.set()
+        assert release.wait(timeout=2.0)
+        mem._stores = {"ready": True}
+
+    monkeypatch.setattr(runtime_init, "ensure_stores", slow_ensure_stores)
+    monkeypatch.setattr(runtime_init, "ensure_llm", lambda mem: setattr(mem, "llm", object()))
+    monkeypatch.setattr(runtime_init, "ensure_embedder", lambda mem: setattr(mem, "embedder", object()))
+    monkeypatch.setattr(
+        runtime_init,
+        "ensure_cores",
+        lambda mem: (
+            setattr(mem, "working_memory", object()),
+            setattr(mem, "episodic_core", object()),
+            setattr(mem, "semantic_core", object()),
+            setattr(mem, "procedural_core", object()),
+            setattr(mem, "chunk_core", object()),
+        ),
+    )
+    monkeypatch.setattr(runtime_init, "ensure_graph", lambda mem: None)
+    monkeypatch.setattr(runtime_init, "ensure_rlm", lambda mem: setattr(mem, "_rlm_controller", object()))
+    monkeypatch.setattr(runtime_init, "ensure_features", lambda mem: setattr(mem, "_features_initialized", True))
+    monkeypatch.setattr(runtime_init, "ensure_pipeline", lambda mem: setattr(mem, "pipeline", object()))
+
+    def call_retrieval() -> None:
+        memory._ensure_retrieval_ready()
+        completions.append("retrieval")
+
+    def call_ingestion() -> None:
+        memory._ensure_ingestion_ready()
+        completions.append("ingestion")
+
+    retrieval_thread = threading.Thread(target=call_retrieval)
+    ingestion_thread = threading.Thread(target=call_ingestion)
+
+    retrieval_thread.start()
+    assert entered.wait(timeout=1.0)
+    ingestion_thread.start()
+    time.sleep(0.1)
+
+    assert calls["stores"] == 1
+    assert completions == []
+    assert memory._base_ready is False
+
+    release.set()
+    retrieval_thread.join(timeout=2.0)
+    ingestion_thread.join(timeout=2.0)
+
+    assert calls["stores"] == 1
+    assert sorted(completions) == ["ingestion", "retrieval"]
+    assert memory._base_ready is True
+    assert memory._retrieval_ready is True
+    assert memory._ingestion_ready is True
+
+
+def test_failed_llm_init_does_not_leave_memory_llm_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    memory = _build_uninitialized_memory(tmp_path)
+    memory.llm = None
+    memory.agent_llm = None
+    memory.agent_llm_cfg = type("AgentCfg", (), {"provider": "openai"})()
+
+    class _FakeLLM:
+        def __init__(self, model: str) -> None:
+            self.model = model
+
+    def fake_get_llm_factory(provider: str):
+        if provider == memory.llm_cfg.provider:
+            return lambda cfg: _FakeLLM("uma-model")
+        if provider == "openai":
+            def _raise(_cfg):
+                raise RuntimeError("agent llm init failed")
+            return _raise
+        return None
+
+    monkeypatch.setattr(provider_init, "get_llm_factory", fake_get_llm_factory)
+
+    with pytest.raises(RuntimeError, match="agent llm init failed"):
+        provider_init.ensure_llm(memory)
+
+    assert memory.llm is None
+    assert memory.agent_llm is None
+
+
+def test_failed_embedder_validation_does_not_leave_memory_embedder_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    memory = _build_uninitialized_memory(tmp_path)
+    memory.embedder = None
+
+    class _BadEmbedder:
+        model = "bad-embedder"
+        dimension = 1
+
+    monkeypatch.setattr(
+        provider_init,
+        "get_embedder_factory",
+        lambda provider: (lambda cfg: _BadEmbedder()) if provider == memory.embedding_cfg.provider else None,
+    )
+
+    with pytest.raises(ValueError, match="Embedder dimension mismatch"):
+        provider_init.ensure_embedder(memory)
+
+    assert memory.embedder is None
+
+
+def test_failed_core_init_can_retry_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    memory = _build_uninitialized_memory(tmp_path)
+    memory.llm = object()
+    memory.embedder = object()
+    memory._stores = {
+        "episodic": object(),
+        "semantic": object(),
+        "procedural": object(),
+        "chunk": object(),
+    }
+    semantic_calls = {"count": 0}
+
+    monkeypatch.setattr(memory_module, "WorkingMemoryCore", lambda **kwargs: object())
+    monkeypatch.setattr(memory_module, "EpisodeIndexer", lambda **kwargs: object())
+    monkeypatch.setattr(memory_module, "EpisodicRetentionPolicy", lambda **kwargs: object())
+    monkeypatch.setattr(memory_module, "EpisodicCore", lambda **kwargs: object())
+    monkeypatch.setattr(memory_module, "ProceduralCore", lambda store: object())
+    monkeypatch.setattr(memory_module, "ChunkCore", lambda store, memory: object())
+
+    def fake_semantic_core(**kwargs):
+        semantic_calls["count"] += 1
+        if semantic_calls["count"] == 1:
+            raise RuntimeError("semantic init failed")
+        return object()
+
+    monkeypatch.setattr(memory_module, "SemanticCore", fake_semantic_core)
+
+    with pytest.raises(RuntimeError, match="semantic init failed"):
+        memory._init_core_subsystems()
+
+    assert memory.working_memory is None
+    assert memory.episodic_core is None
+    assert memory.semantic_core is None
+    assert memory.procedural_core is None
+    assert memory.chunk_core is None
+
+    memory._init_core_subsystems()
+
+    assert semantic_calls["count"] == 2
+    assert memory.working_memory is not None
+    assert memory.episodic_core is not None
+    assert memory.semantic_core is not None
+    assert memory.procedural_core is not None
+    assert memory.chunk_core is not None
+
+
+def test_warmup_failure_does_not_poison_foreground_ingestion_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    memory = _build_uninitialized_memory(tmp_path)
+    calls = {"count": 0}
+
+    def fake_init_ingestion_ready(mem: UMAMemory) -> None:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("warmup failed")
+        mem._ingestion_ready = True
+
+    class _ImmediateThread:
+        def __init__(self, *, target, name: str, daemon: bool) -> None:
+            self._target = target
+
+        def start(self) -> None:
+            self._target()
+
+    monkeypatch.setattr(runtime_init, "init_ingestion_ready", fake_init_ingestion_ready)
+    monkeypatch.setattr(memory_module, "init_ingestion_ready", fake_init_ingestion_ready)
+    monkeypatch.setattr(runtime_init.threading, "Thread", _ImmediateThread)
+
+    runtime_init.schedule_ingestion_warmup(memory)
+
+    assert calls["count"] == 1
+    assert memory._ingestion_ready is False
+    assert memory._warmup_scheduled is False
+
+    memory._ensure_ingestion_ready()
+
+    assert calls["count"] == 2
     assert memory._ingestion_ready is True
 
 
