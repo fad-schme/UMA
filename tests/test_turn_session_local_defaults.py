@@ -15,7 +15,8 @@ async def test_process_turn_writes_session_local_episode_and_fact_provenance(uma
         user_id="user:u1",
         user_msg="hello",
         assistant_reply="user likes coffee.",
-        extra_meta={"session_id": "session-a", "request_id": "req-turn-a"},
+        session_id="session-a",
+        extra_meta={"request_id": "req-turn-a"},
     )
 
     epi_conn = mem._stores["episodic"]._conn()
@@ -70,8 +71,8 @@ async def test_process_turn_writes_session_local_episode_and_fact_provenance(uma
 
 
 @pytest.mark.asyncio
-async def test_process_turn_requires_explicit_session_or_legacy_mode(uma_memory) -> None:
-    with pytest.raises(ValueError, match="requires extra_meta\\['session_id'\\]"):
+async def test_process_turn_requires_explicit_session_id(uma_memory) -> None:
+    with pytest.raises(ValueError, match="requires a non-empty session_id"):
         await uma_memory.process_turn(
             user_id="user:u1",
             user_msg="hello",
@@ -88,13 +89,13 @@ async def test_retrieval_does_not_see_prior_session_turn_artifacts_by_default(um
         user_id="user:u1",
         user_msg="first",
         assistant_reply="user likes coffee.",
-        extra_meta={"session_id": "session-a"},
+        session_id="session-a",
     )
     await mem.process_turn(
         user_id="user:u1",
         user_msg="second",
         assistant_reply="user likes tea.",
-        extra_meta={"session_id": "session-b"},
+        session_id="session-b",
     )
 
     sem_conn = mem._stores["semantic"]._conn()
@@ -156,7 +157,7 @@ async def test_retrieval_does_not_share_turn_artifacts_across_agents(uma_memory)
         user_id="user:u1",
         user_msg="first",
         assistant_reply="user likes coffee.",
-        extra_meta={"session_id": "shared-session"},
+        session_id="shared-session",
     )
 
     mem._agent_id = "agent-b"
@@ -164,7 +165,7 @@ async def test_retrieval_does_not_share_turn_artifacts_across_agents(uma_memory)
         user_id="user:u1",
         user_msg="second",
         assistant_reply="user likes tea.",
-        extra_meta={"session_id": "shared-session"},
+        session_id="shared-session",
     )
 
     sem_conn = mem._stores["semantic"]._conn()
@@ -219,41 +220,11 @@ async def test_retrieval_does_not_share_turn_artifacts_across_agents(uma_memory)
 
 
 @pytest.mark.asyncio
-async def test_explicit_legacy_turn_write_mode_is_gated_and_non_canonical(uma_memory) -> None:
-    mem = uma_memory
-    assert mem.agent_id
-
-    await mem.process_turn(
-        user_id="user:u1",
-        user_msg="legacy",
-        assistant_reply="user likes cocoa.",
-        extra_meta={"legacy_turn_write_mode": True},
-    )
-
-    sem_conn = mem._stores["semantic"]._conn()
-    try:
-        rows = mem._stores["semantic"]._query_all(
-            sem_conn,
-            """
-            SELECT session_id, origin_agent_id, origin_session_id
-            FROM facts
-            WHERE owner_type=? AND owner_id=?
-            ORDER BY id ASC
-            """,
-            params=["user", "user:u1"],
-            log_context="test_legacy_turn_write_mode",
+async def test_process_turn_rejects_legacy_turn_write_mode_without_session_id(uma_memory) -> None:
+    with pytest.raises(ValueError, match="requires a non-empty session_id"):
+        await uma_memory.process_turn(
+            user_id="user:u1",
+            user_msg="legacy",
+            assistant_reply="user likes cocoa.",
+            extra_meta={"legacy_turn_write_mode": True},
         )
-        assert rows
-        assert all(str(row["session_id"]).startswith("legacy-user:") for row in rows)
-        assert all(row["origin_agent_id"] == mem.agent_id for row in rows)
-        assert all(str(row["origin_session_id"]).startswith("legacy-user:") for row in rows)
-    finally:
-        sem_conn.close()
-
-    ctx = await mem.set_context(
-        tenant_id=DEFAULT_TENANT_ID,
-        agent_id=mem.agent_id,
-        request_id="req-no-session",
-        user_id="user:u1",
-    ).retrieve_context(query_text="cocoa")
-    assert "cocoa" not in {str(getattr(f, "object", "")) for f in (ctx.get("facts") or [])}

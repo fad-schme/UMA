@@ -38,7 +38,6 @@ from uma.adapters.observability.context import request_context
 from uma.adapters.observability.metrics import increment, timed
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
 from uma.common.types import RuntimeContext, SessionScope
-from uma.memory.working_memory.core import legacy_session_scope_for_user
 from uma.common.identity import normalize_user_id
 logger = logging.getLogger(__name__)
 
@@ -256,51 +255,69 @@ class MemoryPipeline:
         user_id: str,
         user_msg: str,
         assistant_reply: str,
+        session_id: str,
+        tenant_id: str = DEFAULT_TENANT_ID,
+        workspace_id: Optional[str] = None,
         extra_meta: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Perform memory updates for a single turn using:
 
-            user_msg          → final user input
-            assistant_reply   → final agent output (external LLM)
+            user_msg          -> final user input
+            assistant_reply   -> final agent output
 
         UMA stores:
             - WM messages
             - Episodic memory
             - Semantic facts
-            - Temporal graph edges (optional)
+            - Temporal graph edges
+
+        Required execution scope is passed explicitly through function parameters.
+        `extra_meta` is optional non-scope metadata only.
 
         No reply is returned.
         """
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise ValueError("MemoryPipeline.process_turn requires a non-empty session_id.")
 
-        with request_context(extra_meta.get("request_id") if extra_meta else None):
+        resolved_tenant_id = str(tenant_id or DEFAULT_TENANT_ID).strip()
+        if not resolved_tenant_id:
+            raise ValueError("MemoryPipeline.process_turn requires a non-empty tenant_id.")
+
+        resolved_session_id = session_id.strip()
+        resolved_workspace_id = str(workspace_id).strip() if workspace_id is not None else None
+        meta = dict(extra_meta or {})
+
+        with request_context(resolved_session_id):
             with timed("pipeline.process_turn.latency_s"):
                 increment("pipeline.process_turn.count")
 
-                request_id = (extra_meta or {}).get("request_id") if isinstance(extra_meta, dict) else None
                 turn_id = _compute_turn_id(
                     user_id=user_id,
                     user_msg=user_msg,
                     assistant_reply=assistant_reply,
-                    request_id=str(request_id) if request_id else None,
+                    request_id=resolved_session_id,
                 )
+
                 turn_context = self._resolve_turn_context(
                     user_id=user_id,
-                    turn_id=turn_id,
-                    extra_meta=extra_meta,
+                    session_id=resolved_session_id,
+                    tenant_id=resolved_tenant_id,
+                    workspace_id=resolved_workspace_id,
                 )
                 wm_scope = self._resolve_working_memory_scope(turn_context=turn_context)
 
-                # 1) Hooks
                 await self._run_before_turn_hooks(user_id, user_msg)
 
-                # 2) Working memory update
-                self._update_working_memory(wm_scope, user_msg, assistant_reply, turn_id=turn_id)
+                self._update_working_memory(
+                    wm_scope,
+                    user_msg,
+                    assistant_reply,
+                    turn_id=turn_id,
+                )
 
-                # 3) WM compaction
                 await self._maybe_compact_working_memory(wm_scope)
 
-                # 4) Episodic storage
                 episode = await self._store_episode(
                     user_id,
                     user_msg,
@@ -319,42 +336,44 @@ class MemoryPipeline:
                             "episode": episode,
                             "facts": None,
                             "turn_context": turn_context,
-                            "extra_meta": extra_meta or {},
+                            "extra_meta": meta,
                         }
                     )
                     if enqueued:
                         logger.info("MemoryPipeline: deferred post-turn tasks queued.")
-                else:
-                    # 5) Semantic ingestion
-                    facts = await self._semantic_ingest(
-                        user_id,
-                        assistant_reply,
-                        turn_id=turn_id,
-                        turn_context=turn_context,
-                    )
-                    if episode is not None and facts:
-                        for f in facts:
-                            try:
-                                meta = getattr(f, "meta", None) or {}
-                                meta.setdefault("source_episode_id", getattr(episode, "id", None))
-                                f.meta = meta
-                            except Exception:
-                                continue
+                    return
 
-                    # 5b) Optional promotion of eligible facts to agent KB
-                    await self._maybe_promote_facts(user_id=user_id, facts=facts)
+                facts = await self._semantic_ingest(
+                    user_id,
+                    assistant_reply,
+                    turn_id=turn_id,
+                    turn_context=turn_context,
+                )
 
-                    # 6) Graph update
-                    await self._update_graph(user_id, episode, facts, turn_context=turn_context)
+                if episode is not None and facts:
+                    for fact in facts:
+                        try:
+                            fact_meta = getattr(fact, "meta", None) or {}
+                            fact_meta.setdefault("source_episode_id", getattr(episode, "id", None))
+                            fact.meta = fact_meta
+                        except Exception:
+                            continue
 
-                    # 7) Hooks
-                    await self._run_after_turn_hooks(
-                        user_id=user_id,
-                        user_msg=user_msg,
-                        reply=assistant_reply,
-                        extra_meta=extra_meta or {},
-                    )
+                await self._maybe_promote_facts(user_id=user_id, facts=facts)
 
+                await self._update_graph(
+                    user_id,
+                    episode,
+                    facts,
+                    turn_context=turn_context,
+                )
+
+                await self._run_after_turn_hooks(
+                    user_id=user_id,
+                    user_msg=user_msg,
+                    reply=assistant_reply,
+                    extra_meta=meta,
+                )
     # ------------------------------------------------------------------
     # PROMOTION (OPTIONAL)
     # ------------------------------------------------------------------
@@ -502,50 +521,35 @@ class MemoryPipeline:
         self,
         *,
         user_id: str,
-        turn_id: str,
-        extra_meta: Optional[Dict[str, Any]] = None,
+        session_id: str,
+        tenant_id: str = DEFAULT_TENANT_ID,
+        workspace_id: Optional[str] = None,
     ) -> RuntimeContext:
         agent_id = getattr(self.mem, "agent_id", None)
         if not agent_id:
             raise ValueError("MemoryPipeline.process_turn requires agent_id for scoped turn processing.")
 
         normalized_user_id = normalize_user_id(user_id)
-        meta = extra_meta or {}
-        tenant_id = str(meta.get("tenant_id") or DEFAULT_TENANT_ID)
-        session_id = meta.get("session_id")
-        if session_id:
-            return RuntimeContext(
-                tenant_id=tenant_id,
-                agent_id=agent_id,
-                request_id=str(meta.get("request_id") or turn_id),
-                user_id=normalized_user_id,
-                workspace_id=(str(meta["workspace_id"]) if meta.get("workspace_id") else None),
-                session_id=str(session_id),
-            )
 
-        if not bool(meta.get("legacy_turn_write_mode", False)):
-            raise ValueError(
-                "MemoryPipeline.process_turn requires extra_meta['session_id'] for canonical turn writes. "
-                "Use extra_meta['legacy_turn_write_mode']=True only for explicit transitional compatibility."
-            )
+        resolved_tenant_id = str(tenant_id or DEFAULT_TENANT_ID).strip()
+        if not resolved_tenant_id:
+            raise ValueError("MemoryPipeline.process_turn requires a non-empty tenant_id.")
 
-        legacy_scope = legacy_session_scope_for_user(
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            user_id=normalized_user_id,
-        )
-        logger.warning(
-            "MemoryPipeline: using explicit legacy turn write mode without session_id. "
-            "This compatibility path is non-canonical and should be removed after migration."
-        )
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise ValueError("MemoryPipeline.process_turn requires a non-empty session_id.")
+
+        resolved_session_id = session_id.strip()
+        resolved_workspace_id = str(workspace_id).strip() if workspace_id is not None else None
+
         return RuntimeContext(
-            tenant_id=legacy_scope.tenant_id,
-            agent_id=legacy_scope.agent_id,
-            request_id=str(meta.get("request_id") or turn_id),
-            user_id=legacy_scope.user_id,
-            workspace_id=legacy_scope.workspace_id,
-            session_id=legacy_scope.session_id,
+            tenant_id=resolved_tenant_id,
+            agent_id=agent_id,
+            request_id=resolved_session_id,
+            user_id=normalized_user_id,
+            workspace_id=resolved_workspace_id,
+            session_id=resolved_session_id,
         )
+    
 
     def _resolve_working_memory_scope(
         self,

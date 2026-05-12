@@ -231,7 +231,8 @@ async def test_retrieval_and_process_turn_overlap_preserve_session_isolation(tmp
             user_id="user:u1",
             user_msg="session a seed",
             assistant_reply="user likes coffee in session a",
-            extra_meta={"session_id": "session-a", "request_id": "req-seed-a"},
+            session_id="session-a",
+            extra_meta={"request_id": "req-seed-a"},
         )
 
         entered = asyncio.Event()
@@ -250,7 +251,8 @@ async def test_retrieval_and_process_turn_overlap_preserve_session_isolation(tmp
                 user_id="user:u1",
                 user_msg="session b write",
                 assistant_reply="user likes tea in session b",
-                extra_meta={"session_id": "session-b", "request_id": "req-write-b"},
+                session_id="session-b",
+                extra_meta={"request_id": "req-write-b"},
             )
         )
         await asyncio.wait_for(entered.wait(), timeout=1.0)

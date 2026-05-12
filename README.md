@@ -127,24 +127,28 @@ from uma import UMAMemory
 from uma.api.management import explain_result, export_wiki_projection
 
 memory = UMAMemory.from_yaml("config/uma.yaml").set_context(
-    user_id="user-123",
     agent_id="agent-default",
-    tenant_id="default",
-    request_id="req-1",
-    session_id="session-1",
 )
 
 context = await memory.retrieve_context(
     query_text=user_message,
+    user_id="user-123",
+    tenant_id="default",
+    request_id="req-1",
+    session_id="session-1",
     lane_filter=["raw", "semantic"],
 )
 
 memory_result = await memory.retrieve_memory(
     query_text=user_message,
+    user_id="user-123",
+    tenant_id="default",
+    request_id="req-1",
+    session_id="session-1",
     memory_intent="continuity",
 )
 
-explanation = await explain_result(memory, memory_result)
+explanation = await explain_result(memory, memory_result, user_id="user-123")
 
 messages = [
     {"role": "system", "content": system_prompt},

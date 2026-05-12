@@ -17,13 +17,13 @@ async def test_pipeline_updates_graph_with_facts_and_temporal_links(tmp_path):
             user_id="user:u1",
             user_msg="hello",
             assistant_reply="user likes sushi.",
-            extra_meta={"session_id": "session-a"},
+            session_id="session-a",
         )
         await mem.process_turn(
             user_id="user:u1",
             user_msg="hello again",
             assistant_reply="user likes pizza.",
-            extra_meta={"session_id": "session-a"},
+            session_id="session-a",
         )
 
         adapter = getattr(mem.graph_core, "adapter", None)

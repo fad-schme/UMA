@@ -123,7 +123,7 @@ async def test_request_handle_retrieval_requires_user_id_for_current_behavior(um
 @pytest.mark.asyncio
 async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory) -> None:
     memory = uma_memory
-    seen: List[tuple[str, str]] = []
+    seen: List[tuple[str, RuntimeContext, str]] = []
 
     async def fake_context(
         bound_context: RuntimeContext,
@@ -131,7 +131,7 @@ async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory
         query_text: str,
         lane_filter=None,
     ) -> Dict[str, list]:
-        seen.append(("context", query_text))
+        seen.append(("context", bound_context, query_text))
         return {
             "product": "context",
             "query": query_text,
@@ -151,7 +151,7 @@ async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory
         query_text: str,
         memory_intent: str = "continuity",
     ) -> Dict[str, Any]:
-        seen.append(("memory", query_text))
+        seen.append(("memory", bound_context, query_text))
         return {
             "product": "memory",
             "query": query_text,
@@ -176,15 +176,54 @@ async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory
     memory.runtime.retrieve_context = fake_context  # type: ignore[method-assign]
     memory.runtime.retrieve_memory = fake_memory  # type: ignore[method-assign]
 
-    context = await memory.retrieve_context(query_text="hello world")
-    memory_result = await memory.retrieve_memory(query_text="hello world")
+    context = await memory.retrieve_context(
+        query_text="hello world",
+        user_id="user:u1",
+        tenant_id="tenant-1",
+        request_id="req-ctx",
+        workspace_id="workspace:alpha",
+        session_id="session-1",
+    )
+    memory_result = await memory.retrieve_memory(
+        query_text="hello world",
+        user_id="user:u1",
+        tenant_id="tenant-1",
+        request_id="req-mem",
+        workspace_id="workspace:alpha",
+        session_id="session-1",
+    )
 
     assert context["product"] == "context"
     assert context["documents"] == []
     assert memory_result["product"] == "memory"
     assert memory_result["memories"][0]["id"] == "mem-1"
     assert memory_result["fallback"]["used"] is True
-    assert seen == [("context", "hello world"), ("memory", "hello world")]
+    assert seen == [
+        (
+            "context",
+            RuntimeContext(
+                tenant_id="tenant-1",
+                agent_id=memory.agent_id or "agent-default",
+                request_id="req-ctx",
+                user_id="user:u1",
+                workspace_id="workspace:alpha",
+                session_id="session-1",
+            ),
+            "hello world",
+        ),
+        (
+            "memory",
+            RuntimeContext(
+                tenant_id="tenant-1",
+                agent_id=memory.agent_id or "agent-default",
+                request_id="req-mem",
+                user_id="user:u1",
+                workspace_id="workspace:alpha",
+                session_id="session-1",
+            ),
+            "hello world",
+        ),
+    ]
 
 
 @pytest.mark.asyncio

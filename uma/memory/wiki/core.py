@@ -231,12 +231,22 @@ async def lint_wiki_page(
     memory: Any,
     page_or_artifact: Any,
     *,
+    user_id: str,
+    tenant_id: str = "default",
+    workspace_id: str | None = None,
     stale_after_seconds: int | None = None,
 ) -> dict[str, Any]:
     """Check one wiki page for structural drift without rewriting canonical state."""
     if memory is None:
         raise ValueError("lint_wiki_page: memory is required")
-    runtime_context = memory._require_bound_runtime_context()
+    
+    runtime_context = memory._resolve_runtime_context(
+        user_id=user_id,
+        tenant_id=tenant_id,
+        request_id="wiki:lint_wiki_page",
+        workspace_id=workspace_id,
+        session_id=None,
+    )
     page = wiki_page_from_record(page_or_artifact)
     expanded = await memory.runtime.expand_evidence(runtime_context, page["compiled_artifact"])
     provenance = page["provenance"]

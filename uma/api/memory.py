@@ -28,20 +28,20 @@ Typical developer workflow
 
     memory = UMAMemory.from_yaml("uma.yaml")
 
-2. Bind request scope ergonomically for repeated retrieval:
+2. Optionally bind the fixed agent identity:
 
     memory = memory.set_context(
-        user_id=user_id,
         agent_id="agent-default",
+    )
+
+3. Retrieve context with explicit per-call request scope:
+
+    context = await memory.retrieve_context(
+        query_text="the user's current question or task",
+        user_id=user_id,
         tenant_id="default",
         request_id="req-1",
         session_id="session-1",
-    )
-
-3. Retrieve context:
-
-    context = await memory.retrieve_context(
-        query_text="the user's current question or task"
     )
 
 4. Ingest conversation turns or documents through the public APIs on UMAMemory.
@@ -147,7 +147,6 @@ class UMAMemory:
         self.semantic_salience_threshold = self.cfg.semantic_salience_threshold
         self._agent_id: Optional[str] = None
         self._runtime: Optional[UMARuntime] = None
-        self._bound_runtime_context: Optional[RuntimeContext] = None
         self.animus_profile_provider = AnimusProfileProvider()
 
         # Internal store registry (core-only access; no direct store usage outside cores)
@@ -190,30 +189,32 @@ class UMAMemory:
 
     @property
     def agent_id(self) -> Optional[str]:
-        """Return the current runtime agent identity, if one is known.
-
-        This remains request/runtime state, not durable configuration. A value
-        may come from a bound runtime context or from internal bootstrap code
-        that seeds `_agent_id` before request-scoped flows execute.
-        """
-        agent_id = self._agent_id
-        if isinstance(agent_id, str):
-            normalized = agent_id.strip()
+        """Return the current runtime agent identity, if one is known."""
+        if isinstance(self._agent_id, str):
+            normalized = self._agent_id.strip()
             return normalized or None
-
-        runtime_context = self._bound_runtime_context
-        if runtime_context is not None and runtime_context.agent_id:
-            return runtime_context.agent_id
         return None
+    
+    def _resolve_runtime_context(
+        self,
+        *,
+        user_id: Optional[str],
+        tenant_id: str = "default",
+        request_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> RuntimeContext:
+        """Resolve request scope for public APIs from explicit per-call values only."""
+        if not isinstance(user_id, str) or not user_id.strip():
+            raise ValueError("UMAMemory requires an explicit user_id.")
 
-    def _require_bound_runtime_context(self) -> RuntimeContext:
-        """Return the currently bound runtime context for public retrieval APIs."""
-        runtime_context = self._bound_runtime_context
-        if runtime_context is None:
-            raise RuntimeError(
-                "UMAMemory requires a bound runtime_context. Call set_context(...) before retrieval."
-            )
-        return runtime_context
+        return self._build_runtime_context(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            request_id=request_id,
+            workspace_id=workspace_id,
+            session_id=session_id,
+        )
 
     def _ensure_base_ready(self) -> None:
         """Ensure the minimum baseline runtime is ready."""
@@ -274,31 +275,14 @@ class UMAMemory:
     def set_context(
         self,
         *,
-        user_id: str,
         agent_id: Optional[str] = None,
-        tenant_id: str = "default",
-        request_id: Optional[str] = None,
-        workspace_id: Optional[str] = None,
-        session_id: Optional[str] = None,
     ) -> "UMAMemory":
-        runtime_context = self._build_runtime_context(
-            user_id=user_id,
-            agent_id=agent_id,
-            tenant_id=tenant_id,
-            request_id=request_id,
-            workspace_id=workspace_id,
-            session_id=session_id,
-        )
-        self._bound_runtime_context = runtime_context
-        self._agent_id = runtime_context.agent_id
-        logger.debug(
-            "UMAMemory.for_context: bound tenant=%s agent=%s user=%s request=%s session=%s",
-            runtime_context.tenant_id,
-            runtime_context.agent_id,
-            runtime_context.user_id,
-            runtime_context.request_id,
-            runtime_context.session_id,
-        )
+        """Bind the fixed UMA agent identity."""
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise ValueError("UMAMemory.set_context requires a non-empty agent_id.")
+
+        self._agent_id = agent_id.strip()
+        logger.debug("UMAMemory.set_context: bound agent identity agent=%s", self._agent_id)
         return self
     
     # ----------------------------------------------------------------------
@@ -308,9 +292,14 @@ class UMAMemory:
         self,
         *,
         query_text: str,
+        user_id: Optional[str] = None,
+        tenant_id: str = "default",
+        request_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        session_id: Optional[str] = None,
         lane_filter: Optional[list[str]] = None,
     ) -> Dict[str, Any]:
-        """Return curated LLM context for the bound runtime scope.
+        """Return curated LLM context for the explicit request scope.
 
         Contract:
         - intended for LLM context assembly, not durable memory projection
@@ -320,7 +309,13 @@ class UMAMemory:
         - persisted artifacts expose canonical UMA metadata through `meta`
         - lane contents remain source-traceable through facts, chunks, skills, and graph items
         """
-        runtime_context = self._require_bound_runtime_context()
+        runtime_context = self._resolve_runtime_context(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            request_id=request_id,
+            workspace_id=workspace_id,
+            session_id=session_id,
+        )
         return await self.runtime.retrieve_context(
             runtime_context,
             query_text=query_text,
@@ -331,9 +326,14 @@ class UMAMemory:
         self,
         *,
         query_text: str,
+        user_id: Optional[str] = None,
+        tenant_id: str = "default",
+        request_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        session_id: Optional[str] = None,
         memory_intent: str = "continuity",
     ) -> Dict[str, Any]:
-        """Return compiled, evidence-backed memory results for the bound runtime scope.
+        """Return compiled, evidence-backed memory results for the explicit request scope.
 
         Contract:
         - `memories` is the primary compiled-memory field
@@ -341,7 +341,13 @@ class UMAMemory:
         - supporting facts/skills remain secondary evidence, not the product identity
         - explicit `fallback` prevents silent degradation into chunk-only context retrieval
         """
-        runtime_context = self._require_bound_runtime_context()
+        runtime_context = self._resolve_runtime_context(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            request_id=request_id,
+            workspace_id=workspace_id,
+            session_id=session_id
+        )
         return await self.runtime.retrieve_memory(
             runtime_context,
             query_text=query_text,
@@ -357,15 +363,21 @@ class UMAMemory:
         user_id: str,
         user_msg: str,
         assistant_reply: str,
+        session_id: Optional[str] = None,
+        tenant_id: str = "default",
+        workspace_id: Optional[str] = None,
         extra_meta: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Public turn-ingest entrypoint.
 
         This is the supported memory-surface wrapper over the canonical
-        pipeline turn processor. It uses the current runtime `agent_id` and the
-        explicit `extra_meta` scope fields consumed by `MemoryPipeline`.
+        pipeline turn processor. Session scope is explicit at this boundary;
+        `extra_meta` remains optional non-session metadata.
         """
         self._ensure_ingestion_ready()
+
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise ValueError("UMAMemory.process_turn requires a non-empty session_id.")
 
         if self.pipeline is None:
             from uma.ingest.pipeline import MemoryPipeline
@@ -382,8 +394,12 @@ class UMAMemory:
             user_id=normalized_user_id,
             user_msg=user_msg,
             assistant_reply=assistant_reply,
+            session_id=session_id.strip(),
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
             extra_meta=extra_meta,
         )
+
 
 
     async def ingest_document(
@@ -420,10 +436,21 @@ class UMAMemory:
         self,
         file_path: str,
         *,
+        user_id: Optional[str] = None,
+        tenant_id: str = "default",
+        request_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        session_id: Optional[str] = None,
         config: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """Bootstrap long-term memory facts from MEMORY.md through the ingest layer."""
-        runtime_context = self._require_bound_runtime_context()
+        runtime_context = self._resolve_runtime_context(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            request_id=request_id,
+            workspace_id=workspace_id,
+            session_id=session_id,
+        )
         self._ensure_ingestion_ready()
 
         from uma.ingest.ingest_service import ingest_memory_bootstrap
@@ -438,9 +465,21 @@ class UMAMemory:
     async def load_daily_diary_bootstrap(
         self,
         file_path: str,
+        *,
+        user_id: Optional[str] = None,
+        tenant_id: str = "default",
+        request_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Bootstrap a daily diary file through the ingest layer."""
-        runtime_context = self._require_bound_runtime_context()
+        runtime_context = self._resolve_runtime_context(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            request_id=request_id,
+            workspace_id=workspace_id,
+            session_id=session_id,
+        )
         self._ensure_ingestion_ready()
 
         from uma.ingest.ingest_service import ingest_daily_diary_bootstrap

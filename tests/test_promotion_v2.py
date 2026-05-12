@@ -247,7 +247,7 @@ async def test_process_turn_without_policy_does_not_silently_promote(uma_memory)
         user_id="user:u1",
         user_msg="hello",
         assistant_reply="the team uses kubernetes cluster orchestration for production workloads.",
-        extra_meta={"session_id": "session-a"},
+        session_id="session-a",
     )
 
     sem_conn = memory._stores["semantic"]._conn()

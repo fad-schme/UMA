@@ -1,11 +1,43 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, Optional
 
 import yaml
 
+from tests.helpers.providers import fake_embed, fake_llm
 from uma.api.memory import UMAMemory
+from uma.adapters.llm import openai_compatible as shared_llm_module
+
+
+_TEST_EMBED_DIM = 64
+
+
+class _FakeAsyncOpenAI:
+    def __init__(self, **kwargs: Any) -> None:
+        self.init_kwargs = kwargs
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._chat_create))
+        self.embeddings = SimpleNamespace(create=self._embedding_create)
+
+    async def _chat_create(self, **kwargs: Any) -> Any:
+        content = await fake_llm(
+            messages=list(kwargs.get("messages") or []),
+            max_tokens=int(kwargs.get("max_tokens", 256)),
+            temperature=float(kwargs.get("temperature", 0.0)),
+        )
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+        )
+
+    async def _embedding_create(self, **kwargs: Any) -> Any:
+        vectors = await fake_embed(
+            texts=list(kwargs.get("input") or []),
+            dimension=_TEST_EMBED_DIM,
+        )
+        return SimpleNamespace(
+            data=[SimpleNamespace(embedding=vector) for vector in vectors]
+        )
 
 
 def build_test_config(
@@ -25,6 +57,9 @@ def build_test_config(
     """
     db_root = Path(db_root)
     graph_config = graph_config or {}
+    global _TEST_EMBED_DIM
+    _TEST_EMBED_DIM = int(embedding_dim)
+    shared_llm_module.AsyncOpenAI = _FakeAsyncOpenAI  # type: ignore[assignment]
 
     cfg: Dict[str, Any] = {
         "storage": {
@@ -42,13 +77,14 @@ def build_test_config(
             "keep_recent_token_fraction": 0.1,
         },
         "embedding": {
-            "provider": "tests.helpers.providers:fake_embed",
-            "model": "fake-embed",
+            "provider": "ollama",
+            "model": "nomic-embed-text",
             "dimension": int(embedding_dim),
+            "config": {"host": "http://localhost:11434"},
         },
         "llms": {
-            "agent": {"provider": "tests.helpers.providers:fake_llm", "model": "fake-llm", "config": {}},
-            "uma": {"provider": "tests.helpers.providers:fake_llm", "model": "fake-llm", "config": {}},
+            "agent": {"provider": "ollama", "model": "llama3", "config": {"host": "http://localhost:11434"}},
+            "uma": {"provider": "ollama", "model": "llama3", "config": {"host": "http://localhost:11434"}},
         },
         "retrieval": {
             "max_episodes": 5,
@@ -128,11 +164,6 @@ async def init_uma_for_tests(
     cfg_path.write_text(yaml.safe_dump(cfg))
 
     memory = UMAMemory.from_yaml(str(cfg_path))
-    memory.set_context(
-        user_id="user:u1",
-        agent_id=agent_id,
-        tenant_id="default",
-        request_id=f"test:{agent_id}",
-    )
+    memory.set_context(agent_id=agent_id)
     memory._ensure_ingestion_ready()
     return memory

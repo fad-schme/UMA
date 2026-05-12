@@ -34,16 +34,22 @@ def _primary_artifact(result: Any) -> Any:
     return result
 
 
-def _require_runtime_context(memory: "UMAMemory") -> Any:
-    return memory._require_bound_runtime_context()
-
-
 async def explain_result(
     memory: "UMAMemory",
     result: Any,
+    *,
+    user_id: str,
+    tenant_id: str = "default",
+    workspace_id: str | None = None,
 ) -> dict[str, Any]:
     """Explain a retrieval result or compiled artifact using canonical provenance."""
-    runtime_context = _require_runtime_context(memory)
+    runtime_context = memory._resolve_runtime_context(
+        user_id=user_id,
+        tenant_id=tenant_id,
+        request_id="management:explain_result",
+        workspace_id=workspace_id,
+        session_id=None,
+    )
     artifact = _primary_artifact(result)
     page = wiki_module.wiki_page_from_record(artifact)
     expanded = await memory.runtime.expand_evidence(runtime_context, artifact)
@@ -80,7 +86,6 @@ async def explain_result(
         "invalid_reasons": list(provenance.get("invalid_reasons") or []),
         "wiki_page": page,
     }
-
 
 def update_wiki_page(
     memory: "UMAMemory",
@@ -154,29 +159,46 @@ async def lint_memory_drift(
     memory: "UMAMemory",
     artifacts: Any | Sequence[Any],
     *,
+    user_id: str,
+    tenant_id: str = "default",
+    workspace_id: str | None = None,
     stale_after_seconds: int | None = None,
 ) -> dict[str, Any]:
     """Lint compiled memory artifacts for provenance drift without mutating them."""
-    items = list(artifacts) if isinstance(artifacts, Sequence) and not isinstance(artifacts, (str, bytes, bytearray, Mapping)) else [artifacts]
+    items = (
+        list(artifacts)
+        if isinstance(artifacts, Sequence)
+        and not isinstance(artifacts, (str, bytes, bytearray, Mapping))
+        else [artifacts]
+    )
     findings: list[dict[str, Any]] = []
     statuses: list[str] = []
+
     for artifact in items:
         lint_result = await wiki_module.lint_wiki_page(
             memory,
             artifact,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
             stale_after_seconds=stale_after_seconds,
         )
         findings.extend(list(lint_result["findings"]))
         statuses.append(str(lint_result["drift_status"]))
+
     status = "ok" if not findings else "issues_found"
-    logger.info("lint_memory_drift: artifacts=%d findings=%d status=%s", len(items), len(findings), status)
+    logger.info(
+        "lint_memory_drift: artifacts=%d findings=%d status=%s",
+        len(items),
+        len(findings),
+        status,
+    )
     return {
         "status": status,
         "artifacts_scanned": len(items),
         "findings": findings,
         "drift_statuses": statuses,
     }
-
 
 __all__ = [
     "explain_result",

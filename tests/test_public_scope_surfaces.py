@@ -35,12 +35,7 @@ async def _init_memory_with_procedural_feature(tmp_path) -> UMAMemory:
     cfg_path.write_text(yaml.safe_dump(cfg))
 
     memory = UMAMemory.from_yaml(str(cfg_path))
-    memory.set_context(
-        user_id="user:u1",
-        agent_id="agent-default",
-        tenant_id="default",
-        request_id="test:agent-default",
-    )
+    memory.set_context(agent_id="agent-default")
     memory._ensure_ingestion_ready()
     return memory
 

@@ -30,20 +30,20 @@ def test_animus_bootstrap_methods_remain_public_on_umamemory() -> None:
 
 
 @pytest.mark.asyncio
-async def test_load_memory_bootstrap_requires_bound_runtime_context(tmp_path) -> None:
+async def test_load_memory_bootstrap_requires_explicit_user_id(tmp_path) -> None:
     memory = _build_unbound_memory(tmp_path)
     try:
-        with pytest.raises(RuntimeError, match="bound runtime_context"):
+        with pytest.raises(ValueError, match="explicit user_id"):
             await memory.load_memory_bootstrap(str(tmp_path / "MEMORY.md"))
     finally:
         memory.shutdown()
 
 
 @pytest.mark.asyncio
-async def test_load_daily_diary_bootstrap_requires_bound_runtime_context(tmp_path) -> None:
+async def test_load_daily_diary_bootstrap_requires_explicit_user_id(tmp_path) -> None:
     memory = _build_unbound_memory(tmp_path)
     try:
-        with pytest.raises(RuntimeError, match="bound runtime_context"):
+        with pytest.raises(ValueError, match="explicit user_id"):
             await memory.load_daily_diary_bootstrap(str(tmp_path / "2026-05-05.md"))
     finally:
         memory.shutdown()
@@ -63,13 +63,22 @@ async def test_memory_bootstrap_wrapper_delegates_to_ingest_service(uma_memory, 
         return {"status": "ingested", "path": file_path, "facts_created": 1}
 
     monkeypatch.setattr(ingest_service, "ingest_memory_bootstrap", _fake_ingest_memory_bootstrap)
-    result = await uma_memory.load_memory_bootstrap(str(bootstrap_path), config={"mode": "test"})
+    result = await uma_memory.load_memory_bootstrap(
+        str(bootstrap_path),
+        user_id="user:u1",
+        tenant_id="default",
+        request_id="req-memory-bootstrap",
+        session_id="session-bootstrap",
+        config={"mode": "test"},
+    )
 
     assert result == {"status": "ingested", "path": str(bootstrap_path), "facts_created": 1}
     assert calls["file_path"] == str(bootstrap_path)
     assert calls["memory"] is uma_memory
     assert calls["config"] == {"mode": "test"}
     assert calls["runtime_context"] is not None
+    assert calls["runtime_context"].user_id == "user:u1"
+    assert calls["runtime_context"].session_id == "session-bootstrap"
 
 
 @pytest.mark.asyncio
@@ -85,29 +94,43 @@ async def test_daily_diary_bootstrap_wrapper_delegates_to_ingest_service(uma_mem
         return {"status": "ingested", "path": file_path, "episodes_created": 1}
 
     monkeypatch.setattr(ingest_service, "ingest_daily_diary_bootstrap", _fake_ingest_daily_diary_bootstrap)
-    result = await uma_memory.load_daily_diary_bootstrap(str(diary_path))
+    result = await uma_memory.load_daily_diary_bootstrap(
+        str(diary_path),
+        user_id="user:u1",
+        tenant_id="default",
+        request_id="req-diary-bootstrap",
+        session_id="session-diary",
+    )
 
     assert result == {"status": "ingested", "path": str(diary_path), "episodes_created": 1}
     assert calls["file_path"] == str(diary_path)
     assert calls["memory"] is uma_memory
     assert calls["runtime_context"] is not None
+    assert calls["runtime_context"].user_id == "user:u1"
+    assert calls["runtime_context"].session_id == "session-diary"
 
 
 @pytest.mark.asyncio
 async def test_memory_bootstrap_preserves_skip_and_ingest_result_shapes(uma_memory, tmp_path) -> None:
-    missing = await uma_memory.load_memory_bootstrap(str(tmp_path / "missing-memory.md"))
+    bootstrap_scope = {
+        "user_id": "user:u1",
+        "tenant_id": "default",
+        "request_id": "req-memory-bootstrap-shape",
+        "session_id": "session-memory-bootstrap",
+    }
+    missing = await uma_memory.load_memory_bootstrap(str(tmp_path / "missing-memory.md"), **bootstrap_scope)
     assert missing["status"] == "skipped"
     assert missing["reason"] == "missing_file"
 
     empty_path = tmp_path / "empty-memory.md"
     empty_path.write_text("", encoding="utf-8")
-    empty = await uma_memory.load_memory_bootstrap(str(empty_path))
+    empty = await uma_memory.load_memory_bootstrap(str(empty_path), **bootstrap_scope)
     assert empty["status"] == "skipped"
     assert empty["reason"] == "empty_file"
 
     no_entries_path = tmp_path / "headings-only-memory.md"
     no_entries_path.write_text("# Memory\n<!-- comment -->\n", encoding="utf-8")
-    no_entries = await uma_memory.load_memory_bootstrap(str(no_entries_path))
+    no_entries = await uma_memory.load_memory_bootstrap(str(no_entries_path), **bootstrap_scope)
     assert no_entries["status"] == "skipped"
     assert no_entries["reason"] == "no_entries"
 
@@ -116,8 +139,8 @@ async def test_memory_bootstrap_preserves_skip_and_ingest_result_shapes(uma_memo
         "# Memory\n- prefers espresso over drip coffee\n- reviews incidents before publishing summaries\n",
         encoding="utf-8",
     )
-    first = await uma_memory.load_memory_bootstrap(str(ingest_path))
-    second = await uma_memory.load_memory_bootstrap(str(ingest_path))
+    first = await uma_memory.load_memory_bootstrap(str(ingest_path), **bootstrap_scope)
+    second = await uma_memory.load_memory_bootstrap(str(ingest_path), **bootstrap_scope)
 
     assert first["status"] == "ingested"
     assert first["entries_found"] == 2
@@ -130,26 +153,32 @@ async def test_memory_bootstrap_preserves_skip_and_ingest_result_shapes(uma_memo
 
 @pytest.mark.asyncio
 async def test_daily_diary_bootstrap_preserves_skip_and_ingest_result_shapes(uma_memory, tmp_path) -> None:
-    missing = await uma_memory.load_daily_diary_bootstrap(str(tmp_path / "missing-diary.md"))
+    bootstrap_scope = {
+        "user_id": "user:u1",
+        "tenant_id": "default",
+        "request_id": "req-diary-bootstrap-shape",
+        "session_id": "session-diary-bootstrap",
+    }
+    missing = await uma_memory.load_daily_diary_bootstrap(str(tmp_path / "missing-diary.md"), **bootstrap_scope)
     assert missing["status"] == "skipped"
     assert missing["reason"] == "missing_file"
 
     empty_path = tmp_path / "empty-diary.md"
     empty_path.write_text("", encoding="utf-8")
-    empty = await uma_memory.load_daily_diary_bootstrap(str(empty_path))
+    empty = await uma_memory.load_daily_diary_bootstrap(str(empty_path), **bootstrap_scope)
     assert empty["status"] == "skipped"
     assert empty["reason"] == "empty_file"
 
     no_entries_path = tmp_path / "notes.md"
     no_entries_path.write_text("not a bullet\nanother line\n", encoding="utf-8")
-    no_entries = await uma_memory.load_daily_diary_bootstrap(str(no_entries_path))
+    no_entries = await uma_memory.load_daily_diary_bootstrap(str(no_entries_path), **bootstrap_scope)
     assert no_entries["status"] == "skipped"
     assert no_entries["reason"] == "no_entries"
 
     diary_path = tmp_path / "2026-05-05.md"
     diary_path.write_text("- investigated alert routing\n- documented follow-up actions\n", encoding="utf-8")
-    first = await uma_memory.load_daily_diary_bootstrap(str(diary_path))
-    second = await uma_memory.load_daily_diary_bootstrap(str(diary_path))
+    first = await uma_memory.load_daily_diary_bootstrap(str(diary_path), **bootstrap_scope)
+    second = await uma_memory.load_daily_diary_bootstrap(str(diary_path), **bootstrap_scope)
 
     assert first["status"] == "ingested"
     assert first["diary_date"] == "2026-05-05"

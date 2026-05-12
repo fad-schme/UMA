@@ -329,18 +329,6 @@ class UMARuntime:
             return getattr(memory, "llm", None)
         return self._llm
 
-    @property
-    def agent_id(self) -> Optional[str]:
-        """Return the bridge runtime agent identity, if one is known."""
-        memory = self.memory_bridge
-        if memory is None:
-            return None
-        agent_id = getattr(memory, "agent_id", None)
-        if isinstance(agent_id, str):
-            normalized = agent_id.strip()
-            return normalized or None
-        return None
-
     def ensure_retrieval_ready(self) -> None:
         """Ensure retrieval-only dependencies are initialized."""
         memory = self._require_memory_bridge()

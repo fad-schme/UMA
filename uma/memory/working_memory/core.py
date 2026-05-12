@@ -21,8 +21,8 @@ WorkingMemoryCore does NOT:
 - build prompts
 - generate assistant replies
 
-Long-term memory retrieval is handled by the bound runtime/request-handle path
-via `UMARuntime.bind(RuntimeContext(...))` and `UMARequestHandle`.
+Long-term memory retrieval is handled by UMA's retrieval runtime from explicit
+request scope; working memory only stores session-local conversational state.
 """
 
 from __future__ import annotations
