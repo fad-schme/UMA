@@ -1,7 +1,9 @@
 from datetime import datetime, timedelta
+import asyncio
 
 import pytest
 
+from uma.common import maintenance as maintenance_module
 from uma.common.identity import normalize_user_id
 from uma.common.types import Episode
 from uma.common.types import Fact
@@ -401,3 +403,246 @@ async def test_rebuild_derived_indexes_is_tenant_scoped_for_identical_owner_tupl
     params_list = [params or {} for _cypher, params in memory.graph_core.adapter.queries]
     assert any(params.get("tenant_id") == "tenant-a" and params.get("episode_id") == "ep-tenant-a" for params in params_list)
     assert not any(params.get("tenant_id") == "tenant-b" for params in params_list)
+
+
+@pytest.mark.asyncio
+async def test_vector_rebuild_lock_prevents_overlapping_execution(uma_memory, monkeypatch: pytest.MonkeyPatch):
+    memory = uma_memory
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls = {"count": 0}
+    completions: list[str] = []
+
+    async def slow_unlocked(*args, **kwargs):
+        calls["count"] += 1
+        entered.set()
+        await release.wait()
+        return {"status": "ok", "report": {}}
+
+    monkeypatch.setattr(maintenance_module, "_rebuild_vector_indexes_unlocked", slow_unlocked)
+
+    async def call(name: str) -> None:
+        await maintenance_module.rebuild_vector_indexes(memory, owner_type="user", owner_id="user:u1")
+        completions.append(name)
+
+    first = asyncio.create_task(call("first"))
+    await entered.wait()
+    second = asyncio.create_task(call("second"))
+    await asyncio.sleep(0.05)
+
+    assert calls["count"] == 1
+    assert completions == []
+
+    release.set()
+    await asyncio.gather(first, second)
+
+    assert calls["count"] == 2
+    assert sorted(completions) == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_graph_rebuild_lock_prevents_overlapping_execution(uma_memory, monkeypatch: pytest.MonkeyPatch):
+    memory = uma_memory
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls = {"count": 0}
+    completions: list[str] = []
+
+    async def slow_unlocked(*args, **kwargs):
+        calls["count"] += 1
+        entered.set()
+        await release.wait()
+        return {"status": "ok", "episodes": 0, "facts": 0, "episode_fact_links": 0, "temporal_links": 0}
+
+    monkeypatch.setattr(maintenance_module, "_rebuild_graph_from_authoritative_stores_unlocked", slow_unlocked)
+
+    async def call(name: str) -> None:
+        await maintenance_module._rebuild_graph_from_authoritative_stores(
+            memory,
+            tenant_id="tenant-a",
+            owner_type="user",
+            owner_id=normalize_user_id("user:u1"),
+            include_graph=True,
+        )
+        completions.append(name)
+
+    first = asyncio.create_task(call("first"))
+    await entered.wait()
+    second = asyncio.create_task(call("second"))
+    await asyncio.sleep(0.05)
+
+    assert calls["count"] == 1
+    assert completions == []
+
+    release.set()
+    await asyncio.gather(first, second)
+
+    assert calls["count"] == 2
+    assert sorted(completions) == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_graph_rebuild_clears_scoped_materialization_before_replay(uma_memory):
+    memory = uma_memory
+    owner_id = normalize_user_id("user:u1")
+    base_ts = datetime.utcnow()
+    embedding = (await memory.embedder.embed(["graph rebuild scope"]))[0]
+
+    await memory.episodic_core.add_episode(
+        Episode(
+            id="ep-scope-clear",
+            timestamp=base_ts,
+            summary="scope clear",
+            user_id=owner_id,
+            owner_type="user",
+            owner_id=owner_id,
+            tenant_id="tenant-clear",
+            session_id="session-clear",
+            origin_agent_id="agent-clear",
+            origin_user_id=owner_id,
+            origin_session_id="session-clear",
+            meta={"turn_id": "turn-clear"},
+        ),
+        embedding,
+    )
+    await memory.semantic_core.upsert_fact(
+        Fact(
+            id="fact_scope_clear",
+            subject=owner_id,
+            predicate="likes",
+            object="clear-tea",
+            created_at=base_ts,
+            updated_at=base_ts,
+            source_ids=["chunk-clear"],
+            confidence=0.9,
+            tenant_id="tenant-clear",
+            owner_type="user",
+            owner_id=owner_id,
+            session_id="session-clear",
+            origin_agent_id="agent-clear",
+            origin_user_id=owner_id,
+            origin_session_id="session-clear",
+            meta={"turn_id": "turn-clear"},
+        ),
+        embedding,
+    )
+
+    adapter = memory.graph_core.adapter
+    adapter.queries.clear()
+
+    result = await memory.rebuild_derived_indexes(
+        tenant_id="tenant-clear",
+        owner_type="user",
+        owner_id=owner_id,
+        include_procedural=False,
+    )
+
+    assert result["status"] in ("ok", "degraded")
+    assert len(adapter.queries) >= 3
+    clear_queries = adapter.queries[:3]
+    clear_params = [params or {} for _cypher, params in clear_queries]
+    assert all(params.get("tenant_id") == "tenant-clear" for params in clear_params)
+    assert all(params.get("owner_type") == "user" for params in clear_params)
+    assert all(params.get("owner_id") == owner_id for params in clear_params)
+    assert "DELETE r" in clear_queries[0][0]
+    assert "DETACH DELETE f" in clear_queries[1][0]
+    assert "DETACH DELETE e" in clear_queries[2][0]
+
+
+@pytest.mark.asyncio
+async def test_graph_rebuild_clear_is_scoped_to_requested_owner(uma_memory):
+    memory = uma_memory
+    owner_id = normalize_user_id("user:shared")
+    base_ts = datetime.utcnow()
+    embedding = (await memory.embedder.embed(["graph rebuild owner scope"]))[0]
+
+    await memory.episodic_core.add_episode(
+        Episode(
+            id="ep-clear-a",
+            timestamp=base_ts,
+            summary="tenant a",
+            user_id=owner_id,
+            owner_type="user",
+            owner_id=owner_id,
+            tenant_id="tenant-a",
+            session_id="session-a",
+            origin_agent_id="agent-a",
+            origin_user_id=owner_id,
+            origin_session_id="session-a",
+            meta={"turn_id": "turn-a"},
+        ),
+        embedding,
+    )
+    await memory.episodic_core.add_episode(
+        Episode(
+            id="ep-clear-b",
+            timestamp=base_ts + timedelta(seconds=1),
+            summary="tenant b",
+            user_id=owner_id,
+            owner_type="user",
+            owner_id=owner_id,
+            tenant_id="tenant-b",
+            session_id="session-b",
+            origin_agent_id="agent-b",
+            origin_user_id=owner_id,
+            origin_session_id="session-b",
+            meta={"turn_id": "turn-b"},
+        ),
+        embedding,
+    )
+    await memory.semantic_core.upsert_fact(
+        Fact(
+            id="fact_clear_a",
+            subject=owner_id,
+            predicate="likes",
+            object="alpha",
+            created_at=base_ts,
+            updated_at=base_ts,
+            source_ids=["chunk-a"],
+            confidence=0.9,
+            tenant_id="tenant-a",
+            owner_type="user",
+            owner_id=owner_id,
+            session_id="session-a",
+            origin_agent_id="agent-a",
+            origin_user_id=owner_id,
+            origin_session_id="session-a",
+            meta={"turn_id": "turn-a"},
+        ),
+        embedding,
+    )
+    await memory.semantic_core.upsert_fact(
+        Fact(
+            id="fact_clear_b",
+            subject=owner_id,
+            predicate="likes",
+            object="beta",
+            created_at=base_ts + timedelta(seconds=1),
+            updated_at=base_ts + timedelta(seconds=1),
+            source_ids=["chunk-b"],
+            confidence=0.9,
+            tenant_id="tenant-b",
+            owner_type="user",
+            owner_id=owner_id,
+            session_id="session-b",
+            origin_agent_id="agent-b",
+            origin_user_id=owner_id,
+            origin_session_id="session-b",
+            meta={"turn_id": "turn-b"},
+        ),
+        embedding,
+    )
+
+    adapter = memory.graph_core.adapter
+    adapter.queries.clear()
+
+    await memory.rebuild_derived_indexes(
+        tenant_id="tenant-a",
+        owner_type="user",
+        owner_id=owner_id,
+        include_procedural=False,
+    )
+
+    clear_params = [(params or {}) for _cypher, params in adapter.queries[:3]]
+    assert all(params.get("tenant_id") == "tenant-a" for params in clear_params)
+    assert not any(params.get("tenant_id") == "tenant-b" for params in clear_params)
