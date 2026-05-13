@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import asyncio
+import threading
 
 import pytest
 
@@ -8,6 +9,7 @@ from uma.common.identity import normalize_user_id
 from uma.common.types import Episode
 from uma.common.types import Fact
 from uma.common.types import Skill
+from uma.retrieve.user_query_helper import build_fact_embedding_text
 
 
 @pytest.mark.asyncio
@@ -646,3 +648,334 @@ async def test_graph_rebuild_clear_is_scoped_to_requested_owner(uma_memory):
     clear_params = [(params or {}) for _cypher, params in adapter.queries[:3]]
     assert all(params.get("tenant_id") == "tenant-a" for params in clear_params)
     assert not any(params.get("tenant_id") == "tenant-b" for params in clear_params)
+
+
+@pytest.mark.asyncio
+async def test_live_write_overlap_with_vector_rebuild_keeps_retrieval_scoped(uma_memory, monkeypatch: pytest.MonkeyPatch):
+    memory = uma_memory
+    owner_id = normalize_user_id("user:scope-a")
+    other_owner_id = normalize_user_id("user:scope-b")
+    base_ts = datetime.utcnow()
+
+    existing_fact = Fact(
+        id="fact_overlap_existing",
+        subject=owner_id,
+        predicate="LIKES",
+        object="coffee",
+        created_at=base_ts,
+        updated_at=base_ts,
+        source_ids=["chunk-existing"],
+        confidence=0.9,
+        tenant_id="tenant-a",
+        owner_type="user",
+        owner_id=owner_id,
+        session_id="session-a",
+        origin_agent_id="agent-a",
+        origin_user_id=owner_id,
+        origin_session_id="session-a",
+    )
+    live_fact = Fact(
+        id="fact_overlap_live",
+        subject=owner_id,
+        predicate="LIKES",
+        object="tea",
+        created_at=base_ts + timedelta(seconds=1),
+        updated_at=base_ts + timedelta(seconds=1),
+        source_ids=["chunk-live"],
+        confidence=0.9,
+        tenant_id="tenant-a",
+        owner_type="user",
+        owner_id=owner_id,
+        session_id="session-a",
+        origin_agent_id="agent-a",
+        origin_user_id=owner_id,
+        origin_session_id="session-a",
+    )
+    other_fact = Fact(
+        id="fact_overlap_other_tenant",
+        subject=other_owner_id,
+        predicate="LIKES",
+        object="juice",
+        created_at=base_ts,
+        updated_at=base_ts,
+        source_ids=["chunk-other"],
+        confidence=0.9,
+        tenant_id="tenant-b",
+        owner_type="user",
+        owner_id=other_owner_id,
+        session_id="session-b",
+        origin_agent_id="agent-b",
+        origin_user_id=other_owner_id,
+        origin_session_id="session-b",
+    )
+
+    existing_embedding, live_embedding, other_embedding = await memory.embedder.embed(
+        [
+            build_fact_embedding_text(existing_fact),
+            build_fact_embedding_text(live_fact),
+            build_fact_embedding_text(other_fact),
+        ]
+    )
+    await memory.semantic_core.upsert_fact(existing_fact, existing_embedding)
+    await memory.semantic_core.upsert_fact(other_fact, other_embedding)
+
+    original_list_facts = memory.semantic_core.list_facts_for_owner
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    blocked = {"done": False}
+
+    async def paused_list_facts_for_owner(*, tenant_id: str, owner_type: str, owner_id: str, limit=None):
+        if (
+            not blocked["done"]
+            and tenant_id == "tenant-a"
+            and owner_type == "user"
+            and owner_id == normalize_user_id("user:scope-a")
+        ):
+            blocked["done"] = True
+            entered.set()
+            await release.wait()
+        return await original_list_facts(
+            tenant_id=tenant_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            limit=limit,
+        )
+
+    monkeypatch.setattr(memory.semantic_core, "list_facts_for_owner", paused_list_facts_for_owner)
+
+    rebuild_task = asyncio.create_task(
+        memory.rebuild_vector_indexes(
+            tenant_id="tenant-a",
+            owner_type="user",
+            owner_id=owner_id,
+            include_episodic=False,
+            include_procedural=False,
+        )
+    )
+    await entered.wait()
+
+    await memory.semantic_core.upsert_fact(live_fact, live_embedding)
+    release.set()
+    rebuild_result = await rebuild_task
+
+    assert rebuild_result["status"] in ("ok", "degraded")
+
+    tenant_a_results = await memory.semantic_core.search(
+        query_embedding=live_embedding,
+        tenant_id="tenant-a",
+        owner_type="user",
+        owner_id=owner_id,
+        k=10,
+        query_text=build_fact_embedding_text(live_fact),
+    )
+    assert tenant_a_results
+    assert all(getattr(fact, "tenant_id", None) == "tenant-a" for fact in tenant_a_results)
+    assert all(getattr(fact, "owner_id", None) == owner_id for fact in tenant_a_results)
+    assert not any(getattr(fact, "id", None) == other_fact.id for fact in tenant_a_results)
+
+    tenant_b_results = await memory.semantic_core.search(
+        query_embedding=other_embedding,
+        tenant_id="tenant-b",
+        owner_type="user",
+        owner_id=other_owner_id,
+        k=10,
+        query_text=build_fact_embedding_text(other_fact),
+    )
+    assert tenant_b_results
+    assert all(getattr(fact, "tenant_id", None) == "tenant-b" for fact in tenant_b_results)
+    assert all(getattr(fact, "owner_id", None) == other_owner_id for fact in tenant_b_results)
+    assert not any(getattr(fact, "id", None) == live_fact.id for fact in tenant_b_results)
+
+
+@pytest.mark.asyncio
+async def test_deferred_graph_update_overlap_with_graph_rebuild_keeps_scope_isolated(
+    uma_memory,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    memory = uma_memory
+    owner_id = normalize_user_id("user:graph-a")
+    base_ts = datetime.utcnow()
+    seed_embedding = (await memory.embedder.embed(["graph overlap seed"]))[0]
+
+    await memory.episodic_core.add_episode(
+        Episode(
+            id="ep-graph-overlap-a",
+            timestamp=base_ts,
+            summary="seed episode",
+            user_id=owner_id,
+            owner_type="user",
+            owner_id=owner_id,
+            tenant_id="tenant-a",
+            session_id="session-a",
+            origin_agent_id="agent-a",
+            origin_user_id=owner_id,
+            origin_session_id="session-a",
+            meta={"turn_id": "turn-a"},
+        ),
+        seed_embedding,
+    )
+    await memory.semantic_core.upsert_fact(
+        Fact(
+            id="fact_graph_overlap_a",
+            subject=owner_id,
+            predicate="LIKES",
+            object="alpha",
+            created_at=base_ts,
+            updated_at=base_ts,
+            source_ids=["chunk-a"],
+            confidence=0.9,
+            tenant_id="tenant-a",
+            owner_type="user",
+            owner_id=owner_id,
+            session_id="session-a",
+            origin_agent_id="agent-a",
+            origin_user_id=owner_id,
+            origin_session_id="session-a",
+            meta={"turn_id": "turn-a"},
+        ),
+        seed_embedding,
+    )
+
+    adapter = memory.graph_core.adapter
+    adapter.queries.clear()
+
+    original_list_episodes = memory.episodic_core.list_episodes
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    blocked = {"done": False}
+
+    async def paused_list_episodes(tenant_id: str, owner_type: str, owner_id: str):
+        if (
+            not blocked["done"]
+            and tenant_id == "tenant-a"
+            and owner_type == "user"
+            and owner_id == normalize_user_id("user:graph-a")
+        ):
+            blocked["done"] = True
+            entered.set()
+            await release.wait()
+        return await original_list_episodes(tenant_id, owner_type, owner_id)
+
+    monkeypatch.setattr(memory.episodic_core, "list_episodes", paused_list_episodes)
+
+    rebuild_task = asyncio.create_task(
+        memory.rebuild_derived_indexes(
+            tenant_id="tenant-a",
+            owner_type="user",
+            owner_id=owner_id,
+            include_procedural=False,
+        )
+    )
+    await entered.wait()
+
+    await memory.process_turn(
+        user_id="user:graph-b",
+        user_msg="I like tea",
+        assistant_reply="Noted that you like tea.",
+        session_id="session-b",
+        tenant_id="tenant-b",
+        workspace_id="workspace-b",
+        extra_meta={"request_id": "req-graph-b"},
+    )
+
+    release.set()
+    rebuild_result = await rebuild_task
+
+    assert rebuild_result["status"] in ("ok", "degraded")
+    clear_queries = [
+        (cypher, params or {})
+        for cypher, params in adapter.queries
+        if "DELETE r" in cypher or "DETACH DELETE f" in cypher or "DETACH DELETE e" in cypher
+    ]
+    assert len(clear_queries) == 3
+    assert all(params.get("tenant_id") == "tenant-a" for _cypher, params in clear_queries)
+    assert all(params.get("owner_type") == "user" for _cypher, params in clear_queries)
+    assert all(params.get("owner_id") == owner_id for _cypher, params in clear_queries)
+
+    params_list = [params or {} for _cypher, params in adapter.queries]
+    assert any(params.get("tenant_id") == "tenant-b" and params.get("owner_id") == normalize_user_id("user:graph-b") for params in params_list)
+    assert any(params.get("tenant_id") == "tenant-a" and params.get("owner_id") == owner_id for params in params_list)
+    assert not any(
+        (params.get("tenant_id") == "tenant-b")
+        and (
+            "DELETE r" in cypher
+            or "DETACH DELETE f" in cypher
+            or "DETACH DELETE e" in cypher
+        )
+        for cypher, params in adapter.queries
+    )
+
+
+@pytest.mark.asyncio
+async def test_semantic_search_drops_vector_candidates_without_committed_sql_row(
+    uma_memory,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    memory = uma_memory
+    owner_id = normalize_user_id("user:transient")
+    fact = Fact(
+        id="fact_transient_visibility",
+        subject=owner_id,
+        predicate="LIKES",
+        object="transient coffee",
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+        source_ids=["chunk-transient"],
+        confidence=0.9,
+        tenant_id="tenant-transient",
+        owner_type="user",
+        owner_id=owner_id,
+        session_id="session-transient",
+        origin_agent_id="agent-transient",
+        origin_user_id=owner_id,
+        origin_session_id="session-transient",
+    )
+    embedding = (await memory.embedder.embed([build_fact_embedding_text(fact)]))[0]
+
+    vector_index = memory.semantic_core.vector_index()
+    real_upsert = vector_index.upsert
+    entered = threading.Event()
+    release = threading.Event()
+    failures: list[BaseException] = []
+
+    def blocking_upsert(*args, **kwargs):
+        real_upsert(*args, **kwargs)
+        entered.set()
+        if not release.wait(timeout=2.0):
+            raise TimeoutError("timed out waiting to release vector upsert")
+
+    monkeypatch.setattr(vector_index, "upsert", blocking_upsert)
+
+    def writer() -> None:
+        try:
+            asyncio.run(memory.semantic_core.upsert_fact(fact, embedding))
+        except BaseException as exc:  # pragma: no cover - failure capture only
+            failures.append(exc)
+
+    thread = threading.Thread(target=writer)
+    thread.start()
+    assert entered.wait(timeout=1.0)
+
+    transient_results = await memory.semantic_core.search(
+        query_embedding=embedding,
+        tenant_id="tenant-transient",
+        owner_type="user",
+        owner_id=owner_id,
+        k=10,
+        query_text=build_fact_embedding_text(fact),
+    )
+    assert transient_results == []
+
+    release.set()
+    thread.join(timeout=2.0)
+    assert not failures
+
+    committed_results = await memory.semantic_core.search(
+        query_embedding=embedding,
+        tenant_id="tenant-transient",
+        owner_type="user",
+        owner_id=owner_id,
+        k=10,
+        query_text=build_fact_embedding_text(fact),
+    )
+    assert [item.id for item in committed_results] == [fact.id]
