@@ -71,16 +71,38 @@ def test_runtime_does_not_mutate_when_binding_distinct_contexts() -> None:
     before_metadata = dict(runtime.metadata)
     before_stores = dict(runtime.stores)
 
-    runtime.bind(RuntimeContext(tenant_id="tenant-1", agent_id="agent-a", request_id="req-a"))
-    runtime.bind(RuntimeContext(tenant_id="tenant-2", agent_id="agent-b", request_id="req-b"))
+    handle_a = runtime.bind(
+        RuntimeContext(
+            tenant_id="tenant-1",
+            agent_id="agent-a",
+            request_id="req-a",
+            user_id="user-a",
+            session_id="session-a",
+        )
+    )
+    handle_b = runtime.bind(
+        RuntimeContext(
+            tenant_id="tenant-2",
+            agent_id="agent-b",
+            request_id="req-b",
+            user_id="user-b",
+            session_id="session-b",
+        )
+    )
 
     assert runtime.metadata == before_metadata
     assert runtime.stores == before_stores
     assert not hasattr(runtime, "context")
     assert not hasattr(runtime, "request_id")
-    assert runtime.agent_id is None
     assert not hasattr(runtime, "session_id")
     assert not hasattr(runtime, "user_id")
+    assert handle_a.context != handle_b.context
+    assert handle_a.request_id == "req-a"
+    assert handle_b.request_id == "req-b"
+    assert handle_a.user_id == "user-a"
+    assert handle_b.user_id == "user-b"
+    assert handle_a.session_id == "session-a"
+    assert handle_b.session_id == "session-b"
 
 
 def test_runtime_bind_requires_runtime_context() -> None:

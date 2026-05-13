@@ -185,7 +185,9 @@ class UMAMemory:
     def runtime(self) -> UMARuntime:
         """Return the shared internal runtime view over this memory instance."""
         if self._runtime is None:
-            self._runtime = UMARuntime.from_memory(self)
+            with self._lifecycle_lock:
+                if self._runtime is None:
+                    self._runtime = UMARuntime.from_memory(self)
         return self._runtime
 
     @property

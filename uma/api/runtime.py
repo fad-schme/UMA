@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
+import threading
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional
 
@@ -197,28 +198,35 @@ class AnimusProfileProvider:
         if ttl_seconds <= 0:
             raise ValueError("AnimusProfileProvider.ttl_seconds must be a positive integer.")
         self.ttl_seconds = ttl_seconds
+        self._lock = threading.RLock()
         self._user_profile: Optional[_AnimusProfileCacheEntry] = None
         self._agent_profile: Optional[_AnimusProfileCacheEntry] = None
 
     def load_user_profile(self, path: str) -> None:
         """Load and cache the current USER.md profile."""
-        self._user_profile = self._load_profile(path)
-        logger.info("AnimusProfileProvider: loaded user profile from %s", self._user_profile.path)
+        loaded = self._load_profile(path)
+        with self._lock:
+            self._user_profile = loaded
+        logger.info("AnimusProfileProvider: loaded user profile from %s", loaded.path)
 
     def load_agent_profile(self, path: str) -> None:
         """Load and cache the current SOUL.md profile."""
-        self._agent_profile = self._load_profile(path)
-        logger.info("AnimusProfileProvider: loaded agent profile from %s", self._agent_profile.path)
+        loaded = self._load_profile(path)
+        with self._lock:
+            self._agent_profile = loaded
+        logger.info("AnimusProfileProvider: loaded agent profile from %s", loaded.path)
 
     def get_user_profile_text(self) -> str:
         """Return cached USER.md content, refreshing it after TTL expiry."""
-        self._user_profile = self._refresh_if_needed(self._user_profile)
-        return self._user_profile.text if self._user_profile is not None else ""
+        with self._lock:
+            self._user_profile = self._refresh_if_needed(self._user_profile)
+            return self._user_profile.text if self._user_profile is not None else ""
 
     def get_agent_profile_text(self) -> str:
         """Return cached SOUL.md content, refreshing it after TTL expiry."""
-        self._agent_profile = self._refresh_if_needed(self._agent_profile)
-        return self._agent_profile.text if self._agent_profile is not None else ""
+        with self._lock:
+            self._agent_profile = self._refresh_if_needed(self._agent_profile)
+            return self._agent_profile.text if self._agent_profile is not None else ""
 
     def _refresh_if_needed(
         self,

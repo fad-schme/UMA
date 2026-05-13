@@ -6,6 +6,7 @@ These utilities rebuild derived indexes from SQL-backed authoritative data.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
@@ -17,6 +18,26 @@ from uma.common.identity import normalize_user_id
 from uma.retrieve.user_query_helper import build_fact_embedding_text
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_async_lock(memory: Any, attr_name: str) -> asyncio.Lock:
+    lock = getattr(memory, attr_name, None)
+    if lock is not None:
+        return lock
+
+    lifecycle_lock = getattr(memory, "_lifecycle_lock", None)
+    if lifecycle_lock is not None:
+        with lifecycle_lock:
+            existing = getattr(memory, attr_name, None)
+            if existing is not None:
+                return existing
+            created = asyncio.Lock()
+            setattr(memory, attr_name, created)
+            return created
+
+    created = asyncio.Lock()
+    setattr(memory, attr_name, created)
+    return created
 
 
 def _ownership_ref(tenant_id: str, owner_type: str, owner_id: str) -> OwnershipRef:
@@ -117,6 +138,31 @@ async def rebuild_vector_indexes(
     - Semantic and procedural embeddings are recomputed from text representations.
     - If tenant_id, owner_type or owner_id is not provided, semantic and episodic rebuilds are skipped.
     """
+    lock = _ensure_async_lock(memory, "_vector_rebuild_lock")
+    async with lock:
+        return await _rebuild_vector_indexes_unlocked(
+            memory,
+            tenant_id=tenant_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            include_episodic=include_episodic,
+            include_semantic=include_semantic,
+            include_procedural=include_procedural,
+            batch_size=batch_size,
+        )
+
+
+async def _rebuild_vector_indexes_unlocked(
+    memory: Any,
+    *,
+    tenant_id: Optional[str] = None,
+    owner_type: Optional[str] = None,
+    owner_id: Optional[str] = None,
+    include_episodic: bool = True,
+    include_semantic: bool = True,
+    include_procedural: bool = True,
+    batch_size: int = 32,
+) -> Dict[str, Any]:
     report: Dict[str, Any] = {
         "episodic": {"status": "skipped", "count": 0},
         "semantic": {"status": "skipped", "count": 0},
@@ -296,7 +342,74 @@ async def rebuild_derived_indexes(
     }
 
 
+def _clear_scoped_graph_materialization(
+    graph: Any,
+    *,
+    tenant_id: str,
+    owner_type: str,
+    owner_id: str,
+) -> None:
+    if not hasattr(graph, "run_query"):
+        raise RuntimeError("graph core missing run_query")
+
+    params = {
+        "tenant_id": tenant_id,
+        "owner_type": owner_type,
+        "owner_id": owner_id,
+    }
+
+    graph.run_query(
+        """
+        MATCH ()-[r]-()
+        WHERE r.tenant_id = $tenant_id
+          AND r.owner_type = $owner_type
+          AND r.owner_id = $owner_id
+        DELETE r
+        """,
+        params,
+    )
+    graph.run_query(
+        """
+        MATCH (f:Fact)
+        WHERE f.tenant_id = $tenant_id
+          AND f.owner_type = $owner_type
+          AND f.owner_id = $owner_id
+        DETACH DELETE f
+        """,
+        params,
+    )
+    graph.run_query(
+        """
+        MATCH (e:Episode)
+        WHERE e.tenant_id = $tenant_id
+          AND e.owner_type = $owner_type
+          AND e.owner_id = $owner_id
+        DETACH DELETE e
+        """,
+        params,
+    )
+
+
 async def _rebuild_graph_from_authoritative_stores(
+    memory: Any,
+    *,
+    tenant_id: Optional[str],
+    owner_type: Optional[str],
+    owner_id: Optional[str],
+    include_graph: bool,
+) -> Dict[str, Any]:
+    lock = _ensure_async_lock(memory, "_graph_rebuild_lock")
+    async with lock:
+        return await _rebuild_graph_from_authoritative_stores_unlocked(
+            memory,
+            tenant_id=tenant_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            include_graph=include_graph,
+        )
+
+
+async def _rebuild_graph_from_authoritative_stores_unlocked(
     memory: Any,
     *,
     tenant_id: Optional[str],
@@ -325,6 +438,12 @@ async def _rebuild_graph_from_authoritative_stores(
 
     try:
         scoped_owner_id = normalize_user_id(owner_id) if owner_type == "user" else owner_id
+        _clear_scoped_graph_materialization(
+            graph,
+            tenant_id=tenant_id,
+            owner_type=owner_type,
+            owner_id=scoped_owner_id,
+        )
         episodes = await episodic_core.list_episodes(tenant_id, owner_type, scoped_owner_id) if include_graph else []
         facts: List[Fact] = await semantic_core.list_facts_for_owner(
             tenant_id=tenant_id,

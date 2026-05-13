@@ -23,7 +23,7 @@ ENV/
 
 # Distribution / packaging
 build/
-# dist/
+dist/
 *.egg-info/
 
 # VSCode

@@ -28,6 +28,7 @@ setup(
     description="UMA: modular memory and context manager for AI agents",
     long_description=README,
     long_description_content_type="text/markdown",
+    url="https://github.com/your-org/uma-rlm",
     author="a.Diaz-Schmeier",
     author_email="ad-schme@ai-mem-engineering.com",
     license="Apache-2.0",
