@@ -181,6 +181,35 @@ The public Apache-2.0 repo includes UMA Lite and UMA Container profiles.
 
 Production packaging is not included in this public repo. A future private or commercial package may provide production-specific profiles, managed-service adapters, and deployment tooling.
 
+## Agent Skills
+
+UMA ships four AI coding assistant skill files under `.claude/skills/`. These are structured markdown documents that Claude Code (and other assistants that follow the AgentSkills convention) automatically load as context when you ask questions about the project.
+
+| Skill file | What it covers |
+| --- | --- |
+| `.claude/skills/uma-overview.md` | What UMA is and isn't, design philosophy, DAT invariants, ownership model, runtime scope rules |
+| `.claude/skills/uma-api.md` | Full public API — all `UMAMemory` method signatures with contracts, scope fields, management APIs |
+| `.claude/skills/uma-lanes.md` | All six memory lanes, their storage contracts, retrieval limits, and the canonical retrieval pipeline |
+| `.claude/skills/uma-configure.md` | Runtime profiles, full YAML structure, LLM/embedding providers, vector backends, install surfaces |
+
+No setup is required. Claude Code reads `.claude/skills/` automatically. When you ask the assistant a question like *"how do I filter by lane?"* or *"what does `process_turn` persist?"* it will draw on these files rather than guessing from the README alone.
+
+Other assistants can reference the same files directly from `.claude/skills/` or via a symlink at `.agents/skills/` if your tooling follows that convention.
+
+### Generating skill files from compiled memory
+
+`export_wiki_projection` accepts a `skill_format=True` flag to render a compiled wiki artifact as an agent skill file instead of the default projection format. This lets UMA's own compiled memory feed directly into the assistant skill layer.
+
+```python
+from uma.api.management import export_wiki_projection
+
+# default: human-readable wiki projection
+await export_wiki_projection(memory, artifact, output_path="wiki/topic.md")
+
+# skill file: YAML frontmatter + clean content for AI coding assistants
+await export_wiki_projection(memory, artifact, output_path=".claude/skills/topic.md", skill_format=True)
+```
+
 ## Architecture Notes
 
 UMA-RLM preserves a few core invariants across ingestion and retrieval:

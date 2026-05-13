@@ -205,10 +205,15 @@ def export_wiki_projection(
     page_or_artifact: Any,
     *,
     output_path: str | None = None,
+    skill_format: bool = False,
 ) -> dict[str, Any]:
-    """Render one canonical wiki page to rebuildable markdown without mutating page state."""
+    """Render one canonical wiki page to rebuildable markdown without mutating page state.
+
+    Set skill_format=True to emit an agent-skill file (YAML frontmatter + clean content)
+    consumable by AI coding assistants instead of the default projection format.
+    """
     page = wiki_page_from_record(page_or_artifact)
-    markdown = _format_projection_markdown(page)
+    markdown = _format_skill_markdown(page) if skill_format else _format_projection_markdown(page)
     written_path: str | None = None
     if output_path is not None:
         path = Path(output_path)
@@ -219,7 +224,8 @@ def export_wiki_projection(
         "status": "exported",
         "page_id": page["page_id"],
         "artifact_id": page["compiled_artifact_id"],
-        "projection_only": True,
+        "projection_only": not skill_format,
+        "skill_format": skill_format,
         "path": written_path,
         "markdown": markdown,
         "source_chunk_ids": list(page["evidence_links"]["source_chunk_ids"]),
@@ -391,6 +397,29 @@ def _format_projection_markdown(page: Mapping[str, Any]) -> str:
         for conflict in conflicts:
             claim = str((conflict or {}).get("field") or (conflict or {}).get("claim") or "conflict")
             lines.append(f"- {claim}")
+    return "\n".join(lines).strip() + "\n"
+
+
+def _format_skill_markdown(page: Mapping[str, Any]) -> str:
+    lines = [
+        "---",
+        f"name: {page['slug']}",
+        f"description: {page.get('summary') or page['title']}",
+        "metadata:",
+        "  type: project",
+        "  source: uma_wiki",
+        f"  page_id: {page['page_id']}",
+        f"  category: {page['category']}",
+        f"  derived_at: {page.get('derived_at') or ''}",
+        "---",
+        "",
+        f"# {page['title']}",
+        "",
+    ]
+    for section in page.get("sections") or []:
+        heading = str(section.get("heading") or "Section")
+        body = str(section.get("body") or "").strip()
+        lines.extend([f"## {heading}", "", body, ""])
     return "\n".join(lines).strip() + "\n"
 
 

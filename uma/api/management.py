@@ -149,10 +149,14 @@ async def export_wiki_projection(
     artifact: Mapping[str, Any],
     *,
     output_path: str | None = None,
+    skill_format: bool = False,
 ) -> dict[str, Any]:
-    """Render a compiled wiki artifact into a rebuildable markdown projection."""
+    """Render a compiled wiki artifact into a rebuildable markdown projection.
+
+    Set skill_format=True to emit an agent-skill file instead of the default projection format.
+    """
     del memory
-    return wiki_module.export_wiki_projection(artifact, output_path=output_path)
+    return wiki_module.export_wiki_projection(artifact, output_path=output_path, skill_format=skill_format)
 
 
 async def lint_memory_drift(
