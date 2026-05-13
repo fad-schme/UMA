@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from tests.helpers.runtime import build_test_config
+from uma.api.runtime import AnimusProfileProvider, _AnimusProfileCacheEntry
 from uma.common.initializers import providers as provider_init
 from uma.common.initializers import runtime as runtime_init
 import uma.api.memory as memory_module
@@ -17,6 +18,8 @@ from uma.ingest.pipeline import MemoryPipeline
 from uma.common.config import UMAConfig
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
 from uma.common.types import RuntimeContext
+from uma.memory.working_memory.buffer import WorkingMemoryBuffer, WorkingMemoryMessage
+from uma.common.types import SessionScope
 
 
 def _build_uninitialized_memory(tmp_path: Path) -> UMAMemory:
@@ -338,6 +341,130 @@ def test_warmup_failure_does_not_poison_foreground_ingestion_retry(
 
     assert calls["count"] == 2
     assert memory._ingestion_ready is True
+
+
+def test_memory_runtime_singleton_is_thread_safe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    memory = _build_uninitialized_memory(tmp_path)
+    created: list[object] = []
+    entered = threading.Event()
+    release = threading.Event()
+
+    def fake_from_memory(mem: UMAMemory) -> object:
+        created.append(object())
+        entered.set()
+        assert release.wait(timeout=2.0)
+        return created[-1]
+
+    monkeypatch.setattr(memory_module.UMARuntime, "from_memory", staticmethod(fake_from_memory))
+
+    seen: list[object] = []
+
+    def resolve_runtime() -> None:
+        seen.append(memory.runtime)
+
+    first = threading.Thread(target=resolve_runtime)
+    second = threading.Thread(target=resolve_runtime)
+    first.start()
+    assert entered.wait(timeout=1.0)
+    second.start()
+    time.sleep(0.1)
+    release.set()
+    first.join(timeout=2.0)
+    second.join(timeout=2.0)
+
+    assert len(created) == 1
+    assert len(seen) == 2
+    assert seen[0] is seen[1]
+
+
+def test_animus_profile_provider_refresh_is_singleflight(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    profile_path = tmp_path / "USER.md"
+    profile_path.write_text("first", encoding="utf-8")
+    provider = AnimusProfileProvider(ttl_seconds=300)
+    provider.load_user_profile(str(profile_path))
+
+    provider._user_profile = _AnimusProfileCacheEntry(
+        path=str(profile_path),
+        text="expired",
+        loaded_at=0.0,
+        expires_at=0.0,
+    )
+
+    entered = threading.Event()
+    release = threading.Event()
+    calls = {"count": 0}
+
+    def fake_load_profile(path: str):
+        calls["count"] += 1
+        entered.set()
+        assert release.wait(timeout=2.0)
+        now = time.time()
+        return _AnimusProfileCacheEntry(
+            path=path,
+            text="refreshed",
+            loaded_at=now,
+            expires_at=now + 300,
+        )
+
+    monkeypatch.setattr(provider, "_load_profile", fake_load_profile)
+
+    results: list[str] = []
+
+    def read_profile() -> None:
+        results.append(provider.get_user_profile_text())
+
+    first = threading.Thread(target=read_profile)
+    second = threading.Thread(target=read_profile)
+    first.start()
+    assert entered.wait(timeout=1.0)
+    second.start()
+    time.sleep(0.1)
+    release.set()
+    first.join(timeout=2.0)
+    second.join(timeout=2.0)
+
+    assert calls["count"] == 1
+    assert results == ["refreshed", "refreshed"]
+
+
+def test_working_memory_buffer_thread_safe_for_append_read_replace() -> None:
+    buffer = WorkingMemoryBuffer(max_tokens=100)
+    scope = SessionScope(
+        tenant_id=DEFAULT_TENANT_ID,
+        agent_id="agent-test",
+        session_id="session-test",
+        user_id="user:u1",
+    )
+    failures: list[BaseException] = []
+
+    def writer() -> None:
+        try:
+            for idx in range(100):
+                buffer.append(scope, "user", f"msg-{idx}")
+        except BaseException as exc:  # pragma: no cover - failure capture only
+            failures.append(exc)
+
+    def reader_replacer() -> None:
+        try:
+            for _ in range(100):
+                ctx = buffer.get_context(scope)
+                buffer.replace_messages(scope, ctx[-10:])
+                buffer.total_tokens(scope)
+        except BaseException as exc:  # pragma: no cover - failure capture only
+            failures.append(exc)
+
+    threads = [
+        threading.Thread(target=writer),
+        threading.Thread(target=reader_replacer),
+        threading.Thread(target=reader_replacer),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2.0)
+
+    assert failures == []
+    assert isinstance(buffer.get_context(scope), list)
 
 
 class _DummyPipelineMemory:

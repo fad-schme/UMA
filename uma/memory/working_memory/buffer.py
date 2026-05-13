@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+import threading
 from typing import Dict, List, Literal, Optional, Tuple
 
 from uma.common.types import SessionScope
@@ -91,6 +92,7 @@ class WorkingMemoryBuffer:
             only exposes the current usage.
         """
         self._max_tokens = max_tokens
+        self._lock = threading.RLock()
         self._store: Dict[Tuple[str, str, str], List[WorkingMemoryMessage]] = {}
         logger.debug("Initialized WorkingMemoryBuffer with max_tokens=%d", max_tokens)
 
@@ -175,7 +177,8 @@ class WorkingMemoryBuffer:
         )
 
         key = self._key_for_scope(scope)
-        self._store.setdefault(key, []).append(msg)
+        with self._lock:
+            self._store.setdefault(key, []).append(msg)
 
         logger.debug(
             "Appended message to working memory: tenant=%s agent=%s session=%s role=%s tokens=%d",
@@ -203,9 +206,10 @@ class WorkingMemoryBuffer:
         list[WorkingMemoryMessage]
             List of messages in insertion order for this session scope.
         """
-        messages = self._store.get(self._key_for_scope(scope), [])
-        # Return a copy to avoid accidental external mutation.
-        return list(messages)
+        with self._lock:
+            messages = self._store.get(self._key_for_scope(scope), [])
+            # Return a copy to avoid accidental external mutation.
+            return list(messages)
 
     def total_tokens(self, scope: SessionScope) -> int:
         """
@@ -216,7 +220,10 @@ class WorkingMemoryBuffer:
         int
             Sum of token_estimate for all messages for the user.
         """
-        total = sum(msg.token_estimate for msg in self._store.get(self._key_for_scope(scope), []))
+        with self._lock:
+            total = sum(
+                msg.token_estimate for msg in self._store.get(self._key_for_scope(scope), [])
+            )
         logger.debug(
             "Total tokens for working memory tenant=%s agent=%s session=%s: %d",
             scope.tenant_id,
@@ -250,7 +257,8 @@ class WorkingMemoryBuffer:
         - This method overwrites the previous list completely.
         - Callers must ensure new_messages is consistent and valid.
         """
-        self._store[self._key_for_scope(scope)] = list(new_messages)
+        with self._lock:
+            self._store[self._key_for_scope(scope)] = list(new_messages)
         logger.info(
             "Replaced working memory messages for tenant=%s agent=%s session=%s; new_len=%d",
             scope.tenant_id,
