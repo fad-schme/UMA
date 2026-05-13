@@ -36,7 +36,7 @@ _INGEST_PIPELINE_VERSION = "doc_ingest_v1"
 _EXTRACTOR_VERSION = "doc_fact_extract_v1"
 _SPLITTER_VERSION = "doc_normalize_v1"
 _CHUNKER_VERSION = "doc_chunk_v2"
-_MEMORY_BOOTSTRAP_VERSION = "memory_bootstrap_v1"
+_MEMORY_BOOTSTRAP_VERSION = "memory_bootstrap_v2"
 _DAILY_DIARY_BOOTSTRAP_VERSION = "daily_diary_bootstrap_v1"
 
 
@@ -1058,7 +1058,7 @@ async def ingest_memory_bootstrap(
     normalized_tenant_id = runtime_context.tenant_id
     workspace_id = runtime_context.workspace_id
 
-    normalized_path, _raw_text, entries, ingest_signature, source_hash, skip = await _capture_bootstrap_source(
+    normalized_path, raw_text, entries, ingest_signature, source_hash, skip = await _capture_bootstrap_source(
         file_path=file_path,
         runtime_context=runtime_context,
         document_store=runtime.document_store,
@@ -1085,11 +1085,64 @@ async def ingest_memory_bootstrap(
     )
 
     now = datetime.now(timezone.utc)
+    doc_id = f"memory-bootstrap:{source_hash}"
+    parsed = ParsedDocument(
+        doc_id=doc_id,
+        source_path=normalized_path,
+        source_hash=source_hash,
+        pages=[(1, raw_text)],
+        extracted_at=now,
+    )
+    bootstrap_chunks: list[DocumentChunk] = []
+    for index, entry_text in enumerate(entries):
+        chunk_hash = hashlib.sha256(
+            f"{normalized_tenant_id}|{normalized_user_id}|{source_hash}|{index}|{entry_text}".encode("utf-8")
+        ).hexdigest()[:24]
+        bootstrap_chunks.append(
+            DocumentChunk(
+                chunk_id=f"chunk_mem_{chunk_hash}",
+                doc_id=doc_id,
+                text=entry_text,
+                page_range=(1, 1),
+                position=index,
+                paragraph_index_start=index,
+                paragraph_index_end=index,
+            )
+        )
+
+    persisted_chunks = await _persist_chunks(
+        parsed=parsed,
+        final_chunks=bootstrap_chunks,
+        config=IngestConfig(),
+        runtime=runtime,
+        ingest_signature=ingest_signature,
+        existing_manifest=None,
+        owner_type="user",
+        owner_id=normalized_user_id,
+        tenant_id=normalized_tenant_id,
+        workspace_id=workspace_id,
+        warnings=[],
+    )
+    chunk_ids_by_position = {
+        int(getattr(chunk, "position", -1)): str(getattr(chunk, "id", "") or "")
+        for chunk in persisted_chunks
+        if getattr(chunk, "id", None)
+    }
+    if len(chunk_ids_by_position) != len(entries):
+        raise RuntimeError(
+            f"ingest_memory_bootstrap: failed to persist source chunks for file: {normalized_path}"
+        )
+
     facts: list[Fact] = []
     for index, entry_text in enumerate(entries):
         fact_hash = hashlib.sha256(
             f"{normalized_tenant_id}|{normalized_user_id}|{entry_text}".encode("utf-8")
         ).hexdigest()[:24]
+        source_chunk_id = chunk_ids_by_position.get(index)
+        if not source_chunk_id:
+            raise RuntimeError(
+                f"ingest_memory_bootstrap: missing source chunk for entry index={index} file: {normalized_path}"
+            )
         fact = Fact(
             id=f"fact_mem_{fact_hash}",
             subject=normalized_user_id,
@@ -1097,7 +1150,7 @@ async def ingest_memory_bootstrap(
             object=entry_text,
             created_at=now,
             updated_at=now,
-            source_ids=[f"memory_bootstrap:{source_hash}"],
+            source_ids=[source_chunk_id],
             confidence=1.0,
             meta=normalize_fact_metadata(
                 {
@@ -1106,20 +1159,23 @@ async def ingest_memory_bootstrap(
                     "import_mode": "bootstrap",
                     "line_index": index,
                     "source_type": "memory_bootstrap",
+                    "doc_id": doc_id,
+                    "source_path": normalized_path,
+                    "source_hash": source_hash,
                 },
                 fact_id=f"fact_mem_{fact_hash}",
                 owner_type="user",
                 owner_id=normalized_user_id,
                 created_at=now,
                 updated_at=now,
-                source_ids=[f"memory_bootstrap:{source_hash}"],
-                session_id=runtime_context.session_id,
+                source_ids=[source_chunk_id],
+                session_id=None,
             ),
             owner_type="user",
             owner_id=normalized_user_id,
             tenant_id=normalized_tenant_id,
             workspace_id=workspace_id,
-            session_id=runtime_context.session_id,
+            session_id=None,
             origin_agent_id=runtime_context.agent_id,
             origin_user_id=runtime_context.user_id,
             origin_session_id=runtime_context.session_id,
@@ -1143,7 +1199,7 @@ async def ingest_memory_bootstrap(
 
     await _upsert_source_manifest(
         document_store=runtime.document_store,
-        doc_id=f"memory-bootstrap:{source_hash}",
+        doc_id=doc_id,
         source_path=normalized_path,
         source_hash=source_hash,
         ingested_at=now,
@@ -1161,10 +1217,11 @@ async def ingest_memory_bootstrap(
                 ingest_signature=ingest_signature,
                 extra={
                     "entries_found": len(entries),
+                    "chunks_created": len(persisted_chunks),
                     "facts_created": len(persisted_fact_ids),
                 },
             ),
-            doc_id=f"memory-bootstrap:{source_hash}",
+            doc_id=doc_id,
             owner_type="user",
             owner_id=normalized_user_id,
             ingested_at=now,

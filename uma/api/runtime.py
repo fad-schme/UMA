@@ -98,11 +98,13 @@ class UMARequestHandle:
         query_text: str,
         *,
         memory_intent: str = "continuity",
+        include_debug: bool = False,
     ) -> Dict[str, Any]:
         return await self.runtime.retrieve_memory(
             self.context,
             query_text=query_text,
             memory_intent=memory_intent,
+            include_debug=include_debug,
         )
 
     async def expand_evidence(self, artifact: Any) -> Dict[str, Any]:
@@ -815,6 +817,7 @@ class UMARuntime:
         *,
         query_text: str,
         memory_intent: str = "continuity",
+        include_debug: bool = False,
     ) -> Dict[str, Any]:
         """Retrieve compiled, evidence-backed memory results for one request scope.
 
@@ -903,7 +906,7 @@ class UMARuntime:
         compiled_memory_log = [semantic_retrieved_event]
         for artifact in [*memory_sources, compiled_answer]:
             compiled_memory_log.extend(list(artifact.get("compiled_memory_log") or []))
-        return {
+        detailed_result = {
             "query": query_text.strip(),
             "product": "memory",
             "memory_intent": memory_intent.strip(),
@@ -944,6 +947,90 @@ class UMARuntime:
                 }
             ],
         }
+        return self._build_public_memory_result(
+            detailed_result,
+            include_debug=include_debug,
+        )
+
+    @staticmethod
+    def _serialize_memory_fact(fact: Any) -> Dict[str, Any]:
+        provenance = provenance_for_artifact(fact)
+        text = ""
+        if isinstance(fact, Mapping):
+            subject = str(fact.get("subject") or "").strip()
+            predicate = str(fact.get("predicate") or "").strip()
+            object_text = str(fact.get("object") or "").strip()
+            confidence = fact.get("confidence")
+            salience = fact.get("salience")
+        else:
+            subject = str(getattr(fact, "subject", "") or "").strip()
+            predicate = str(getattr(fact, "predicate", "") or "").strip()
+            object_text = str(getattr(fact, "object", "") or "").strip()
+            confidence = getattr(fact, "confidence", None)
+            salience = getattr(fact, "salience", None)
+        if object_text:
+            text = object_text
+        else:
+            text = " ".join(part for part in (subject, predicate) if part).strip()
+        return {
+            "text": text,
+            "confidence": confidence,
+            "salience": salience,
+            "source_chunk_ids": collect_source_chunk_ids(fact) or list(provenance.get("source_chunk_ids") or []),
+        }
+
+    @staticmethod
+    def _serialize_memory_evidence(chunk: Any) -> Dict[str, Any]:
+        if isinstance(chunk, Mapping):
+            payload = dict(chunk)
+        else:
+            payload = _chunk_payload(chunk)
+
+        source_path = payload.get("source_path")
+        source_name = payload.get("source")
+        if not source_name and source_path:
+            source_name = str(source_path).rsplit("/", 1)[-1]
+
+        return {
+            "id": payload.get("id"),
+            "text": payload.get("text"),
+            "source": source_name,
+            "source_document_id": payload.get("doc_id") or payload.get("source_document_id"),
+        }
+
+    def _build_public_memory_result(
+        self,
+        detailed_result: Mapping[str, Any],
+        *,
+        include_debug: bool,
+    ) -> Dict[str, Any]:
+        facts = [
+            self._serialize_memory_fact(fact)
+            for fact in list(detailed_result.get("supporting_facts") or [])
+        ]
+        evidence = [
+            item 
+            for item in (
+                self._serialize_memory_evidence(chunk)
+                for chunk in list(detailed_result.get("supporting_evidence") or [])
+            )
+
+            if any(item.get(key) for key in ("id", "text", "source", "source_document_id"))
+
+        ]
+        provenance = dict(detailed_result.get("provenance") or {})
+        public_result: Dict[str, Any] = {
+            "query": detailed_result.get("query"),
+            "facts": facts,
+            "evidence": evidence,
+            "provenance_valid": bool(provenance.get("valid")),
+        }
+        invalid_reasons = list(provenance.get("invalid_reasons") or [])
+        if invalid_reasons:
+            public_result["provenance_error"] = str(invalid_reasons[0])
+        if include_debug:
+            public_result["debug"] = dict(detailed_result)
+        return public_result
 
     def _render_profile_overlay(self) -> str:
         """Render cached USER.md and SOUL.md overlays for every response."""

@@ -51,27 +51,15 @@ async def test_request_handle_retrieval_delegates_directly_to_runtime(uma_memory
         *,
         query_text: str,
         memory_intent: str = "continuity",
+        include_debug: bool = False,
     ) -> Dict[str, Any]:
         seen.append(("memory", bound_context, query_text))
         return {
-            "product": "memory",
             "query": query_text,
-            "memory_intent": memory_intent,
-            "memories": [{"id": "mem-1", "provenance": {"valid": True, "source_chunk_ids": ["chunk-1"]}}],
-            "compiled_answer": {"id": "mem-1", "provenance": {"valid": True, "source_chunk_ids": ["chunk-1"]}},
+            "facts": [{"text": "fact", "confidence": 1.0, "salience": 1.0, "source_chunk_ids": ["chunk-1"]}],
             "evidence": [],
-            "supporting_evidence": [],
-            "supporting_facts": [],
-            "supporting_skills": [],
-            "conflicts": [],
-            "support_density": 0.0,
-            "fallback": {"used": True, "mode": "evidence_only", "reason": "no_compiled_memory_available"},
-            "memory_sources": [],
-            "compiled_memory_index": [],
-            "compiled_memory_log": [],
-            "confidence": {},
-            "provenance": {"valid": True, "source_chunk_ids": ["chunk-1"]},
-            "retrieval_path": [],
+            "provenance_valid": True,
+            "debug": {"memory_intent": memory_intent} if include_debug else None,
         }
 
     async def fake_messages(
@@ -94,9 +82,8 @@ async def test_request_handle_retrieval_delegates_directly_to_runtime(uma_memory
     assert structured["product"] == "context"
     assert structured["lane_filter"] == ["semantic"]
     assert structured["documents"] == []
-    assert memory_payload["product"] == "memory"
-    assert memory_payload["memories"][0]["id"] == "mem-1"
-    assert memory_payload["fallback"]["used"] is True
+    assert memory_payload["provenance_valid"] is True
+    assert memory_payload["facts"][0]["source_chunk_ids"] == ["chunk-1"]
     assert messages["meta"]["render_mode"] == "raw_rendered"
     assert seen == [
         ("context", context, "hello world"),
@@ -150,27 +137,15 @@ async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory
         *,
         query_text: str,
         memory_intent: str = "continuity",
+        include_debug: bool = False,
     ) -> Dict[str, Any]:
         seen.append(("memory", bound_context, query_text))
         return {
-            "product": "memory",
             "query": query_text,
-            "memory_intent": memory_intent,
-            "memories": [{"id": "mem-1", "provenance": {"valid": True, "source_chunk_ids": ["chunk-1"]}}],
-            "compiled_answer": {"id": "mem-1", "provenance": {"valid": True, "source_chunk_ids": ["chunk-1"]}},
+            "facts": [{"text": "fact", "confidence": 1.0, "salience": 1.0, "source_chunk_ids": ["chunk-1"]}],
             "evidence": [],
-            "supporting_evidence": [],
-            "supporting_facts": [],
-            "supporting_skills": [],
-            "conflicts": [],
-            "support_density": 0.0,
-            "fallback": {"used": True, "mode": "evidence_only", "reason": "no_compiled_memory_available"},
-            "memory_sources": [],
-            "compiled_memory_index": [],
-            "compiled_memory_log": [],
-            "confidence": {},
-            "provenance": {"valid": True, "source_chunk_ids": ["chunk-1"]},
-            "retrieval_path": [],
+            "provenance_valid": True,
+            "debug": {"memory_intent": memory_intent} if include_debug else None,
         }
 
     memory.runtime.retrieve_context = fake_context  # type: ignore[method-assign]
@@ -195,9 +170,8 @@ async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory
 
     assert context["product"] == "context"
     assert context["documents"] == []
-    assert memory_result["product"] == "memory"
-    assert memory_result["memories"][0]["id"] == "mem-1"
-    assert memory_result["fallback"]["used"] is True
+    assert memory_result["provenance_valid"] is True
+    assert memory_result["facts"][0]["text"] == "fact"
     assert seen == [
         (
             "context",
@@ -267,14 +241,62 @@ async def test_runtime_memory_retrieval_surfaces_explicit_evidence_only_fallback
         memory_intent="continuity",
     )
 
-    assert result["product"] == "memory"
-    assert result["memory_intent"] == "continuity"
-    assert len(result["memories"]) == 1
-    assert result["fallback"]["used"] is True
-    assert result["fallback"]["mode"] == "evidence_only"
-    assert result["fallback"]["reason"] == "no_compiled_memory_available"
-    assert result["compiled_answer"]["provenance"]["valid"] is False
-    assert "missing_source_chunk_ids" in result["compiled_answer"]["provenance"]["invalid_reasons"]
+    assert result["facts"] == []
+    assert result["evidence"] == []
+    assert result["provenance_valid"] is False
+    assert result["provenance_error"] == "missing_source_chunk_ids"
+    assert "product" not in result
+    assert "memory_intent" not in result
+    assert "compiled_memory_log" not in result
+    assert "compiled_memory_index" not in result
+
+
+@pytest.mark.asyncio
+async def test_runtime_memory_retrieval_can_expose_debug_payload(uma_memory) -> None:
+    runtime = UMARuntime.from_memory(uma_memory)
+    context = RuntimeContext(
+        tenant_id="tenant-1",
+        agent_id=uma_memory.agent_id or "agent-default",
+        request_id="req-memory-debug",
+        user_id="user:u1",
+    )
+
+    async def fake_context(
+        bound_context: RuntimeContext,
+        *,
+        query_text: str,
+        lane_filter=None,
+    ) -> Dict[str, list]:
+        return {
+            "product": "context",
+            "query": query_text,
+            "lane_filter": [],
+            "working_memory": [],
+            "episodic": [],
+            "facts": [],
+            "chunks": [],
+            "documents": [],
+            "skills": [],
+            "graph": [],
+            "trace": [{"event": "lane_plan"}],
+            "confidence": {"score": 0.2},
+            "provenance": {"valid": False, "source_chunk_ids": [], "invalid_reasons": ["missing_source_chunk_ids"]},
+        }
+
+    runtime.retrieve_context = fake_context  # type: ignore[method-assign]
+
+    result = await runtime.retrieve_memory(
+        context,
+        query_text="memory query",
+        memory_intent="continuity",
+        include_debug=True,
+    )
+
+    assert result["provenance_valid"] is False
+    assert "debug" in result
+    assert result["debug"]["product"] == "memory"
+    assert result["debug"]["memory_intent"] == "continuity"
+    assert "compiled_memory_log" in result["debug"]
 
 
 @pytest.mark.asyncio

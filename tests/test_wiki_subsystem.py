@@ -43,6 +43,7 @@ async def test_regenerated_wiki_page_is_canonical_record_with_evidence_links(uma
         context,
         query_text="What stores long-term metrics?",
         memory_intent="continuity",
+        include_debug=True,
     )
 
     page = wiki_module.regenerate_wiki_page(
@@ -51,7 +52,7 @@ async def test_regenerated_wiki_page_is_canonical_record_with_evidence_links(uma
         title="Ops Metrics",
         owner_type="user",
         owner_id="user:u1",
-        parent_artifacts=[memory_result["compiled_answer"]],
+        parent_artifacts=[memory_result["debug"]["compiled_answer"]],
         category="operations",
     )
 
@@ -128,7 +129,7 @@ async def test_wiki_lint_reports_invalid_parent_lineage(uma_memory) -> None:
         parent_artifacts=[manual_parent["compiled_artifact"]],
     )
 
-    lint_result = await lint_memory_drift(uma_memory, [child])
+    lint_result = await lint_memory_drift(uma_memory, [child], user_id="user:u1")
 
     issues = {finding["issue"] for finding in lint_result["findings"]}
     assert lint_result["status"] == "issues_found"
@@ -211,7 +212,7 @@ async def test_management_delegates_wiki_update_export_and_lint(uma_memory, tmp_
         seen.append(("export", str(output_path)))
         return {"status": "exported", "projection_only": True, "markdown": "# Test\n", "path": output_path}
 
-    async def fake_lint(memory, page_or_artifact, *, stale_after_seconds=None):
+    async def fake_lint(memory, page_or_artifact, *, user_id=None, tenant_id="default", workspace_id=None, stale_after_seconds=None):
         seen.append(("lint", str(stale_after_seconds)))
         return {"status": "ok", "page_id": "wiki:test/page", "artifact_id": "wiki:test/page", "drift_status": "active", "findings": []}
 
@@ -228,7 +229,7 @@ async def test_management_delegates_wiki_update_export_and_lint(uma_memory, tmp_
         manual=True,
     )
     await export_wiki_projection(uma_memory, result["page"], output_path=str(tmp_path / "page.md"))
-    await lint_memory_drift(uma_memory, [result["page"]], stale_after_seconds=5)
+    await lint_memory_drift(uma_memory, [result["page"]], user_id="user:u1", stale_after_seconds=5)
 
     assert seen == [
         ("update", "wiki:test/page"),

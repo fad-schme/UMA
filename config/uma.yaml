@@ -24,8 +24,8 @@ working_memory:
 
 embedding:
   provider: "ollama"
-  model: "nomic-embed-text"
-  dimension: 768
+  model: "all-minilm"
+  dimension: 384
   config:
     host: "http://localhost:11434"
     batch_size: 32
@@ -35,7 +35,7 @@ llms:
   # UMA uses this LLM internally for memory extraction and summarization.
   uma:
     provider: "ollama"
-    model: "llama3"
+    model: "phi4-mini:latest"
     config:
       host: "http://localhost:11434"
       timeout: 20.0

@@ -152,6 +152,80 @@ async def test_memory_bootstrap_preserves_skip_and_ingest_result_shapes(uma_memo
 
 
 @pytest.mark.asyncio
+async def test_memory_bootstrap_persists_chunk_backed_provenance_for_retrieve_memory(uma_memory, tmp_path) -> None:
+    bootstrap_path = tmp_path / "MEMORY.md"
+    bootstrap_path.write_text(
+        "# Memory\n- Favorite database: sqlite\n- Preferred editor: vim\n",
+        encoding="utf-8",
+    )
+
+    result = await uma_memory.load_memory_bootstrap(
+        str(bootstrap_path),
+        user_id="user:u1",
+        tenant_id="default",
+        request_id="req-memory-bootstrap-provenance",
+        session_id="session-memory-bootstrap-provenance",
+    )
+
+    facts = await uma_memory.semantic_core.fetch_by_ids(
+        result["fact_ids"],
+        tenant_id="default",
+        owner_type="user",
+        owner_id="user:u1",
+    )
+    assert len(facts) == 2
+
+    source_chunk_ids = sorted({fact.source_ids[0] for fact in facts if getattr(fact, "source_ids", None)})
+    assert len(source_chunk_ids) == 2
+    assert all(not chunk_id.startswith("memory_bootstrap:") for chunk_id in source_chunk_ids)
+
+    owner_chunks = await uma_memory.chunk_core._fetch_by_ids(
+        source_chunk_ids,
+        tenant_id="default",
+        owner_type="user",
+        owner_id="user:u1",
+    )
+    assert len(owner_chunks) == 2
+    assert {chunk.text for chunk in owner_chunks} == {"Favorite database: sqlite", "Preferred editor: vim"}
+
+    leaked_chunks = await uma_memory.chunk_core._fetch_by_ids(
+        source_chunk_ids,
+        tenant_id="default",
+        owner_type="user",
+        owner_id="user:u2",
+    )
+    assert leaked_chunks == []
+
+    memory_result = await uma_memory.retrieve_memory(
+        query_text="sqlite",
+        user_id="user:u1",
+        tenant_id="default",
+        request_id="req-memory-bootstrap-recall",
+        session_id="session-memory-bootstrap-recall",
+    )
+
+    assert memory_result["evidence"]
+    assert memory_result["facts"]
+    assert isinstance(memory_result["facts"][0], dict)
+    assert isinstance(memory_result["evidence"][0], dict)
+    assert memory_result["provenance_valid"] is True
+    assert "provenance_error" not in memory_result
+    assert "product" not in memory_result
+    assert "memory_intent" not in memory_result
+    assert "compiled_answer" not in memory_result
+    assert "trace" not in memory_result
+
+    other_user_result = await uma_memory.retrieve_memory(
+        query_text="sqlite",
+        user_id="user:u2",
+        tenant_id="default",
+        request_id="req-memory-bootstrap-other-user",
+        session_id="session-memory-bootstrap-other-user",
+    )
+    assert other_user_result["evidence"] == []
+
+
+@pytest.mark.asyncio
 async def test_daily_diary_bootstrap_preserves_skip_and_ingest_result_shapes(uma_memory, tmp_path) -> None:
     bootstrap_scope = {
         "user_id": "user:u1",

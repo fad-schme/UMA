@@ -70,6 +70,7 @@ async def test_management_update_explain_and_export_use_canonical_provenance(uma
         context,
         query_text="What handles production metrics?",
         memory_intent="continuity",
+        include_debug=True,
     )
 
     artifact_result = update_wiki_page(
@@ -79,14 +80,14 @@ async def test_management_update_explain_and_export_use_canonical_provenance(uma
         owner_type="user",
         owner_id="user:u1",
         summary="Metrics and alerting summary.",
-        parent_artifacts=[memory_result["compiled_answer"]],
-        related_artifact_ids=[memory_result["compiled_answer"]["id"]],
+        parent_artifacts=[memory_result["debug"]["compiled_answer"]],
+        related_artifact_ids=[memory_result["debug"]["compiled_answer"]["id"]],
         retrieval_tags=["ops", "metrics"],
     )
     artifact = artifact_result["artifact"]
     before_export = copy.deepcopy(artifact)
 
-    explanation = await explain_result(memory, artifact)
+    explanation = await explain_result(memory, artifact, user_id="user:u1")
     assert artifact == before_export
     projection_path = tmp_path / "wiki" / "ops-metrics.md"
     export_result = await export_wiki_projection(memory, artifact, output_path=str(projection_path))
@@ -121,7 +122,7 @@ async def test_management_lint_reports_invalid_parent_lineage_without_rewriting(
         parent_artifacts=[manual_parent],
     )["artifact"]
 
-    lint_result = await lint_memory_drift(memory, [child], stale_after_seconds=0)
+    lint_result = await lint_memory_drift(memory, [child], user_id="user:u1", stale_after_seconds=0)
 
     issues = {finding["issue"] for finding in lint_result["findings"]}
     assert lint_result["status"] == "issues_found"
