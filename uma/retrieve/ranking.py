@@ -130,12 +130,18 @@ def compute_rerank_score(*, query_text: str, candidate: Any, terms: Optional[Seq
 
     exact_query_hit = 1 if (len(q) >= 4 and q in text) else 0
 
+    # Normalize term/phrase hits as coverage ratios so multi-term queries
+    # don't balloon the score relative to the vector/lexical components.
+    n_terms = max(1, len(terms or []))
+    term_ratio = float(term_hits) / n_terms
+    phrase_ratio = float(phrase_hits) / n_terms
+
     return (
         v
-        + lex
-        + (5.0 * float(term_hits))
-        + (8.0 * float(phrase_hits))
-        + (3.0 * float(exact_query_hit))
+        + min(lex, 1.0)           # clamp lexical to [0, 1] — same scale as log1p(vector)
+        + (2.0 * term_ratio)      # 0–2.0
+        + (3.0 * phrase_ratio)    # 0–3.0 (sub-score of term coverage)
+        + float(exact_query_hit)  # 0–1
     )
 
 

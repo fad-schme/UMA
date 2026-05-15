@@ -182,24 +182,6 @@ def _read_text_source(path: str, *, api_name: str) -> str:
         raise RuntimeError(f"{api_name}: failed to read file: {path}") from exc
 
 
-def _extract_memory_bootstrap_lines(raw_text: str) -> list[str]:
-    entries: list[str] = []
-    for line in raw_text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("<!--") or stripped.startswith("#"):
-            continue
-        if stripped.startswith("- "):
-            stripped = stripped[2:].strip()
-        if stripped:
-            entries.append(stripped)
-    return entries
-
-
-def _build_memory_bootstrap_signature(*, raw_text: str) -> dict[str, Any]:
-    return {
-        "pipeline_version": _MEMORY_BOOTSTRAP_VERSION,
-        "content_hash": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
-    }
 
 
 async def _embed_and_persist_facts(
@@ -1044,97 +1026,6 @@ def _build_daily_diary_bootstrap_signature(*, raw_text: str) -> dict[str, Any]:
     }
 
 
-def _build_bootstrap_chunks(
-    entries: list[str],
-    *,
-    doc_id: str,
-    source_hash: str,
-    tenant_id: str,
-    user_id: str,
-) -> list[DocumentChunk]:
-    chunks: list[DocumentChunk] = []
-    for index, entry_text in enumerate(entries):
-        chunk_hash = hashlib.sha256(
-            f"{tenant_id}|{user_id}|{source_hash}|{index}|{entry_text}".encode("utf-8")
-        ).hexdigest()[:24]
-        chunks.append(DocumentChunk(
-            chunk_id=f"chunk_mem_{chunk_hash}",
-            doc_id=doc_id,
-            text=entry_text,
-            page_range=(1, 1),
-            position=index,
-            paragraph_index_start=index,
-            paragraph_index_end=index,
-        ))
-    return chunks
-
-
-def _build_bootstrap_facts(
-    entries: list[str],
-    *,
-    chunk_ids_by_position: dict[int, str],
-    doc_id: str,
-    source_path: str,
-    source_hash: str,
-    now: datetime,
-    tenant_id: str,
-    user_id: str,
-    workspace_id: Any,
-    runtime_context: Any,
-) -> list[Fact]:
-    facts: list[Fact] = []
-    for index, entry_text in enumerate(entries):
-        fact_hash = hashlib.sha256(
-            f"{tenant_id}|{user_id}|{entry_text}".encode("utf-8")
-        ).hexdigest()[:24]
-        source_chunk_id = chunk_ids_by_position.get(index)
-        if not source_chunk_id:
-            raise RuntimeError(
-                f"ingest_memory_bootstrap: missing source chunk for entry index={index} file: {source_path}"
-            )
-        fact = Fact(
-            id=f"fact_mem_{fact_hash}",
-            subject=user_id,
-            predicate="remembers",
-            object=entry_text,
-            created_at=now,
-            updated_at=now,
-            source_ids=[source_chunk_id],
-            confidence=1.0,
-            meta=normalize_fact_metadata(
-                {
-                    "source_kind": "memory_bootstrap",
-                    "source_file": source_path,
-                    "import_mode": "bootstrap",
-                    "line_index": index,
-                    "source_type": "memory_bootstrap",
-                    "doc_id": doc_id,
-                    "source_path": source_path,
-                    "source_hash": source_hash,
-                },
-                fact_id=f"fact_mem_{fact_hash}",
-                owner_type="user",
-                owner_id=user_id,
-                created_at=now,
-                updated_at=now,
-                source_ids=[source_chunk_id],
-                session_id=None,
-            ),
-            owner_type="user",
-            owner_id=user_id,
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            session_id=None,
-            origin_agent_id=runtime_context.agent_id,
-            origin_user_id=runtime_context.user_id,
-            origin_session_id=runtime_context.session_id,
-            scope_model_version="v2",
-            salience=1.0,
-        )
-        fact.validate()
-        facts.append(fact)
-    return facts
-
 
 async def ingest_memory_bootstrap(
     file_path: str,
@@ -1143,147 +1034,23 @@ async def ingest_memory_bootstrap(
     runtime_context: Any,
     config: Any | None = None,
 ) -> Dict[str, Any]:
-    """Ingest MEMORY.md bootstrap facts through the ingest layer."""
+    """Ingest MEMORY.md through the full document pipeline (chunker + LLM fact extraction)."""
     del config
-    runtime = _resolve_ingest_runtime(memory)
-    normalized_user_id = runtime_context.user_id
-    normalized_tenant_id = runtime_context.tenant_id
-    workspace_id = runtime_context.workspace_id
-
-    normalized_path, raw_text, entries, ingest_signature, source_hash, skip = await _capture_bootstrap_source(
-        file_path=file_path,
-        runtime_context=runtime_context,
-        document_store=runtime.document_store,
-        api_name="load_memory_bootstrap",
-        source_kind="memory_bootstrap",
-        signature_builder=_build_memory_bootstrap_signature,
-        entry_extractor=_extract_memory_bootstrap_lines,
+    report = await ingest_document(
+        file_path,
+        owner_type="user",
+        owner_id=runtime_context.user_id,
+        memory=memory,
     )
-    if skip is not None:
-        return skip
-
-    semantic_store = runtime.semantic_core
-    if semantic_store is None or not hasattr(semantic_store, "upsert_fact"):
-        raise RuntimeError(
-            "ingest_memory_bootstrap: semantic store is not initialized or does not support upsert_fact"
-        )
-
     logger.info(
-        "ingest_memory_bootstrap: importing memory bootstrap path=%s tenant_id=%s user_id=%s entries=%d",
-        normalized_path,
-        normalized_tenant_id,
-        normalized_user_id,
-        len(entries),
+        "ingest_memory_bootstrap: path=%s chunks=%d facts=%d",
+        file_path, report.chunks_created, report.facts_created,
     )
-
-    now = datetime.now(timezone.utc)
-    doc_id = f"memory-bootstrap:{source_hash}"
-    parsed = ParsedDocument(
-        doc_id=doc_id,
-        source_path=normalized_path,
-        source_hash=source_hash,
-        pages=[(1, raw_text)],
-        extracted_at=now,
-    )
-    bootstrap_chunks = _build_bootstrap_chunks(
-        entries,
-        doc_id=doc_id,
-        source_hash=source_hash,
-        tenant_id=normalized_tenant_id,
-        user_id=normalized_user_id,
-    )
-
-    persisted_chunks = await _persist_chunks(
-        parsed=parsed,
-        final_chunks=bootstrap_chunks,
-        config=IngestConfig(),
-        runtime=runtime,
-        ingest_signature=ingest_signature,
-        existing_manifest=None,
-        owner_type="user",
-        owner_id=normalized_user_id,
-        tenant_id=normalized_tenant_id,
-        workspace_id=workspace_id,
-        warnings=[],
-    )
-    chunk_ids_by_position = {
-        int(getattr(chunk, "position", -1)): str(getattr(chunk, "id", "") or "")
-        for chunk in persisted_chunks
-        if getattr(chunk, "id", None)
-    }
-    if len(chunk_ids_by_position) != len(entries):
-        raise RuntimeError(
-            f"ingest_memory_bootstrap: failed to persist source chunks for file: {normalized_path}"
-        )
-
-    facts = _build_bootstrap_facts(
-        entries,
-        chunk_ids_by_position=chunk_ids_by_position,
-        doc_id=doc_id,
-        source_path=normalized_path,
-        source_hash=source_hash,
-        now=now,
-        tenant_id=normalized_tenant_id,
-        user_id=normalized_user_id,
-        workspace_id=workspace_id,
-        runtime_context=runtime_context,
-    )
-
-    persisted_fact_ids = await _embed_and_persist_facts(
-        facts=facts,
-        embedder=runtime.embedder,
-        semantic_store=semantic_store,
-        warnings=None,
-        log_context="ingest_memory_bootstrap",
-    )
-    if not persisted_fact_ids:
-        raise RuntimeError(
-            f"ingest_memory_bootstrap: failed to persist any facts for file: {normalized_path}"
-        )
-
-    await _upsert_source_manifest(
-        document_store=runtime.document_store,
-        doc_id=doc_id,
-        source_path=normalized_path,
-        source_hash=source_hash,
-        ingested_at=now,
-        tenant_id=normalized_tenant_id,
-        owner_type="user",
-        owner_id=normalized_user_id,
-        workspace_id=workspace_id,
-        origin_agent_id=runtime_context.agent_id,
-        origin_user_id=runtime_context.user_id,
-        origin_session_id=runtime_context.session_id,
-        meta=normalize_document_metadata(
-            _build_bootstrap_manifest_meta(
-                source_kind="memory_bootstrap",
-                source_type="memory_bootstrap",
-                ingest_signature=ingest_signature,
-                extra={
-                    "entries_found": len(entries),
-                    "chunks_created": len(persisted_chunks),
-                    "facts_created": len(persisted_fact_ids),
-                },
-            ),
-            doc_id=doc_id,
-            owner_type="user",
-            owner_id=normalized_user_id,
-            ingested_at=now,
-            source_path=normalized_path,
-            source_hash=source_hash,
-        ),
-        log_context="load_memory_bootstrap",
-    )
-
     return {
         "status": "ingested",
-        "path": normalized_path,
-        "tenant_id": normalized_tenant_id,
-        "user_id": normalized_user_id,
-        "workspace_id": workspace_id,
-        "entries_found": len(entries),
-        "facts_created": len(persisted_fact_ids),
-        "fact_ids": persisted_fact_ids,
+        "path": file_path,
+        "chunks_created": report.chunks_created,
+        "facts_created": report.facts_created,
     }
 
 
@@ -1293,12 +1060,33 @@ async def ingest_daily_diary_bootstrap(
     memory: Any,
     runtime_context: Any,
 ) -> Dict[str, Any]:
-    """Ingest one daily diary bootstrap file through the ingest layer."""
+    """Ingest a daily diary file.
+
+    Runs the full document pipeline (chunker + LLM fact extraction) for the
+    chunk/fact/wiki lanes, then writes one episode per diary entry for the
+    episodic lane. The two manifest gates are independent so each lane is
+    idempotent on re-ingest.
+    """
     runtime = _resolve_ingest_runtime(memory)
     normalized_user_id = runtime_context.user_id
     normalized_tenant_id = runtime_context.tenant_id
     workspace_id = runtime_context.workspace_id
 
+    # --- Chunk / fact / wiki lane ---
+    ingest_report = await ingest_document(
+        file_path,
+        owner_type="user",
+        owner_id=normalized_user_id,
+        memory=memory,
+    )
+    logger.info(
+        "ingest_daily_diary_bootstrap: document pipeline path=%s chunks=%d facts=%d",
+        file_path, ingest_report.chunks_created, ingest_report.facts_created,
+    )
+
+    # --- Episodic lane ---
+    # _capture_bootstrap_source acts as the idempotency gate for this lane
+    # independently of the document manifest written above.
     normalized_path, _raw_text, entries, ingest_signature, source_hash, skip = await _capture_bootstrap_source(
         file_path=file_path,
         runtime_context=runtime_context,
@@ -1308,81 +1096,73 @@ async def ingest_daily_diary_bootstrap(
         signature_builder=_build_daily_diary_bootstrap_signature,
         entry_extractor=_extract_daily_diary_entries,
     )
-    if skip is not None:
-        return skip
 
-    diary_date = None
-    try:
-        diary_date = Path(normalized_path).stem
-    except Exception:
+    episode_ids: list[str] = []
+    if skip is None:
         diary_date = None
+        try:
+            diary_date = Path(normalized_path).stem
+        except Exception:
+            pass
 
-    from uma.ingest.episodic_writer import write_daily_diary_episodes
+        from uma.ingest.episodic_writer import write_daily_diary_episodes
 
-    logger.info(
-        "ingest_daily_diary_bootstrap: importing diary path=%s tenant_id=%s user_id=%s entries=%d",
-        normalized_path,
-        normalized_tenant_id,
-        normalized_user_id,
-        len(entries),
-    )
-
-    episode_ids = await write_daily_diary_episodes(
-        file_path=normalized_path,
-        diary_date=diary_date,
-        entries=entries,
-        owner_type="user",
-        owner_id=normalized_user_id,
-        user_id=normalized_user_id,
-        embedder=runtime.embedder,
-        episodic_core=runtime.episodic_core,
-    )
-
-    if episode_ids:
-        now = Path(normalized_path).stat().st_mtime if os.path.exists(normalized_path) else None
-        ingested_at = datetime.fromtimestamp(now, tz=timezone.utc) if now is not None else datetime.now(timezone.utc)
-        await _upsert_source_manifest(
-            document_store=runtime.document_store,
-            doc_id=f"daily-diary:{source_hash}",
-            source_path=normalized_path,
-            source_hash=source_hash,
-            ingested_at=ingested_at,
-            tenant_id=normalized_tenant_id,
+        logger.info(
+            "ingest_daily_diary_bootstrap: episodic lane path=%s entries=%d",
+            normalized_path, len(entries),
+        )
+        episode_ids = await write_daily_diary_episodes(
+            file_path=normalized_path,
+            diary_date=diary_date,
+            entries=entries,
             owner_type="user",
             owner_id=normalized_user_id,
-            workspace_id=workspace_id,
-            origin_agent_id=runtime_context.agent_id,
-            origin_user_id=runtime_context.user_id,
-            origin_session_id=runtime_context.session_id,
-            meta=normalize_document_metadata(
-                _build_bootstrap_manifest_meta(
-                    source_kind="daily_diary",
-                    source_type="daily_diary",
-                    ingest_signature=ingest_signature,
-                    extra={
-                        "diary_date": diary_date,
-                        "entries_found": len(entries),
-                        "episodes_created": len(episode_ids),
-                    },
-                ),
+            user_id=normalized_user_id,
+            embedder=runtime.embedder,
+            episodic_core=runtime.episodic_core,
+        )
+
+        if episode_ids:
+            ingested_at = datetime.now(timezone.utc)
+            await _upsert_source_manifest(
+                document_store=runtime.document_store,
                 doc_id=f"daily-diary:{source_hash}",
-                owner_type="user",
-                owner_id=normalized_user_id,
-                ingested_at=ingested_at,
                 source_path=normalized_path,
                 source_hash=source_hash,
-            ),
-            log_context="load_daily_diary_bootstrap",
-        )
+                ingested_at=ingested_at,
+                tenant_id=normalized_tenant_id,
+                owner_type="user",
+                owner_id=normalized_user_id,
+                workspace_id=workspace_id,
+                origin_agent_id=runtime_context.agent_id,
+                origin_user_id=runtime_context.user_id,
+                origin_session_id=runtime_context.session_id,
+                meta=normalize_document_metadata(
+                    _build_bootstrap_manifest_meta(
+                        source_kind="daily_diary",
+                        source_type="daily_diary",
+                        ingest_signature=ingest_signature,
+                        extra={
+                            "diary_date": diary_date,
+                            "entries_found": len(entries),
+                            "episodes_created": len(episode_ids),
+                        },
+                    ),
+                    doc_id=f"daily-diary:{source_hash}",
+                    owner_type="user",
+                    owner_id=normalized_user_id,
+                    ingested_at=ingested_at,
+                    source_path=normalized_path,
+                    source_hash=source_hash,
+                ),
+                log_context="load_daily_diary_bootstrap",
+            )
 
     return {
         "status": "ingested",
-        "path": normalized_path,
-        "tenant_id": normalized_tenant_id,
-        "user_id": normalized_user_id,
-        "workspace_id": workspace_id,
-        "diary_date": diary_date,
-        "entries_found": len(entries),
+        "path": file_path,
+        "chunks_created": ingest_report.chunks_created,
+        "facts_created": ingest_report.facts_created,
         "episodes_created": len(episode_ids),
         "episode_ids": episode_ids,
     }

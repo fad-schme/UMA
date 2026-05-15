@@ -501,6 +501,12 @@ def _snippet_quality_ok(snippet: str, terms: List[str], *, require_terms: bool) 
     s = (snippet or "").strip()
     if not s:
         return False
+    # Strip markdown heading markers (##, ###, etc.) and HTML comments before quality checks
+    # so that structured documents (diaries, wikis) aren't silently excluded.
+    s = re.sub(r"^#+\s+", "", s).strip()
+    s = re.sub(r"^<!--.*?-->\s*", "", s, flags=re.DOTALL).strip()
+    if not s:
+        return False
     if _starts_like_fragment(s):
         return False
     if len(s) < 40:

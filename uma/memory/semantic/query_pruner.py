@@ -179,6 +179,11 @@ async def prune_facts_for_query(
     except Exception:
         scores = []
     if not scores:
+        logger.warning(
+            "semantic.query_pruner: LLM scores missing or mismatched; "
+            "using keyword fallback for %d candidates",
+            len(candidates),
+        )
         selected = fallback_keep_by_query(query_text, candidates)
         return [candidates[i - 1] for i in selected if 1 <= i <= len(candidates)] or facts
 

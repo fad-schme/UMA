@@ -91,8 +91,7 @@ class CurateCompiledMemoryResult:
 
 @dataclass(frozen=True)
 class IngestConfig:
-    # Storage efficiency: reduce vector count first (slightly larger chunks, less overlap).
-    chunk_size_tokens: int = 450
+    chunk_size_tokens: int = 300
     overlap_tokens: int = 100
     embed_batch_size: int = 16
     embed_max_retries: int = 3
