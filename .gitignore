@@ -64,7 +64,7 @@ ARCHITECTURE.md
 AGENTS.md
 PRODUCTION.md
 scripts/
-examples/
+#examples/
 .codex
 
 # Ignore pytest temporary test artifacts

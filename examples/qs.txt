@@ -1,0 +1,43 @@
+Here are 10 retrieval questions you can ask UMA that reference information in the example files:
+
+1. **Scheduling & Availability**
+   - "What is Anna's core availability window and when should I avoid scheduling meetings?"
+   - *(Retrieves from USER.md: 09:00-17:00 CET availability, Friday afternoons blocked for deep work)*
+
+2. **Communication Preferences**
+   - "How should I format documentation and code examples for Anna?"
+   - *(Retrieves from USER.md & SOUL.md: Markdown with syntax-highlighted code blocks, never pie charts)*
+
+3. **Current Project Status**
+   - "What is the status of Project Animus and when is the v1.0 launch targeted?"
+   - *(Retrieves from MEMORY.md & USER.md: React Native app, targeting Q3 2026, currently in active development)*
+
+4. **Decision-Making Pattern**
+   - "How does Anna typically evaluate architectural proposals?"
+   - *(Retrieves from SOUL.md & MEMORY.md: Wants clear rationale and trade-offs, prefers "one obvious path" principle)*
+
+5. **Daily Priorities**
+   - "What were Anna's main focus areas and blockers yesterday?"
+   - *(Retrieves from DAILY_DIARY.md: May 14 entries about test failures, vector DB latency, conference call prep)*
+
+6. **Personal Constraints**
+   - "Are there any dietary or personal restrictions I should know about when planning team activities?"
+   - *(Retrieves from USER.md & MEMORY.md: Mushroom allergy, prefers weekend work-life balance)*
+
+7. **Code Review Expectations**
+   - "What does Anna look for when reviewing code and what is her approval workflow?"
+   - *(Retrieves from SOUL.md & USER.md: Thorough architectural feedback, fast approval once concerns addressed, single idea per commit preferred)*
+
+8. **Time Off & Vacation**
+   - "When is Anna on vacation and what communication should be avoided?"
+   - *(Retrieves from MEMORY.md & USER.md: April 4-11 confirmed, June 1 week tentative, no briefings during vacation)*
+
+9. **Team & Collaboration**
+   - "Who does Anna work closely with and what is her reporting structure?"
+   - *(Retrieves from USER.md & MEMORY.md: Reports to Michael, collaborates with Sarah, mentors 2-3 junior engineers)*
+
+10. **Incident Response**
+    - "If there's a production issue, how should I communicate the problem to Anna?"
+    - *(Retrieves from SOUL.md: Provide structured context (what, why, impact), flag as URGENT, include minimal logs, suggest preventive measures)*
+
+These questions demonstrate how UMA retrieves contextual information across different memory lanes—daily working memory, long-term personal profile, agent behavioral guidelines, and project status—to provide relevant, personalized context.
