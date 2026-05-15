@@ -8,7 +8,6 @@ ownership, storage location, or ad hoc source naming.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping
 from uma.common.provenance import build_provenance
@@ -84,25 +83,6 @@ _LEGACY_KIND_ALIASES = {
     "fact": SEMANTIC_FACT_KIND,
     "episode": EPISODIC_EVENT_KIND,
 }
-
-
-@dataclass(frozen=True)
-class TaxonomyEntry:
-    kind: str
-    kb_lane: str
-    meaning: str
-
-
-TAXONOMY = (
-    TaxonomyEntry(RAW_SOURCE_KIND, RAW_LANE, "Immutable source evidence stored through canonical ingest."),
-    TaxonomyEntry(WIKI_PAGE_KIND, WIKI_LANE, "Mutable compiled wiki artifact backed by evidence and provenance."),
-    TaxonomyEntry(SEMANTIC_FACT_KIND, SEMANTIC_LANE, "Durable semantic knowledge extracted from evidence."),
-    TaxonomyEntry(EPISODIC_EVENT_KIND, EPISODIC_LANE, "Time-ordered episodic event or import event."),
-    TaxonomyEntry(PROCEDURAL_RULE_KIND, PROCEDURAL_LANE, "Durable procedural instruction or skill artifact."),
-    TaxonomyEntry(PROFILE_FACT_KIND, PROFILE_LANE, "Profile-oriented user fact used for continuity and recall."),
-    TaxonomyEntry(DECISION_TRACE_KIND, TRACE_LANE, "Persisted decision trace or controller reasoning artifact."),
-    TaxonomyEntry(QUERY_ARTIFACT_KIND, TRACE_LANE, "Persisted query-oriented artifact such as a retrieval trace or query pack."),
-)
 
 
 def lane_for_kind(kind: str) -> str:
