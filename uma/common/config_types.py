@@ -288,7 +288,7 @@ class RetrievalConfig:
         chunk_shortlist_k = int(d.get("chunk_shortlist_k", 12))
         if chunk_shortlist_k < 0:
             raise ValueError("'retrieval.chunk_shortlist_k' must be a non-negative integer")
-        chunk_shortlist_max_per_doc = int(d.get("chunk_shortlist_max_per_doc", 3))
+        chunk_shortlist_max_per_doc = int(d.get("chunk_shortlist_max_per_doc", 5))
         if chunk_shortlist_max_per_doc < 0:
             raise ValueError("'retrieval.chunk_shortlist_max_per_doc' must be a non-negative integer")
         hybrid_cfg = d.get("hybrid")
@@ -518,6 +518,7 @@ class RuntimeConfig:
     consolidation: ConsolidationConfig
     pipeline: PipelineConfig
     semantic_salience_threshold: float
+    semantic_salience_decay_days: float = 180.0
 
     @classmethod
     def from_uma_config(cls, cfg: Dict[str, Any]) -> "RuntimeConfig":
@@ -537,6 +538,7 @@ class RuntimeConfig:
         semantic_salience = semantic_section.get("salience_threshold")
         if semantic_salience is None:
             semantic_salience = consolidation_cfg.prune_min_fact_salience
+        semantic_decay_days = float(semantic_section.get("salience_decay_days", 180.0))
 
         return cls(
             storage=storage_cfg,
@@ -549,4 +551,5 @@ class RuntimeConfig:
             consolidation=consolidation_cfg,
             pipeline=pipeline_cfg,
             semantic_salience_threshold=float(semantic_salience),
+            semantic_salience_decay_days=semantic_decay_days,
         )

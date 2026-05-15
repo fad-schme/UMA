@@ -644,11 +644,26 @@ def _fact_blob(fact: Any) -> str:
     return " ".join(parts).lower()
 
 
+def _word_root(word: str) -> str:
+    """Strip common inflectional suffixes for fuzzy term matching."""
+    w = word.lower()
+    for suffix in ("ing", "tion", "sion", "ness", "ment", "ed", "er", "ly", "es", "s"):
+        if len(w) > len(suffix) + 3 and w.endswith(suffix):
+            return w[: -len(suffix)]
+    return w
+
+
 def _predicate_score(predicate: str, facts: List[Any], terms: List[str]) -> int:
     if not predicate or not terms or not facts:
         return 0
     blob = " ".join(_fact_blob(f) for f in facts if f)[:20000]
-    return sum(1 for t in terms if t and t in blob)
+    score = 0
+    for t in terms:
+        if not t:
+            continue
+        if t in blob or _word_root(t) in blob:
+            score += 1
+    return score
 
 
 def _select_predicate_for_expansion(

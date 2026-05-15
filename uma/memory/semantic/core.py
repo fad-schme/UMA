@@ -56,6 +56,7 @@ class SemanticCore:
         embedder: Any,
         semantic_store: Any,
         salience_threshold: float = 0.3,
+        salience_decay_days: float = 180.0,
         *,
         memory: Optional[Any] = None,
     ) -> None:
@@ -64,6 +65,7 @@ class SemanticCore:
             embedder=embedder,
             semantic_store=semantic_store,
             salience_threshold=salience_threshold,
+            salience_decay_days=salience_decay_days,
         )
         logger.debug("SemanticCore initialized.")
 

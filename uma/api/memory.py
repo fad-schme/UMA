@@ -616,16 +616,19 @@ class UMAMemory:
         # ---------------------- Semantic Core ---------------------------
         try:
             salience = self.semantic_salience_threshold
+            decay_days = self.cfg.semantic_salience_decay_days
             semantic_core = SemanticCore(
                 llm=self.llm,
                 embedder=self.embedder,
                 semantic_store=self._stores["semantic"],
                 salience_threshold=salience,
+                salience_decay_days=decay_days,
                 memory=self,
             )
             logger.info(
-                "SemanticCore initialized (salience_threshold=%.2f).",
+                "SemanticCore initialized (salience_threshold=%.2f, decay_days=%.0f).",
                 salience,
+                decay_days,
             )
         except Exception:
             logger.exception("UMAMemory: failed to initialize SemanticCore.")

@@ -38,16 +38,17 @@ class SalienceScorer:
     Compute a salience score for a Fact.
     """
 
+    def __init__(self, decay_half_life_days: float = 180.0) -> None:
+        self._half_life = max(1.0, float(decay_half_life_days))
+
     def score(self, fact: Fact) -> float:
         now = datetime.now(timezone.utc)
         updated = fact.updated_at.replace(tzinfo=timezone.utc)
 
-        # Days since last update
         age_days = max(0.0, (now - updated).total_seconds() / 86400.0)
 
         base_conf = fact.confidence if fact.confidence is not None else 0.5
-        # Half-life ~180 days
-        decay_factor = 0.5 ** (age_days / 180.0)
+        decay_factor = 0.5 ** (age_days / self._half_life)
 
         salience = max(0.0, min(1.0, float(base_conf) * float(decay_factor)))
         return salience

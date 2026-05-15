@@ -165,6 +165,10 @@ def compute_confidence(coverage: CoverageReport) -> Dict[str, float]:
 
 def _fact_salience(fact: Any) -> float:
     try:
+        # Direct field takes precedence (Fact dataclass stores salience as a field, not in meta)
+        val = get_attr_or_key(fact, "salience", None)
+        if val is not None:
+            return float(val)
         meta = get_attr_or_key(fact, "meta") or {}
         return float(meta.get("salience", 0.0)) if isinstance(meta, dict) else 0.0
     except Exception:

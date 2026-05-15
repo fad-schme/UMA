@@ -45,7 +45,6 @@ retrieval:
   max_facts: 5
   max_skills: 3
   max_graph_items: 3
-  max_evidence_chunks: 10
   strict: true
   debug_scores: false
   context:
@@ -64,6 +63,7 @@ retrieval:
 
 semantic:
   salience_threshold: 0.45
+  salience_decay_days: 180
 
 features:
   load:

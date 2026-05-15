@@ -32,20 +32,21 @@ class SemanticIngestor:
         embedder: Any,
         semantic_store: Any,
         salience_threshold: float = 0.3,
+        salience_decay_days: float = 180.0,
     ) -> None:
         # Allow SemanticCore to be constructed in retrieval-only mode (tests / minimal envs)
         # without requiring an LLM. Extraction/ingestion APIs will safely no-op.
         self.extractor: FactExtractor | None = None
         try:
             if llm is not None:
-                self.extractor = FactExtractor(llm, SalienceScorer())
+                self.extractor = FactExtractor(llm, SalienceScorer(decay_half_life_days=salience_decay_days))
         except Exception:
             logger.exception("SemanticIngestor: failed to initialize FactExtractor; extraction disabled.")
             self.extractor = None
         self.embedder = embedder
         self.semantic_store = semantic_store
         self.threshold = float(salience_threshold)
-        logger.debug("SemanticIngestor initialized (threshold=%.2f).", self.threshold)
+        logger.debug("SemanticIngestor initialized (threshold=%.2f, decay_days=%.0f).", self.threshold, salience_decay_days)
 
     async def extract(self, user_id: str, text: str, *, extra_meta: dict | None = None) -> List[Fact]:
         if self.extractor is None:
