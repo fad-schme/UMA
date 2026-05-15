@@ -113,23 +113,18 @@ def test_runtime_bind_requires_runtime_context() -> None:
 
 def test_runtime_constructor_preserves_shared_infrastructure_references() -> None:
     stores = {"semantic": object()}
+    config = object()
+    llm = object()
     runtime = UMARuntime(
-        config=object(),
-        raw_config=object(),
+        config=config,
         stores=stores,
-        llm=object(),
-        agent_llm=object(),
-        embedder=object(),
-        document_store=object(),
-        graph_service=object(),
-        ranking_service=object(),
-        feature_registry={"procedural": object()},
+        llm=llm,
         metadata={"version": "test"},
     )
 
     assert runtime.stores.keys() == stores.keys()
-    assert runtime.config is not None
-    assert runtime.llm is not None
+    assert runtime.config is config
+    assert runtime.llm is llm
     assert runtime.metadata["version"] == "test"
 
 

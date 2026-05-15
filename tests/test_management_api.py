@@ -1,19 +1,13 @@
 from __future__ import annotations
 
-import copy
-
 import pytest
 
 import uma.api.management as management_api
-from uma.api.management import (
-    explain_result,
-    export_wiki_projection,
-    lint_memory_drift,
-    update_wiki_page,
-)
+from uma.api.management import explain_result, lint_memory_drift
 from uma.api.memory import UMAMemory
 from uma.api.runtime import UMARuntime
 from uma.common.types import RuntimeContext
+from uma.memory import wiki as wiki_module
 
 
 def test_memory_public_surface_keeps_animus_support_and_drops_management_methods() -> None:
@@ -23,8 +17,6 @@ def test_memory_public_surface_keeps_animus_support_and_drops_management_methods
     assert hasattr(UMAMemory, "load_daily_diary_bootstrap")
     assert not hasattr(UMAMemory, "expand_evidence")
     assert not hasattr(UMAMemory, "compile_memory_artifact")
-    assert not hasattr(UMAMemory, "update_wiki_page")
-    assert not hasattr(UMAMemory, "export_wiki_projection")
     assert not hasattr(UMAMemory, "explain_result")
     assert not hasattr(UMAMemory, "lint_memory_drift")
 
@@ -32,9 +24,7 @@ def test_memory_public_surface_keeps_animus_support_and_drops_management_methods
 def test_management_module_exports_supported_operations_only() -> None:
     assert management_api.__all__ == [
         "explain_result",
-        "export_wiki_projection",
         "lint_memory_drift",
-        "update_wiki_page",
     ]
 
 
@@ -51,7 +41,7 @@ def test_animus_profile_loaders_remain_public_and_functional(uma_memory, tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_management_update_explain_and_export_use_canonical_provenance(uma_memory, tmp_path) -> None:
+async def test_management_explain_uses_canonical_provenance(uma_memory, tmp_path) -> None:
     memory = uma_memory
     path = tmp_path / "management-doc.txt"
     path.write_text(
@@ -72,56 +62,35 @@ async def test_management_update_explain_and_export_use_canonical_provenance(uma
         memory_intent="continuity",
     )
 
-    artifact_result = update_wiki_page(
-        memory,
-        artifact_id="wiki:ops/metrics",
-        title="Ops Metrics",
-        owner_type="user",
-        owner_id="user:u1",
-        summary="Metrics and alerting summary.",
-        parent_artifacts=[memory_result["compiled_answer"]],
-        related_artifact_ids=[memory_result["compiled_answer"]["id"]],
-        retrieval_tags=["ops", "metrics"],
-    )
-    artifact = artifact_result["artifact"]
-    before_export = copy.deepcopy(artifact)
+    artifact = memory_result["compiled_answer"]
+    explanation = await explain_result(memory, artifact, user_id="user:u1")
 
-    explanation = await explain_result(memory, artifact)
-    assert artifact == before_export
-    projection_path = tmp_path / "wiki" / "ops-metrics.md"
-    export_result = await export_wiki_projection(memory, artifact, output_path=str(projection_path))
-
-    assert artifact_result["operation"] == "wiki_artifact_created"
     assert explanation["evidence"]
     assert explanation["chunk_ids"] == artifact["provenance"]["source_chunk_ids"]
     assert explanation["compiled_memory_index"]["artifact_id"] == artifact["id"]
-    assert export_result["projection_only"] is True
-    assert export_result["path"] == str(projection_path)
-    assert projection_path.read_text(encoding="utf-8").startswith("# Ops Metrics")
-    assert artifact == before_export
 
 
 @pytest.mark.asyncio
 async def test_management_lint_reports_invalid_parent_lineage_without_rewriting(uma_memory) -> None:
     memory = uma_memory
-    manual_parent = update_wiki_page(
-        memory,
-        artifact_id="wiki:manual/root",
+    manual_parent = wiki_module.regenerate_wiki_page(
+        memory=memory,
+        page_key="wiki:manual/root",
         title="Manual Root",
         owner_type="user",
         owner_id="user:u1",
         manual=True,
-    )["artifact"]
-    child = update_wiki_page(
-        memory,
-        artifact_id="wiki:manual/child",
+    )["compiled_artifact"]
+    child = wiki_module.regenerate_wiki_page(
+        memory=memory,
+        page_key="wiki:manual/child",
         title="Manual Child",
         owner_type="user",
         owner_id="user:u1",
         parent_artifacts=[manual_parent],
-    )["artifact"]
+    )["compiled_artifact"]
 
-    lint_result = await lint_memory_drift(memory, [child], stale_after_seconds=0)
+    lint_result = await lint_memory_drift(memory, [child], user_id="user:u1", stale_after_seconds=0)
 
     issues = {finding["issue"] for finding in lint_result["findings"]}
     assert lint_result["status"] == "issues_found"

@@ -276,15 +276,8 @@ class UMARuntime:
         self,
         *,
         config: Any = None,
-        raw_config: Any = None,
         stores: Optional[Mapping[str, Any]] = None,
         llm: Any = None,
-        agent_llm: Any = None,
-        embedder: Any = None,
-        document_store: Any = None,
-        graph_service: Any = None,
-        ranking_service: Any = None,
-        feature_registry: Optional[Mapping[str, Any]] = None,
         memory_bridge: Any = None,
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> None:
@@ -293,13 +286,6 @@ class UMARuntime:
         self._llm = llm
         self.memory_bridge = memory_bridge
         self.metadata: Dict[str, Any] = dict(metadata or {})
-        del raw_config
-        del agent_llm
-        del embedder
-        del document_store
-        del graph_service
-        del ranking_service
-        del feature_registry
 
     @classmethod
     def from_memory(cls, memory: Any) -> "UMARuntime":
@@ -930,7 +916,6 @@ class UMARuntime:
             "compiled_memory_log": compiled_memory_log,
             "confidence": confidence,
             "provenance": compiled_answer["provenance"],
-            "retrieval_path": trace,
             "trace": trace
             + [
                 {

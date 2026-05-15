@@ -161,7 +161,7 @@ memory.shutdown()  # release backend connections
 These keep inspection, curation, and drift checks off the main `UMAMemory` surface.
 
 ```python
-from uma.api.management import explain_result, export_wiki_projection, update_wiki_page, lint_memory_drift
+from uma.api.management import explain_result, lint_memory_drift
 ```
 
 ### `explain_result` — Inspect provenance of a retrieval result
@@ -175,36 +175,6 @@ explanation = await explain_result(
 )
 # Returns: artifact_id, provenance, evidence, chunk_ids, lineage, conflicts, wiki_page
 ```
-
-### `update_wiki_page` — Create or refresh a compiled wiki artifact
-
-```python
-result = update_wiki_page(
-    memory,
-    artifact_id="wiki-topic-1",
-    title="Topic Title",
-    owner_type="user",
-    owner_id="user-123",
-    text="compiled content",
-    summary="short summary",
-    topic_key="topic-slug",
-    direct_source_chunk_ids=["chunk-1", "chunk-2"],
-    retrieval_tags=["topic", "domain"],
-    manual=False,
-)
-```
-
-### `export_wiki_projection` — Render wiki artifact to markdown
-
-```python
-projection = await export_wiki_projection(
-    memory,
-    artifact,           # compiled artifact dict
-    output_path="wiki/topic.md",  # optional; writes file if provided
-)
-```
-
-Produces a human-readable, git-friendly, Obsidian-compatible markdown projection. This is a **projection only** — not the canonical source of truth.
 
 ### `lint_memory_drift` — Check artifacts for provenance drift
 

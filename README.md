@@ -124,7 +124,7 @@ Supported LLM providers are `ollama`, `openai`, and `anthropic`. Supported embed
 
 ```python
 from uma import UMAMemory
-from uma.api.management import explain_result, export_wiki_projection
+from uma.api.management import explain_result
 
 memory = UMAMemory.from_yaml("config/uma.yaml").set_context(
     agent_id="agent-default",
@@ -173,7 +173,7 @@ The public surface is intentionally small.
 - Required Animus support on `UMAMemory`
   `load_userprofile(...)`, `load_agentprofile(...)`, `load_memory_bootstrap(...)`, `load_daily_diary_bootstrap(...)`
 - Developer and admin management APIs
-  `uma.api.management.explain_result(...)`, `update_wiki_page(...)`, `export_wiki_projection(...)`, `lint_memory_drift(...)`
+  `uma.api.management.explain_result(...)`, `lint_memory_drift(...)`
 
 ## Production Boundary
 
@@ -195,20 +195,7 @@ UMA ships four AI coding assistant skill files under `.claude/skills/`. These ar
 No setup is required. Claude Code reads `.claude/skills/` automatically. When you ask the assistant a question like *"how do I filter by lane?"* or *"what does `process_turn` persist?"* it will draw on these files rather than guessing from the README alone.
 
 Other assistants can reference the same files directly from `.claude/skills/` or via a symlink at `.agents/skills/` if your tooling follows that convention.
-
-### Generating skill files from compiled memory
-
-`export_wiki_projection` accepts a `skill_format=True` flag to render a compiled wiki artifact as an agent skill file instead of the default projection format. This lets UMA's own compiled memory feed directly into the assistant skill layer.
-
-```python
-from uma.api.management import export_wiki_projection
-
-# default: human-readable wiki projection
-await export_wiki_projection(memory, artifact, output_path="wiki/topic.md")
-
-# skill file: YAML frontmatter + clean content for AI coding assistants
-await export_wiki_projection(memory, artifact, output_path=".claude/skills/topic.md", skill_format=True)
-```
+The UMA agent skills follow the Agent Skills best practices and the Claude Skills best practices. 
 
 ## Architecture Notes
 

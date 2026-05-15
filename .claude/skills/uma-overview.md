@@ -60,7 +60,7 @@ A user must be able to understand what UMA-RLM is in one sentence and install it
 
 ```python
 from uma import UMAMemory
-from uma.api.management import explain_result, export_wiki_projection, update_wiki_page, lint_memory_drift
+from uma.api.management import explain_result, lint_memory_drift
 
 memory = UMAMemory.from_yaml("config/uma.yaml")
 memory = memory.set_context(agent_id="agent-default")

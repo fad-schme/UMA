@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import copy
 
 import pytest
 
-from uma.api.management import export_wiki_projection, lint_memory_drift, update_wiki_page
+from uma.api.management import lint_memory_drift
 from uma.api.runtime import UMARuntime
 from uma.common.types import RuntimeContext
 from uma.ingest.ingest_service import capture_source, curate_compiled_memory, derive_memory_artifacts
@@ -87,27 +86,6 @@ def test_wiki_page_refresh_keeps_identity_when_title_changes(uma_memory) -> None
     assert refreshed["title"] == "Platform Metrics"
 
 
-@pytest.mark.asyncio
-async def test_wiki_projection_is_rebuildable_and_non_canonical(uma_memory, tmp_path) -> None:
-    page = wiki_module.regenerate_wiki_page(
-        memory=uma_memory,
-        page_key="manual/notes",
-        title="Manual Notes",
-        owner_type="user",
-        owner_id="user:u1",
-        manual=True,
-    )
-    before = copy.deepcopy(page)
-    projection_path = tmp_path / "wiki" / "manual-notes.md"
-
-    export_result = await export_wiki_projection(uma_memory, page, output_path=str(projection_path))
-
-    projection_path.unlink()
-    rebuilt = await export_wiki_projection(uma_memory, page, output_path=str(projection_path))
-    assert export_result["projection_only"] is True
-    assert rebuilt["markdown"] == export_result["markdown"]
-    assert page == before
-
 
 @pytest.mark.asyncio
 async def test_wiki_lint_reports_invalid_parent_lineage(uma_memory) -> None:
@@ -128,7 +106,7 @@ async def test_wiki_lint_reports_invalid_parent_lineage(uma_memory) -> None:
         parent_artifacts=[manual_parent["compiled_artifact"]],
     )
 
-    lint_result = await lint_memory_drift(uma_memory, [child])
+    lint_result = await lint_memory_drift(uma_memory, [child], user_id="user:u1")
 
     issues = {finding["issue"] for finding in lint_result["findings"]}
     assert lint_result["status"] == "issues_found"
@@ -172,66 +150,3 @@ async def test_stage3_curation_uses_wiki_subsystem(uma_memory, tmp_path, monkeyp
     assert curated.compiled_artifacts[0]["id"].startswith("wiki:")
 
 
-@pytest.mark.asyncio
-async def test_management_delegates_wiki_update_export_and_lint(uma_memory, tmp_path, monkeypatch) -> None:
-    seen: list[tuple[str, str]] = []
-
-    def fake_regenerate(**kwargs):
-        seen.append(("update", str(kwargs["page_key"])))
-        return {
-            "page_type": wiki_module.WIKI_PAGE_RECORD_TYPE,
-            "page_id": "wiki:test/page",
-            "slug": "test/page",
-            "title": "Test Page",
-            "category": "general",
-            "status": "active",
-            "text": None,
-            "summary": None,
-            "sections": [],
-            "evidence_links": {"source_chunk_ids": [], "source_document_ids": [], "parent_artifact_ids": [], "related_artifact_ids": []},
-            "compiled_artifact_id": "wiki:test/page",
-            "compiled_artifact_ids": ["wiki:test/page"],
-            "derived_at": None,
-            "updated_at": None,
-            "provenance": {"valid": True, "source_chunk_ids": [], "manual": True},
-            "conflicts": [],
-            "drift_status": "unchecked",
-            "manual": True,
-            "compiled_memory_index": {"artifact_id": "wiki:test/page"},
-            "compiled_memory_log": [{"event_type": "manual_update"}],
-            "compiled_artifact": {
-                "id": "wiki:test/page",
-                "compiled_memory_index": {"artifact_id": "wiki:test/page"},
-                "compiled_memory_log": [{"event_type": "manual_update"}],
-                "provenance": {"valid": True, "source_chunk_ids": [], "manual": True},
-            },
-        }
-
-    def fake_export(page_or_artifact, *, output_path=None):
-        seen.append(("export", str(output_path)))
-        return {"status": "exported", "projection_only": True, "markdown": "# Test\n", "path": output_path}
-
-    async def fake_lint(memory, page_or_artifact, *, stale_after_seconds=None):
-        seen.append(("lint", str(stale_after_seconds)))
-        return {"status": "ok", "page_id": "wiki:test/page", "artifact_id": "wiki:test/page", "drift_status": "active", "findings": []}
-
-    monkeypatch.setattr(wiki_module, "regenerate_wiki_page", fake_regenerate)
-    monkeypatch.setattr(wiki_module, "export_wiki_projection", fake_export)
-    monkeypatch.setattr(wiki_module, "lint_wiki_page", fake_lint)
-
-    result = update_wiki_page(
-        uma_memory,
-        artifact_id="wiki:test/page",
-        title="Test Page",
-        owner_type="user",
-        owner_id="user:u1",
-        manual=True,
-    )
-    await export_wiki_projection(uma_memory, result["page"], output_path=str(tmp_path / "page.md"))
-    await lint_memory_drift(uma_memory, [result["page"]], stale_after_seconds=5)
-
-    assert seen == [
-        ("update", "wiki:test/page"),
-        ("export", str(tmp_path / "page.md")),
-        ("lint", "5"),
-    ]

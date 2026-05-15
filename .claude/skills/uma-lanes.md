@@ -130,13 +130,7 @@ Up to `max_procedural: 2` per context retrieval. Up to `max_skills: 3` in memory
 
 **Management:**
 ```python
-from uma.api.management import update_wiki_page, export_wiki_projection, lint_memory_drift
-
-# Create or refresh a wiki artifact
-result = update_wiki_page(memory, artifact_id=..., title=..., owner_type=..., ...)
-
-# Export to markdown projection
-await export_wiki_projection(memory, artifact, output_path="wiki/topic.md")
+from uma.api.management import lint_memory_drift
 
 # Check for provenance drift
 await lint_memory_drift(memory, artifact, user_id=..., stale_after_seconds=86400)

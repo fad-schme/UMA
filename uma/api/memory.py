@@ -211,47 +211,7 @@ class UMAMemory:
         if not isinstance(user_id, str) or not user_id.strip():
             raise ValueError("UMAMemory requires an explicit user_id.")
 
-        return self._build_runtime_context(
-            user_id=user_id,
-            tenant_id=tenant_id,
-            request_id=request_id,
-            workspace_id=workspace_id,
-            session_id=session_id,
-        )
-
-    def _ensure_base_ready(self) -> None:
-        """Ensure the minimum baseline runtime is ready."""
-        if not getattr(self, "_retrieval_ready", False):
-            init_retrieval_ready(self)
-        self.initialized = True
-
-    def _ensure_retrieval_ready(self) -> None:
-        """Ensure retrieval-only dependencies are ready."""
-        if not getattr(self, "_retrieval_ready", False):
-            init_retrieval_ready(self)
-        self.initialized = True
-
-    def _ensure_ingestion_ready(self) -> None:
-        """Ensure ingestion dependencies are ready."""
-        if not getattr(self, "_ingestion_ready", False):
-            init_ingestion_ready(self)
-        self.initialized = True
-
-    def _build_runtime_context(
-        self,
-        *,
-        user_id: str,
-        agent_id: Optional[str] = None,
-        tenant_id: str = "default",
-        request_id: Optional[str] = None,
-        workspace_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-    ) -> RuntimeContext:
-        """Build a validated runtime context for public retrieval APIs."""
-        if not isinstance(user_id, str) or not user_id.strip():
-            raise ValueError("UMAMemory retrieval requires a non-empty user_id.")
-
-        resolved_agent_id = (agent_id or self.agent_id or "agent-default").strip()
+        resolved_agent_id = (self.agent_id or "agent-default").strip()
         if not resolved_agent_id:
             raise ValueError("UMAMemory retrieval requires a non-empty agent_id.")
 
@@ -271,6 +231,18 @@ class UMAMemory:
             workspace_id=workspace_id,
             session_id=session_id,
         )
+
+    def _ensure_retrieval_ready(self) -> None:
+        """Ensure retrieval-only dependencies are ready."""
+        if not getattr(self, "_retrieval_ready", False):
+            init_retrieval_ready(self)
+        self.initialized = True
+
+    def _ensure_ingestion_ready(self) -> None:
+        """Ensure ingestion dependencies are ready."""
+        if not getattr(self, "_ingestion_ready", False):
+            init_ingestion_ready(self)
+        self.initialized = True
 
     # ----------------------------------------------------------------------
     # -------------------- Core Public APIs -------------------------------

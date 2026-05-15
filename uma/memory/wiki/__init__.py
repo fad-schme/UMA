@@ -1,6 +1,5 @@
 from .core import (
     WIKI_PAGE_RECORD_TYPE,
-    export_wiki_projection,
     lint_wiki_page,
     page_identity_for_key,
     regenerate_wiki_page,
@@ -10,7 +9,6 @@ from .core import (
 
 __all__ = [
     "WIKI_PAGE_RECORD_TYPE",
-    "export_wiki_projection",
     "lint_wiki_page",
     "page_identity_for_key",
     "regenerate_wiki_page",

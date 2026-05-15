@@ -71,7 +71,7 @@ async def test_request_handle_retrieval_delegates_directly_to_runtime(uma_memory
             "compiled_memory_log": [],
             "confidence": {},
             "provenance": {"valid": True, "source_chunk_ids": ["chunk-1"]},
-            "retrieval_path": [],
+            "trace": [],
         }
 
     async def fake_messages(
@@ -170,7 +170,7 @@ async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory
             "compiled_memory_log": [],
             "confidence": {},
             "provenance": {"valid": True, "source_chunk_ids": ["chunk-1"]},
-            "retrieval_path": [],
+            "trace": [],
         }
 
     memory.runtime.retrieve_context = fake_context  # type: ignore[method-assign]
