@@ -91,17 +91,19 @@ async def test_provenance_chain_supports_fact_memory_and_wiki_artifact_expansion
         context,
         query_text="What platform do we use for production workloads?",
         memory_intent="continuity",
+        include_debug=True,
     )
-    assert memory_result["compiled_answer"]["provenance"]["source_chunk_ids"]
-    assert memory_result["compiled_memory_index"]
-    assert memory_result["compiled_memory_log"]
-    assert memory_result["compiled_memory_index"][0]["navigation_only"] is True
+    assert memory_result["provenance_valid"] is True
+    assert memory_result["debug"]["compiled_answer"]["provenance"]["source_chunk_ids"]
+    assert memory_result["debug"]["compiled_memory_index"]
+    assert memory_result["debug"]["compiled_memory_log"]
+    assert memory_result["debug"]["compiled_memory_index"][0]["navigation_only"] is True
 
     fact_evidence = await explain_result(memory, fact, user_id="user:u1")
     assert fact_evidence["evidence"]
     assert fact_evidence["chunk_ids"]
 
-    answer_evidence = await explain_result(memory, memory_result["compiled_answer"], user_id="user:u1")
+    answer_evidence = await explain_result(memory, memory_result["debug"]["compiled_answer"], user_id="user:u1")
     assert answer_evidence["evidence"]
     assert answer_evidence["chunk_ids"]
 
@@ -172,6 +174,7 @@ async def test_compiled_memory_artifact_builds_index_log_and_transitive_raw_evid
         context,
         query_text="What monitoring platform do we use?",
         memory_intent="continuity",
+        include_debug=True,
     )
 
     page = wiki_module.regenerate_wiki_page(
@@ -181,8 +184,8 @@ async def test_compiled_memory_artifact_builds_index_log_and_transitive_raw_evid
         owner_type="user",
         owner_id="user:u1",
         summary="Monitoring platform used in operations.",
-        parent_artifacts=[memory_result["compiled_answer"]],
-        related_artifact_ids=[memory_result["compiled_answer"]["id"]],
+        parent_artifacts=[memory_result["debug"]["compiled_answer"]],
+        related_artifact_ids=[memory_result["debug"]["compiled_answer"]["id"]],
         retrieval_tags=["ops", "monitoring"],
     )
     artifact = page["compiled_artifact"]
@@ -193,12 +196,12 @@ async def test_compiled_memory_artifact_builds_index_log_and_transitive_raw_evid
     assert artifact["compiled_memory_index"]["navigation_only"] is True
     assert artifact["compiled_memory_index"]["source_chunk_ids"] == artifact["provenance"]["source_chunk_ids"]
     assert artifact["compiled_memory_log"][0]["event_type"] == "wiki_artifact_created"
-    assert artifact["compiled_memory_log"][0]["parent_artifact_ids"] == [memory_result["compiled_answer"]["id"]]
+    assert artifact["compiled_memory_log"][0]["parent_artifact_ids"] == [memory_result["debug"]["compiled_answer"]["id"]]
 
     expanded = await explain_result(memory, artifact, user_id="user:u1")
     assert expanded["chunk_ids"] == artifact["provenance"]["source_chunk_ids"]
     assert expanded["direct_chunk_ids"] == []
-    assert expanded["lineage"][0]["parent_artifact_ids"] == [memory_result["compiled_answer"]["id"]]
+    assert expanded["lineage"][0]["parent_artifact_ids"] == [memory_result["debug"]["compiled_answer"]["id"]]
     assert expanded["compiled_memory_log"][0]["event_type"] == "evidence_expanded"
 
 

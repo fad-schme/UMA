@@ -28,7 +28,7 @@ dist/
 
 # VSCode
 .vscode/
-
+.uma/
 # macOS
 .DS_Store
 

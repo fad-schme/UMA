@@ -60,9 +60,10 @@ async def test_management_explain_uses_canonical_provenance(uma_memory, tmp_path
         context,
         query_text="What handles production metrics?",
         memory_intent="continuity",
+        include_debug=True,
     )
 
-    artifact = memory_result["compiled_answer"]
+    artifact = memory_result["debug"]["compiled_answer"]
     explanation = await explain_result(memory, artifact, user_id="user:u1")
 
     assert explanation["evidence"]

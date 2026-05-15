@@ -15,7 +15,7 @@ try:
     from anthropic import AsyncAnthropic  # type: ignore
 except Exception as exc:  # pragma: no cover
     AsyncAnthropic = None  # type: ignore[assignment]
-    logger.error("Failed to import anthropic: %s", exc)
+    #logger.error("Failed to import anthropic: %s", exc)
 
 
 def _resolve_api_key(

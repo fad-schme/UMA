@@ -42,6 +42,7 @@ async def test_regenerated_wiki_page_is_canonical_record_with_evidence_links(uma
         context,
         query_text="What stores long-term metrics?",
         memory_intent="continuity",
+        include_debug=True,
     )
 
     page = wiki_module.regenerate_wiki_page(
@@ -50,7 +51,7 @@ async def test_regenerated_wiki_page_is_canonical_record_with_evidence_links(uma
         title="Ops Metrics",
         owner_type="user",
         owner_id="user:u1",
-        parent_artifacts=[memory_result["compiled_answer"]],
+        parent_artifacts=[memory_result["debug"]["compiled_answer"]],
         category="operations",
     )
 

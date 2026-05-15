@@ -307,6 +307,7 @@ class UMAMemory:
         workspace_id: Optional[str] = None,
         session_id: Optional[str] = None,
         memory_intent: str = "continuity",
+        include_debug: bool = False,
     ) -> Dict[str, Any]:
         """Return compiled, evidence-backed memory results for the explicit request scope.
 
@@ -327,6 +328,7 @@ class UMAMemory:
             runtime_context,
             query_text=query_text,
             memory_intent=memory_intent,
+            include_debug=include_debug,
         )
     
     # ----------------------------------------------------------------------
