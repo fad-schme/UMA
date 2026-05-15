@@ -70,9 +70,6 @@ examples/
 # Ignore pytest temporary test artifacts
 .pytest_tmp/
 
-# Local Claude settings and skills
-.claude/
-
 # Database files and local SQLite DBs
 *.db
 *.sqlite
