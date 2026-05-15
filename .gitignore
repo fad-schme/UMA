@@ -69,7 +69,8 @@ examples/
 
 # Ignore pytest temporary test artifacts
 .pytest_tmp/
-
+tmp_pytest/
+.pytest_cache/
 # Database files and local SQLite DBs
 *.db
 *.sqlite

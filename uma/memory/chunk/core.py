@@ -19,6 +19,7 @@ Note for maintainers:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
@@ -58,6 +59,18 @@ def merge_chunks_with_precedence(
     1) evidence, 2) query hits, 3) neighbors.
     """
     return dedupe_by_id(list(evidence or []) + list(query_hits or []) + list(neighbors or []))
+
+
+@dataclass
+class ChunkSearchOptions:
+    query_text: Optional[str] = None
+    doc_id: Optional[str] = None
+    filter_terms: bool = False
+    expand_neighbors: bool = False
+    neighbor_window: int = 1
+    max_expanded_chunks: int = 24
+    shortlist_k: Optional[int] = None
+    shortlist_max_per_doc: Optional[int] = None
 
 
 class ChunkCore:
@@ -136,13 +149,15 @@ class ChunkCore:
             owner_type=owner_type,
             owner_id=owner_id,
             k=int(k),
-            query_text=query_text,
-            filter_terms=bool(query_text and str(query_text).strip()),
-            expand_neighbors=True,
-            neighbor_window=neighbor_window,
-            max_expanded_chunks=max_expanded_chunks,
-            shortlist_k=shortlist_k,
-            shortlist_max_per_doc=shortlist_max_per_doc,
+            options=ChunkSearchOptions(
+                query_text=query_text,
+                filter_terms=bool(query_text and str(query_text).strip()),
+                expand_neighbors=True,
+                neighbor_window=neighbor_window,
+                max_expanded_chunks=max_expanded_chunks,
+                shortlist_k=shortlist_k,
+                shortlist_max_per_doc=shortlist_max_per_doc,
+            ),
         )
 
     async def _search(
@@ -276,28 +291,13 @@ class ChunkCore:
         owner_type: str,
         owner_id: str,
         k: int = 10,
-        query_text: Optional[str] = None,
-        doc_id: Optional[str] = None,
-        filter_terms: bool = False,
-        expand_neighbors: bool = False,
-        neighbor_window: int = 1,
-        max_expanded_chunks: int = 24,
-        shortlist_k: Optional[int] = None,
-        shortlist_max_per_doc: Optional[int] = None,
+        options: Optional[ChunkSearchOptions] = None,
     ) -> List[Chunk]:
         """
-        Unified chunk search path for both baseline retrieval and RLM.
+        Unified chunk search: vector → hybrid → term-filter → neighbor expansion.
 
-        Scoping contract:
-        - Facts (semantic memory) may apply *subject* filtering (user-specific vs corpus-wide).
-        - Chunks MUST NOT use subject filtering. They are scoped only by:
-          `owner_type`/`owner_id` (DAT) and optionally `doc_id`.
-
-        Behavior:
-        - Vector search as primary candidate set.
-        - Optional lexical fallback + merge (lexical-first ordering).
-        - Optional term filtering for strict keyword gating.
-        - Deterministic dedupe + metadata tagging.
+        Scoping: chunks are scoped only by owner_type/owner_id and optionally doc_id.
+        Subject filtering must NOT be applied here.
         """
         if self.store is None:
             return []
@@ -307,7 +307,57 @@ class ChunkCore:
             k = 10
         if k <= 0:
             return []
+        opts = options or ChunkSearchOptions()
 
+        chunks, lexical_ids = await self._execute_hybrid_search(
+            query_embedding=query_embedding,
+            tenant_id=tenant_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            k=k,
+            query_text=opts.query_text,
+            doc_id=opts.doc_id,
+        )
+        logger.debug(
+            "ChunkCore.search_chunks merged_results=%d lexical_ids=%d filter_terms=%s",
+            len(chunks),
+            len(lexical_ids),
+            opts.filter_terms,
+        )
+        self._tag_retrieval_metadata(chunks, lexical_ids)
+        if opts.filter_terms and opts.query_text and opts.query_text.strip():
+            chunks = self._apply_term_filter(chunks, opts.query_text)
+        if opts.expand_neighbors and chunks:
+            try:
+                anchors = self._shortlist_for_neighbor_expansion(
+                    chunks,
+                    shortlist_k=opts.shortlist_k,
+                    shortlist_max_per_doc=opts.shortlist_max_per_doc,
+                )
+                chunks = await self.expand_neighbors(
+                    tenant_id=tenant_id,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    anchors=anchors,
+                    window=opts.neighbor_window,
+                    max_total=opts.max_expanded_chunks,
+                )
+            except Exception:
+                logger.exception("ChunkCore.search_chunks neighbor expansion failed")
+                raise
+        return chunks
+
+    async def _execute_hybrid_search(
+        self,
+        *,
+        query_embedding: List[float],
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+        k: int,
+        query_text: Optional[str],
+        doc_id: Optional[str],
+    ) -> tuple[List[Chunk], set[str]]:
         memory = getattr(self, "_memory", None)
         retrieval_cfg = getattr(memory, "retrieval_cfg", None) if memory is not None else None
         hybrid_cfg = getattr(retrieval_cfg, "hybrid", None) if retrieval_cfg is not None else None
@@ -333,32 +383,19 @@ class ChunkCore:
             doc_id=doc_id,
         )
         if any(isinstance(x, dict) for x in (chunks or [])):
-            logger.error("ChunkCore.search_chunks: expected Chunk objects from store.search; got dict(s)")
-            raise TypeError(
-                "ChunkCore expected Chunk objects from store.search(); got dict(s). "
-                "Fix the chunk store to return Chunk only."
-            )
+            logger.error("ChunkCore._execute_hybrid_search: expected Chunk objects from store.search; got dict(s)")
+            raise TypeError("ChunkCore expected Chunk objects from store.search(); got dict(s).")
         logger.debug(
             "ChunkCore.search_chunks vector owner=%s:%s k=%s results=%d doc_id=%s",
-            owner_type,
-            owner_id,
-            k,
-            len(chunks),
-            doc_id,
+            owner_type, owner_id, k, len(chunks), doc_id,
         )
 
         dense_chunks = list(chunks or [])
         lexical_ids: set[str] = set()
-        sparse_chunks: List[Chunk] = []
         if hybrid_enabled and top_k_sparse > 0 and query_text and query_text.strip():
-            found: List[Chunk] = []
             logger.debug(
                 "ChunkCore.search_chunks lexical=enabled owner=%s:%s k_sparse=%s strategy=%s query_text=%r",
-                owner_type,
-                owner_id,
-                top_k_sparse,
-                fusion_strategy,
-                query_text,
+                owner_type, owner_id, top_k_sparse, fusion_strategy, query_text,
             )
             found = await self._lexical_search(
                 query_text=query_text,
@@ -367,65 +404,38 @@ class ChunkCore:
                 owner_id=owner_id,
                 k=int(top_k_sparse),
             )
-            logger.debug(
-                "ChunkCore.search_chunks lexical results=%d",
-                len(found),
-            )
+            logger.debug("ChunkCore.search_chunks lexical results=%d", len(found))
             if found:
-                sparse_chunks = list(found or [])
                 for it in found:
                     if isinstance(it, dict):
-                        logger.error(
-                            "ChunkCore.search_chunks: expected Chunk objects from store.lexical_search; got dict"
-                        )
-                        raise TypeError(
-                            "ChunkCore expected Chunk objects from store.lexical_search(); got dict. "
-                            "Fix the chunk store to return Chunk only."
-                        )
+                        logger.error("ChunkCore._execute_hybrid_search: expected Chunk objects from store.lexical_search; got dict")
+                        raise TypeError("ChunkCore expected Chunk objects from store.lexical_search(); got dict.")
                     cid = getattr(it, "id", None)
                     if cid:
                         lexical_ids.add(str(cid))
-                chunks = fuse_candidates(
-                    dense=dense_chunks,
-                    sparse=sparse_chunks,
-                    strategy=fusion_strategy,
-                )
-        logger.debug(
-            "ChunkCore.search_chunks merged_results=%d lexical_ids=%d filter_terms=%s",
-            len(chunks),
-            len(lexical_ids),
-            filter_terms,
-        )
+                chunks = fuse_candidates(dense=dense_chunks, sparse=list(found), strategy=fusion_strategy)
+        return chunks, lexical_ids
 
+    def _tag_retrieval_metadata(self, chunks: List[Chunk], lexical_ids: set[str]) -> None:
         if lexical_ids:
-            def _chunk_id(ch: Chunk) -> str:
-                return str(ch.id or "")
-
-            def _apply_meta(ch: Chunk) -> None:
+            for ch in chunks:
                 meta = getattr(ch, "meta", None) or {}
                 if not isinstance(meta, dict):
                     meta = {}
                 meta.setdefault("retrieval_route", "query")
                 meta.setdefault("retrieval_stage", "search")
-                if _chunk_id(ch) in lexical_ids:
+                if str(ch.id or "") in lexical_ids:
                     meta.setdefault("retrieval_method", "lexical")
                     meta.setdefault("lexical_score", float(meta.get("lexical_confidence", 0.2) or 0.2))
                 else:
                     meta.setdefault("retrieval_method", "vector")
                 ch.meta = meta
-
-            for ch in chunks:
-                _apply_meta(ch)
         else:
-            # Vector-only path: still attach minimal provenance for downstream consumers.
             try:
                 for ch in chunks:
                     if isinstance(ch, dict):
-                        logger.error("ChunkCore.search_chunks: expected Chunk objects from store.search; got dict")
-                        raise TypeError(
-                            "ChunkCore expected Chunk objects from store.search(); got dict. "
-                            "Fix the chunk store to return Chunk only."
-                        )
+                        logger.error("ChunkCore._tag_retrieval_metadata: expected Chunk objects; got dict")
+                        raise TypeError("ChunkCore expected Chunk objects; got dict.")
                     meta = getattr(ch, "meta", None) or {}
                     if not isinstance(meta, dict):
                         meta = {}
@@ -434,67 +444,39 @@ class ChunkCore:
                     meta.setdefault("retrieval_method", "vector")
                     ch.meta = meta
             except Exception:
-                logger.exception("ChunkCore.search_chunks: failed to attach retrieval metadata")
+                logger.exception("ChunkCore._tag_retrieval_metadata: failed to attach retrieval metadata")
                 raise
-
             try:
-                confs = []
-                for ch in chunks:
-                    meta = getattr(ch, "meta", None)
-                    if isinstance(meta, dict) and meta.get("retrieval_method") == "lexical":
-                        c = meta.get("lexical_confidence")
-                        if c is not None:
-                            confs.append(float(c))
+                confs = [
+                    float(ch.meta["lexical_confidence"])
+                    for ch in chunks
+                    if isinstance(getattr(ch, "meta", None), dict)
+                    and ch.meta.get("retrieval_method") == "lexical"
+                    and ch.meta.get("lexical_confidence") is not None
+                ]
                 if confs:
                     logger.info(
                         "ChunkCore.search_chunks lexical_confidence n=%d avg=%.2f max=%.2f",
-                        len(confs),
-                        sum(confs) / max(1, len(confs)),
-                        max(confs),
+                        len(confs), sum(confs) / max(1, len(confs)), max(confs),
                     )
             except Exception:
-                logger.exception("ChunkCore.search_chunks: failed to summarize lexical_confidence")
+                logger.exception("ChunkCore._tag_retrieval_metadata: failed to summarize lexical_confidence")
                 raise
 
-        if filter_terms and query_text and query_text.strip():
-            from uma.retrieve.user_query_helper import build_query_term_set
-            term_set = build_query_term_set(query_text)
-            if term_set and (term_set.terms or term_set.phrases):
-                from uma.retrieve.user_query_helper import text_matches_query_terms
-                filtered: List[Chunk] = []
-                for ch in chunks:
-                    if isinstance(ch, dict):
-                        logger.error("ChunkCore.search_chunks: expected Chunk objects from store.search; got dict")
-                        raise TypeError(
-                            "ChunkCore expected Chunk objects from store.search(); got dict. "
-                            "Fix the chunk store to return Chunk only."
-                        )
-                    text = getattr(ch, "text", "")
-                    if not text:
-                        continue
-                    if text_matches_query_terms(text, term_set, min_term_matches=2, max_terms_for_match=6):
-                        filtered.append(ch)
-                chunks = filtered
-
-        if expand_neighbors and chunks:
-            try:
-                anchors = self._shortlist_for_neighbor_expansion(
-                    chunks,
-                    shortlist_k=shortlist_k,
-                    shortlist_max_per_doc=shortlist_max_per_doc,
-                )
-                chunks = await self.expand_neighbors(
-                    tenant_id=tenant_id,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    anchors=anchors,
-                    window=neighbor_window,
-                    max_total=max_expanded_chunks,
-                )
-            except Exception:
-                logger.exception("ChunkCore.search_chunks neighbor expansion failed")
-                raise
-        return chunks
+    @staticmethod
+    def _apply_term_filter(chunks: List[Chunk], query_text: str) -> List[Chunk]:
+        from uma.retrieve.user_query_helper import build_query_term_set, text_matches_query_terms
+        term_set = build_query_term_set(query_text)
+        if not term_set or (not term_set.terms and not term_set.phrases):
+            return chunks
+        filtered: List[Chunk] = []
+        for ch in chunks:
+            if isinstance(ch, dict):
+                logger.error("ChunkCore._apply_term_filter: expected Chunk objects; got dict")
+                raise TypeError("ChunkCore expected Chunk objects; got dict.")
+            if getattr(ch, "text", "") and text_matches_query_terms(ch.text, term_set, min_term_matches=2, max_terms_for_match=6):
+                filtered.append(ch)
+        return filtered
 
     @staticmethod
     def _shortlist_for_neighbor_expansion(

@@ -45,7 +45,6 @@ def build_compiled_memory_artifact(
     status: str = "active",
     metadata: Mapping[str, Any] | None = None,
     existing_artifact: Any | None = None,
-    actor: Mapping[str, Any] | None = None,
     event_type: str | None = None,
 ) -> dict[str, Any]:
     normalized_direct_chunk_ids = _string_list(direct_source_chunk_ids)
@@ -120,7 +119,6 @@ def build_compiled_memory_artifact(
     artifact["compiled_memory_log"] = existing_log + build_compiled_memory_log(
         artifact,
         event_type=event_type or derivation_type,
-        actor=actor,
     )
     return artifact
 
@@ -153,32 +151,14 @@ def build_compiled_memory_log(
     artifact: Any,
     *,
     event_type: str,
-    actor: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    event = build_compiled_memory_log_event(
-        event_type=event_type,
-        artifact=artifact,
-        actor=actor,
-    )
+    event = build_compiled_memory_log_event(event_type=event_type, artifact=artifact)
     events = [event]
     provenance = provenance_for_artifact(artifact)
-    conflicts = provenance.get("conflicts") if isinstance(provenance.get("conflicts"), list) else []
-    if conflicts:
-        events.append(
-            build_compiled_memory_log_event(
-                event_type="conflict_detected",
-                artifact=artifact,
-                actor=actor,
-            )
-        )
+    if isinstance(provenance.get("conflicts"), list) and provenance["conflicts"]:
+        events.append(build_compiled_memory_log_event(event_type="conflict_detected", artifact=artifact))
     if not provenance.get("valid"):
-        events.append(
-            build_compiled_memory_log_event(
-                event_type="provenance_invalidated",
-                artifact=artifact,
-                actor=actor,
-            )
-        )
+        events.append(build_compiled_memory_log_event(event_type="provenance_invalidated", artifact=artifact))
     return events
 
 
@@ -186,30 +166,24 @@ def build_compiled_memory_log_event(
     *,
     event_type: str,
     artifact: Any | None = None,
-    artifact_id: str | None = None,
-    timestamp: str | datetime | None = None,
     source_chunk_ids: Sequence[Any] | None = None,
     parent_artifact_ids: Sequence[Any] | None = None,
-    derivation_type: str | None = None,
     retrieval_path: Sequence[Mapping[str, Any]] | None = None,
-    conflicts: Sequence[Mapping[str, Any]] | None = None,
-    actor: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     provenance = provenance_for_artifact(artifact) if artifact is not None else {}
     artifact_identifier = str(
-        artifact_id
-        or _artifact_value(artifact, "id")
+        _artifact_value(artifact, "id")
         or _artifact_value(artifact, "doc_id")
         or ""
     )
-    event_timestamp = _isoformat(timestamp) or provenance.get("derived_at") or _utcnow_isoformat()
+    event_timestamp = provenance.get("derived_at") or _utcnow_isoformat()
     normalized_source_chunk_ids = _ordered_unique(
         _string_list(source_chunk_ids) + collect_transitive_source_chunk_ids(artifact) if artifact is not None else _string_list(source_chunk_ids)
     )
     normalized_parent_artifact_ids = _ordered_unique(
         _string_list(parent_artifact_ids) + (collect_parent_artifact_ids(artifact) if artifact is not None else [])
     )
-    normalized_conflicts = [dict(item) for item in (conflicts or provenance.get("conflicts") or []) if isinstance(item, Mapping)]
+    normalized_conflicts = [dict(item) for item in (provenance.get("conflicts") or []) if isinstance(item, Mapping)]
     return {
         "event_type_marker": COMPILED_MEMORY_LOG_TYPE,
         "event_id": f"log:{artifact_identifier or 'artifact'}:{event_type}:{event_timestamp}",
@@ -218,12 +192,11 @@ def build_compiled_memory_log_event(
         "artifact_id": artifact_identifier or None,
         "source_chunk_ids": normalized_source_chunk_ids,
         "parent_artifact_ids": normalized_parent_artifact_ids,
-        "derivation_type": str(derivation_type or provenance.get("derivation_type") or event_type or ""),
+        "derivation_type": str(provenance.get("derivation_type") or event_type or ""),
         "retrieval_path": [dict(item) for item in (retrieval_path or provenance.get("retrieval_path") or []) if isinstance(item, Mapping)],
         "conflicts": normalized_conflicts,
         "manual": bool(provenance.get("manual")),
         "provenance_valid": bool(provenance.get("valid", True)),
-        "actor": dict(actor or {}),
     }
 
 

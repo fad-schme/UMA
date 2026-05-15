@@ -93,160 +93,11 @@ class ContextPackBuilder:
             "confidence": {},
         }
 
-        for msg in ctx.get("working_memory", []):
-            try:
-                role = getattr(msg, "role", None)
-                if role is None and isinstance(msg, dict):
-                    role = msg.get("role")
-                text = getattr(msg, "content", None)
-                if text is None and isinstance(msg, dict):
-                    text = msg.get("text", "")
-                metadata = getattr(msg, "metadata", None)
-                if metadata is None and isinstance(msg, dict):
-                    metadata = msg.get("metadata", {})
-                tokens = getattr(msg, "token_estimate", None)
-                if tokens is None and isinstance(msg, dict):
-                    tokens = msg.get("tokens", 0)
-                pack["working_memory"].append(
-                    {
-                        "role": role,
-                        "text": text,
-                        "metadata": metadata or {},
-                        "tokens": tokens if tokens is not None else 0,
-                    }
-                )
-            except Exception:
-                logger.exception(
-                    "ContextPackBuilder: failed to pack working memory entry owner_type=%s owner_id=%s trace_id=%s",
-                    owner_type,
-                    owner_id,
-                    trace_id,
-                )
-
-        for ep in ctx.get("episodic", []):
-            try:
-                _meta, metadata = _artifact_metadata(
-                    ep,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    created_at=get_attr_or_key(ep, "created_at") or get_attr_or_key(ep, "timestamp"),
-                    updated_at=get_attr_or_key(ep, "updated_at") or get_attr_or_key(ep, "timestamp"),
-                    session_id=get_attr_or_key(ep, "session_id"),
-                )
-                pack["episodic"].append(
-                    {
-                        "id": get_attr_or_key(ep, "id"),
-                        "timestamp": get_attr_or_key(ep, "timestamp"),
-                        "summary": get_attr_or_key(ep, "summary") or repr(ep),
-                        "tags": get_attr_or_key(ep, "tags", []),
-                        "kind": metadata["kind"],
-                        "kb_lane": metadata["kb_lane"],
-                        "provenance": dict(metadata.get("provenance") or {}),
-                        "meta": metadata,
-                    }
-                )
-            except Exception:
-                logger.exception(
-                    "ContextPackBuilder: failed to pack episodic memory entry owner_type=%s owner_id=%s trace_id=%s",
-                    owner_type,
-                    owner_id,
-                    trace_id,
-                )
-
-        for fact in ctx.get("facts", []):
-            try:
-                meta, metadata = _artifact_metadata(
-                    fact,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    created_at=get_attr_or_key(fact, "created_at"),
-                    updated_at=get_attr_or_key(fact, "updated_at"),
-                    session_id=get_attr_or_key(fact, "session_id"),
-                )
-                pack["facts"].append(
-                    {
-                        "id": get_attr_or_key(fact, "id"),
-                        "subject": get_attr_or_key(fact, "subject", "unknown"),
-                        "predicate": get_attr_or_key(fact, "predicate", "related_to"),
-                        "object": get_attr_or_key(fact, "object"),
-                        "confidence": get_attr_or_key(fact, "confidence", 0.0),
-                        "source_ids": get_attr_or_key(fact, "source_ids", []),
-                        "kind": metadata["kind"],
-                        "kb_lane": metadata["kb_lane"],
-                        "provenance": dict(metadata.get("provenance") or {}),
-                        "meta": metadata,
-                        "fact_text": meta.get("fact_text"),
-                    }
-                )
-            except Exception:
-                logger.exception(
-                    "ContextPackBuilder: failed to pack semantic fact owner_type=%s owner_id=%s trace_id=%s",
-                    owner_type,
-                    owner_id,
-                    trace_id,
-                )
-
-        for chunk in ctx.get("chunks", []):
-            try:
-                _meta, metadata = _artifact_metadata(
-                    chunk,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    created_at=get_attr_or_key(chunk, "created_at"),
-                    updated_at=get_attr_or_key(chunk, "updated_at"),
-                )
-                pack["chunks"].append(
-                    {
-                        "id": get_attr_or_key(chunk, "id"),
-                        "doc_id": get_attr_or_key(chunk, "doc_id"),
-                        "source_path": get_attr_or_key(chunk, "source_path"),
-                        "text": get_attr_or_key(chunk, "text", ""),
-                        "page_range": get_attr_or_key(chunk, "page_range"),
-                        "position": get_attr_or_key(chunk, "position", 0),
-                        "kind": metadata["kind"],
-                        "kb_lane": metadata["kb_lane"],
-                        "provenance": dict(metadata.get("provenance") or {}),
-                        "meta": metadata,
-                    }
-                )
-            except Exception:
-                logger.exception(
-                    "ContextPackBuilder: failed to pack chunk owner_type=%s owner_id=%s trace_id=%s",
-                    owner_type,
-                    owner_id,
-                    trace_id,
-                )
-
-        for skill in ctx.get("skills", []):
-            try:
-                _meta, metadata = _artifact_metadata(
-                    skill,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    created_at=get_attr_or_key(skill, "created_at"),
-                    updated_at=get_attr_or_key(skill, "updated_at"),
-                )
-                pack["skills"].append(
-                    {
-                        "id": get_attr_or_key(skill, "id"),
-                        "name": get_attr_or_key(skill, "name", "Unnamed Skill"),
-                        "description": get_attr_or_key(skill, "description"),
-                        "plan": get_attr_or_key(skill, "plan", {}),
-                        "tools": get_attr_or_key(skill, "tools", []),
-                        "kind": metadata["kind"],
-                        "kb_lane": metadata["kb_lane"],
-                        "provenance": dict(metadata.get("provenance") or {}),
-                        "meta": metadata,
-                    }
-                )
-            except Exception:
-                logger.exception(
-                    "ContextPackBuilder: failed to pack procedural skill owner_type=%s owner_id=%s trace_id=%s",
-                    owner_type,
-                    owner_id,
-                    trace_id,
-                )
-
+        _pack_working_memory(pack, ctx, owner_type=owner_type, owner_id=owner_id, trace_id=trace_id)
+        _pack_episodic(pack, ctx, owner_type=owner_type, owner_id=owner_id, trace_id=trace_id)
+        _pack_facts(pack, ctx, owner_type=owner_type, owner_id=owner_id, trace_id=trace_id)
+        _pack_chunks(pack, ctx, owner_type=owner_type, owner_id=owner_id, trace_id=trace_id)
+        _pack_skills(pack, ctx, owner_type=owner_type, owner_id=owner_id, trace_id=trace_id)
         _pack_graph(pack, ctx, owner_type=owner_type, owner_id=owner_id, trace_id=trace_id)
         _pack_trace_and_confidence(pack, ctx, owner_type=owner_type, owner_id=owner_id, trace_id=trace_id)
 
@@ -344,6 +195,150 @@ def _artifact_metadata(
         session_id=session_id,
     )
     return meta, metadata
+
+
+def _pack_working_memory(pack, ctx, *, owner_type, owner_id, trace_id):
+    for msg in ctx.get("working_memory", []):
+        try:
+            role = getattr(msg, "role", None)
+            if role is None and isinstance(msg, dict):
+                role = msg.get("role")
+            text = getattr(msg, "content", None)
+            if text is None and isinstance(msg, dict):
+                text = msg.get("text", "")
+            metadata = getattr(msg, "metadata", None)
+            if metadata is None and isinstance(msg, dict):
+                metadata = msg.get("metadata", {})
+            tokens = getattr(msg, "token_estimate", None)
+            if tokens is None and isinstance(msg, dict):
+                tokens = msg.get("tokens", 0)
+            pack["working_memory"].append({
+                "role": role,
+                "text": text,
+                "metadata": metadata or {},
+                "tokens": tokens if tokens is not None else 0,
+            })
+        except Exception:
+            logger.exception(
+                "ContextPackBuilder: failed to pack working memory entry owner_type=%s owner_id=%s trace_id=%s",
+                owner_type, owner_id, trace_id,
+            )
+
+
+def _pack_episodic(pack, ctx, *, owner_type, owner_id, trace_id):
+    for ep in ctx.get("episodic", []):
+        try:
+            _meta, metadata = _artifact_metadata(
+                ep,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                created_at=get_attr_or_key(ep, "created_at") or get_attr_or_key(ep, "timestamp"),
+                updated_at=get_attr_or_key(ep, "updated_at") or get_attr_or_key(ep, "timestamp"),
+                session_id=get_attr_or_key(ep, "session_id"),
+            )
+            pack["episodic"].append({
+                "id": get_attr_or_key(ep, "id"),
+                "timestamp": get_attr_or_key(ep, "timestamp"),
+                "summary": get_attr_or_key(ep, "summary") or repr(ep),
+                "tags": get_attr_or_key(ep, "tags", []),
+                "kind": metadata["kind"],
+                "kb_lane": metadata["kb_lane"],
+                "provenance": dict(metadata.get("provenance") or {}),
+                "meta": metadata,
+            })
+        except Exception:
+            logger.exception(
+                "ContextPackBuilder: failed to pack episodic memory entry owner_type=%s owner_id=%s trace_id=%s",
+                owner_type, owner_id, trace_id,
+            )
+
+
+def _pack_facts(pack, ctx, *, owner_type, owner_id, trace_id):
+    for fact in ctx.get("facts", []):
+        try:
+            meta, metadata = _artifact_metadata(
+                fact,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                created_at=get_attr_or_key(fact, "created_at"),
+                updated_at=get_attr_or_key(fact, "updated_at"),
+                session_id=get_attr_or_key(fact, "session_id"),
+            )
+            pack["facts"].append({
+                "id": get_attr_or_key(fact, "id"),
+                "subject": get_attr_or_key(fact, "subject", "unknown"),
+                "predicate": get_attr_or_key(fact, "predicate", "related_to"),
+                "object": get_attr_or_key(fact, "object"),
+                "confidence": get_attr_or_key(fact, "confidence", 0.0),
+                "source_ids": get_attr_or_key(fact, "source_ids", []),
+                "kind": metadata["kind"],
+                "kb_lane": metadata["kb_lane"],
+                "provenance": dict(metadata.get("provenance") or {}),
+                "meta": metadata,
+                "fact_text": meta.get("fact_text"),
+            })
+        except Exception:
+            logger.exception(
+                "ContextPackBuilder: failed to pack semantic fact owner_type=%s owner_id=%s trace_id=%s",
+                owner_type, owner_id, trace_id,
+            )
+
+
+def _pack_chunks(pack, ctx, *, owner_type, owner_id, trace_id):
+    for chunk in ctx.get("chunks", []):
+        try:
+            _meta, metadata = _artifact_metadata(
+                chunk,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                created_at=get_attr_or_key(chunk, "created_at"),
+                updated_at=get_attr_or_key(chunk, "updated_at"),
+            )
+            pack["chunks"].append({
+                "id": get_attr_or_key(chunk, "id"),
+                "doc_id": get_attr_or_key(chunk, "doc_id"),
+                "source_path": get_attr_or_key(chunk, "source_path"),
+                "text": get_attr_or_key(chunk, "text", ""),
+                "page_range": get_attr_or_key(chunk, "page_range"),
+                "position": get_attr_or_key(chunk, "position", 0),
+                "kind": metadata["kind"],
+                "kb_lane": metadata["kb_lane"],
+                "provenance": dict(metadata.get("provenance") or {}),
+                "meta": metadata,
+            })
+        except Exception:
+            logger.exception(
+                "ContextPackBuilder: failed to pack chunk owner_type=%s owner_id=%s trace_id=%s",
+                owner_type, owner_id, trace_id,
+            )
+
+
+def _pack_skills(pack, ctx, *, owner_type, owner_id, trace_id):
+    for skill in ctx.get("skills", []):
+        try:
+            _meta, metadata = _artifact_metadata(
+                skill,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                created_at=get_attr_or_key(skill, "created_at"),
+                updated_at=get_attr_or_key(skill, "updated_at"),
+            )
+            pack["skills"].append({
+                "id": get_attr_or_key(skill, "id"),
+                "name": get_attr_or_key(skill, "name", "Unnamed Skill"),
+                "description": get_attr_or_key(skill, "description"),
+                "plan": get_attr_or_key(skill, "plan", {}),
+                "tools": get_attr_or_key(skill, "tools", []),
+                "kind": metadata["kind"],
+                "kb_lane": metadata["kb_lane"],
+                "provenance": dict(metadata.get("provenance") or {}),
+                "meta": metadata,
+            })
+        except Exception:
+            logger.exception(
+                "ContextPackBuilder: failed to pack procedural skill owner_type=%s owner_id=%s trace_id=%s",
+                owner_type, owner_id, trace_id,
+            )
 
 
 def _pack_graph(

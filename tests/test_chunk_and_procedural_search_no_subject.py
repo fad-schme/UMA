@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from uma.common.types import OwnershipRef, Skill
+from uma.memory.chunk.core import ChunkSearchOptions
 
 
 @pytest.mark.asyncio
@@ -37,8 +38,7 @@ async def test_chunk_search_does_not_require_subject(uma_memory, tmp_path):
         owner_type=owner_type,
         owner_id=owner_id,
         k=5,
-        query_text=q,
-        filter_terms=False,
+        options=ChunkSearchOptions(query_text=q, filter_terms=False),
     )
     assert res2, "Expected hybrid chunk retrieval to return at least one result"
 

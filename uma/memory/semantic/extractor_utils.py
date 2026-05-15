@@ -184,7 +184,7 @@ _SENT_END_RE = re.compile(r"[.!?]\s")
 _LIST_LINE_RE = re.compile(r"^\s*([-*•]|\d+\.)\s+", re.MULTILINE)
 
 
-def _word_count(text: str) -> int:
+def word_count(text: str) -> int:
     if not text:
         return 0
     return len(_WORD_RE.findall(text))
@@ -232,7 +232,7 @@ def _normalize_subject(subject: str, *, doc_id: str) -> str:
 # ---------------------------------------------------------------------
 # Prompt builder (no domain cues)
 # ---------------------------------------------------------------------
-def _build_prompt(
+def build_prompt(
     *,
     min_fact_words: int,
     mode: str,
@@ -459,7 +459,7 @@ def select_chunks_for_fact_extraction(
 # ---------------------------------------------------------------------
 # Batching
 # ---------------------------------------------------------------------
-def _partition_batches_by_chars(
+def partition_batches_by_chars(
     chunks: List[DocumentChunk],
     *,
     batch_size_chunks: int,
@@ -495,7 +495,7 @@ def _partition_batches_by_chars(
         batches.append(cur)
 
     logger.debug(
-        "_partition_batches_by_chars: total=%d batches=%d batch_size_chunks=%d max_chars=%d",
+        "partition_batches_by_chars: total=%d batches=%d batch_size_chunks=%d max_chars=%d",
         len(chunks),
         len(batches),
         batch_size_chunks,
@@ -507,7 +507,7 @@ def _partition_batches_by_chars(
 # ---------------------------------------------------------------------
 # Fact parsing + enforcement (internal parsed dicts -> Fact later)
 # ---------------------------------------------------------------------
-def _coerce_object_text(obj: Any) -> str:
+def coerce_object_text(obj: Any) -> str:
     if obj is None:
         return ""
     if isinstance(obj, str):
@@ -518,7 +518,7 @@ def _coerce_object_text(obj: Any) -> str:
         return _normalize_ws(str(obj))
 
 
-def _enforce_fact_limits(
+def enforce_fact_limits(
     subj: str,
     pred: str,
     obj_text: str,
@@ -543,163 +543,11 @@ def _enforce_fact_limits(
     return subj_n, pred_n, obj_n2
 
 
-def _parse_facts_list(
-    *,
-    facts_payload: Any,
-    chunk: Optional[DocumentChunk],
-    min_fact_words: int,
-    scorer: SalienceScorer,
-    max_facts_per_chunk: int,
-    object_max_words: int,
-    max_fact_tokens: int,
-    predicate_default: str,
-) -> List[Dict[str, Any]]:
-    """
-    Parse the model payload into a small internal representation.
-
-    Returns a list of dicts with keys:
-      subject, predicate, object, confidence, salience, source_chunk_id
-
-    This is intentionally *not* a public type. We convert to `Fact` in
-    `parse_facts_list_into_facts(...)` so `extractor_utils` stays Fact-only externally.
-    """
-    if not isinstance(facts_payload, list):
-        return []
-
-    extracted: List[Dict[str, Any]] = []
-    drop_counts: Dict[str, int] = {}
-    in_count = len(facts_payload)
-    dropped_object_previews: List[Tuple[str, int]] = []
-    dropped_object_preview_limit = 3
-
-    for item in facts_payload:
-        try:
-            if not isinstance(item, dict):
-                drop_counts["item_not_dict"] = drop_counts.get("item_not_dict", 0) + 1
-                continue
-
-            subj = item.get("subject")
-            pred = item.get("predicate") or predicate_default
-            obj = item.get("object")
-            conf = item.get("confidence", 0.7)
-
-            if not subj:
-                drop_counts["missing_subject"] = drop_counts.get("missing_subject", 0) + 1
-                continue
-
-            obj_text = _coerce_object_text(obj)
-            if not obj_text:
-                drop_counts["missing_object"] = drop_counts.get("missing_object", 0) + 1
-                continue
-
-            if min_fact_words and _word_count(obj_text) < int(min_fact_words):
-                drop_counts["below_min_fact_words"] = drop_counts.get("below_min_fact_words", 0) + 1
-                if logger.isEnabledFor(logging.DEBUG) and len(dropped_object_previews) < dropped_object_preview_limit:
-                    subj_s = _truncate_words(_normalize_ws(str(subj)), 12)
-                    pred_s = _truncate_words(_normalize_ws(str(pred)), 5) or predicate_default
-                    obj_s = _truncate_words(_normalize_ws(str(obj_text)), 32)
-                    sentence = f"{subj_s} {pred_s} {obj_s}".strip()
-                    dropped_object_previews.append((sentence, _word_count(obj_text)))
-                continue
-
-            confidence = _clamp01(_safe_float(conf, 0.7))
-
-            subj_n, pred_n, obj_n = _enforce_fact_limits(
-                str(subj),
-                str(pred),
-                obj_text,
-                object_max_words=int(object_max_words),
-                max_fact_tokens=int(max_fact_tokens),
-            )
-            if not obj_n:
-                drop_counts["empty_after_limits"] = drop_counts.get("empty_after_limits", 0) + 1
-                continue
-
-            # Score salience using a stub Fact (owner fields intentionally omitted).
-            now = datetime.now(timezone.utc)
-            stub = Fact(
-                id="stub",
-                subject=str(subj_n),
-                predicate=str(pred_n),
-                object=str(obj_n),
-                created_at=now,
-                updated_at=now,
-                confidence=confidence,
-                meta={},
-            )
-            salience = float(scorer.score(stub))
-
-            source_chunk_id = str(chunk.chunk_id) if chunk is not None else "doc_summary"
-            docid = str(chunk.doc_id) if chunk is not None else "doc"
-
-            extracted.append(
-                {
-                    "subject": _normalize_subject(str(subj_n), doc_id=docid),
-                    "predicate": str(pred_n),
-                    "object": str(obj_n),
-                    "confidence": float(confidence),
-                    "salience": float(salience),
-                    "source_chunk_id": source_chunk_id,
-                }
-            )
-        except Exception:
-            logger.exception("_parse_facts_list: failed parsing fact item; skipping")
-            drop_counts["exception"] = drop_counts.get("exception", 0) + 1
-            continue
-
-    if logger.isEnabledFor(logging.DEBUG) and in_count and (len(extracted) == 0 or drop_counts):
-        chunk_id = getattr(chunk, "chunk_id", None) if chunk is not None else "doc_summary"
-        logger.debug(
-            "_parse_facts_list: chunk_id=%s in=%d kept=%d dropped=%s min_fact_words=%d object_max_words=%d max_fact_tokens=%d",
-            chunk_id,
-            in_count,
-            len(extracted),
-            drop_counts,
-            int(min_fact_words),
-            int(object_max_words),
-            int(max_fact_tokens),
-        )
-        if dropped_object_previews:
-            logger.debug(
-                "_parse_facts_list: chunk_id=%s dropped_below_min_fact_words_samples=%s",
-                chunk_id,
-                [{"words": wc, "fact": sent} for sent, wc in dropped_object_previews],
-            )
-
-    extracted.sort(key=lambda d: (-float(d.get("salience", 0.0)), -float(d.get("confidence", 0.0)), str(d.get("subject", ""))))
-    return extracted[: max(0, int(max_facts_per_chunk))]
-
-
 # ---------------------------------------------------------------------
 # Public helpers for FactExtractor (returning Fact)
 # ---------------------------------------------------------------------
 def safe_confidence(v: Any, default: float = 0.7) -> float:
     return _clamp01(_safe_float(v, default))
-
-
-def coerce_object_text(obj: Any) -> str:
-    return _coerce_object_text(obj)
-
-
-def word_count(text: str) -> int:
-    return _word_count(text)
-
-
-def enforce_fact_limits(
-    *,
-    subj: str,
-    pred: str,
-    obj_text: str,
-    object_max_words: int,
-    max_fact_tokens: int,
-) -> Tuple[str, str, str]:
-    return _enforce_fact_limits(
-        subj=subj,
-        pred=pred,
-        obj_text=obj_text,
-        object_max_words=object_max_words,
-        max_fact_tokens=max_fact_tokens,
-    )
 
 
 def parse_facts_list_into_facts(
@@ -719,68 +567,114 @@ def parse_facts_list_into_facts(
     source_path: str,
     source_hash: str,
 ) -> List[Fact]:
-    parsed = _parse_facts_list(
-        facts_payload=facts_payload,
-        chunk=chunk,
-        min_fact_words=int(min_fact_words),
-        scorer=scorer,
-        max_facts_per_chunk=int(max_facts_per_chunk),
-        object_max_words=int(object_max_words),
-        max_fact_tokens=int(max_fact_tokens),
-        predicate_default=str(predicate_default),
-    )
+    if not isinstance(facts_payload, list):
+        return []
 
+    source_chunk_id = str(chunk.chunk_id) if chunk is not None else "doc_summary"
+    chunk_doc_id = str(chunk.doc_id) if chunk is not None else doc_id
+    drop_counts: Dict[str, int] = {}
+    in_count = len(facts_payload)
+    dropped_object_previews: List[Tuple[str, int]] = []
+    dropped_object_preview_limit = 3
     out: List[Fact] = []
-    for p in parsed:
-        try:
-            src_chunk_id = str(p.get("source_chunk_id", "") or "")
-            subj = str(p.get("subject", "") or "")
-            pred = str(p.get("predicate", "") or "STATES")
-            obj = str(p.get("object", "") or "")
-            conf = float(p.get("confidence", 0.7) or 0.7)
-            sal = float(p.get("salience", 0.0) or 0.0)
 
-            if not subj or not obj:
+    for item in facts_payload:
+        try:
+            if not isinstance(item, dict):
+                drop_counts["item_not_dict"] = drop_counts.get("item_not_dict", 0) + 1
                 continue
 
-            fact_id = f"fact_{uuid_from_text(f'{doc_id}:{src_chunk_id}:{subj}:{pred}:{obj}')}"
+            subj = item.get("subject")
+            pred = item.get("predicate") or predicate_default
+            obj = item.get("object")
+            conf = item.get("confidence", 0.7)
+
+            if not subj:
+                drop_counts["missing_subject"] = drop_counts.get("missing_subject", 0) + 1
+                continue
+
+            obj_text = coerce_object_text(obj)
+            if not obj_text:
+                drop_counts["missing_object"] = drop_counts.get("missing_object", 0) + 1
+                continue
+
+            if min_fact_words and word_count(obj_text) < int(min_fact_words):
+                drop_counts["below_min_fact_words"] = drop_counts.get("below_min_fact_words", 0) + 1
+                if logger.isEnabledFor(logging.DEBUG) and len(dropped_object_previews) < dropped_object_preview_limit:
+                    subj_s = _truncate_words(_normalize_ws(str(subj)), 12)
+                    pred_s = _truncate_words(_normalize_ws(str(pred)), 5) or predicate_default
+                    obj_s = _truncate_words(_normalize_ws(str(obj_text)), 32)
+                    dropped_object_previews.append((f"{subj_s} {pred_s} {obj_s}".strip(), word_count(obj_text)))
+                continue
+
+            confidence = _clamp01(_safe_float(conf, 0.7))
+            subj_n, pred_n, obj_n = enforce_fact_limits(
+                str(subj),
+                str(pred),
+                obj_text,
+                object_max_words=int(object_max_words),
+                max_fact_tokens=int(max_fact_tokens),
+            )
+            if not obj_n:
+                drop_counts["empty_after_limits"] = drop_counts.get("empty_after_limits", 0) + 1
+                continue
+
+            subj_n = _normalize_subject(subj_n, doc_id=chunk_doc_id)
+            fact_id = f"fact_{uuid_from_text(f'{doc_id}:{source_chunk_id}:{subj_n}:{pred_n}:{obj_n}')}"
             meta = normalize_fact_metadata(
                 {
                     "doc_id": doc_id,
                     "source_path": source_path,
                     "source_hash": source_hash,
-                    "fact_text": obj,
-                    "fact_type": "summary" if pred == "SUMMARY" else "claim",
+                    "fact_text": obj_n,
+                    "fact_type": "summary" if pred_n == "SUMMARY" else "claim",
                 },
                 fact_id=fact_id,
                 owner_type=owner_type,
                 owner_id=owner_id,
                 created_at=now,
                 updated_at=now,
-                source_ids=[src_chunk_id] if src_chunk_id else [],
+                source_ids=[source_chunk_id] if source_chunk_id else [],
                 session_id=None,
             )
-
             f = Fact(
                 id=fact_id,
-                subject=subj,
-                predicate=pred,
-                object=obj,
+                subject=subj_n,
+                predicate=pred_n,
+                object=obj_n,
                 created_at=now,
                 updated_at=now,
-                source_ids=[src_chunk_id] if src_chunk_id else [],
-                confidence=conf,
-                salience=sal,
+                source_ids=[source_chunk_id] if source_chunk_id else [],
+                confidence=confidence,
+                salience=0.0,
                 owner_type=owner_type,
                 owner_id=owner_id,
                 meta=meta,
             )
-
-            # Re-score to ensure consistent scorer behavior across paths.
             f.salience = float(scorer.score(f))
             out.append(f)
         except Exception:
-            logger.exception("parse_facts_list_into_facts: failed converting parsed payload to Fact; skipping")
+            logger.exception("parse_facts_list_into_facts: failed parsing fact item; skipping")
+            drop_counts["exception"] = drop_counts.get("exception", 0) + 1
+            continue
+
+    if logger.isEnabledFor(logging.DEBUG) and in_count and (len(out) == 0 or drop_counts):
+        logger.debug(
+            "parse_facts_list_into_facts: chunk_id=%s in=%d kept=%d dropped=%s min_fact_words=%d object_max_words=%d max_fact_tokens=%d",
+            source_chunk_id,
+            in_count,
+            len(out),
+            drop_counts,
+            int(min_fact_words),
+            int(object_max_words),
+            int(max_fact_tokens),
+        )
+        if dropped_object_previews:
+            logger.debug(
+                "parse_facts_list_into_facts: chunk_id=%s dropped_below_min_fact_words_samples=%s",
+                source_chunk_id,
+                [{"words": wc, "fact": sent} for sent, wc in dropped_object_previews],
+            )
 
     out.sort(key=lambda f: (-float(f.salience), -float(f.confidence), f.subject))
     return out[: max(0, int(max_facts_per_chunk))]
@@ -849,18 +743,6 @@ def fallback_fact_for_chunk(
         scorer=scorer,
     )
 
-
-def build_prompt(**kwargs: Any) -> List[Dict[str, str]]:
-    return _build_prompt(**kwargs)
-
-
-def partition_batches_by_chars(
-    chunks: List[DocumentChunk],
-    *,
-    batch_size_chunks: int,
-    max_chars: int,
-) -> List[List[DocumentChunk]]:
-    return _partition_batches_by_chars(chunks, batch_size_chunks=batch_size_chunks, max_chars=max_chars)
 
 
 def batch_repair_messages(bad: str, *, max_facts_per_chunk: int) -> List[Dict[str, str]]:

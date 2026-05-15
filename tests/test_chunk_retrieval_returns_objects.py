@@ -6,6 +6,7 @@ import pytest
 
 from uma.retrieve.rlm.snippet_refiner import SnippetRefiner
 from uma.common.types import Chunk, Fact
+from uma.memory.chunk.core import ChunkSearchOptions
 
 
 @pytest.mark.asyncio
@@ -29,8 +30,7 @@ async def test_chunk_retrieval_returns_chunk_objects(uma_memory, tmp_path) -> No
         owner_type=owner_type,
         owner_id=owner_id,
         k=5,
-        query_text=q,
-        filter_terms=False,
+        options=ChunkSearchOptions(query_text=q, filter_terms=False),
     )
     assert res
     assert all(isinstance(c, Chunk) for c in res)

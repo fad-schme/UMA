@@ -1044,6 +1044,98 @@ def _build_daily_diary_bootstrap_signature(*, raw_text: str) -> dict[str, Any]:
     }
 
 
+def _build_bootstrap_chunks(
+    entries: list[str],
+    *,
+    doc_id: str,
+    source_hash: str,
+    tenant_id: str,
+    user_id: str,
+) -> list[DocumentChunk]:
+    chunks: list[DocumentChunk] = []
+    for index, entry_text in enumerate(entries):
+        chunk_hash = hashlib.sha256(
+            f"{tenant_id}|{user_id}|{source_hash}|{index}|{entry_text}".encode("utf-8")
+        ).hexdigest()[:24]
+        chunks.append(DocumentChunk(
+            chunk_id=f"chunk_mem_{chunk_hash}",
+            doc_id=doc_id,
+            text=entry_text,
+            page_range=(1, 1),
+            position=index,
+            paragraph_index_start=index,
+            paragraph_index_end=index,
+        ))
+    return chunks
+
+
+def _build_bootstrap_facts(
+    entries: list[str],
+    *,
+    chunk_ids_by_position: dict[int, str],
+    doc_id: str,
+    source_path: str,
+    source_hash: str,
+    now: datetime,
+    tenant_id: str,
+    user_id: str,
+    workspace_id: Any,
+    runtime_context: Any,
+) -> list[Fact]:
+    facts: list[Fact] = []
+    for index, entry_text in enumerate(entries):
+        fact_hash = hashlib.sha256(
+            f"{tenant_id}|{user_id}|{entry_text}".encode("utf-8")
+        ).hexdigest()[:24]
+        source_chunk_id = chunk_ids_by_position.get(index)
+        if not source_chunk_id:
+            raise RuntimeError(
+                f"ingest_memory_bootstrap: missing source chunk for entry index={index} file: {source_path}"
+            )
+        fact = Fact(
+            id=f"fact_mem_{fact_hash}",
+            subject=user_id,
+            predicate="remembers",
+            object=entry_text,
+            created_at=now,
+            updated_at=now,
+            source_ids=[source_chunk_id],
+            confidence=1.0,
+            meta=normalize_fact_metadata(
+                {
+                    "source_kind": "memory_bootstrap",
+                    "source_file": source_path,
+                    "import_mode": "bootstrap",
+                    "line_index": index,
+                    "source_type": "memory_bootstrap",
+                    "doc_id": doc_id,
+                    "source_path": source_path,
+                    "source_hash": source_hash,
+                },
+                fact_id=f"fact_mem_{fact_hash}",
+                owner_type="user",
+                owner_id=user_id,
+                created_at=now,
+                updated_at=now,
+                source_ids=[source_chunk_id],
+                session_id=None,
+            ),
+            owner_type="user",
+            owner_id=user_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            session_id=None,
+            origin_agent_id=runtime_context.agent_id,
+            origin_user_id=runtime_context.user_id,
+            origin_session_id=runtime_context.session_id,
+            scope_model_version="v2",
+            salience=1.0,
+        )
+        fact.validate()
+        facts.append(fact)
+    return facts
+
+
 async def ingest_memory_bootstrap(
     file_path: str,
     *,
@@ -1093,22 +1185,13 @@ async def ingest_memory_bootstrap(
         pages=[(1, raw_text)],
         extracted_at=now,
     )
-    bootstrap_chunks: list[DocumentChunk] = []
-    for index, entry_text in enumerate(entries):
-        chunk_hash = hashlib.sha256(
-            f"{normalized_tenant_id}|{normalized_user_id}|{source_hash}|{index}|{entry_text}".encode("utf-8")
-        ).hexdigest()[:24]
-        bootstrap_chunks.append(
-            DocumentChunk(
-                chunk_id=f"chunk_mem_{chunk_hash}",
-                doc_id=doc_id,
-                text=entry_text,
-                page_range=(1, 1),
-                position=index,
-                paragraph_index_start=index,
-                paragraph_index_end=index,
-            )
-        )
+    bootstrap_chunks = _build_bootstrap_chunks(
+        entries,
+        doc_id=doc_id,
+        source_hash=source_hash,
+        tenant_id=normalized_tenant_id,
+        user_id=normalized_user_id,
+    )
 
     persisted_chunks = await _persist_chunks(
         parsed=parsed,
@@ -1133,57 +1216,18 @@ async def ingest_memory_bootstrap(
             f"ingest_memory_bootstrap: failed to persist source chunks for file: {normalized_path}"
         )
 
-    facts: list[Fact] = []
-    for index, entry_text in enumerate(entries):
-        fact_hash = hashlib.sha256(
-            f"{normalized_tenant_id}|{normalized_user_id}|{entry_text}".encode("utf-8")
-        ).hexdigest()[:24]
-        source_chunk_id = chunk_ids_by_position.get(index)
-        if not source_chunk_id:
-            raise RuntimeError(
-                f"ingest_memory_bootstrap: missing source chunk for entry index={index} file: {normalized_path}"
-            )
-        fact = Fact(
-            id=f"fact_mem_{fact_hash}",
-            subject=normalized_user_id,
-            predicate="remembers",
-            object=entry_text,
-            created_at=now,
-            updated_at=now,
-            source_ids=[source_chunk_id],
-            confidence=1.0,
-            meta=normalize_fact_metadata(
-                {
-                    "source_kind": "memory_bootstrap",
-                    "source_file": normalized_path,
-                    "import_mode": "bootstrap",
-                    "line_index": index,
-                    "source_type": "memory_bootstrap",
-                    "doc_id": doc_id,
-                    "source_path": normalized_path,
-                    "source_hash": source_hash,
-                },
-                fact_id=f"fact_mem_{fact_hash}",
-                owner_type="user",
-                owner_id=normalized_user_id,
-                created_at=now,
-                updated_at=now,
-                source_ids=[source_chunk_id],
-                session_id=None,
-            ),
-            owner_type="user",
-            owner_id=normalized_user_id,
-            tenant_id=normalized_tenant_id,
-            workspace_id=workspace_id,
-            session_id=None,
-            origin_agent_id=runtime_context.agent_id,
-            origin_user_id=runtime_context.user_id,
-            origin_session_id=runtime_context.session_id,
-            scope_model_version="v2",
-            salience=1.0,
-        )
-        fact.validate()
-        facts.append(fact)
+    facts = _build_bootstrap_facts(
+        entries,
+        chunk_ids_by_position=chunk_ids_by_position,
+        doc_id=doc_id,
+        source_path=normalized_path,
+        source_hash=source_hash,
+        now=now,
+        tenant_id=normalized_tenant_id,
+        user_id=normalized_user_id,
+        workspace_id=workspace_id,
+        runtime_context=runtime_context,
+    )
 
     persisted_fact_ids = await _embed_and_persist_facts(
         facts=facts,

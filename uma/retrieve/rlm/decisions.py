@@ -292,331 +292,305 @@ def deterministic_decision(
     This function contains no I/O. It translates the current state
     (ContextPack + CoverageReport) into a bounded list of RetrievalAction(s).
     """
+    decision = _decide_zero_yield_fallback(pack, cfg)
+    if decision is not None:
+        return decision
+
     actions: List[RetrievalAction] = []
+    actions.extend(_decide_semantic(pack, coverage, cfg))
+    actions.extend(_decide_chunk_fallback(pack, cfg))
+    actions.extend(_decide_episodic_clusters(pack, coverage, cfg))
+    actions.extend(_decide_graph(pack, coverage, cfg))
+    return ControllerDecision(actions=actions) if actions else None
 
+
+def _decide_zero_yield_fallback(pack: Any, cfg: Dict[str, Any]) -> Optional[ControllerDecision]:
     max_items_per_type = int(cfg.get("max_items_per_type", 30))
-    cluster_k = int(cfg.get("cluster_k", 3))
-    salience_threshold = float(cfg.get("salience_threshold", 0.6))
-    graph_predicate_limit = int(cfg.get("graph_predicate_limit", 2))
-
     chunk_fallback_enabled = bool(cfg.get("chunk_fallback_enabled", True))
     chunk_fallback_k_multiplier = max(1, int(cfg.get("chunk_fallback_k_multiplier", 2)))
-    predicate_allowlist = cfg.get("predicate_allowlist") if isinstance(cfg, dict) else None
     trace_id = (cfg.get("trace_id") if isinstance(cfg, dict) else None) or getattr(pack, "trace_id", None)
     intent = str(getattr(pack, "intent", "") or "").strip().lower()
     active_domains = list(getattr(pack, "active_domains", []) or [])
 
-    # ------------------------------------------------------------------
-    # Zero-yield fallback ladder (Phase 4)
-    # ------------------------------------------------------------------
     last = _last_action_result(getattr(pack, "steps", []) or [])
-    if isinstance(last, dict):
-        last_action = str(last.get("action") or "").strip()
-        last_store = str(last.get("store") or "").strip()
-        try:
-            last_novelty = int(last.get("novelty") or 0)
-        except Exception:
-            last_novelty = 0
+    if not isinstance(last, dict):
+        return None
+    last_action = str(last.get("action") or "").strip()
+    last_store = str(last.get("store") or "").strip()
+    try:
+        last_novelty = int(last.get("novelty") or 0)
+    except Exception:
+        last_novelty = 0
+    active_domain_set = set(active_domains or [])
+    chunks_allowed = "kb_doc" in active_domain_set
+    chunks_used = bool(getattr(pack, "chunk_fallback_used", False)) or _did_action(
+        getattr(pack, "steps", []) or [], "search_chunks"
+    )
 
-        active_domain_set = set(active_domains or [])
-        chunks_allowed = "kb_doc" in active_domain_set
-        chunks_used = bool(getattr(pack, "chunk_fallback_used", False)) or _did_action(
-            getattr(pack, "steps", []) or [], "search_chunks"
-        )
-
-        # 1) fetch_more_facts 0 novelty => try chunks once; else broaden semantic.
-        if last_action == "fetch_more_facts" and last_novelty == 0 and last_store == "facts":
-            if chunks_allowed and not chunks_used and chunk_fallback_enabled:
-                logger.info(
-                    "RLM_DECISION trace_id=%s intent=%s domains=%s fallback=search_chunks reason=fetch_more_facts_zero_yield",
-                    trace_id,
-                    (intent or "").upper(),
-                    active_domains,
-                )
-                actions.append(
-                    RetrievalAction(
-                        action="search_chunks",
-                        k=min(max_items_per_type * max(3, chunk_fallback_k_multiplier), 180),
-                        owner_type=getattr(pack, "owner_type", None),
-                    )
-                )
-                try:
-                    setattr(pack, "chunk_fallback_used", True)
-                except Exception:
-                    logger.exception("deterministic_decision: failed to mark chunk_fallback_used (fallback ladder)")
-                    raise
-                return ControllerDecision(actions=actions)
-
+    if last_action == "fetch_more_facts" and last_novelty == 0 and last_store == "facts":
+        if chunks_allowed and not chunks_used and chunk_fallback_enabled:
             logger.info(
-                "RLM_DECISION trace_id=%s intent=%s domains=%s fallback=search_semantic reason=fetch_more_facts_zero_yield",
-                trace_id,
-                (intent or "").upper(),
-                active_domains,
+                "RLM_DECISION trace_id=%s intent=%s domains=%s fallback=search_chunks reason=fetch_more_facts_zero_yield",
+                trace_id, (intent or "").upper(), active_domains,
             )
-            actions.append(
-                RetrievalAction(
-                    action="search_semantic",
-                    k=max_items_per_type,
-                    owner_type=getattr(pack, "owner_type", None),
-                )
-            )
-            return ControllerDecision(actions=actions)
-
-        # 2) expand_graph 0 novelty => try semantic or chunks.
-        if last_action == "expand_graph" and last_novelty == 0 and last_store == "graph":
-            if chunks_allowed and not chunks_used and chunk_fallback_enabled:
-                logger.info(
-                    "RLM_DECISION trace_id=%s intent=%s domains=%s fallback=search_chunks reason=expand_graph_zero_yield",
-                    trace_id,
-                    (intent or "").upper(),
-                    active_domains,
-                )
-                actions.append(
-                    RetrievalAction(
-                        action="search_chunks",
-                        k=min(max_items_per_type * max(3, chunk_fallback_k_multiplier), 180),
-                        owner_type=getattr(pack, "owner_type", None),
-                    )
-                )
-                try:
-                    setattr(pack, "chunk_fallback_used", True)
-                except Exception:
-                    logger.exception("deterministic_decision: failed to mark chunk_fallback_used (fallback ladder)")
-                    raise
-                return ControllerDecision(actions=actions)
-
-            logger.info(
-                "RLM_DECISION trace_id=%s intent=%s domains=%s fallback=search_semantic reason=expand_graph_zero_yield",
-                trace_id,
-                (intent or "").upper(),
-                active_domains,
-            )
-            actions.append(
-                RetrievalAction(
-                    action="search_semantic",
-                    k=max_items_per_type,
-                    owner_type=getattr(pack, "owner_type", None),
-                )
-            )
-            return ControllerDecision(actions=actions)
-
-    # --- Semantic ---
-    if getattr(coverage, "needs_semantic", False):
-        facts = getattr(pack, "facts", []) or []
-        if facts:
-            eligible, best_pred, best_score, reasons = _debug_score_predicates(
-                pack=pack,
-                facts=list(facts or []),
-                graph_predicate_limit=graph_predicate_limit,
-                predicate_allowlist=predicate_allowlist,
-            )
-            predicate, score = _select_predicate_for_expansion(
-                pack=pack,
-                facts=list(facts or []),
-                graph_predicate_limit=graph_predicate_limit,
-                predicate_allowlist=predicate_allowlist,
-            )
-            logger.info(
-                "RLM_DECISION trace_id=%s intent=%s domains=%s eligible_predicates=%s selected_predicate=%s score=%d reasons=%s",
-                trace_id,
-                (intent or "").upper(),
-                active_domains,
-                eligible,
-                predicate,
-                int(score or 0),
-                reasons,
-            )
-            if predicate and score > 0:
-                offset = getattr(pack, "get_predicate_offset")(predicate)
-                actions.append(
-                    RetrievalAction(
-                        action="fetch_more_facts",
-                        predicate=predicate,
-                        k=max_items_per_type,
-                        filters={"offset": offset},
-                        owner_type=getattr(pack, "owner_type", None),
-                    )
-                )
-                getattr(pack, "bump_predicate_offset")(predicate, max_items_per_type)
-            else:
-                # No predicate is relevant to the query => broaden search instead of expanding by predicate.
-                logger.info(
-                    "RLM_DECISION trace_id=%s intent=%s domains=%s eligible_predicates=%s fallback=search_semantic reason=no_relevant_predicates",
-                    trace_id,
-                    (intent or "").upper(),
-                    active_domains,
-                    eligible,
-                )
-                actions.append(
-                    RetrievalAction(
-                        action="search_semantic",
-                        k=max_items_per_type,
-                        owner_type=getattr(pack, "owner_type", None),
-                    )
-                )
-        else:
-            logger.info(
-                "RLM_DECISION trace_id=%s intent=%s domains=%s fallback=search_semantic reason=no_facts_in_pack",
-                trace_id,
-                (intent or "").upper(),
-                active_domains,
-            )
-            actions.append(
-                RetrievalAction(
-                    action="search_semantic",
-                    k=max_items_per_type,
-                    owner_type=getattr(pack, "owner_type", None),
-                )
-            )
-
-    # --- Chunk fallback (at most once) ---
-    if chunk_fallback_enabled and not bool(getattr(pack, "chunk_fallback_used", False)):
-        chunks = getattr(pack, "chunks", []) or []
-        if len(chunks) == 0:
-            actions.append(
-                RetrievalAction(
-                    action="search_chunks",
-                    k=min(max_items_per_type * chunk_fallback_k_multiplier, 120),
-                    owner_type=getattr(pack, "owner_type", None),
-                )
+            action = RetrievalAction(
+                action="search_chunks",
+                k=min(max_items_per_type * max(3, chunk_fallback_k_multiplier), 180),
+                owner_type=getattr(pack, "owner_type", None),
             )
             try:
                 setattr(pack, "chunk_fallback_used", True)
             except Exception:
-                logger.exception("deterministic_decision: failed to mark chunk_fallback_used")
+                logger.exception("_decide_zero_yield_fallback: failed to mark chunk_fallback_used")
                 raise
+            return ControllerDecision(actions=[action])
+        logger.info(
+            "RLM_DECISION trace_id=%s intent=%s domains=%s fallback=search_semantic reason=fetch_more_facts_zero_yield",
+            trace_id, (intent or "").upper(), active_domains,
+        )
+        return ControllerDecision(actions=[RetrievalAction(
+            action="search_semantic", k=max_items_per_type, owner_type=getattr(pack, "owner_type", None),
+        )])
 
-    # --- Episodic / clusters ---
-    if getattr(coverage, "needs_clusters", False):
-        episodes = getattr(pack, "episodes", []) or []
-        has_cluster = any(isinstance(ep, dict) and "episode_ids" in ep for ep in episodes)
-        actions.append(
-            RetrievalAction(
-                action="fetch_episode_clusters",
-                k=cluster_k,
-                time_range=None,
-                min_salience=salience_threshold,
+    if last_action == "expand_graph" and last_novelty == 0 and last_store == "graph":
+        if chunks_allowed and not chunks_used and chunk_fallback_enabled:
+            logger.info(
+                "RLM_DECISION trace_id=%s intent=%s domains=%s fallback=search_chunks reason=expand_graph_zero_yield",
+                trace_id, (intent or "").upper(), active_domains,
+            )
+            action = RetrievalAction(
+                action="search_chunks",
+                k=min(max_items_per_type * max(3, chunk_fallback_k_multiplier), 180),
                 owner_type=getattr(pack, "owner_type", None),
             )
+            try:
+                setattr(pack, "chunk_fallback_used", True)
+            except Exception:
+                logger.exception("_decide_zero_yield_fallback: failed to mark chunk_fallback_used")
+                raise
+            return ControllerDecision(actions=[action])
+        logger.info(
+            "RLM_DECISION trace_id=%s intent=%s domains=%s fallback=search_semantic reason=expand_graph_zero_yield",
+            trace_id, (intent or "").upper(), active_domains,
         )
-        if not has_cluster and len(getattr(pack, "steps", []) or []) >= 2:
-            actions.append(
-                RetrievalAction(
-                    action="search_episodic",
-                    k=max_items_per_type,
-                    owner_type=getattr(pack, "owner_type", None),
-                )
-            )
+        return ControllerDecision(actions=[RetrievalAction(
+            action="search_semantic", k=max_items_per_type, owner_type=getattr(pack, "owner_type", None),
+        )])
 
-    # --- Graph last-mile ---
+    return None
+
+
+def _decide_semantic(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> List[RetrievalAction]:
+    if not getattr(coverage, "needs_semantic", False):
+        return []
+    max_items_per_type = int(cfg.get("max_items_per_type", 30))
+    graph_predicate_limit = max(1, int(cfg.get("graph_predicate_limit", 2)))
+    predicate_allowlist = cfg.get("predicate_allowlist") if isinstance(cfg, dict) else None
+    trace_id = (cfg.get("trace_id") if isinstance(cfg, dict) else None) or getattr(pack, "trace_id", None)
+    intent = str(getattr(pack, "intent", "") or "").strip().lower()
+    active_domains = list(getattr(pack, "active_domains", []) or [])
+    actions: List[RetrievalAction] = []
+    facts = getattr(pack, "facts", []) or []
+    if facts:
+        eligible, best_pred, best_score, reasons = _debug_score_predicates(
+            pack=pack,
+            facts=list(facts),
+            graph_predicate_limit=graph_predicate_limit,
+            predicate_allowlist=predicate_allowlist,
+        )
+        predicate, score = _select_predicate_for_expansion(
+            pack=pack,
+            facts=list(facts),
+            graph_predicate_limit=graph_predicate_limit,
+            predicate_allowlist=predicate_allowlist,
+        )
+        logger.info(
+            "RLM_DECISION trace_id=%s intent=%s domains=%s eligible_predicates=%s selected_predicate=%s score=%d reasons=%s",
+            trace_id, (intent or "").upper(), active_domains, eligible, predicate, int(score or 0), reasons,
+        )
+        if predicate and score > 0:
+            offset = getattr(pack, "get_predicate_offset")(predicate)
+            actions.append(RetrievalAction(
+                action="fetch_more_facts",
+                predicate=predicate,
+                k=max_items_per_type,
+                filters={"offset": offset},
+                owner_type=getattr(pack, "owner_type", None),
+            ))
+            getattr(pack, "bump_predicate_offset")(predicate, max_items_per_type)
+        else:
+            # No predicate is relevant to the query => broaden search instead of expanding by predicate.
+            logger.info(
+                "RLM_DECISION trace_id=%s intent=%s domains=%s eligible_predicates=%s fallback=search_semantic reason=no_relevant_predicates",
+                trace_id, (intent or "").upper(), active_domains, eligible,
+            )
+            actions.append(RetrievalAction(
+                action="search_semantic",
+                k=max_items_per_type,
+                owner_type=getattr(pack, "owner_type", None),
+            ))
+    else:
+        logger.info(
+            "RLM_DECISION trace_id=%s intent=%s domains=%s fallback=search_semantic reason=no_facts_in_pack",
+            trace_id, (intent or "").upper(), active_domains,
+        )
+        actions.append(RetrievalAction(
+            action="search_semantic",
+            k=max_items_per_type,
+            owner_type=getattr(pack, "owner_type", None),
+        ))
+    return actions
+
+
+def _decide_chunk_fallback(pack: Any, cfg: Dict[str, Any]) -> List[RetrievalAction]:
+    if not bool(cfg.get("chunk_fallback_enabled", True)):
+        return []
+    if bool(getattr(pack, "chunk_fallback_used", False)):
+        return []
+    if len(getattr(pack, "chunks", []) or []) > 0:
+        return []
+    max_items_per_type = int(cfg.get("max_items_per_type", 30))
+    chunk_fallback_k_multiplier = max(1, int(cfg.get("chunk_fallback_k_multiplier", 2)))
+    try:
+        setattr(pack, "chunk_fallback_used", True)
+    except Exception:
+        logger.exception("_decide_chunk_fallback: failed to mark chunk_fallback_used")
+        raise
+    return [RetrievalAction(
+        action="search_chunks",
+        k=min(max_items_per_type * chunk_fallback_k_multiplier, 120),
+        owner_type=getattr(pack, "owner_type", None),
+    )]
+
+
+def _decide_episodic_clusters(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> List[RetrievalAction]:
+    if not getattr(coverage, "needs_clusters", False):
+        return []
+    cluster_k = max(1, int(cfg.get("cluster_k", 3)))
+    salience_threshold = float(cfg.get("salience_threshold", 0.6))
+    max_items_per_type = int(cfg.get("max_items_per_type", 30))
+    actions: List[RetrievalAction] = []
+    episodes = getattr(pack, "episodes", []) or []
+    has_cluster = any(isinstance(ep, dict) and "episode_ids" in ep for ep in episodes)
+    actions.append(RetrievalAction(
+        action="fetch_episode_clusters",
+        k=cluster_k,
+        time_range=None,
+        min_salience=salience_threshold,
+        owner_type=getattr(pack, "owner_type", None),
+    ))
+    if not has_cluster and len(getattr(pack, "steps", []) or []) >= 2:
+        actions.append(RetrievalAction(
+            action="search_episodic",
+            k=max_items_per_type,
+            owner_type=getattr(pack, "owner_type", None),
+        ))
+    return actions
+
+
+def _decide_graph(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> List[RetrievalAction]:
     graph = getattr(pack, "graph", []) or []
     facts = getattr(pack, "facts", []) or []
     chunks = getattr(pack, "chunks", []) or []
     if (
-        not graph
-        and (facts or chunks)
-        and not getattr(coverage, "needs_semantic", False)
-        and not getattr(coverage, "needs_clusters", False)
+        graph
+        or not (facts or chunks)
+        or getattr(coverage, "needs_semantic", False)
+        or getattr(coverage, "needs_clusters", False)
     ):
-        # PERSONAL intent keeps user-based expansion (LIKES/PREFERS lane).
-        if intent == "personal" and getattr(pack, "owner_type", None) == "user":
-            next_scope = cfg.get("next_predicate_scope")
-            predicate_scope = next_scope(pack, graph_predicate_limit) if callable(next_scope) else []
-            if predicate_scope:
-                logger.info(
-                    "RLM_DECISION trace_id=%s intent=%s domains=%s graph_seed=user_id predicate_scope=%s",
-                    trace_id,
-                    (intent or "").upper(),
-                    active_domains,
-                    predicate_scope[: max(1, int(graph_predicate_limit))],
-                )
-                actions.append(
-                    RetrievalAction(
-                        action="expand_graph",
-                        subject=getattr(pack, "user_id", None),
-                        predicate=predicate_scope[0],
-                        domain_scope=["user_profile"],
-                        hops=1,
-                        direction="outbound",
-                        k=min(max_items_per_type, 20),
-                        owner_type=getattr(pack, "owner_type", None),
-                    )
-                )
+        return []
+    max_items_per_type = int(cfg.get("max_items_per_type", 30))
+    graph_predicate_limit = max(1, int(cfg.get("graph_predicate_limit", 2)))
+    predicate_allowlist = cfg.get("predicate_allowlist") if isinstance(cfg, dict) else None
+    trace_id = (cfg.get("trace_id") if isinstance(cfg, dict) else None) or getattr(pack, "trace_id", None)
+    intent = str(getattr(pack, "intent", "") or "").strip().lower()
+    active_domains = list(getattr(pack, "active_domains", []) or [])
+    actions: List[RetrievalAction] = []
 
-        # TOPICAL / MIXED: seed graph expansion from evidence-derived entities, not user_id.
-        else:
-            kb_facts = filter_facts_by_domains(list(facts or []), allowed_domains={"kb_doc"})
-            eligible_g, _best_g, _best_score_g, reasons_g = _debug_score_predicates(
-                pack=pack,
-                facts=kb_facts,
-                graph_predicate_limit=graph_predicate_limit,
-                predicate_allowlist=predicate_allowlist,
-            )
-            predicate, score = _select_predicate_for_expansion(
-                pack=pack,
-                facts=kb_facts,
-                graph_predicate_limit=graph_predicate_limit,
-                predicate_allowlist=predicate_allowlist,
-            )
-            fallback_reason: Optional[str] = None
-            if not predicate or score <= 0:
-                # Fall back to a stable observed kb_doc predicate scope (never user_profile).
-                preds = _top_predicates_from_facts(kb_facts, graph_predicate_limit)
-                predicate = preds[0] if preds else None
-                fallback_reason = "no_relevant_predicates_for_graph"
-
-            entities = extract_candidate_entities(
-                query_text=getattr(pack, "query_text", "") or "",
-                facts=list(facts or []),
-                chunks=list(chunks or []),
-                limit=5,
-            )
-            excluded_reasons: List[str] = []
-            if intent in {"topical", "mixed"} and "user_profile" not in set(active_domains or []):
-                try:
-                    observed = _observed_predicates(list(facts or []))
-                    if any(p in PREFERENCE_PREDICATES for p in observed):
-                        excluded_reasons.append("excluded_user_profile_predicates_due_to_intent")
-                except Exception:
-                    pass
-            combined_reasons: Optional[List[str]] = None
-            try:
-                rs: List[str] = []
-                if isinstance(reasons_g, list):
-                    rs.extend([r for r in reasons_g if isinstance(r, str) and r])
-                rs.extend([r for r in excluded_reasons if isinstance(r, str) and r])
-                combined_reasons = rs or None
-            except Exception:
-                combined_reasons = excluded_reasons or None
+    # PERSONAL intent: user-based expansion (LIKES/PREFERS lane).
+    if intent == "personal" and getattr(pack, "owner_type", None) == "user":
+        next_scope = cfg.get("next_predicate_scope")
+        predicate_scope = next_scope(pack, graph_predicate_limit) if callable(next_scope) else []
+        if predicate_scope:
             logger.info(
-                "RLM_DECISION trace_id=%s intent=%s domains=%s graph_seed=entities eligible_predicates=%s selected_predicate=%s score=%d selected_entities=%s fallback=%s reasons=%s",
-                trace_id,
-                (intent or "").upper(),
-                active_domains,
-                eligible_g,
-                predicate,
-                int(score or 0),
-                (entities or [])[:5],
-                fallback_reason,
-                combined_reasons,
+                "RLM_DECISION trace_id=%s intent=%s domains=%s graph_seed=user_id predicate_scope=%s",
+                trace_id, (intent or "").upper(), active_domains,
+                predicate_scope[: max(1, int(graph_predicate_limit))],
             )
+            actions.append(RetrievalAction(
+                action="expand_graph",
+                subject=getattr(pack, "user_id", None),
+                predicate=predicate_scope[0],
+                domain_scope=["user_profile"],
+                hops=1,
+                direction="outbound",
+                k=min(max_items_per_type, 20),
+                owner_type=getattr(pack, "owner_type", None),
+            ))
+        return actions
 
-            # Keep bounded: expand around at most 2 topical entities per step.
-            for ent in (entities or [])[:2]:
-                actions.append(
-                    RetrievalAction(
-                        action="expand_graph",
-                        subject=ent,
-                        predicate=predicate,
-                        domain_scope=["kb_doc"],
-                        hops=1,
-                        direction="both",
-                        k=min(max_items_per_type, 20),
-                        owner_type=getattr(pack, "owner_type", None),
-                    )
-                )
+    # TOPICAL / MIXED: seed graph expansion from evidence-derived entities, not user_id.
+    kb_facts = filter_facts_by_domains(list(facts), allowed_domains={"kb_doc"})
+    eligible_g, _best_g, _best_score_g, reasons_g = _debug_score_predicates(
+        pack=pack,
+        facts=kb_facts,
+        graph_predicate_limit=graph_predicate_limit,
+        predicate_allowlist=predicate_allowlist,
+    )
+    predicate, score = _select_predicate_for_expansion(
+        pack=pack,
+        facts=kb_facts,
+        graph_predicate_limit=graph_predicate_limit,
+        predicate_allowlist=predicate_allowlist,
+    )
+    fallback_reason: Optional[str] = None
+    if not predicate or score <= 0:
+        # Fall back to a stable observed kb_doc predicate scope (never user_profile).
+        preds = _top_predicates_from_facts(kb_facts, graph_predicate_limit)
+        predicate = preds[0] if preds else None
+        fallback_reason = "no_relevant_predicates_for_graph"
 
-    return ControllerDecision(actions=actions) if actions else None
+    entities = extract_candidate_entities(
+        query_text=getattr(pack, "query_text", "") or "",
+        facts=list(facts),
+        chunks=list(chunks),
+        limit=5,
+    )
+    excluded_reasons: List[str] = []
+    if intent in {"topical", "mixed"} and "user_profile" not in set(active_domains or []):
+        try:
+            observed = _observed_predicates(list(facts))
+            if any(p in PREFERENCE_PREDICATES for p in observed):
+                excluded_reasons.append("excluded_user_profile_predicates_due_to_intent")
+        except Exception:
+            pass
+    combined_reasons: Optional[List[str]] = None
+    try:
+        rs: List[str] = []
+        if isinstance(reasons_g, list):
+            rs.extend([r for r in reasons_g if isinstance(r, str) and r])
+        rs.extend([r for r in excluded_reasons if isinstance(r, str) and r])
+        combined_reasons = rs or None
+    except Exception:
+        combined_reasons = excluded_reasons or None
+    logger.info(
+        "RLM_DECISION trace_id=%s intent=%s domains=%s graph_seed=entities eligible_predicates=%s selected_predicate=%s score=%d selected_entities=%s fallback=%s reasons=%s",
+        trace_id, (intent or "").upper(), active_domains, eligible_g, predicate,
+        int(score or 0), (entities or [])[:5], fallback_reason, combined_reasons,
+    )
+    # Keep bounded: expand around at most 2 topical entities per step.
+    for ent in (entities or [])[:2]:
+        actions.append(RetrievalAction(
+            action="expand_graph",
+            subject=ent,
+            predicate=predicate,
+            domain_scope=["kb_doc"],
+            hops=1,
+            direction="both",
+            k=min(max_items_per_type, 20),
+            owner_type=getattr(pack, "owner_type", None),
+        ))
+    return actions
 
 
 def _extract_query_terms(query_text: str) -> List[str]:
