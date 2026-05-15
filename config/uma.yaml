@@ -35,7 +35,7 @@ llms:
   # UMA uses this LLM internally for memory extraction and summarization.
   uma:
     provider: "ollama"
-    model: "phi4-mini:latest"
+    model: "gpt-oss:latest"
     config:
       host: "http://localhost:11434"
       timeout: 20.0

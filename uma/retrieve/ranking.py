@@ -410,7 +410,7 @@ class Ranker:
                     if getattr(ts, "tzinfo", None) is None:
                         ts = ts.replace(tzinfo=timezone.utc)
                     age_days = (now - ts).total_seconds() / 86400.0
-                    recency = max(0.0, 1.0 - age_days / 30.0)
+                    recency = max(0.0, 1.0 - age_days / 90.0)
             except Exception:
                 recency = 0.0
 

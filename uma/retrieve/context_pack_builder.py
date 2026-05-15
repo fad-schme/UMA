@@ -514,8 +514,9 @@ def _snippet_quality_ok(snippet: str, terms: List[str], *, require_terms: bool) 
     words = [w for w in s.split() if w]
     if len(words) < 12:
         return False
-    # Starts mid-word or punctuation-heavy start/end
-    if re.match(r"^[^\w]", s) or re.match(r".*[^\w]$", s):
+    # Reject mid-sentence starts or mid-clause cuts (trailing comma/semicolon/colon).
+    # Terminal punctuation (.!?) is fine — trim_to_sentence_boundary produces those.
+    if re.match(r"^[^\w]", s) or re.search(r"[,;:]$", s):
         return False
     # Reject common sentence fragments (lowercase starts with no clear sentence start).
     if re.match(r"^(and|or|but|so|because|that|which|with)\b", s.lower()):
@@ -523,9 +524,6 @@ def _snippet_quality_ok(snippet: str, terms: List[str], *, require_terms: bool) 
     # Mostly punctuation
     letters = sum(1 for c in s if c.isalnum())
     if letters < max(10, len(s) // 5):
-        return False
-    # Require a verb-like token to avoid fragments.
-    if not re.search(r"\b(is|are|was|were|be|been|being|has|have|had|do|does|did|can|could|should|would|will|may|might|must|include|includes|including|uses|use|ensure|ensures|required|requires|allow|allows|prevent|prevents|provide|provides|protect|protects)\b", s.lower()):
         return False
     if require_terms and terms:
         s_lower = s.lower()
@@ -593,11 +591,15 @@ def _collect_chunk_snippets(
         terms = (extracted.get("keywords") or []) + (extracted.get("keyphrases") or [])
     terms = [t for t in terms if isinstance(t, str) and t]
 
+    # Scan up to 2x the budget to find enough quality snippets.
+    scan_limit = max(cfg.max_chunks * 2, 10)
     seen_chunk_text = set()
     snippets: List[str] = []
     seen_snippets: set[str] = set()
     added = 0
-    for ch in ordered_chunks[: cfg.max_chunks]:
+    for ch in ordered_chunks[:scan_limit]:
+        if added >= cfg.max_chunks:
+            break
         text = (ch.get("text") or "").strip()
         key = " ".join(text.split()).lower()
         if not text or key in seen_chunk_text:
@@ -617,7 +619,7 @@ def _collect_chunk_snippets(
         added += 1
 
     if not snippets:
-        for ch in ordered_chunks[: cfg.max_chunks]:
+        for ch in ordered_chunks[:scan_limit]:
             text = (ch.get("text") or "").strip()
             key = " ".join(text.split()).lower()
             if not text or key in seen_chunk_text:
