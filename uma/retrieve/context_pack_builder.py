@@ -771,7 +771,7 @@ def _build_fallback_snippets(
 ) -> List[Dict[str, Any]]:
     chunk_snippets = _collect_chunk_snippets(pack, cfg, query_text, facts)
     final_snippets = [{"text": s} for s in chunk_snippets]
-    if cfg.snippet_refiner_enabled and refiner_failed:
+    if cfg.snippet_refiner_available and refiner_failed:
         logger.warning("ContextPackBuilder: SnippetRefiner failed; using fallback snippets")
     if not final_snippets and pack.get("chunks"):
         raw_snippets = _collect_raw_chunk_texts(pack.get("chunks", []), cfg.max_chunks)
@@ -797,7 +797,7 @@ async def _compute_final_snippets(
 ) -> List[Dict[str, Any]]:
     final_snippets: List[Dict[str, Any]] = []
     refiner_failed = False
-    if cfg.snippet_refiner_enabled:
+    if cfg.snippet_refiner_available:
         try:
             refiner = SnippetRefiner(llm=llm, cfg=cfg)
             final_snippets = await refiner.refine(

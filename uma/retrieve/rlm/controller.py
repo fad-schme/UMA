@@ -100,6 +100,12 @@ class RLMController:
         self.semantic_first = bool(getattr(rlm_cfg, "semantic_first", True))
         self.clusters_first = bool(getattr(rlm_cfg, "clusters_first", True))
 
+        ctx_cfg = getattr(retrieval_cfg, "context", None) if retrieval_cfg else None
+        self.episodic_clustering_available = bool(
+            getattr(ctx_cfg, "episodic_clustering_available", False)
+        )
+        self.graph_expansion_available = getattr(memory, "graph_core", None) is not None
+
     # ------------------------------------------------------------------
     # PUBLIC API
     # ------------------------------------------------------------------
@@ -416,6 +422,8 @@ class RLMController:
                     "chunk_fallback_enabled": self.chunk_fallback_enabled,
                     "chunk_fallback_k_multiplier": self.chunk_fallback_k_multiplier,
                     "predicate_allowlist": self.predicate_allowlist,
+                    "episodic_clustering_available": self.episodic_clustering_available,
+                    "graph_expansion_available": self.graph_expansion_available,
                     "next_predicate_scope": lambda p, limit: _filter_predicates_for_domains(
                         decisions.next_predicate_scope(
                             facts=getattr(p, "facts", []) or [],
@@ -453,14 +461,6 @@ class RLMController:
                     continue
                 if action.action in {"search_procedural"} and not self._lane_active(pack, "procedural"):
                     logger.debug("RLMController: skipping %s (procedural lane not active)", action.action)
-                    continue
-                if action.action in {"graph_neighbors", "expand_graph"} and not (
-                    ("kb_doc" in active) or ("user_profile" in active)
-                ):
-                    logger.debug("RLMController: skipping %s (no graph domain active)", action.action)
-                    continue
-                if action.action in {"graph_neighbors", "expand_graph"} and getattr(getattr(self.env, "_memory", None), "graph_core", None) is None:
-                    logger.debug("RLMController: skipping %s (graph_core not available)", action.action)
                     continue
                 logger.debug(
                     "RLMController: executing action=%s k=%s",
@@ -787,15 +787,28 @@ class RLMController:
 
         episodes = []
         if self._lane_active(pack, "episodic"):
-            episodes = await self.env.execute_action(
-                request=request,
-                action=RetrievalAction(action="episodic_clusters", k=self.cluster_k, reason="baseline"),
-                query_embedding=list(query_embedding),
-                query_text=pack.query_text,
-                owner_type=owner_type,
-                owner_id=owner_id,
-                default_k=self.max_items_per_type,
-            )
+            if self.episodic_clustering_available:
+                # Enterprise: clusters built by consolidation — primary path.
+                episodes = await self.env.execute_action(
+                    request=request,
+                    action=RetrievalAction(action="episodic_clusters", k=self.cluster_k, reason="baseline"),
+                    query_embedding=list(query_embedding),
+                    query_text=pack.query_text,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    default_k=self.max_items_per_type,
+                )
+            else:
+                # Lite/cont: no consolidation, direct vector search over raw episodes.
+                episodes = await self.env.execute_action(
+                    request=request,
+                    action=RetrievalAction(action="search_episodic", k=self.cluster_k, reason="baseline"),
+                    query_embedding=list(query_embedding),
+                    query_text=pack.query_text,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    default_k=self.max_items_per_type,
+                )
         episodes = self.ranker.rank_episodes(episodes or [], query_text=pack.query_text)
         episodes = self._filter_items_by_active_lanes(list(episodes or []), pack)
         pack.episodes = _merge_unique(

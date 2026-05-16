@@ -35,10 +35,10 @@ llms:
   # UMA uses this LLM internally for memory extraction and summarization.
   uma:
     provider: "ollama"
-    model: "gpt-oss:latest"
+    model: "qwen2.5:3b"
     config:
       host: "http://localhost:11434"
-      timeout: 20.0
+      timeout: 60.0
 
 retrieval:
   max_episodes: 3
@@ -53,7 +53,6 @@ retrieval:
     max_semantic: 4
     max_chunks: 5
     snippet_max_chars: 600
-    snippet_refiner_enabled: true
     snippet_refiner_top_k: 6
     max_procedural: 2
     include_working_memory: true

@@ -625,7 +625,6 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 k=k_i + offset_i,
                 filters=filters,
                 log_context="episodic_search",
-                id_prefix="episode_",
             )
             if not id_score_pairs:
                 logger.debug(

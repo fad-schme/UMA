@@ -469,26 +469,38 @@ def _decide_episodic_clusters(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> 
     cluster_k = max(1, int(cfg.get("cluster_k", 3)))
     salience_threshold = float(cfg.get("salience_threshold", 0.6))
     max_items_per_type = int(cfg.get("max_items_per_type", 30))
-    actions: List[RetrievalAction] = []
-    episodes = getattr(pack, "episodes", []) or []
-    has_cluster = any(isinstance(ep, dict) and "episode_ids" in ep for ep in episodes)
-    actions.append(RetrievalAction(
-        action="fetch_episode_clusters",
-        k=cluster_k,
-        time_range=None,
-        min_salience=salience_threshold,
-        owner_type=getattr(pack, "owner_type", None),
-    ))
-    if not has_cluster and len(getattr(pack, "steps", []) or []) >= 2:
-        actions.append(RetrievalAction(
-            action="search_episodic",
-            k=max_items_per_type,
-            owner_type=getattr(pack, "owner_type", None),
-        ))
-    return actions
+    owner_type = getattr(pack, "owner_type", None)
+
+    if bool(cfg.get("episodic_clustering_available", False)):
+        # Enterprise: compiled cluster summaries are the primary path.
+        episodes = getattr(pack, "episodes", []) or []
+        has_cluster = any(isinstance(ep, dict) and "episode_ids" in ep for ep in episodes)
+        actions = [RetrievalAction(
+            action="fetch_episode_clusters",
+            k=cluster_k,
+            time_range=None,
+            min_salience=salience_threshold,
+            owner_type=owner_type,
+        )]
+        if not has_cluster and len(getattr(pack, "steps", []) or []) >= 2:
+            actions.append(RetrievalAction(
+                action="search_episodic",
+                k=max_items_per_type,
+                owner_type=owner_type,
+            ))
+        return actions
+
+    # Lite/cont: no consolidation — direct vector search over raw episodes.
+    return [RetrievalAction(
+        action="search_episodic",
+        k=max_items_per_type,
+        owner_type=owner_type,
+    )]
 
 
 def _decide_graph(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> List[RetrievalAction]:
+    if not bool(cfg.get("graph_expansion_available", False)):
+        return []
     graph = getattr(pack, "graph", []) or []
     facts = getattr(pack, "facts", []) or []
     chunks = getattr(pack, "chunks", []) or []

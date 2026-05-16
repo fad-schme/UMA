@@ -33,6 +33,16 @@ _HISTORY_MARKERS = (
     "previous",
     "last time",
     "what happened",
+    "yesterday",
+    "last week",
+    "last month",
+    "last session",
+    "ago",
+    "when did",
+    "used to",
+    "recall",
+    "told me",
+    "in the past",
 )
 
 

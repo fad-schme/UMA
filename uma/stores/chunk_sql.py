@@ -332,7 +332,6 @@ class ChunkSQLStore(BaseVectorSQLStore):
                 k=k,
                 filters=filters,
                 log_context="chunk_search",
-                id_prefix="chunk_",
             )
             if not id_score_pairs:
                 logger.debug(

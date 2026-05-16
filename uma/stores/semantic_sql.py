@@ -530,7 +530,6 @@ class SemanticSQLStore(BaseVectorSQLStore):
                 k=k_i + offset_i,
                 filters=filters,
                 log_context="semantic_search",
-                id_prefix="fact_",
             )
             if not id_score_pairs:
                 logger.debug(

@@ -273,7 +273,7 @@ class RetrievalConfig:
     chunk_shortlist_max_per_doc: int = 3
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "RetrievalConfig":
+    def from_dict(cls, d: Dict[str, Any], *, profile: str = "lite") -> "RetrievalConfig":
         strict_mode = bool(d.get("strict", True))
         debug_scores = bool(d.get("debug_scores", False))
         max_evidence_chunks = int(d.get("max_evidence_chunks", 6))
@@ -342,7 +342,7 @@ class RetrievalConfig:
             max_expanded_chunks=max_expanded_chunks,
             chunk_shortlist_k=chunk_shortlist_k,
             chunk_shortlist_max_per_doc=chunk_shortlist_max_per_doc,
-            context=RetrievalContextConfig.from_dict(d.get("context") or {}),
+            context=RetrievalContextConfig.from_dict(d.get("context") or {}, profile=profile),
             strict=strict_mode,
             debug_scores=debug_scores,
             rlm=rlm_obj,
@@ -391,11 +391,13 @@ class RetrievalContextConfig:
     include_graph: bool = True
     include_procedural: bool = True
     snippet_max_chars: int = 240
-    snippet_refiner_enabled: bool = False
+    snippet_refiner_available: bool = False
     snippet_refiner_top_k: int = 8
+    episodic_clustering_available: bool = False
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "RetrievalContextConfig":
+    def from_dict(cls, d: Dict[str, Any], *, profile: str = "lite") -> "RetrievalContextConfig":
+        is_enterprise = profile == "enterprise"
         return cls(
             max_working_messages=int(d.get("max_working_messages", 4)),
             max_episodic=int(d.get("max_episodic", 3)),
@@ -408,8 +410,9 @@ class RetrievalContextConfig:
             include_graph=bool(d.get("include_graph", True)),
             include_procedural=bool(d.get("include_procedural", True)),
             snippet_max_chars=int(d.get("snippet_max_chars", 240)),
-            snippet_refiner_enabled=bool(d.get("snippet_refiner_enabled", False)),
+            snippet_refiner_available=is_enterprise,
             snippet_refiner_top_k=int(d.get("snippet_refiner_top_k", 8)),
+            episodic_clustering_available=is_enterprise,
         )
 
 # ---------------------------------------------------------------------------
@@ -519,16 +522,19 @@ class RuntimeConfig:
     pipeline: PipelineConfig
     semantic_salience_threshold: float
     semantic_salience_decay_days: float = 180.0
+    profile: str = "lite"
 
     @classmethod
     def from_uma_config(cls, cfg: Dict[str, Any]) -> "RuntimeConfig":
+        profile = str(cfg.get("profile", "lite")) if isinstance(cfg, dict) else "lite"
+
         llms_cfg = LLMsConfig.from_dict(cfg) if isinstance(cfg, dict) else None
         llm_cfg = llms_cfg.uma if llms_cfg else LLMConfig.from_dict(cfg["llm"])
         agent_llm_cfg = llms_cfg.agent if llms_cfg else llm_cfg
 
         embedding_cfg = EmbeddingConfig.from_dict(cfg["embedding"])
         working_memory_cfg = WorkingMemorySettings.from_dict(cfg["working_memory"])
-        retrieval_cfg = RetrievalConfig.from_dict(cfg["retrieval"])
+        retrieval_cfg = RetrievalConfig.from_dict(cfg["retrieval"], profile=profile)
         features_cfg = FeaturesConfig.from_dict(cfg.get("features") or {})
         consolidation_cfg = ConsolidationConfig.from_dict(cfg.get("consolidation"))
         storage_cfg = StorageConfig.from_dict(cfg["storage"])
@@ -552,4 +558,5 @@ class RuntimeConfig:
             pipeline=pipeline_cfg,
             semantic_salience_threshold=float(semantic_salience),
             semantic_salience_decay_days=semantic_decay_days,
+            profile=profile,
         )

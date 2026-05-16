@@ -56,7 +56,6 @@ retrieval:
     max_semantic: 4
     max_chunks: 2
     snippet_max_chars: 600
-    snippet_refiner_enabled: true
     snippet_refiner_top_k: 6
     max_procedural: 2
     include_working_memory: true

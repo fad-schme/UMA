@@ -378,7 +378,6 @@ async def test_search_ids_requires_tenant_scope_filters(uma_memory) -> None:
         embedding,
         filters={"tenant_id": "tenant-a", "owner_type": "user", "owner_id": owner_id},
         log_context="tenant_search_ids",
-        id_prefix="fact_",
     )
 
     assert [fact_id for fact_id, _score in found] == ["fact_search_ids_tenant"]

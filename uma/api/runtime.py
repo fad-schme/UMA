@@ -347,14 +347,21 @@ class UMARuntime:
         """
         memory = self.memory_bridge
         stores = self.stores or {}
+        ctx_cfg = getattr(getattr(memory, "retrieval_cfg", None), "context", None)
         lanes: List[str] = []
         if getattr(memory, "chunk_core", None) is not None or stores.get("chunk") is not None:
             lanes.extend([RAW_LANE, WIKI_LANE])
         if getattr(memory, "semantic_core", None) is not None or stores.get("semantic") is not None:
             lanes.extend([SEMANTIC_LANE, PROFILE_LANE])
-        if getattr(memory, "episodic_core", None) is not None or stores.get("episodic") is not None:
+        if (
+            (getattr(memory, "episodic_core", None) is not None or stores.get("episodic") is not None)
+            and bool(getattr(ctx_cfg, "include_episodic", True))
+        ):
             lanes.append(EPISODIC_LANE)
-        if getattr(memory, "procedural_core", None) is not None or stores.get("procedural") is not None:
+        if (
+            (getattr(memory, "procedural_core", None) is not None or stores.get("procedural") is not None)
+            and bool(getattr(ctx_cfg, "include_procedural", True))
+        ):
             lanes.append(PROCEDURAL_LANE)
         seen: set[str] = set()
         return [lane for lane in lanes if not (lane in seen or seen.add(lane))]
@@ -1054,7 +1061,7 @@ class UMARuntime:
         pack = ContextPackBuilder.build(query_text, structured)
         ctx_cfg = getattr(getattr(self.config, "retrieval", None), "context", None)
 
-        if getattr(ctx_cfg, "snippet_refiner_enabled", False):
+        if getattr(ctx_cfg, "snippet_refiner_available", False):
             rendered_memory = await ContextPackBuilder.render_snippet_async(
                 pack,
                 ctx_cfg,

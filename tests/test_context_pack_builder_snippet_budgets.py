@@ -6,7 +6,7 @@ from uma.retrieve.context_pack_builder import ContextPackBuilder
 
 
 class _Cfg:
-    snippet_refiner_enabled = True
+    snippet_refiner_available = True
     snippet_refiner_top_k = 6
     max_chunks = 2
     snippet_max_chars = 50

@@ -200,7 +200,7 @@ class SnippetRefiner:
             raw = await generate_text(
                 llm=self.llm,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=300,
+                max_tokens=2048,
                 ctx=LLMCallContext(op="snippet_refine_single"),
             )
             result = self._parse_single_response(raw)

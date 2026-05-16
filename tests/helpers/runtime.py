@@ -102,7 +102,6 @@ def build_test_config(
                 "max_procedural": 3,
                 "max_graph": 3,
                 "snippet_max_chars": 600,
-                "snippet_refiner_enabled": True,
                 "snippet_refiner_top_k": 6,
                 "include_working_memory": True,
                 "include_episodic": True,

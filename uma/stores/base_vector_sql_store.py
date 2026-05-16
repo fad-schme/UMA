@@ -100,8 +100,6 @@ class BaseVectorSQLStore(BaseSQLStore):
         k: int,
         filters: Optional[Dict[str, Any]] = None,
         log_context: str = "",
-        *,
-        id_prefix: Optional[str] = None,
     ) -> List[Tuple[str, float]]:
         """
         Run a vector search and return a ranked list of (id, score).
@@ -167,8 +165,6 @@ class BaseVectorSQLStore(BaseSQLStore):
                         "%s Invalid vector search result element=%r%s",
                         self.__class__.__name__, pair, ctx
                     )
-                    continue
-                if id_prefix is not None and not sid.startswith(id_prefix):
                     continue
                 if sid in seen:
                     continue
@@ -294,8 +290,6 @@ class BaseVectorSQLStore(BaseSQLStore):
         k: int = 10,
         filters: Optional[Dict[str, Any]] = None,
         log_context: str = "",
-        *,
-        id_prefix: Optional[str] = None,
     ) -> List[Any]:
         """
         Semantic search pipeline:
@@ -324,7 +318,6 @@ class BaseVectorSQLStore(BaseSQLStore):
             k=k,
             filters=filters,
             log_context=log_context,
-            id_prefix=id_prefix,
         )
 
         if not id_score_pairs:
@@ -352,7 +345,6 @@ class BaseVectorSQLStore(BaseSQLStore):
         k: int = 10,
         filters: Optional[Dict[str, Any]] = None,
         log_context: str = "",
-        id_prefix: Optional[str] = None,
     ) -> List[Tuple[str, float]]:
         """
         Return ranked (id, score) pairs for a vector query (no SQL fetch).
@@ -378,7 +370,6 @@ class BaseVectorSQLStore(BaseSQLStore):
             k=k,
             filters=filters,
             log_context=log_context,
-            id_prefix=id_prefix,
         )
 
     async def fetch_by_ids(

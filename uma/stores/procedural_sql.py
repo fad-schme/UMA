@@ -543,7 +543,6 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                 k=k,
                 filters={"tenant_id": tenant_id, "owner_type": owner_type, "owner_id": owner_id},
                 log_context="procedural_search",
-                id_prefix="skill_",
             )
         except Exception:
             logger.exception("ProceduralSQLStore.search failed.")

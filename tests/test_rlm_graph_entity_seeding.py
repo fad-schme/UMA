@@ -46,6 +46,7 @@ def test_topical_graph_expansion_seeds_from_entities_not_user_id() -> None:
         cfg={
             "chunk_fallback_enabled": False,
             "graph_predicate_limit": 2,
+            "graph_expansion_available": True,
         },
     )
     assert decision is not None
@@ -89,6 +90,7 @@ def test_personal_graph_expansion_keeps_user_anchor() -> None:
             "chunk_fallback_enabled": False,
             "graph_predicate_limit": 2,
             "next_predicate_scope": lambda _p, _limit: ["LIKES"],
+            "graph_expansion_available": True,
         },
     )
     assert decision is not None

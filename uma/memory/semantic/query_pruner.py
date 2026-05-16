@@ -146,7 +146,7 @@ async def prune_facts_for_query(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            max_tokens=128,
+            max_tokens=2048,
             ctx=LLMCallContext(op="fact_prune"),
             model_validate=_ScoresPayload.model_validate,
             repair_messages_fn=lambda bad: [
