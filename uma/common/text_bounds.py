@@ -21,6 +21,13 @@ def trim_to_sentence_boundary(text: str, *, max_chars: int) -> str:
         return text.strip()
 
     cut = text[:max_chars_i]
+    # Prefer the last real sentence boundary: .!? followed by whitespace (not a decimal or abbreviation mid-word).
+    boundaries = [m.end() for m in re.finditer(r"[.!?](?=\s)", cut)]
+    if cut and cut[-1] in ".!?":
+        boundaries.append(len(cut))
+    if boundaries:
+        return cut[: boundaries[-1]].strip()
+    # Fallback: last .!? of any kind (abbreviation, decimal, etc.)
     m = re.search(r"[.!?](?!.*[.!?])", cut)
     if m:
         return cut[: m.end()].strip()

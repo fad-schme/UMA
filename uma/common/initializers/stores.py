@@ -113,7 +113,7 @@ def initialize_stores(memory: "Any") -> dict:
         from uma.adapters.vector.inmemory import InMemoryVectorIndex
         from uma.adapters.vector.faiss_adapter import FaissIndex
 
-        def vector_init(d: int):
+        def vector_init(d: int, **_: Any):
             try:
                 return FaissIndex(d)
             except Exception:
@@ -125,7 +125,8 @@ def initialize_stores(memory: "Any") -> dict:
     elif vector_backend == "inmemory":
         from uma.adapters.vector.inmemory import InMemoryVectorIndex
 
-        vector_init = lambda d: InMemoryVectorIndex(d)
+        def vector_init(d: int, **_: Any):
+            return InMemoryVectorIndex(d)
 
     else:
         if ":" not in vector_backend_str:
@@ -136,13 +137,13 @@ def initialize_stores(memory: "Any") -> dict:
         if not isinstance(vector_cfg, dict):
             raise ValueError("storage.vector_config must be a mapping for plugin vector backend")
 
-        def vector_init(d: int):
-            return plugin(d, **vector_cfg)
+        def vector_init(d: int, **overrides: Any):
+            return plugin(d, **{**vector_cfg, **overrides})
 
-    epi_idx = vector_init(dim)
-    sem_idx = vector_init(dim)
-    pro_idx = vector_init(dim)
-    chunk_idx = vector_init(dim)
+    epi_idx = vector_init(dim, table_name="vectors_episodic")
+    sem_idx = vector_init(dim, table_name="vectors_semantic")
+    pro_idx = vector_init(dim, table_name="vectors_procedural")
+    chunk_idx = vector_init(dim, table_name="vectors_chunks")
 
     try:
         stores = {
