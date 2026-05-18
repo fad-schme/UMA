@@ -82,11 +82,13 @@ See `uma-api.md` for full signatures and contracts.
 
 Vector store is never the source of truth. It stores only ids and filterable metadata, not full chunk text.
 
-## Runtime Profiles
+## Runtime Profile
 
-| Profile | Config | Backend | Use case |
-|---|---|---|---|
-| UMA Lite | `config/uma.yaml` or `config/uma_lite.yaml` | SQLite + LanceDB (embedded) | First run, local agents, demos |
-| UMA Container | `config/uma_cont.yaml` | SQLite + Qdrant (Docker) | Local service-style development |
+UMA uses a single embedded profile: SQLite (authoritative) + LanceDB (vector index). No external services required.
 
-See `uma-configure.md` for full configuration details.
+| Config | Use |
+|---|---|
+| `config/uma.yaml` | Default runnable config |
+| `config/uma_lite.yaml` | Reference embedded profile (same storage settings) |
+
+LLM and embedding values are user-customizable baselines. See `uma-configure.md` for full configuration details.

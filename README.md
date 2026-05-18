@@ -12,18 +12,16 @@ UMA-RLM helps agents work with long-lived memory without turning memory into uns
 - `retrieve_memory(...)` returns compiled, evidence-backed memory for continuity-oriented use.
 - `process_turn(...)` persists new interactions into UMA's memory lanes.
 
-The public Apache-2.0 repo now exposes two open-source runtime profiles.
+## Runtime Profile
 
-## Runtime Profiles
+UMA uses a single embedded runtime profile: SQLite for authoritative storage and LanceDB for vector retrieval. No external database services are required.
 
-| Profile | Config file | Runtime model | Best for |
-| --- | --- | --- | --- |
-| UMA Lite | `config/uma.yaml` | Embedded SQLite + LanceDB | First run, local agents, demos |
-| UMA Lite | `config/uma_lite.yaml` | Embedded SQLite + LanceDB | Explicit lite config |
-| UMA Container | `config/uma_cont.yaml` | SQLite + Qdrant Docker Compose service | Local service-style development |
+| Config file | Use |
+| --- | --- |
+| `config/uma.yaml` | Default runnable config |
+| `config/uma_lite.yaml` | Reference embedded profile (same storage settings) |
 
-`config/uma.yaml` is the default runnable profile and is equivalent to `config/uma_lite.yaml`.
-If you install the public vector extras, you can also point `vector_backend` at `uma.adapters.vector.faiss_adapter:FaissIndex` for an in-process FAISS alternative.
+`config/uma.yaml` is the default. LLM and embedding values in these files are user-customizable baselines — set the provider, model, and host to match your environment before running.
 
 ## Quickstart: UMA Lite
 
@@ -41,64 +39,11 @@ print(memory.health_check())
 PY
 ```
 
-The embedded storage stack does not require Qdrant, Docker, Postgres, or a graph database. LLM and embedding providers are still configured according to your application needs.
-
-If you want the explicit Lite config instead of the default alias file:
-
-```python
-from uma import UMAMemory
-
-memory = UMAMemory.from_yaml("config/uma_lite.yaml")
-```
-
-## Optional: UMA Container With Qdrant
-
-UMA Container is the local service-style profile. It keeps SQLite embedded in the UMA process and runs Qdrant as a separate Docker Compose service.
-
-Start Qdrant with:
-
-```bash
-pip install -e '.[vector]'
-docker compose -f docker/uma_cont/docker-compose.yml up -d
-```
-
-`config/uma_cont.yaml` is written for UMA running inside the same Docker Compose network as Qdrant, so it uses:
-
-```text
-http://qdrant:6333
-```
-
-If UMA runs on the host while Qdrant runs in Docker, override that URL to:
-
-```text
-http://localhost:6333
-```
-
-UMA Container is not an all-in-one container. Qdrant runs as a separate service, and Docker Compose keeps the local stack easy to start with one command.
-Container describes the runtime topology, not a fixed vector engine. The default container profile uses Qdrant, and you can also configure LanceDB or the packaged FAISS adapter if you want the UMA process to keep vectors in-process.
-
-## Configuration Files
-
-- `config/uma.yaml`
-  Default runnable config. Equivalent to UMA Lite.
-- `config/uma_lite.yaml`
-  Explicit embedded profile using SQLite + LanceDB.
-- `config/uma_cont.yaml`
-  Container-backed local profile using SQLite + Qdrant.
-
-The `profile` field is declarative metadata. UMA still initializes through the same path:
-
-```python
-from uma import UMAMemory
-
-memory = UMAMemory.from_yaml("config/uma.yaml")
-```
-
-There are no separate `init_lite()` or `init_cont()` entry points.
+The embedded storage stack requires no external database services. Configure your LLM and embedding provider in the YAML before running.
 
 ## Graph Is Optional
 
-Graph memory is optional. The public UMA Lite and UMA Container profiles disable graph by default.
+Graph memory is optional and disabled by default.
 
 UMA still provides value through raw, semantic, episodic, procedural, profile, trace, and wiki lanes without a graph database. Graph support can be added later for relationship traversal and associative recall, but it is not required for first-run usage.
 
@@ -116,7 +61,7 @@ For development and test workflows:
 pip install -r requirements.txt
 ```
 
-Optional extras remain available for additional providers and development workflows. In particular, `pip install -e '.[vector]'` adds the public Qdrant and FAISS client dependencies for alternate vector backends, while the default UMA Lite path does not require users to install separate vector or graph infrastructure before trying UMA.
+Optional extras are available for additional providers and development workflows. The default embedded path requires no extra installs. Use `pip install -e '.[vector]'` only if you are configuring an alternate vector backend (e.g. FAISS). LLM and embedding providers are configured in your YAML file.
 
 Supported LLM providers are `ollama`, `openai`, and `anthropic`. Supported embedding providers are `ollama` and `openai`. Anthropic/Claude is LLM-only in the public repo; install `pip install -e '.[llm]'` if you want to configure `provider: anthropic`.
 
@@ -160,7 +105,7 @@ await memory.process_turn(
     user_id="user-123",
     user_msg=user_message,
     assistant_reply=agent_reply,
-    extra_meta={"session_id": "session-1"},
+    session_id="session-1",
 )
 ```
 

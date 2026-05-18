@@ -2,14 +2,14 @@
 
 ## Runtime Profiles
 
-UMA has two public profiles. Both initialize through the same `UMAMemory.from_yaml(path)` entry point — there are no separate init functions.
+UMA has one embedded profile: SQLite (authoritative) + LanceDB (vector index). No external services required. Initialize through `UMAMemory.from_yaml(path)`.
 
-| Profile | Config file | Vector backend | Graph | Use case |
-|---|---|---|---|---|
-| UMA Lite | `config/uma.yaml` or `config/uma_lite.yaml` | LanceDB (embedded, no install) | Disabled | First run, local agents, demos |
-| UMA Container | `config/uma_cont.yaml` | Qdrant (Docker Compose service) | Disabled | Local service-style development |
+| Config file | Use |
+|---|---|
+| `config/uma.yaml` | Default runnable config |
+| `config/uma_lite.yaml` | Reference embedded profile (same storage settings) |
 
-`config/uma.yaml` is an alias for `config/uma_lite.yaml` — they are equivalent.
+LLM and embedding values in both files are user-customizable baselines — set provider, model, and host to match your environment.
 
 ---
 
@@ -32,19 +32,6 @@ Data is stored under `.uma/` in the working directory:
 
 ---
 
-## UMA Container — Qdrant Profile
-
-SQLite stays in-process; Qdrant runs as a Docker Compose service.
-
-```bash
-pip install -e '.[vector]'
-docker compose -f docker/uma_cont/docker-compose.yml up -d
-```
-
-The container config (`config/uma_cont.yaml`) targets `http://qdrant:6333` (Docker network hostname). If UMA runs on the host while Qdrant runs in Docker, override to `http://localhost:6333`.
-
----
-
 ## Full YAML Structure
 
 ### Storage
@@ -60,12 +47,6 @@ storage:
   vector_backend: "uma.adapters.vector.lancedb:LanceDBIndex"
   vector_config:
     path: ".uma/vectors"
-
-  # Qdrant (Container profile):
-  # vector_backend: "uma.adapters.vector.qdrant:QdrantIndex"
-  # vector_config:
-  #   url: "http://localhost:6333"
-  #   collection_prefix: "uma"
 
   # FAISS (in-process alternative, requires pip install -e '.[vector]'):
   # vector_backend: "uma.adapters.vector.faiss_adapter:FaissIndex"
@@ -214,9 +195,16 @@ pipeline:
 
 ## Alternate Vector Backends
 
-All three vector backends are configured through `vector_backend` + `vector_config`:
+The vector backend is a user configuration choice. Set `vector_backend` + `vector_config` in your YAML:
 
-**FAISS (in-process, no Docker):**
+**LanceDB (default, embedded — no install required):**
+```yaml
+vector_backend: "uma.adapters.vector.lancedb:LanceDBIndex"
+vector_config:
+  path: ".uma/vectors"
+```
+
+**FAISS (in-process alternative):**
 ```bash
 pip install -e '.[vector]'
 ```
@@ -226,22 +214,14 @@ vector_config:
   path: ".uma/vectors/faiss"
 ```
 
-**Qdrant (Docker service):**
+**Qdrant (external service):**
 ```bash
 pip install -e '.[vector]'
-docker compose -f docker/uma_cont/docker-compose.yml up -d
 ```
 ```yaml
 vector_backend: "uma.adapters.vector.qdrant:QdrantIndex"
 vector_config:
   url: "http://localhost:6333"
-```
-
-**LanceDB (default Lite, embedded):**
-```yaml
-vector_backend: "uma.adapters.vector.lancedb:LanceDBIndex"
-vector_config:
-  path: ".uma/vectors"
 ```
 
 Vector indexes can always be rebuilt from authoritative SQLite data:
