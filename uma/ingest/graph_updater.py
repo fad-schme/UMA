@@ -152,6 +152,7 @@ async def update_graph(
                     subject=str(fact.subject),
                     predicate=str(fact.predicate),
                     object=str(fact.object),
+                    tenant_id=str(getattr(fact, "tenant_id", "default") or "default"),
                     owner_type=str(fact.owner_type),
                     owner_id=str(fact.owner_id),
                     source_chunk_id=source_chunk_id,

@@ -440,30 +440,8 @@ async def _run_manifest_gate(
             ),
         )
 
-    now_refresh = datetime.now(timezone.utc)
-    await _upsert_source_manifest(
-        document_store=runtime.document_store,
-        doc_id=existing_manifest.doc_id,
-        source_path=parsed.source_path,
-        source_hash=parsed.source_hash,
-        ingested_at=now_refresh,
-        tenant_id=tenant_id,
-        owner_type=owner_type,
-        owner_id=owner_id,
-        workspace_id=workspace_id,
-        origin_agent_id=getattr(existing_manifest, "origin_agent_id", None),
-        origin_user_id=getattr(existing_manifest, "origin_user_id", None),
-        origin_session_id=getattr(existing_manifest, "origin_session_id", None),
-        meta=_merge_manifest_meta(
-            existing=getattr(existing_manifest, "meta", None) or {},
-            ingest_signature=ingest_signature,
-            now=now_refresh,
-            reingest_reason="signature_changed",
-        ),
-        log_context="ingest_document",
-    )
+    # Manifest will be written after embedding succeeds in _persist_chunks.
     warnings.append(f"re-ingesting existing manifest doc_id={existing_manifest.doc_id} (signature changed)")
-
     return ingest_signature, existing_manifest, None
 
 
@@ -573,7 +551,28 @@ async def _persist_chunks(
     workspace_id: str | None,
     warnings: List[str],
 ) -> List[Chunk]:
-    now_refresh = datetime.now(timezone.utc)
+    chunk_rows = _build_chunk_rows(
+        parsed=parsed,
+        final_chunks=final_chunks,
+        config=config,
+        tenant_id=tenant_id,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        workspace_id=workspace_id,
+    )
+
+    # Embed first; if this raises, no manifest is written so re-ingest remains safe.
+    created_chunks = await _embed_and_upsert_chunks(
+        final_chunks=final_chunks,
+        chunk_rows=chunk_rows,
+        config=config,
+        runtime=runtime,
+        warnings=warnings,
+    )
+
+    # Write manifest only after embedding succeeds to avoid stale manifest blocking re-ingest.
+    now_persist = datetime.now(timezone.utc)
+    reingest_reason = "signature_changed" if existing_manifest is not None else None
     await _upsert_source_manifest(
         document_store=runtime.document_store,
         doc_id=parsed.doc_id,
@@ -590,27 +589,12 @@ async def _persist_chunks(
         meta=_merge_manifest_meta(
             existing=(getattr(existing_manifest, "meta", None) or {}) if existing_manifest is not None else {},
             ingest_signature=ingest_signature,
-            now=now_refresh,
+            now=now_persist,
+            reingest_reason=reingest_reason,
         ),
         log_context="ingest_document",
     )
-    chunk_rows = _build_chunk_rows(
-        parsed=parsed,
-        final_chunks=final_chunks,
-        config=config,
-        tenant_id=tenant_id,
-        owner_type=owner_type,
-        owner_id=owner_id,
-        workspace_id=workspace_id,
-    )
-
-    return await _embed_and_upsert_chunks(
-        final_chunks=final_chunks,
-        chunk_rows=chunk_rows,
-        config=config,
-        runtime=runtime,
-        warnings=warnings,
-    )
+    return created_chunks
 
 
 def _build_chunk_rows(
@@ -707,7 +691,7 @@ async def _extract_facts_and_update_graph(
     tenant_id: str,
     workspace_id: str | None,
     warnings: List[str],
-) -> tuple[List[Fact], int, int]:
+) -> tuple[List[Fact], int, int, List[str]]:
     extract_chunks = final_chunks
     if config.extract_max_chunks is not None:
         extract_chunks = semantic_extractor.FactExtractor.select_chunks_for_fact_extraction(
@@ -716,7 +700,7 @@ async def _extract_facts_and_update_graph(
         )
 
     fact_extractor = semantic_extractor.FactExtractor(llm=runtime.llm)
-    extracted_fact_records: List[Fact] = await fact_extractor.extract_chunk_facts_batch(
+    extracted_fact_records, llm_batch_failures = await fact_extractor.extract_chunk_facts_batch(
         extract_chunks,
         owner_type=owner_type,
         owner_id=owner_id,
@@ -727,6 +711,13 @@ async def _extract_facts_and_update_graph(
         batch_size_chunks=int(config.fact_extraction_batch_size_chunks),
         max_chars=int(config.fact_extraction_batch_max_chars),
     )
+    if llm_batch_failures > 0:
+        msg = (
+            f"fact extraction: {llm_batch_failures} LLM batch(es) failed for doc_id={parsed.doc_id}; "
+            "deterministic fallback was used — consider switching to a more capable LLM"
+        )
+        warnings.append(msg)
+        logger.warning("ingest_document: %s", msg)
 
     for fact in extracted_fact_records:
         if fact.owner_type != owner_type:
@@ -745,7 +736,7 @@ async def _extract_facts_and_update_graph(
         fact.meta["extractor_version"] = _EXTRACTOR_VERSION
         fact.meta["chunker_version"] = _CHUNKER_VERSION
 
-    facts_created = 0
+    persisted_fact_ids: List[str] = []
     if extracted_fact_records:
         persisted_fact_ids = await _embed_and_persist_facts(
             facts=extracted_fact_records,
@@ -754,14 +745,13 @@ async def _extract_facts_and_update_graph(
             warnings=warnings,
             log_context="ingest_document",
         )
-        facts_created = len(persisted_fact_ids)
 
     graph_edges = await update_graph(
         extracted_fact_records,
         graph_core=runtime.graph_core,
         concurrency=getattr(config, "graph_update_concurrency", 8),
     )
-    return extracted_fact_records, facts_created, graph_edges
+    return extracted_fact_records, len(persisted_fact_ids), graph_edges, persisted_fact_ids
 
 
 async def capture_source(
@@ -892,7 +882,7 @@ async def derive_memory_artifacts(
     config = config or IngestConfig()
     runtime = _resolve_ingest_runtime(memory)
     warnings = list(capture.warnings)
-    derived_facts, facts_created, graph_edges = await _extract_facts_and_update_graph(
+    derived_facts, facts_created, graph_edges, fact_ids = await _extract_facts_and_update_graph(
         parsed=capture.parsed,
         final_chunks=capture.captured_chunk_inputs,
         config=config,
@@ -932,6 +922,7 @@ async def derive_memory_artifacts(
         tenant_id=capture.tenant_id,
         workspace_id=capture.workspace_id,
         warnings=warnings,
+        fact_ids=fact_ids,
     )
 
 
@@ -1036,21 +1027,44 @@ async def ingest_memory_bootstrap(
 ) -> Dict[str, Any]:
     """Ingest MEMORY.md through the full document pipeline (chunker + LLM fact extraction)."""
     del config
-    report = await ingest_document(
-        file_path,
-        owner_type="user",
-        owner_id=runtime_context.user_id,
-        memory=memory,
-    )
+    user_id = runtime_context.user_id
+    tenant_id = runtime_context.tenant_id
+    normalized_path = _validate_text_source_path(file_path, api_name="load_memory_bootstrap")
+
+    if not os.path.exists(normalized_path):
+        return _build_skip_result(reason="missing_file", path=normalized_path, user_id=user_id, tenant_id=tenant_id)
+
+    raw_text = _read_text_source(normalized_path, api_name="load_memory_bootstrap")
+    if not raw_text.strip():
+        return _build_skip_result(reason="empty_file", path=normalized_path, user_id=user_id, tenant_id=tenant_id)
+
+    # Reuse diary entry extractor — MEMORY.md entries are also markdown bullets.
+    entries = _extract_daily_diary_entries(raw_text)
+    if not entries:
+        return _build_skip_result(reason="no_entries", path=normalized_path, user_id=user_id, tenant_id=tenant_id)
+
+    report = await ingest_document(normalized_path, owner_type="user", owner_id=user_id, memory=memory)
     logger.info(
         "ingest_memory_bootstrap: path=%s chunks=%d facts=%d",
-        file_path, report.chunks_created, report.facts_created,
+        normalized_path, report.chunks_created, report.facts_created,
     )
+
+    # Detect idempotency via the manifest-gate warning set by _run_manifest_gate.
+    if any("idempotent" in w for w in (report.warnings or [])):
+        return _build_skip_result(
+            reason="idempotent",
+            path=normalized_path,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            extra={"entries_found": len(entries)},
+        )
+
     return {
         "status": "ingested",
-        "path": file_path,
-        "chunks_created": report.chunks_created,
+        "path": normalized_path,
+        "entries_found": len(entries),
         "facts_created": report.facts_created,
+        "fact_ids": list(report.fact_ids),
     }
 
 
@@ -1072,21 +1086,8 @@ async def ingest_daily_diary_bootstrap(
     normalized_tenant_id = runtime_context.tenant_id
     workspace_id = runtime_context.workspace_id
 
-    # --- Chunk / fact / wiki lane ---
-    ingest_report = await ingest_document(
-        file_path,
-        owner_type="user",
-        owner_id=normalized_user_id,
-        memory=memory,
-    )
-    logger.info(
-        "ingest_daily_diary_bootstrap: document pipeline path=%s chunks=%d facts=%d",
-        file_path, ingest_report.chunks_created, ingest_report.facts_created,
-    )
-
-    # --- Episodic lane ---
-    # _capture_bootstrap_source acts as the idempotency gate for this lane
-    # independently of the document manifest written above.
+    # Pre-flight: check for missing file, empty file, no entries, and idempotency.
+    # This must happen before calling ingest_document to return proper skip shapes.
     normalized_path, _raw_text, entries, ingest_signature, source_hash, skip = await _capture_bootstrap_source(
         file_path=file_path,
         runtime_context=runtime_context,
@@ -1097,70 +1098,86 @@ async def ingest_daily_diary_bootstrap(
         entry_extractor=_extract_daily_diary_entries,
     )
 
-    episode_ids: list[str] = []
-    if skip is None:
-        diary_date = None
-        try:
-            diary_date = Path(normalized_path).stem
-        except Exception:
-            pass
+    if skip is not None:
+        return skip
 
-        from uma.ingest.episodic_writer import write_daily_diary_episodes
+    diary_date = None
+    try:
+        diary_date = Path(normalized_path).stem
+    except Exception:
+        pass
 
-        logger.info(
-            "ingest_daily_diary_bootstrap: episodic lane path=%s entries=%d",
-            normalized_path, len(entries),
-        )
-        episode_ids = await write_daily_diary_episodes(
-            file_path=normalized_path,
-            diary_date=diary_date,
-            entries=entries,
+    # --- Chunk / fact / wiki lane ---
+    ingest_report = await ingest_document(
+        normalized_path,
+        owner_type="user",
+        owner_id=normalized_user_id,
+        memory=memory,
+    )
+    logger.info(
+        "ingest_daily_diary_bootstrap: document pipeline path=%s chunks=%d facts=%d",
+        normalized_path, ingest_report.chunks_created, ingest_report.facts_created,
+    )
+
+    # --- Episodic lane ---
+    from uma.ingest.episodic_writer import write_daily_diary_episodes
+
+    logger.info(
+        "ingest_daily_diary_bootstrap: episodic lane path=%s entries=%d",
+        normalized_path, len(entries),
+    )
+    episode_ids = await write_daily_diary_episodes(
+        file_path=normalized_path,
+        diary_date=diary_date,
+        entries=entries,
+        owner_type="user",
+        owner_id=normalized_user_id,
+        user_id=normalized_user_id,
+        embedder=runtime.embedder,
+        episodic_core=runtime.episodic_core,
+    )
+
+    if episode_ids:
+        ingested_at = datetime.now(timezone.utc)
+        await _upsert_source_manifest(
+            document_store=runtime.document_store,
+            doc_id=f"daily-diary:{source_hash}",
+            source_path=normalized_path,
+            source_hash=source_hash,
+            ingested_at=ingested_at,
+            tenant_id=normalized_tenant_id,
             owner_type="user",
             owner_id=normalized_user_id,
-            user_id=normalized_user_id,
-            embedder=runtime.embedder,
-            episodic_core=runtime.episodic_core,
-        )
-
-        if episode_ids:
-            ingested_at = datetime.now(timezone.utc)
-            await _upsert_source_manifest(
-                document_store=runtime.document_store,
+            workspace_id=workspace_id,
+            origin_agent_id=runtime_context.agent_id,
+            origin_user_id=runtime_context.user_id,
+            origin_session_id=runtime_context.session_id,
+            meta=normalize_document_metadata(
+                _build_bootstrap_manifest_meta(
+                    source_kind="daily_diary",
+                    source_type="daily_diary",
+                    ingest_signature=ingest_signature,
+                    extra={
+                        "diary_date": diary_date,
+                        "entries_found": len(entries),
+                        "episodes_created": len(episode_ids),
+                    },
+                ),
                 doc_id=f"daily-diary:{source_hash}",
-                source_path=normalized_path,
-                source_hash=source_hash,
-                ingested_at=ingested_at,
-                tenant_id=normalized_tenant_id,
                 owner_type="user",
                 owner_id=normalized_user_id,
-                workspace_id=workspace_id,
-                origin_agent_id=runtime_context.agent_id,
-                origin_user_id=runtime_context.user_id,
-                origin_session_id=runtime_context.session_id,
-                meta=normalize_document_metadata(
-                    _build_bootstrap_manifest_meta(
-                        source_kind="daily_diary",
-                        source_type="daily_diary",
-                        ingest_signature=ingest_signature,
-                        extra={
-                            "diary_date": diary_date,
-                            "entries_found": len(entries),
-                            "episodes_created": len(episode_ids),
-                        },
-                    ),
-                    doc_id=f"daily-diary:{source_hash}",
-                    owner_type="user",
-                    owner_id=normalized_user_id,
-                    ingested_at=ingested_at,
-                    source_path=normalized_path,
-                    source_hash=source_hash,
-                ),
-                log_context="load_daily_diary_bootstrap",
-            )
+                ingested_at=ingested_at,
+                source_path=normalized_path,
+                source_hash=source_hash,
+            ),
+            log_context="load_daily_diary_bootstrap",
+        )
 
     return {
         "status": "ingested",
-        "path": file_path,
+        "path": normalized_path,
+        "diary_date": diary_date,
+        "entries_found": len(entries),
         "chunks_created": ingest_report.chunks_created,
         "facts_created": ingest_report.facts_created,
         "episodes_created": len(episode_ids),
@@ -1205,10 +1222,20 @@ async def ingest_document(
         memory=memory,
     )
 
+    chunks_failed = len(capture.captured_chunk_inputs) - len(capture.captured_chunks)
+    if chunks_failed > 0:
+        logger.warning(
+            "ingest_document: %d chunk(s) failed to persist doc_id=%s",
+            chunks_failed,
+            capture.parsed.doc_id,
+        )
+
     return IngestReport(
         doc_id=capture.parsed.doc_id,
         chunks_created=len(capture.captured_chunks),
+        chunks_failed=chunks_failed,
         facts_created=derive.facts_created,
         graph_edges_created=derive.graph_edges_created,
         warnings=derive.warnings,
+        fact_ids=derive.fact_ids,
     )

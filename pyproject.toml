@@ -39,3 +39,8 @@ version = {attr = "uma.version.__version__"}
 namespaces = true
 include = ["uma*"]
 exclude = [".venv*", ".pytest_cache*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "--basetemp=.pytest_tmp"

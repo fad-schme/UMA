@@ -3,11 +3,18 @@
     "allow": [
       "Bash(python -c ' *)",
       "Bash(python examples/batch_test.py)",
+      "Bash(python -m pytest tests/ *)",
       "Bash(python -m pytest tests/ -q --tb=short)",
       "Bash(python -m pytest tests/test_config_profiles.py -q --tb=long)",
       "Bash(python -m pytest tests/test_config_profiles.py tests/test_intent_classification.py tests/test_planner.py -q --tb=short)",
       "Bash(python -m pytest tests/test_config_profiles.py tests/test_planner.py -q --tb=short)",
-      "Bash(python -m pytest tests/ -q --co -q)"
+      "Bash(python -m pytest tests/ -q --co -q)",
+      "Bash(python -m pytest tests/test_fact_extraction_batch_salvage.py tests/test_graph_core.py -q)",
+      "Bash(python -m pytest tests/test_graph_lane_retrieval.py -v)",
+      "Bash(python -m pytest tests/test_context_pack_builder_snippet_budgets.py -v)",
+      "Bash(python -m pytest tests/test_context_pack_builder_snippet_budgets.py tests/test_graph_core.py tests/test_fact_extraction_batch_salvage.py -v)",
+      "Bash(python -m pytest tests/test_graph_lane_retrieval.py::test_ingest_writes_graph_edges -v)",
+      "Bash(python -m pytest -q)"
     ]
   },
   "autoMemoryEnabled": true,

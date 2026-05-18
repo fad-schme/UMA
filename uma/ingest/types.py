@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, List, Tuple, Optional
 
@@ -44,6 +44,8 @@ class IngestReport:
     facts_created: int
     graph_edges_created: int
     warnings: List[str]
+    chunks_failed: int = 0
+    fact_ids: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -74,6 +76,7 @@ class DeriveMemoryArtifactsResult:
     tenant_id: str
     workspace_id: Optional[str]
     warnings: List[str]
+    fact_ids: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

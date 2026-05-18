@@ -137,7 +137,7 @@ def test_extract_facts_batch_salvages_missing_chunks() -> None:
             max_chars=12000,
         )
 
-    facts = asyncio.run(run())
+    facts, _ = asyncio.run(run())
     # Expect at least one fact, and it must be attributed to one of the chunks.
     assert facts
     sources = set()

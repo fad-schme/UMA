@@ -254,7 +254,7 @@ class FactExtractor:
         max_facts_per_chunk: int = utils.DEFAULT_MAX_FACTS_PER_CHUNK,
         object_max_words: int = utils.DEFAULT_OBJECT_MAX_WORDS,
         max_fact_tokens: int = utils.DEFAULT_MAX_FACT_TOKENS,
-    ) -> List[Fact]:
+    ) -> tuple[List[Fact], int]:
         """
         Extract KB-grade facts from chunks using batch calls.
 
@@ -434,7 +434,7 @@ class FactExtractor:
             len(out),
             len(chunks),
         )
-        return out
+        return out, batch_failures
 
     async def extract_chunk_facts_one(
         self,
