@@ -153,11 +153,11 @@ def test_no_legacy_or_duplicate_ownership_resolvers() -> None:
     root = Path(__file__).resolve().parents[1]
     checked_files = list((root / "uma").rglob("*.py"))
     for path in checked_files:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         for marker in forbidden:
             assert marker not in text, f"{marker} remains in {path}"
 
-    ownership_text = (root / "uma/common/ownership.py").read_text()
+    ownership_text = (root / "uma/common/ownership.py").read_text(encoding="utf-8")
     assert "def validate_explicit_owner(" in ownership_text
 
 @pytest.mark.asyncio

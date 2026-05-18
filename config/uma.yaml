@@ -24,8 +24,8 @@ working_memory:
 
 embedding:
   provider: "ollama"
-  model: "all-minilm:latest"
-  dimension: 384
+  model: "nomic-embed-text"
+  dimension: 768
   config:
     host: "http://localhost:11434"
     batch_size: 32
@@ -36,23 +36,24 @@ llms:
   # UMA uses this LLM internally for memory extraction and summarization.
   uma:
     provider: "ollama"
-    model: "qwen2.5:3b"
+    model: "llama3"
     config:
       host: "http://localhost:11434"
-      timeout: 60.0
+      timeout: 20.0
 
 retrieval:
   max_episodes: 3
   max_facts: 5
   max_skills: 3
   max_graph_items: 3
+  max_evidence_chunks: 10
   strict: true
   debug_scores: false
   context:
     max_working_messages: 6
     max_episodic: 2
     max_semantic: 4
-    max_chunks: 5
+    max_chunks: 2
     snippet_max_chars: 600
     snippet_refiner_top_k: 6
     max_procedural: 2
@@ -63,7 +64,6 @@ retrieval:
 
 semantic:
   salience_threshold: 0.45
-  salience_decay_days: 180
 
 features:
   load:

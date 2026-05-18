@@ -14,7 +14,8 @@
       "Bash(python -m pytest tests/test_context_pack_builder_snippet_budgets.py -v)",
       "Bash(python -m pytest tests/test_context_pack_builder_snippet_budgets.py tests/test_graph_core.py tests/test_fact_extraction_batch_salvage.py -v)",
       "Bash(python -m pytest tests/test_graph_lane_retrieval.py::test_ingest_writes_graph_edges -v)",
-      "Bash(python -m pytest -q)"
+      "Bash(python -m pytest -q)",
+      "Bash(python -m pytest tests/test_config_profiles.py::test_config_profile_files_have_expected_shapes -v)"
     ]
   },
   "autoMemoryEnabled": true,
