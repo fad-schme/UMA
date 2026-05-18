@@ -2,10 +2,14 @@
   "permissions": {
     "allow": [
       "Bash(python -c ' *)",
-      "Bash(python examples/batch_test.py)"
+      "Bash(python examples/batch_test.py)",
+      "Bash(python -m pytest tests/ -q --tb=short)",
+      "Bash(python -m pytest tests/test_config_profiles.py -q --tb=long)",
+      "Bash(python -m pytest tests/test_config_profiles.py tests/test_intent_classification.py tests/test_planner.py -q --tb=short)",
+      "Bash(python -m pytest tests/test_config_profiles.py tests/test_planner.py -q --tb=short)",
+      "Bash(python -m pytest tests/ -q --co -q)"
     ]
   },
-  "autoMemory": true,
   "autoMemoryEnabled": true,
-  
+  "autoMemory": true
 }

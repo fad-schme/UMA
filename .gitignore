@@ -75,3 +75,6 @@ tmp_pytest/
 *.db
 *.sqlite
 *.sqlite3
+CLAUDE.md
+memory.md
+session_log.md
