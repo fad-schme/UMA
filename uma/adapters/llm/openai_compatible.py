@@ -180,6 +180,7 @@ class OpenAICompatibleEmbedder(EmbeddingInterface):
         base_url: str,
         api_key: str,
         timeout: float = 30.0,
+        max_input_chars: int = 0,
     ) -> None:
         if AsyncOpenAI is None:
             raise RuntimeError(
@@ -201,6 +202,7 @@ class OpenAICompatibleEmbedder(EmbeddingInterface):
         self._dimension = dimension
         self.base_url = base_url.strip().rstrip("/")
         self.timeout = float(timeout)
+        self.max_input_chars = max(0, int(max_input_chars or 0))
         self._client = AsyncOpenAI(
             api_key=api_key.strip(),
             base_url=self.base_url,
@@ -243,8 +245,10 @@ class OpenAICompatibleEmbedder(EmbeddingInterface):
         api_key = embed_kwargs.pop("api_key", None)
         api_key_env = embed_kwargs.pop("api_key_env", None)
         timeout = embed_kwargs.pop("timeout", 30.0)
+        max_input_chars = int(embed_kwargs.pop("max_input_chars", 0) or 0)
         embed_kwargs.pop("model", None)
         embed_kwargs.pop("dimension", None)
+        embed_kwargs.pop("batch_size", None)
         if embed_kwargs:
             logger.debug(
                 "OpenAICompatibleEmbedder ignored extra config keys for provider=%s: %s",
@@ -269,4 +273,5 @@ class OpenAICompatibleEmbedder(EmbeddingInterface):
                 api_key_env=api_key_env,
             ),
             timeout=float(timeout),
+            max_input_chars=max_input_chars,
         )

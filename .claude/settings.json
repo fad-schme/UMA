@@ -4,5 +4,8 @@
       "Bash(python -c ' *)",
       "Bash(python examples/batch_test.py)"
     ]
-  }
+  },
+  "autoMemory": true,
+  "autoMemoryEnabled": true,
+  
 }

@@ -393,14 +393,19 @@ def finalize_chunks(chunks: List[DocumentChunk]) -> List[DocumentChunk]:
             else:
                 final.append(ch)
 
-        # Validate texts after merging.
+        # Validate texts after merging; drop chunks that are still too short
+        # (degenerate single-item groups such as title pages or TOC headers)
+        # rather than hard-failing the whole document.
+        valid: List[DocumentChunk] = []
         for i, ch in enumerate(final):
             try:
                 validate_chunk_text(ch.text or "")
+                valid.append(ch)
             except Exception as exc:
-                raise ValueError(f"strict chunk validation failed at index={i}: {exc}") from exc
-
-        return final
+                logger.debug(
+                    "finalize_chunks: dropping short chunk at index=%d after all merging: %s", i, exc
+                )
+        return valid
 
     # Group by (doc_id, page_range) preserving original order.
     #

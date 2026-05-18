@@ -60,8 +60,12 @@ async def embed_chunks(
     async def _embed_batch(texts: List[str]) -> List[List[float]]:
         return await embedder.embed(texts)
 
+    max_chars = max(0, int(getattr(embedder, "max_input_chars", 0) or 0))
     for batch_idx, batch in enumerate(_batched(chunks, batch_size)):
-        texts = [c.text or "" for c in batch]
+        if max_chars:
+            texts = [(c.text or "")[:max_chars] for c in batch]
+        else:
+            texts = [c.text or "" for c in batch]
         try:
             vectors = await _embed_batch(texts)
         except Exception as exc:

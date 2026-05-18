@@ -30,6 +30,7 @@ embedding:
     host: "http://localhost:11434"
     batch_size: 32
     timeout: 20.0
+    max_input_chars: 512
 
 llms:
   # UMA uses this LLM internally for memory extraction and summarization.

@@ -26,12 +26,16 @@ class QueryIntent(str, Enum):
 _RE_PERSONAL_MARKERS = re.compile(r"\b(i|me|my|mine|myself)\b", re.IGNORECASE)
 _RE_PERSONAL_QUERIES = re.compile(
     r"\b("
-    r"what do i like|my preferences?|what did i do|did i|do i|"
+    r"what do i like|my preferences?|what did i do|did i|"
     r"my background|my experience|remember|recall|"
     r"like|prefer|dislike|hate|love"
     r")\b",
     re.IGNORECASE,
 )
+# "do i" alone matches "How do I ..." which is instructional, not personal.
+# Match only the phrasing "do i have" / "do i need" / "do i want" which are
+# genuinely personal-state queries.
+_RE_PERSONAL_DO_I = re.compile(r"\bdo i\s+(have|need|want|own|know)\b", re.IGNORECASE)
 
 # Keep topical indicators small and fairly “formal”; used only to decide MIXED vs PERSONAL.
 _RE_TOPICAL_HINTS = re.compile(
@@ -55,7 +59,7 @@ def classify_query_intent(query_text: str) -> QueryIntent:
         return QueryIntent.TOPICAL
 
     personal_markers = bool(_RE_PERSONAL_MARKERS.search(q))
-    personal_query = bool(_RE_PERSONAL_QUERIES.search(q))
+    personal_query = bool(_RE_PERSONAL_QUERIES.search(q)) or bool(_RE_PERSONAL_DO_I.search(q))
 
     # Personal requires both marker and an explicit personal cue.
     if personal_markers and personal_query:
