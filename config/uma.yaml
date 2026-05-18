@@ -36,10 +36,10 @@ llms:
   # UMA uses this LLM internally for memory extraction and summarization.
   uma:
     provider: "ollama"
-    model: "llama3"
+    model: "qwen2.5:3b"
     config:
       host: "http://localhost:11434"
-      timeout: 20.0
+      timeout: 60.0
 
 retrieval:
   max_episodes: 3

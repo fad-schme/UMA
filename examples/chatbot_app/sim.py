@@ -46,7 +46,7 @@ async def run() -> None:
             print(f"Q{i:02d}: {question}")
             print("-" * 70)
 
-            context = await memory.retrieve_context(query_text=question, user_id=user_id)
+            context = await memory.retrieve_context(query_text=question, user_id=user_id, session_id=session_id)
             pack = ContextPackBuilder.build(question, context)
             snippet = await ContextPackBuilder.render_snippet_async(
                 pack, context_cfg=ctx_cfg, llm=llm

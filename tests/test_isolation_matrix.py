@@ -401,3 +401,23 @@ async def test_request_handle_retrieval_remains_isolated_under_overlap(uma_memor
         ("query-a", "user:u1", "legacy-user:user:u1"),
         ("query-b", "user:u2", "legacy-user:user:u2"),
     ]
+
+
+def test_filter_items_by_owner_drops_foreign_user_items_and_keeps_agent_items() -> None:
+    from types import SimpleNamespace
+    from uma.api.runtime import UMARuntime
+
+    agent_item = SimpleNamespace(owner_type="agent", owner_id="agent-default")
+    own_item = SimpleNamespace(owner_type="user", owner_id="user:alice")
+    foreign_item = SimpleNamespace(owner_type="user", owner_id="user:bob")
+    no_owner_item = SimpleNamespace()  # no owner_type attribute — kept for safety
+
+    result = UMARuntime._filter_items_by_owner(
+        [agent_item, own_item, foreign_item, no_owner_item],
+        requesting_user_id="user:alice",
+    )
+
+    assert agent_item in result
+    assert own_item in result
+    assert foreign_item not in result
+    assert no_owner_item in result

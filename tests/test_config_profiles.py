@@ -23,18 +23,19 @@ def test_config_profile_files_have_expected_shapes() -> None:
     assert lite_cfg.profile == "lite"
     assert cont_cfg.profile == "cont"
 
-    assert default_raw == lite_raw
-    assert "agent" not in lite_raw["llms"]
-    assert "consolidation" not in lite_raw
-    assert "hybrid" not in lite_raw["retrieval"]
-    assert "rlm" not in lite_raw["retrieval"]
-    assert lite_raw["embedding"]["dimension"] == 768
-    assert lite_raw["retrieval"]["context"]["include_graph"] is False
-
-    assert lite_cfg.storage.sql_backend == "sqlite"
-    assert lite_cfg.storage.vector_backend == "uma.adapters.vector.lancedb:LanceDBIndex"
-    assert lite_cfg.storage.graph_backend == "disabled"
-    assert lite_cfg.storage.vector_backend.startswith("uma.adapters.vector.")
+    # uma.yaml is a user-customizable baseline — its LLM/embedding values may differ.
+    # Verify structural shape only: same storage backend, graph disabled, correct dimension.
+    for label, raw, cfg in [("default", default_raw, default_cfg), ("lite", lite_raw, lite_cfg)]:
+        assert "agent" not in raw["llms"], label
+        assert "consolidation" not in raw, label
+        assert "hybrid" not in raw["retrieval"], label
+        assert "rlm" not in raw["retrieval"], label
+        assert raw["embedding"]["dimension"] == 768, label
+        assert raw["retrieval"]["context"]["include_graph"] is False, label
+        assert cfg.storage.sql_backend == "sqlite", label
+        assert cfg.storage.vector_backend == "uma.adapters.vector.lancedb:LanceDBIndex", label
+        assert cfg.storage.graph_backend == "disabled", label
+        assert cfg.storage.vector_backend.startswith("uma.adapters.vector."), label
 
     assert cont_cfg.storage.sql_backend == "sqlite"
     assert cont_cfg.storage.vector_backend == "uma.adapters.vector.qdrant:QdrantIndex"

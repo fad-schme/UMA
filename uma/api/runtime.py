@@ -28,6 +28,7 @@ from uma.common.provenance import (
     collect_transitive_source_chunk_ids,
     provenance_for_artifact,
 )
+from uma.common.identity import normalize_user_id
 from uma.common.types import RuntimeContext
 from uma.common.storage_metadata import (
     EPISODIC_LANE,
@@ -422,6 +423,35 @@ class UMARuntime:
         allowed = set(lane_filter)
         return [item for item in (items or []) if cls._item_lane(item) in allowed]
 
+    @staticmethod
+    def _filter_items_by_owner(items: List[Any], requesting_user_id: str) -> List[Any]:
+        """Drop user-owned items whose owner_id does not match the requesting user.
+
+        Agent-owned items (shared KB) pass through unconditionally.
+        Items with no owner metadata are kept to avoid silently dropping
+        legacy or partially-migrated records.
+        """
+        out = []
+        for item in items or []:
+            owner_type = getattr(item, "owner_type", None)
+            if isinstance(item, dict):
+                owner_type = item.get("owner_type", owner_type)
+            if owner_type != "user":
+                out.append(item)
+                continue
+            owner_id = getattr(item, "owner_id", None)
+            if isinstance(item, dict):
+                owner_id = item.get("owner_id", owner_id)
+            if owner_id == requesting_user_id:
+                out.append(item)
+            else:
+                logger.warning(
+                    "UMARuntime: dropped user-owned item owner_id=%s requesting_user_id=%s",
+                    owner_id,
+                    requesting_user_id,
+                )
+        return out
+
     def _load_working_memory_for_context(
         self,
         runtime_context: RuntimeContext,
@@ -453,14 +483,21 @@ class UMARuntime:
         plan: Any,
         working_memory: List[Any],
         pack: Any,
+        requesting_user_id: str,
     ) -> Dict[str, Any]:
         from uma.retrieve.rlm.coverage import compute_confidence
 
         coverage = getattr(pack, "coverage", None)
         active_lanes = list(plan.participating_lanes)
         episodic = self._filter_items_by_lanes(pack.episodes, active_lanes)
-        facts = self._filter_items_by_lanes(pack.facts or [], active_lanes)
-        chunks = self._filter_items_by_lanes(getattr(pack, "chunks", []), active_lanes)
+        facts = self._filter_items_by_owner(
+            self._filter_items_by_lanes(pack.facts or [], active_lanes),
+            requesting_user_id,
+        )
+        chunks = self._filter_items_by_owner(
+            self._filter_items_by_lanes(getattr(pack, "chunks", []), active_lanes),
+            requesting_user_id,
+        )
         skills = self._filter_items_by_lanes(pack.skills, active_lanes)
         trace = list(getattr(pack, "steps", []) or [])
         confidence = compute_confidence(coverage) if coverage is not None else {}
@@ -548,6 +585,7 @@ class UMARuntime:
                 plan=plan,
                 working_memory=working_memory,
                 pack=pack,
+                requesting_user_id=normalize_user_id(runtime_context.user_id),
             )
 
     @staticmethod
