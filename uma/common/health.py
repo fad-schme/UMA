@@ -1,5 +1,5 @@
 """
-Health checks and dependency readiness probes for UMA-RLM.
+Health checks and dependency readiness probes for UMA.
 
 This module provides lightweight checks for core dependencies such as
 SQL backends, vector indices, and graph adapters. It avoids network-heavy
@@ -133,7 +133,7 @@ def _check_embedder(embedder: Optional[EmbeddingInterface], dim: int) -> HealthC
 
 def run_health_checks(memory: Any) -> Dict[str, Any]:
     """
-    Run basic readiness checks for UMA-RLM dependencies.
+    Run basic readiness checks for UMA dependencies.
 
     Returns a dict with overall status and per-check details.
     """

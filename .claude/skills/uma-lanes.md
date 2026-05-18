@@ -1,4 +1,4 @@
-# UMA-RLM — Memory Lanes
+# UMA — Memory Lanes
 
 ## Overview
 

@@ -10,7 +10,7 @@ Design goals
 ------------
 - Store-native: actions map directly to safe, bounded memory store operations.
 - Production-safe: strict validation of parameters, no arbitrary queries.
-- No backwards-compat: UMA-RLM is v1 in active development.
+- No backwards-compat: UMA is v1 in active development.
 
 Action space
 ------------

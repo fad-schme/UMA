@@ -1,4 +1,4 @@
-# UMA-RLM — Configuration
+# UMA — Configuration
 
 ## Runtime Profiles
 

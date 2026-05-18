@@ -2,7 +2,7 @@
 store_metadata.py
 =================
 
-Helpers for tracking UMA-RLM storage format metadata inside SQL stores.
+Helpers for tracking UMA storage format metadata inside SQL stores.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ FORMAT_NAME = "uma-rlm"
 
 def ensure_store_metadata(store: object, conn: object, store_name: str) -> Dict[str, str]:
     """
-    Ensure UMA-RLM metadata exists in the store and validate format.
+    Ensure UMA metadata exists in the store and validate format.
 
     This writes a lightweight key/value table into each SQL DB to record:
     - format_name: "uma-rlm"
@@ -58,7 +58,7 @@ def ensure_store_metadata(store: object, conn: object, store_name: str) -> Dict[
     existing_version = meta.get("uma_rlm_version")
     if existing_version and existing_version != UMA_RLM_VERSION:
         logger.warning(
-            "UMA store '%s' created with UMA-RLM %s; running %s.",
+            "UMA store '%s' created with UMA %s; running %s.",
             store_name,
             existing_version,
             UMA_RLM_VERSION,

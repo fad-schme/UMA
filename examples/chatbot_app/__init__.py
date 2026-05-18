@@ -1,1 +1,1 @@
-"""Example UMA-RLM chatbot application package."""
+"""Example UMA chatbot application package."""

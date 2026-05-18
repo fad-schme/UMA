@@ -5,7 +5,7 @@
 ### Morning Standup (09:30 UTC)
 - Priority: Finalize Q2 security audit report
 - 3 blocking PRs waiting for review in Project Animus repo
-- UMA-RLM memory lanes refactor on track, targeting completion by May 22
+- UMA memory lanes refactor on track, targeting completion by May 22
 - Team meeting at 14:00 to discuss hybrid ranking approach
 
 ### Midday Updates (12:45 UTC)
@@ -49,7 +49,7 @@
 ### Morning Briefing
 - Q2 objectives locked in; Project Animus sprint starts tomorrow
 - 8 critical issues in backlog requiring triage
-- UMA-RLM artifact boundary review scheduled for May 14, 10:00 UTC
+- UMA artifact boundary review scheduled for May 14, 10:00 UTC
 
 ### Midday Actions
 - Reviewed design doc: "Lean ranking rules for hybrid + rerank"
@@ -90,7 +90,7 @@
 
 ### Morning Standup
 - Project Animus: 12 PRs in review queue, 3 ready to merge
-- UMA-RLM: Started path-sharpness-review process
+- UMA: Started path-sharpness-review process
 - Personal: Vacation schedule confirmed for June (first week)
 
 ### Development Work

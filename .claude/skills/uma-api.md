@@ -1,4 +1,4 @@
-# UMA-RLM — Public API Reference
+# UMA — Public API Reference
 
 ## Initialization
 

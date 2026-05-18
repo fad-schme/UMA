@@ -1,7 +1,7 @@
 # Individual Contributor License Agreement
-### UMA-RLM Project — ("Agreement") v1.0
+### UMA Project — ("Agreement") v1.0
 
-Thank you for your interest in UMA-RLM, a project maintained by
+Thank you for your interest in UMA, a project maintained by
 Fernanda Analia Diaz-Schmeier ("Maintainer").
 
 To clarify the intellectual property license granted with Contributions
@@ -33,7 +33,7 @@ beneficial ownership of such entity.
 **"Contribution"** shall mean any original work of authorship, including
 any modifications or additions to an existing work, that is
 intentionally submitted by You to the Maintainer for inclusion in, or
-documentation of, the UMA-RLM project and any products or derivatives
+documentation of, the UMA project and any products or derivatives
 of it (the **"Work"**). For the purposes of this definition, "submitted"
 means any form of electronic, verbal, or written communication sent to
 the Maintainer or the project's representatives, including but not
@@ -151,7 +151,7 @@ this Agreement inaccurate in any respect.
 
 ## How to Sign
 
-Contributions to UMA-RLM are submitted via GitHub pull request.
+Contributions to UMA are submitted via GitHub pull request.
 
 When you open a pull request, the CLA Assistant bot will check whether
 you have signed this agreement. If you have not yet signed, the bot

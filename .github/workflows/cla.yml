@@ -63,7 +63,7 @@ jobs:
           # Message posted on the PR when one or more contributors have not signed.
           # Keep it welcoming and link directly to the sign-off instruction.
           custom-notsigned-prcomment: |
-            Thank you for your contribution to UMA-RLM.
+            Thank you for your contribution to UMA.
 
             Before we can review and merge this pull request, you need to sign
             the Contributor License Agreement (CLA). This is a one-time step
