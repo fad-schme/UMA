@@ -307,7 +307,7 @@ async def interactive_chat(
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="UMA-RLM interactive chatbot example")
+    parser = argparse.ArgumentParser(description="UMA interactive chatbot example")
     parser.add_argument("--config", default="config/uma.yaml")
     parser.add_argument("--user", default="user:local")
     parser.add_argument("--agent", default="agent-default")

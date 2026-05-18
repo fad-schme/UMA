@@ -4,7 +4,7 @@ uma.common.identity
 
 Identity and normalization helpers.
 
-In UMA-RLM v1 we standardize:
+In UMA v1 we standardize:
     subject = "user:<id>"
 
 This is used across:

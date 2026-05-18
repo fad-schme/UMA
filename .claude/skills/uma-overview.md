@@ -1,15 +1,15 @@
-# UMA-RLM — Overview
+# UMA — Overview
 
-## What UMA-RLM Is
+## What UMA Is
 
-UMA-RLM (Universal Memory Architecture — Retrieval Language Model) is a **memory and context runtime SDK** for developers building AI agents. It ingests data (documents, conversation turns), stores it across multiple typed memory lanes (SQL + vector + optional graph), and exposes two thin retrieval products:
+UMA (Universal Memory Architecture — Retrieval Language Model) is a **memory and context runtime SDK** for developers building AI agents. It ingests data (documents, conversation turns), stores it across multiple typed memory lanes (SQL + vector + optional graph), and exposes two thin retrieval products:
 
 - `retrieve_context(...)` — curated, evidence-oriented context for RAG-style LLM prompting
 - `retrieve_memory(...)` — compiled, evidence-backed knowledge for continuity-oriented memory
 
 UMA manages memory only. Your application owns prompts, tool use, reasoning, and final responses.
 
-## What UMA-RLM Is NOT
+## What UMA Is NOT
 
 - Not a chat application or autonomous agent
 - Not a "big prompt builder"
@@ -54,7 +54,7 @@ Cross-tenant access is impossible by construction. Cross-agent sharing is denied
 
 ## One-Sentence Product Test
 
-A user must be able to understand what UMA-RLM is in one sentence and install it in one path.
+A user must be able to understand what UMA is in one sentence and install it in one path.
 
 ## Public API Surface (intentionally small)
 

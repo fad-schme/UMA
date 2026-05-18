@@ -160,7 +160,7 @@ def ensure_pipeline(memory: "UMAMemory") -> None:
 
 def ensure_rlm(memory: "UMAMemory") -> None:
     """
-    Wire UMA-RLM controller (the only supported retrieval mode).
+    Wire UMA controller (the only supported retrieval mode).
     """
     rlm_cfg = memory.retrieval_cfg.rlm
     if rlm_cfg is None or not rlm_cfg.enabled:

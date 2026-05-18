@@ -1,6 +1,6 @@
-# UMA-RLM Example Chatbot
+# UMA Example Chatbot
 
-Simple interactive chatbot demonstrating UMA-RLM memory usage.
+Simple interactive chatbot demonstrating UMA memory usage.
 
 Usage:
 

@@ -67,7 +67,7 @@
    - Tech: TypeScript, GraphQL, PostgreSQL
    - Role: Lead architect, technical decision authority
 
-2. **UMA-RLM Memory System** (30% time):
+2. **UMA Memory System** (30% time):
    - Architecture design and validation
    - Ownership scoping, artifact boundaries
    - Retrieval optimization and testing

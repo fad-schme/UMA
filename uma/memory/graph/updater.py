@@ -11,7 +11,7 @@ DAT invariants enforced
 - Ownership is explicit on all nodes/edges used for traversal
 - Graph failures never crash UMA (best-effort)
 
-Strict mode (UMA-RLM v1)
+Strict mode (UMA v1)
 ------------------------
 - No Cypher fallback for facts
 - Ownership is stamped on ALL traversable relationship types

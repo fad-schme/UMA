@@ -1,12 +1,12 @@
-# UMA-RLM
+# UMA
 
 Universal Memory Architecture for AI agents.
 
-UMA-RLM is a memory and context runtime for developers building AI agents. It stores raw evidence, semantic facts, episodic memory, procedural knowledge, profiles, traces, and compiled wiki artifacts behind a small retrieval surface. UMA manages memory only; your application still owns prompts, tool use, reasoning, and final responses.
+UMA is a memory and context runtime for developers building AI agents. It stores raw evidence, semantic facts, episodic memory, procedural knowledge, profiles, traces, and compiled wiki artifacts behind a small retrieval surface. UMA manages memory only; your application still owns prompts, tool use, reasoning, and final responses.
 
-## What UMA-RLM Is
+## What UMA Is
 
-UMA-RLM helps agents work with long-lived memory without turning memory into unstructured prompt text.
+UMA helps agents work with long-lived memory without turning memory into unstructured prompt text.
 
 - `retrieve_context(...)` returns evidence-oriented context for RAG-style use.
 - `retrieve_memory(...)` returns compiled, evidence-backed memory for continuity-oriented use.
@@ -199,7 +199,7 @@ The UMA agent skills follow the Agent Skills best practices and the Claude Skill
 
 ## Architecture Notes
 
-UMA-RLM preserves a few core invariants across ingestion and retrieval:
+UMA preserves a few core invariants across ingestion and retrieval:
 
 - explicit ownership boundaries across stored and retrieved artifacts
 - provenance carried through raw evidence, facts, and compiled artifacts

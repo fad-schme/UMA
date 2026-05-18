@@ -665,7 +665,7 @@ class MemoryPipeline:
             logger.warning("SemanticCore not initialized; skipping fact ingestion.")
             return []
 
-        # Canonical subject format in UMA-RLM v1: "user:<id>"
+        # Canonical subject format in UMA v1: "user:<id>"
         from uma.common.identity import normalize_user_id
         try:
             user_subject = normalize_user_id(user_id)
