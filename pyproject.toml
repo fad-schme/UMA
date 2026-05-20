@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "uma"
-description = "UMA: modular memory and context manager for AI agents"
+description = "UMA: Unified Memory Architecture for AI agents"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "Apache-2.0"}
@@ -27,7 +27,6 @@ dependencies = [
 llm = ["anthropic"]
 vector = ["faiss-cpu", "weaviate-client", "pinecone-client", "qdrant-client", "fastembed"]
 graph = ["neo4j"]
-postgres = ["psycopg2-binary>=2.9"]
 dev = ["pytest", "matplotlib", "PyPDF2", "pytest-asyncio"]
 ollama = ["ollama"]
 parsers = ["PyPDF2", "beautifulsoup4", "markdown", "pandas"]
