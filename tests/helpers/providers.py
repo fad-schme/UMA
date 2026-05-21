@@ -132,6 +132,40 @@ async def fake_llm(
             txt = txt.split("TEXT:", 1)[1]
         txt = " ".join((txt or "").split()).strip()
 
+        facts: List[Dict[str, Any]] = []
+
+        research_match = re.search(r"\bresearch(?:ing)?\b\s+([^.;\n]+)", txt, flags=re.IGNORECASE)
+        if research_match:
+            obj = research_match.group(1).strip(" .")
+            if obj:
+                facts.append(
+                    {
+                        "predicate": "RESEARCHING",
+                        "object": obj,
+                        "confidence": 0.8,
+                        "source_ids": [],
+                    }
+                )
+
+        interest_match = re.search(r"\binterested in\b\s+([^.;\n]+)", txt, flags=re.IGNORECASE)
+        if interest_match:
+            tail = interest_match.group(1).strip(" .")
+            parts = re.split(r"\b(?:and|or)\b", tail, flags=re.IGNORECASE)
+            for part in parts:
+                obj = " ".join(part.split()).strip(" .")
+                if obj:
+                    facts.append(
+                        {
+                            "predicate": "INTERESTED_IN",
+                            "object": obj,
+                            "confidence": 0.8,
+                            "source_ids": [],
+                        }
+                    )
+
+        if facts:
+            return json.dumps({"facts": facts[:6]})
+
         # Heuristic: pull multiple likes from patterns like "likes sushi and pizza".
         likes: List[str] = []
         m = re.search(r"\\blikes\\b\\s+([^\\.;\\n]+)", txt, flags=re.IGNORECASE)

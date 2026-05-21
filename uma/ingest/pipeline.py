@@ -344,12 +344,22 @@ class MemoryPipeline:
                         logger.info("MemoryPipeline: deferred post-turn tasks queued.")
                     return
 
-                facts = await self._semantic_ingest(
-                    user_id,
-                    assistant_reply,
-                    turn_id=turn_id,
-                    turn_context=turn_context,
-                )
+                facts = []
+                for role, text in (
+                    ("user", user_msg),
+                    ("assistant", assistant_reply),
+                ):
+                    if not isinstance(text, str) or not text.strip():
+                        continue
+                    role_facts = await self._semantic_ingest(
+                        user_id,
+                        text,
+                        turn_id=turn_id,
+                        turn_context=turn_context,
+                        source_role=role,
+                    )
+                    if role_facts:
+                        facts.extend(list(role_facts))
 
                 if episode is not None and facts:
                     for fact in facts:
@@ -655,10 +665,11 @@ class MemoryPipeline:
     async def _semantic_ingest(
         self,
         user_id: str,
-        reply: str,
+        text: str,
         *,
         turn_id: str,
         turn_context: RuntimeContext,
+        source_role: str,
     ) -> Any:
         sem = getattr(self.mem, "semantic_core", None)
         if sem is None:
@@ -676,8 +687,11 @@ class MemoryPipeline:
         try:
             return await sem.ingest(
                 user_subject,
-                reply,
-                extra_meta={"turn_id": turn_id},
+                text,
+                extra_meta={
+                    "turn_id": turn_id,
+                    "source_role": source_role,
+                },
                 turn_context=turn_context,
             )
         except Exception:

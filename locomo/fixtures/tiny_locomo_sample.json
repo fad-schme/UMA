@@ -1,0 +1,40 @@
+[
+  {
+    "conversation_id": "tiny_001",
+    "session_id": "tiny_session_001",
+    "turns": [
+      {
+        "speaker": "user",
+        "text": "My favorite color is green and I moved to Berlin last year.",
+        "timestamp": "2025-01-01T09:00:00Z"
+      },
+      {
+        "speaker": "assistant",
+        "text": "Understood. Your favorite color is green and you moved to Berlin last year.",
+        "timestamp": "2025-01-01T09:00:05Z"
+      },
+      {
+        "speaker": "user",
+        "text": "I usually go climbing on Saturdays with Maya.",
+        "timestamp": "2025-01-02T18:30:00Z"
+      },
+      {
+        "speaker": "assistant",
+        "text": "Got it. You go climbing on Saturdays with Maya.",
+        "timestamp": "2025-01-02T18:30:05Z"
+      }
+    ],
+    "qa": [
+      {
+        "question_id": "tiny_q1",
+        "question": "What is my favorite color?",
+        "answer": "green"
+      },
+      {
+        "question_id": "tiny_q2",
+        "question": "Who do I go climbing with on Saturdays?",
+        "answer": "Maya"
+      }
+    ]
+  }
+]

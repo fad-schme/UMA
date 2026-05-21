@@ -58,6 +58,16 @@ from uma.common.storage_metadata import normalize_fact_metadata
 
 logger = logging.getLogger(__name__)
 
+_USER_PROFILE_PREDICATES = {
+    "LIKES",
+    "PREFERS",
+    "DISLIKES",
+    "LOVES",
+    "HATES",
+    "AVOIDS",
+    "FAVORS",
+}
+
 
 class FactExtractor:
     """Canonical fact extraction surface for both user facts and chunk facts."""
@@ -107,7 +117,22 @@ class FactExtractor:
 
         system_prompt = (
             "Extract LONG-TERM, STABLE facts about the USER from the text.\n"
-            "Do NOT include ephemeral or turn-specific details.\n"
+            "Extract only facts the user directly states or clearly self-declares.\n"
+            "Durable user facts include:\n"
+            "- user goals\n"
+            "- current projects or research topics\n"
+            "- ongoing interests\n"
+            "- identity statements self-declared by the user\n"
+            "- community affiliation\n"
+            "- career or education plans\n"
+            "- important life context\n"
+            "- preferences when explicitly stated\n"
+            "Do NOT include:\n"
+            "- transient filler or chit-chat\n"
+            "- generic emotional tone without durable content\n"
+            "- assistant statements\n"
+            "- speculative or inferred facts the user did not state\n"
+            "- one-off logistics that do not matter across sessions\n"
             "Do NOT paraphrase the whole message—extract only durable user facts.\n\n"
             "Return ONLY valid JSON in this schema:\n"
             "{\n"
@@ -122,6 +147,8 @@ class FactExtractor:
             "}\n"
             f"Rules: return AT MOST {max_facts} facts. "
             f"Each object must be at least {min_fact_words} words long.\n"
+            "Prefer concrete, human-readable objects that preserve the meaningful content.\n"
+            "Do not collapse specific facts into vague abstractions like 'stability' or 'support'.\n"
             "No prose. No markdown."
         )
 
@@ -191,6 +218,8 @@ class FactExtractor:
             if isinstance(source_ids, list):
                 sid_list = [str(s) for s in source_ids if s is not None]
 
+            domain = "user_profile" if pred_n.upper() in _USER_PROFILE_PREDICATES else "kb_doc"
+
             fact = Fact(
                 id=f"fact_{utils.uuid_from_text(f'userfact:v1:{owner_type}:{owner_id}:{subj_n}:{pred_n}:{obj_n}')}",
                 subject=subj_n,
@@ -204,7 +233,7 @@ class FactExtractor:
                 owner_type=owner_type,
                 owner_id=owner_id,
                 meta=normalize_fact_metadata(
-                    {"domain": "user_profile"},
+                    {"domain": domain},
                     fact_id=f"fact_{utils.uuid_from_text(f'userfact:v1:{owner_type}:{owner_id}:{subj_n}:{pred_n}:{obj_n}')}",
                     owner_type=owner_type,
                     owner_id=owner_id,
