@@ -65,6 +65,7 @@ class RLMController:
         except Exception:
             rlm_cfg = None
             debug_scores = False
+            retrieval_cfg = None
 
         self.timeout_s = float(getattr(rlm_cfg, "timeout_s", 20.0))
 
@@ -84,7 +85,11 @@ class RLMController:
             getattr(rlm_cfg, "predicate_weights", None)
         )
         self.predicate_allowlist = getattr(rlm_cfg, "predicate_allowlist", None)
-        self.ranker = Ranker(debug_scores=debug_scores)
+        self.ranker = Ranker(
+            debug_scores=debug_scores,
+            trust_weight=float(getattr(retrieval_cfg, "trust_weight", 0.15)),
+            min_trust_score=float(getattr(retrieval_cfg, "min_trust_score", 0.0)),
+        )
 
         self.novelty_window = max(1, int(getattr(rlm_cfg, "novelty_window", 2)))
         self.min_recent_novelty = max(0, int(getattr(rlm_cfg, "min_recent_novelty", 1)))

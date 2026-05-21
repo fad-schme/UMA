@@ -163,11 +163,12 @@ await memory.rebuild_vector_indexes(tenant_id="default", ...)
 
 All production retrieval follows this exact sequence:
 
-1. **Candidate discovery** — dense vector search (`top_k_dense`) + optional lexical search (`top_k_sparse`), both owner-scoped
+1. **Candidate discovery** — dense vector search (`top_k_dense`) + optional lexical search (`top_k_sparse`), both owner-scoped; quarantined records excluded at the store layer (PR4)
 2. **Fusion** — merge dense + lexical candidates (RRF or boost-on-overlap) into a single candidate pool
 3. **Optional rerank** — reorder within the candidate pool only; never expands the pool
-4. **Selection** — deterministic truncation to `max_chunks` / `max_facts`
-5. **Snippet rendering** — presentation layer: merge adjacency, bound length, preserve traceability
+4. **Trust adjustment** — `final_score = (1 - trust_weight) * existing + trust_weight * trust_score`; candidates below `min_trust_score` are dropped before truncation (retrieval ranking is trust-aware)
+5. **Selection** — deterministic truncation to `max_chunks` / `max_facts`
+6. **Snippet rendering** — presentation layer: merge adjacency, bound length, preserve traceability
 
 **Policy:** Ranking logic lives only in `uma/retrieve/ranking.py`. Never in stores, snippet rendering, or controller layers.
 

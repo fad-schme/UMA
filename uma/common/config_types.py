@@ -271,6 +271,8 @@ class RetrievalConfig:
     rlm: Optional[RLMConfig] = None
     chunk_shortlist_k: int = 12
     chunk_shortlist_max_per_doc: int = 3
+    trust_weight: float = 0.15
+    min_trust_score: float = 0.0
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any], *, profile: str = "lite") -> "RetrievalConfig":
@@ -331,6 +333,8 @@ class RetrievalConfig:
         else:
             rlm_obj = RLMConfig(enabled=True)
 
+        trust_weight = max(0.0, min(1.0, float(d.get("trust_weight", 0.15))))
+        min_trust_score = max(0.0, min(1.0, float(d.get("min_trust_score", 0.0))))
         return cls(
             max_episodes=int(d["max_episodes"]),
             max_facts=int(d["max_facts"]),
@@ -346,6 +350,8 @@ class RetrievalConfig:
             strict=strict_mode,
             debug_scores=debug_scores,
             rlm=rlm_obj,
+            trust_weight=trust_weight,
+            min_trust_score=min_trust_score,
         )
 
     

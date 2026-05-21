@@ -32,6 +32,11 @@ RECALL_KEYWORDS: Set[str] = {
 }
 
 # ----------------------------------------------------------
+# Trust-aware ranking defaults (PR5)
+DEFAULT_TRUST_WEIGHT = 0.15      # beta: weight of trust_score in the final score
+DEFAULT_MIN_TRUST_SCORE = 0.0    # candidates with trust_score < this are dropped
+
+# ----------------------------------------------------------
 # RLM stopping thresholds
 DEFAULT_MAX_RLM_CALLS = 6
 DEFAULT_TOKEN_BUDGET = 5000  # tokens (soft)

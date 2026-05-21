@@ -94,7 +94,7 @@ All production retrieval follows this exact sequence:
 ```
 1. Candidate discovery
    dense vector search (top_k_dense) + optional lexical search (top_k_sparse)
-   both owner-scoped
+   both owner-scoped; quarantined records excluded at the store layer (PR4)
 
 2. Fusion
    merge dense + lexical candidates via RRF or boost-on-overlap
@@ -103,14 +103,18 @@ All production retrieval follows this exact sequence:
 3. Optional rerank
    reorders within the pool only — never expands it
 
-4. Selection
+4. Trust adjustment (PR5)
+   final_score = (1 - trust_weight) * existing_score + trust_weight * trust_score
+   candidates with trust_score < min_trust_score are dropped before truncation
+
+5. Selection
    deterministic truncation to max_chunks / max_facts
 
-5. Snippet rendering
+6. Snippet rendering
    merge adjacency, bound length, preserve source traceability
 ```
 
-Ranking logic lives only in `uma/retrieve/ranking.py`. It is never duplicated in stores, controllers, or rendering layers.
+Ranking logic lives only in `uma/retrieve/ranking.py`. It is never duplicated in stores, controllers, or rendering layers. Trust-aware ranking is a retrieval concern; security primitives (PR1–PR4) set `trust_score` at write time, and the ranking module consumes it at read time.
 
 ---
 

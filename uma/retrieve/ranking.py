@@ -325,6 +325,8 @@ class ScoreCard:
     route: str
     method: str
     final_score: float
+    trust_score: float = 0.0
+    final_score_with_trust: float = 0.0
 
 
 class Ranker:
@@ -335,8 +337,17 @@ class Ranker:
     so downstream debugging is explainable.
     """
 
-    def __init__(self, *, debug_scores: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        debug_scores: bool = False,
+        trust_weight: float = 0.15,
+        min_trust_score: float = 0.0,
+    ) -> None:
         self._debug = bool(debug_scores)
+        self._trust_weight = max(0.0, min(1.0, float(trust_weight)))
+        self._trust_alpha = 1.0 - self._trust_weight
+        self._min_trust_score = max(0.0, float(min_trust_score))
 
     # ----------------------------- Public -----------------------------
 
@@ -366,8 +377,9 @@ class Ranker:
             scored.append((float(final), _id(f), f))
 
         scored.sort(key=lambda x: (-x[0], x[1]))
+        scored = self._apply_trust_weight(scored)
         self._emit_scorecards("facts", scored)
-        return [f for _s, _sid, f in scored]
+        return self._filter_by_trust([f for _s, _sid, f in scored])
 
     def rank_chunks(self, items: Sequence[Any], *, query_text: str = "") -> List[Any]:
         items = list(items or [])
@@ -383,14 +395,17 @@ class Ranker:
             method = str(m.get("retrieval_method") or "")
             rerank = compute_rerank_score(query_text=query_text or "", candidate=ch, terms=terms)
             final = self._route_weight(route) + self._method_weight(method) + float(rerank)
-            _update_meta(ch, {"rerank_score": float(rerank), "final_score": float(final)})
+            trust_raw = getattr(ch, "trust_score", None)
+            trust = max(0.0, min(1.0, _safe_float(trust_raw if trust_raw is not None else 1.0)))
+            final_with_trust = self._trust_alpha * final + self._trust_weight * trust
+            _update_meta(ch, {"rerank_score": float(rerank), "final_score": float(final_with_trust)})
 
             route_pri = self._route_priority(route)
-            scored.append((route_pri, float(final), _doc_id(ch), _position(ch), _id(ch), ch))
+            scored.append((route_pri, float(final_with_trust), _doc_id(ch), _position(ch), _id(ch), ch))
 
         scored.sort(key=lambda x: (x[0], -x[1], x[2], x[3], x[4]))
         self._emit_scorecards("chunks", [(s, sid, it) for (_rp, s, _d, _p, sid, it) in scored])
-        return [ch for _rp, _s, _d, _p, _sid, ch in scored]
+        return self._filter_by_trust([ch for _rp, _s, _d, _p, _sid, ch in scored])
 
     def rank_episodes(self, items: Sequence[Any], *, query_text: str = "") -> List[Any]:
         items = list(items or [])
@@ -418,8 +433,9 @@ class Ranker:
             _update_meta(ep, {"rerank_score": float(rerank), "final_score": float(final)})
             scored.append((final, sid, ep))
         scored.sort(key=lambda x: (-x[0], x[1]))
+        scored = self._apply_trust_weight(scored)
         self._emit_scorecards("episodes", scored)
-        return [ep for _s, _sid, ep in scored]
+        return self._filter_by_trust([ep for _s, _sid, ep in scored])
 
     def rank_skills(self, items: Sequence[Any], *, query_text: str = "") -> List[Any]:
         items = list(items or [])
@@ -437,8 +453,9 @@ class Ranker:
             _update_meta(sk, {"rerank_score": float(rerank), "final_score": float(final)})
             scored.append((final, sid, sk))
         scored.sort(key=lambda x: (-x[0], x[1]))
+        scored = self._apply_trust_weight(scored)
         self._emit_scorecards("skills", scored)
-        return [sk for _s, _sid, sk in scored]
+        return self._filter_by_trust([sk for _s, _sid, sk in scored])
 
     # ----------------------------- Internals -----------------------------
 
@@ -470,12 +487,43 @@ class Ranker:
             return 0.2
         return 0.0
 
+    def _apply_trust_weight(
+        self, scored: List[Tuple[float, str, Any]]
+    ) -> List[Tuple[float, str, Any]]:
+        """Blend existing final_score with trust_score and return re-sorted list.
+
+        formula: final_with_trust = (1 - trust_weight) * existing + trust_weight * trust_score
+        """
+        result = []
+        for existing_final, sid, obj in scored:
+            trust_raw = getattr(obj, "trust_score", None)
+            trust = max(0.0, min(1.0, _safe_float(trust_raw if trust_raw is not None else 1.0)))
+            adjusted = self._trust_alpha * existing_final + self._trust_weight * trust
+            _update_meta(obj, {"final_score": float(adjusted)})
+            result.append((adjusted, sid, obj))
+        result.sort(key=lambda x: (-x[0], x[1]))
+        return result
+
+    def _filter_by_trust(self, items: List[Any]) -> List[Any]:
+        """Drop candidates whose trust_score is below the configured threshold (inclusive)."""
+        if self._min_trust_score <= 0.0:
+            return items
+        out = []
+        for it in items:
+            trust_raw = getattr(it, "trust_score", None)
+            trust = _safe_float(trust_raw if trust_raw is not None else 1.0)
+            if trust >= self._min_trust_score:
+                out.append(it)
+        return out
+
     def _emit_scorecards(self, lane: str, scored: Iterable[Tuple[float, str, Any]]) -> None:
         if not self._debug:
             return
         cards: List[ScoreCard] = []
         for final, sid, obj in scored:
             m = _meta(obj)
+            trust_raw = getattr(obj, "trust_score", None)
+            trust = max(0.0, min(1.0, _safe_float(trust_raw if trust_raw is not None else 1.0)))
             card = ScoreCard(
                 id=sid,
                 vector_score=_safe_float(m.get("vector_score", 0.0) or 0.0),
@@ -484,6 +532,8 @@ class Ranker:
                 route=str(m.get("retrieval_route") or ""),
                 method=str(m.get("retrieval_method") or ""),
                 final_score=float(final),
+                trust_score=float(trust),
+                final_score_with_trust=float(final),  # final is already trust-adjusted at emit time
             )
             cards.append(card)
             _update_meta(
@@ -496,6 +546,8 @@ class Ranker:
                         "route": str(card.route),
                         "rerank_score": float(card.rerank_score),
                         "final_score": float(card.final_score),
+                        "trust_score": float(card.trust_score),
+                        "final_score_with_trust": float(card.final_score_with_trust),
                     }
                 },
             )
