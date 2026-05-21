@@ -5,9 +5,12 @@ isolation, and the include_debug flag from the public UMAMemory boundary.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from tests.helpers.runtime import init_uma_for_tests
+from uma.common.types import Fact
 
 
 @pytest.mark.asyncio
@@ -86,6 +89,72 @@ async def test_retrieve_memory_user_scope_isolation(tmp_path) -> None:
     )
 
     assert bob_result["facts"] == []
+
+
+@pytest.mark.asyncio
+async def test_retrieve_memory_third_person_fact_stays_within_same_user_scope(tmp_path) -> None:
+    memory = await init_uma_for_tests(tmp_path)
+    now = datetime.now(timezone.utc)
+
+    fact_alice = Fact(
+        id="fact_maria_alice",
+        subject="Maria",
+        predicate="has hair color",
+        object="red hair",
+        created_at=now,
+        updated_at=now,
+        owner_type="user",
+        owner_id="user:alice",
+        tenant_id="default",
+        confidence=0.9,
+        salience=0.9,
+    )
+    fact_bob = Fact(
+        id="fact_maria_bob",
+        subject="Maria",
+        predicate="has hair color",
+        object="red hair",
+        created_at=now,
+        updated_at=now,
+        owner_type="user",
+        owner_id="user:bob",
+        tenant_id="default",
+        confidence=0.9,
+        salience=0.9,
+    )
+
+    emb_alice, emb_bob = await memory.embedder.embed(
+        [
+            "Maria has hair color red hair",
+            "Maria has hair color red hair",
+        ]
+    )
+    await memory.semantic_core.upsert_fact(fact_alice, emb_alice)
+
+    bob_before = await memory.retrieve_memory(
+        query_text="Is Maria blond?",
+        user_id="user:bob",
+        tenant_id="default",
+        request_id="req-bob-before-own-maria-fact",
+        session_id="session-bob",
+    )
+    assert bob_before["facts"] == []
+
+    await memory.semantic_core.upsert_fact(fact_bob, emb_bob)
+    bob_after = await memory.retrieve_memory(
+        query_text="Is Maria blond?",
+        user_id="user:bob",
+        tenant_id="default",
+        request_id="req-bob-after-own-maria-fact",
+        session_id="session-bob",
+    )
+
+    objects = {
+        str(item.get("object") or item.get("text") or "").lower()
+        for item in list(bob_after.get("facts") or [])
+        if isinstance(item, dict)
+    }
+    assert any("red hair" in value for value in objects)
 
 
 @pytest.mark.asyncio

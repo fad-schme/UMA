@@ -409,10 +409,39 @@ def build_fact_embedding_text(fact: object) -> str:
     Build embedding text for a Fact-like object.
 
     Priority:
-    1) meta.excerpt / meta.text / meta.description
-    2) object.text / object.content
-    3) subject predicate object
+    1) meta.excerpt / meta.text / meta.description, augmented with relation text
+    2) relation text built from subject + predicate + object
     """
+    subject = ""
+    predicate = ""
+    object_text = ""
+
+    try:
+        subject = str(get_attr_or_key(fact, "subject") or "").strip()
+    except Exception:
+        subject = ""
+    try:
+        predicate = str(get_attr_or_key(fact, "predicate") or "").strip()
+    except Exception:
+        predicate = ""
+    try:
+        obj = get_attr_or_key(fact, "object") if isinstance(fact, dict) else getattr(fact, "object", None)
+        if isinstance(obj, dict):
+            for key in ("text", "content"):
+                val = obj.get(key)
+                if isinstance(val, str) and val.strip():
+                    object_text = val.strip().replace("\n", " ")
+                    break
+            if not object_text and obj:
+                object_text = str(obj).strip().replace("\n", " ")
+        elif obj is not None:
+            object_text = str(obj).strip().replace("\n", " ")
+    except Exception:
+        logger.exception("build_fact_embedding_text: failed to read fact object")
+
+    relation_parts = [part for part in (subject, predicate, object_text) if part]
+    relation_text = " ".join(relation_parts).strip()
+
     try:
         meta = None
         meta = get_attr_or_key(fact, "meta")
@@ -420,26 +449,11 @@ def build_fact_embedding_text(fact: object) -> str:
             for key in ("excerpt", "text", "description"):
                 val = meta.get(key)
                 if isinstance(val, str) and val.strip():
-                    return val.strip().replace("\n", " ")
+                    excerpt = val.strip().replace("\n", " ")
+                    if relation_text and relation_text.lower() not in excerpt.lower():
+                        return f"{relation_text}. {excerpt}".strip()
+                    return excerpt
     except Exception:
         logger.exception("build_fact_embedding_text: failed to read fact meta")
 
-    try:
-        obj = get_attr_or_key(fact, "object") if isinstance(fact, dict) else getattr(fact, "object", None)
-        if isinstance(obj, dict):
-            for key in ("text", "content"):
-                val = obj.get(key)
-                if isinstance(val, str) and val.strip():
-                    return val.strip().replace("\n", " ")
-        elif isinstance(obj, str) and obj.strip():
-            return obj.strip().replace("\n", " ")
-    except Exception:
-        logger.exception("build_fact_embedding_text: failed to read fact object")
-
-    try:
-        subject = get_attr_or_key(fact, "subject")
-        predicate = get_attr_or_key(fact, "predicate")
-        obj = get_attr_or_key(fact, "object")
-        return f"{subject} {predicate} {obj}".strip()
-    except Exception:
-        return ""
+    return relation_text

@@ -282,9 +282,9 @@ async def _normalize_context_result(
     rendered_context = await ContextPackBuilder.render_snippet_async(pack, context_cfg=context_cfg, llm=llm)
     return {
         "rendered_context": rendered_context,
-        "facts": [_sanitize_for_benchmark(_jsonable(item)) for item in context_result.get("facts") or []],
-        "chunks": [_sanitize_for_benchmark(_jsonable(item)) for item in context_result.get("chunks") or []],
-        "episodic": [_sanitize_for_benchmark(_jsonable(item)) for item in context_result.get("episodic") or []],
+        "facts": [_normalize_context_fact(item) for item in context_result.get("facts") or []],
+        "chunks": [_normalize_context_chunk(item) for item in context_result.get("chunks") or []],
+        "episodic": [_normalize_context_episode(item) for item in context_result.get("episodic") or []],
         "documents": [_sanitize_for_benchmark(_jsonable(item)) for item in context_result.get("documents") or []],
         "trace": _sanitize_for_benchmark(_jsonable(context_result.get("trace") or [])),
         "provenance": _sanitize_for_benchmark(_jsonable(context_result.get("provenance") or {})),
@@ -298,69 +298,197 @@ def _normalize_memory_results(memory_result: dict[str, Any]) -> list[dict[str, A
     if isinstance(debug_payload, dict):
         debug_memories = list(debug_payload.get("memories") or [])
 
+    facts = list(memory_result.get("facts") or [])
+    evidence = list(memory_result.get("evidence") or [])
+    for rank, fact in enumerate(facts, start=1):
+        item = _normalize_memory_fact(fact, rank=rank)
+        if item is not None:
+            normalized.append(item)
+    start_rank = len(normalized) + 1
+    for offset, item in enumerate(evidence, start=0):
+        normalized_item = _normalize_memory_evidence(item, rank=start_rank + offset)
+        if normalized_item is not None:
+            normalized.append(normalized_item)
+
     memories = debug_memories
-    if not memories:
-        facts = list(memory_result.get("facts") or [])
-        evidence = list(memory_result.get("evidence") or [])
-        for rank, fact in enumerate(facts, start=1):
-            obj = _jsonable(fact)
-            if not isinstance(obj, dict):
-                obj = {"text": obj}
-            normalized.append(
-                {
-                    "id": obj.get("id"),
-                    "lane": "semantic",
-                    "type": "fact",
-                    "text": obj.get("text"),
-                    "score": obj.get("confidence"),
-                    "rank": rank,
-                    "source_ids": list(obj.get("source_chunk_ids") or []),
-                    "provenance": {},
-                    "timestamp": None,
-                    "metadata": {},
-                }
-            )
-        start_rank = len(normalized) + 1
-        for offset, item in enumerate(evidence, start=0):
-            obj = _jsonable(item)
-            if not isinstance(obj, dict):
-                obj = {"text": obj}
-            normalized.append(
-                {
-                    "id": obj.get("id"),
-                    "lane": "raw",
-                    "type": "evidence",
-                    "text": obj.get("text"),
-                    "score": None,
-                    "rank": start_rank + offset,
-                    "source_ids": [obj.get("source_document_id")] if obj.get("source_document_id") else [],
-                    "provenance": {},
-                    "timestamp": None,
-                    "metadata": {"source": obj.get("source")} if obj.get("source") else {},
-                }
-            )
-        return normalized
 
     for rank, item in enumerate(memories, start=1):
         obj = _jsonable(item)
         if not isinstance(obj, dict):
             obj = {"value": obj}
-        source_ids = _collect_source_ids(obj)
-        normalized.append(
-            {
-                "id": obj.get("id") or obj.get("artifact_id") or obj.get("doc_id"),
-                "lane": obj.get("kb_lane") or obj.get("lane") or obj.get("artifact_lane"),
-                "type": obj.get("artifact_kind") or obj.get("artifact_type") or obj.get("kind") or obj.get("type"),
-                "text": obj.get("text") or obj.get("summary") or obj.get("content") or obj.get("snippet"),
-                "score": obj.get("score") or obj.get("final_score") or obj.get("confidence"),
-                "rank": rank,
-                "source_ids": source_ids,
-                "provenance": _sanitize_for_benchmark(_jsonable(obj.get("provenance") or {})),
-                "timestamp": obj.get("timestamp") or obj.get("derived_at") or obj.get("created_at"),
-                "metadata": _sanitize_for_benchmark(_jsonable(obj.get("metadata") or obj.get("meta") or {})),
-            }
+        normalized_item = _normalize_debug_memory(obj, rank=rank)
+        if normalized_item is not None:
+            normalized.append(normalized_item)
+    return normalized
+
+
+def _normalize_context_fact(item: Any) -> dict[str, Any]:
+    obj = _jsonable(item)
+    if not isinstance(obj, dict):
+        obj = {"value": obj}
+    text = _fact_text(obj)
+    source_ids = list(obj.get("source_ids") or obj.get("source_chunk_ids") or [])
+    normalized = {
+        "id": obj.get("id"),
+        "text": text,
+        "subject": obj.get("subject"),
+        "predicate": obj.get("predicate"),
+        "object": _stringify_text(obj.get("object")),
+        "confidence": obj.get("confidence"),
+        "salience": obj.get("salience"),
+        "source_ids": source_ids,
+        "metadata": _sanitize_for_benchmark(_jsonable(obj.get("meta") or {})),
+    }
+    return _sanitize_for_benchmark(normalized)
+
+
+def _normalize_context_chunk(item: Any) -> dict[str, Any]:
+    obj = _jsonable(item)
+    if not isinstance(obj, dict):
+        obj = {"value": obj}
+    text = (
+        obj.get("text")
+        or obj.get("snippet")
+        or obj.get("content")
+        or obj.get("summary")
+        or _stringify_text(obj.get("value"))
+    )
+    normalized = {
+        "id": obj.get("id") or obj.get("chunk_id"),
+        "text": text,
+        "source_document_id": obj.get("source_document_id") or obj.get("doc_id"),
+        "metadata": _sanitize_for_benchmark(_jsonable(obj.get("meta") or {})),
+    }
+    return _sanitize_for_benchmark(normalized)
+
+
+def _normalize_context_episode(item: Any) -> dict[str, Any]:
+    obj = _jsonable(item)
+    if not isinstance(obj, dict):
+        obj = {"value": obj}
+    normalized = _sanitize_for_benchmark(obj)
+    if isinstance(normalized, dict) and not normalized.get("text"):
+        normalized["text"] = (
+            normalized.get("summary")
+            or normalized.get("raw")
+            or normalized.get("transcript")
+            or normalized.get("content")
         )
     return normalized
+
+
+def _normalize_memory_fact(item: Any, *, rank: int) -> dict[str, Any] | None:
+    obj = _jsonable(item)
+    if not isinstance(obj, dict):
+        obj = {"value": obj}
+    text = _fact_text(obj)
+    if not text:
+        return None
+    return {
+        "id": obj.get("id"),
+        "lane": "semantic",
+        "type": "fact",
+        "text": text,
+        "score": obj.get("confidence"),
+        "rank": rank,
+        "source_ids": list(obj.get("source_ids") or obj.get("source_chunk_ids") or []),
+        "provenance": _sanitize_for_benchmark(_jsonable(obj.get("provenance") or {})),
+        "timestamp": obj.get("timestamp") or obj.get("created_at"),
+        "metadata": _sanitize_for_benchmark(
+            {
+                "subject": obj.get("subject"),
+                "predicate": obj.get("predicate"),
+                "object": _stringify_text(obj.get("object")),
+                "salience": obj.get("salience"),
+            }
+        ),
+    }
+
+
+def _normalize_memory_evidence(item: Any, *, rank: int) -> dict[str, Any] | None:
+    obj = _jsonable(item)
+    if not isinstance(obj, dict):
+        obj = {"value": obj}
+    text = (
+        obj.get("text")
+        or obj.get("snippet")
+        or obj.get("content")
+        or obj.get("summary")
+        or _stringify_text(obj.get("value"))
+    )
+    if not text:
+        return None
+    return {
+        "id": obj.get("id") or obj.get("chunk_id"),
+        "lane": "raw",
+        "type": "evidence",
+        "text": text,
+        "score": None,
+        "rank": rank,
+        "source_ids": [obj.get("source_document_id")] if obj.get("source_document_id") else [],
+        "provenance": _sanitize_for_benchmark(_jsonable(obj.get("provenance") or {})),
+        "timestamp": obj.get("timestamp") or obj.get("created_at"),
+        "metadata": _sanitize_for_benchmark(_jsonable(obj.get("meta") or {})),
+    }
+
+
+def _normalize_debug_memory(obj: dict[str, Any], *, rank: int) -> dict[str, Any] | None:
+    text = (
+        obj.get("text")
+        or obj.get("summary")
+        or obj.get("content")
+        or obj.get("snippet")
+        or _fact_text(obj)
+    )
+    if not text:
+        return None
+    source_ids = _collect_source_ids(obj)
+    return {
+        "id": obj.get("id") or obj.get("artifact_id") or obj.get("doc_id"),
+        "lane": obj.get("kb_lane") or obj.get("lane") or obj.get("artifact_lane"),
+        "type": obj.get("artifact_kind") or obj.get("artifact_type") or obj.get("kind") or obj.get("type"),
+        "text": text,
+        "score": obj.get("score") or obj.get("final_score") or obj.get("confidence"),
+        "rank": rank,
+        "source_ids": source_ids,
+        "provenance": _sanitize_for_benchmark(_jsonable(obj.get("provenance") or {})),
+        "timestamp": obj.get("timestamp") or obj.get("derived_at") or obj.get("created_at"),
+        "metadata": _sanitize_for_benchmark(_jsonable(obj.get("metadata") or obj.get("meta") or {})),
+    }
+
+
+def _fact_text(obj: dict[str, Any]) -> str | None:
+    direct = obj.get("text") or obj.get("fact") or obj.get("claim") or obj.get("content") or obj.get("summary")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+    subject = _stringify_text(obj.get("subject"))
+    predicate = _stringify_text(obj.get("predicate"))
+    object_text = _stringify_text(obj.get("object") or obj.get("value"))
+    parts = [part for part in (subject, predicate, object_text) if part]
+    if not parts:
+        return None
+    return " ".join(parts)
+
+
+def _stringify_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip().strip('"')
+        return cleaned or None
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, dict):
+        for key in ("text", "value", "name", "id"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+        return None
+    if isinstance(value, (list, tuple, set)):
+        parts = [_stringify_text(item) for item in value]
+        joined = ", ".join(part for part in parts if part)
+        return joined or None
+    return str(value)
 
 
 def _collect_source_ids(obj: dict[str, Any]) -> list[Any]:
