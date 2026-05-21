@@ -97,3 +97,72 @@ def test_rerank_candidates_preserves_membership_and_is_deterministic() -> None:
     # but within each group, overlaps should bubble up.
     assert [x["id"] for x in out1][:2] == ["b", "a"]
     assert [x["id"] for x in out1][2:] == ["c", "d"]
+
+
+def test_rank_facts_prefers_specific_answer_bearing_fact_over_generic_placeholder() -> None:
+    now = datetime.now(timezone.utc)
+    generic = Fact(
+        id="f_generic",
+        subject="user",
+        predicate="current projects or research topics",
+        object="research",
+        created_at=now,
+        updated_at=now,
+        meta={"vector_score": 1.0},
+        owner_type="user",
+        owner_id="user:u1",
+        confidence=0.9,
+        salience=0.9,
+    )
+    specific = Fact(
+        id="f_specific",
+        subject="user",
+        predicate="current research topic",
+        object="adoption agencies",
+        created_at=now,
+        updated_at=now,
+        meta={"vector_score": 1.0},
+        owner_type="user",
+        owner_id="user:u1",
+        confidence=0.9,
+        salience=0.9,
+    )
+
+    ranked = Ranker().rank_facts([generic, specific], query_text="What did the user research?")
+    assert [fact.id for fact in ranked][:2] == ["f_specific", "f_generic"]
+
+
+def test_rank_facts_prefers_specific_education_interest_over_generic_context() -> None:
+    now = datetime.now(timezone.utc)
+    generic = Fact(
+        id="f_journey",
+        subject="user",
+        predicate="community affiliation",
+        object="journey with Caroline",
+        created_at=now,
+        updated_at=now,
+        meta={"vector_score": 1.0},
+        owner_type="user",
+        owner_id="user:u1",
+        confidence=0.9,
+        salience=0.9,
+    )
+    specific = Fact(
+        id="f_education",
+        subject="user",
+        predicate="career or education plans",
+        object="continue education and counseling or mental health work",
+        created_at=now,
+        updated_at=now,
+        meta={"vector_score": 1.0},
+        owner_type="user",
+        owner_id="user:u1",
+        confidence=0.9,
+        salience=0.9,
+    )
+
+    ranked = Ranker().rank_facts(
+        [generic, specific],
+        query_text="What fields would the user likely pursue in education?",
+    )
+    assert [fact.id for fact in ranked][:2] == ["f_education", "f_journey"]

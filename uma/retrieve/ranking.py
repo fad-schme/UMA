@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -103,6 +104,45 @@ def _candidate_text_for_rerank(obj: Any) -> str:
         return f"{subj} {pred} {objv}".strip()
 
 
+def _tokenize_text(text: str) -> List[str]:
+    if not text or not isinstance(text, str):
+        return []
+    return [tok for tok in re.findall(r"[a-z0-9]+", text.lower()) if len(tok) >= 3]
+
+
+def _fact_specificity_adjustment(candidate: Any, terms: Sequence[str], *, exact_query_hit: int) -> float:
+    predicate_text = str(get_attr_or_key(candidate, "predicate", "") or "").strip().lower()
+    object_raw = get_attr_or_key(candidate, "object", "") or ""
+    if isinstance(object_raw, dict):
+        object_text = str(object_raw.get("text") or object_raw.get("content") or object_raw).strip().lower()
+    else:
+        object_text = str(object_raw).strip().lower()
+    if not predicate_text and not object_text:
+        return 0.0
+
+    predicate_tokens = set(_tokenize_text(predicate_text))
+    object_tokens = set(_tokenize_text(object_text))
+    query_tokens = set(_tokenize_text(" ".join(terms or [])))
+    if not query_tokens:
+        return 0.0
+
+    predicate_hits = sum(1 for term in query_tokens if term in predicate_text)
+    object_hits = sum(1 for term in query_tokens if term in object_text)
+    if predicate_hits <= 0 and object_hits <= 0 and not exact_query_hit:
+        return 0.0
+
+    object_hit_ratio = float(object_hits) / max(1, len(query_tokens))
+    predicate_hit_ratio = float(predicate_hits) / max(1, len(query_tokens))
+    novel_object_tokens = [tok for tok in object_tokens if tok not in predicate_tokens and tok not in query_tokens]
+    specificity_bonus = min(1.0, float(len(novel_object_tokens)) / 2.0)
+
+    generic_penalty = 0.0
+    if object_tokens and len(object_tokens) <= 1 and object_tokens.issubset(predicate_tokens | query_tokens):
+        generic_penalty = 0.75
+
+    return (1.25 * object_hit_ratio) + (0.75 * predicate_hit_ratio) + (1.0 * specificity_bonus) - generic_penalty
+
+
 def compute_rerank_score(*, query_text: str, candidate: Any, terms: Optional[Sequence[str]] = None) -> float:
     """
     Compute a deterministic rerank score using upstream signals and query overlap.
@@ -135,6 +175,7 @@ def compute_rerank_score(*, query_text: str, candidate: Any, terms: Optional[Seq
     n_terms = max(1, len(terms or []))
     term_ratio = float(term_hits) / n_terms
     phrase_ratio = float(phrase_hits) / n_terms
+    specificity = _fact_specificity_adjustment(candidate, terms or [], exact_query_hit=exact_query_hit)
 
     return (
         v
@@ -142,6 +183,7 @@ def compute_rerank_score(*, query_text: str, candidate: Any, terms: Optional[Seq
         + (2.0 * term_ratio)      # 0–2.0
         + (3.0 * phrase_ratio)    # 0–3.0 (sub-score of term coverage)
         + float(exact_query_hit)  # 0–1
+        + float(specificity)      # prefer concrete answer-bearing facts over generic placeholders
     )
 
 

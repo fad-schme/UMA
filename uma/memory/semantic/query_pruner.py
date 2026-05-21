@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 
 from uma.adapters.llm.controller import LLMCallContext, generate_model
 
-from uma.retrieve.user_query_helper import extract_keywords_and_phrases, get_stopwords
+from uma.retrieve.user_query_helper import build_fact_embedding_text, extract_keywords_and_phrases, get_stopwords
 
 logger = logging.getLogger(__name__)
 
@@ -39,15 +39,11 @@ def describe_fact(fact: Any) -> str:
         logger.exception("describe_fact: failed to read meta")
 
     try:
-        obj = fact.get("object") if isinstance(fact, dict) else getattr(fact, "object", None)
-        if isinstance(obj, dict):
-            text = obj.get("text") or ""
-        else:
-            text = str(obj)
-        if text and str(text).strip():
-            return str(text).strip()
+        text = str(build_fact_embedding_text(fact) or "").strip()
+        if text:
+            return text
     except Exception:
-        logger.exception("describe_fact: failed to read object")
+        logger.exception("describe_fact: failed to build fact text")
 
     try:
         sub = fact.get("subject") if isinstance(fact, dict) else getattr(fact, "subject", "user")
@@ -100,12 +96,17 @@ def fallback_keep_by_query(query: str, facts: Sequence[Any]) -> List[int]:
     if not terms:
         return []
 
-    kept: List[int] = []
+    scored: List[tuple[int, int, int]] = []
     for idx, fact in enumerate(facts, start=1):
         text = describe_fact(fact).lower()
-        if any(t in text for t in terms):
-            kept.append(idx)
-    return kept
+        if not text:
+            continue
+        matched_terms = sum(1 for t in terms if t in text)
+        phrase_hits = sum(1 for t in terms if " " in t and t in text)
+        if matched_terms > 0:
+            scored.append((idx, matched_terms, phrase_hits))
+    scored.sort(key=lambda item: (-item[1], -item[2], item[0]))
+    return [idx for idx, _matched, _phrases in scored]
 
 
 async def prune_facts_for_query(
