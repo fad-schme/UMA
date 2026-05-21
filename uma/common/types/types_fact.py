@@ -60,6 +60,7 @@ class Fact:
     # Security primitives (PR1 baseline: neutral defaults)
     trust_score: float = 0.5
     content_hash: Optional[str] = None
+    quarantined_at: Optional[datetime] = None
 
     # Optional metadata
     salience: float = 0.0

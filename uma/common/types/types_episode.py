@@ -78,6 +78,7 @@ class Episode:
     # -------------------------
     trust_score: float = 0.5
     content_hash: Optional[str] = None
+    quarantined_at: Optional[datetime] = None
 
     # -------------------------
     # Additional fields already referenced in design (optional)

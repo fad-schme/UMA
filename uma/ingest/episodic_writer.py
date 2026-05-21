@@ -9,6 +9,7 @@ from uma.common.types import Episode
 from uma.common.storage_metadata import normalize_episode_metadata
 from uma.common.integrity import hash_episode_content
 from uma.common.trust import SourceDescriptor, score_source
+from uma.common.injection_scan import scan_content, apply_scan, quarantine_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,17 @@ async def write_document_episode(
 
     episode_id = str(uuid4())
     episode_timestamp = datetime.now(timezone.utc)
+    doc_trust = score_source(SourceDescriptor(kind="document"))
+    doc_meta = normalize_episode_metadata(
+        {"doc_id": doc_id, "source_type": "document_ingest"},
+        episode_id=episode_id,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        timestamp=episode_timestamp,
+        session_id=None,
+    )
+    scan_result = scan_content(summary_text)
+    doc_trust, doc_meta = apply_scan(doc_trust, doc_meta, scan_result, log_context=f"episodic_writer/doc:{doc_id}")
     ep = Episode(
         id=episode_id,
         timestamp=episode_timestamp,
@@ -65,16 +77,10 @@ async def write_document_episode(
         user_id=str(user_id or owner_id),
         raw=f"Document ingested: {doc_id}",
         tags=["document_ingest"],
-        trust_score=score_source(SourceDescriptor(kind="document")),
+        trust_score=doc_trust,
         content_hash=hash_episode_content(summary_text),
-        meta=normalize_episode_metadata(
-            {"doc_id": doc_id, "source_type": "document_ingest"},
-            episode_id=episode_id,
-            owner_type=owner_type,
-            owner_id=owner_id,
-            timestamp=episode_timestamp,
-            session_id=None,
-        ),
+        quarantined_at=(datetime.now(timezone.utc) if scan_result.severity == "high" and quarantine_enabled() else None),
+        meta=doc_meta,
         owner_type=owner_type,
         owner_id=owner_id,
     )
@@ -151,6 +157,23 @@ async def write_daily_diary_episodes(
 
         episode_id = str(uuid4())
         episode_timestamp = datetime.now(timezone.utc)
+        diary_trust = score_source(SourceDescriptor(kind="bootstrap_diary"))
+        diary_meta = normalize_episode_metadata(
+            {
+                "source_kind": "daily_diary",
+                "source_file": file_path,
+                "diary_date": diary_date,
+                "import_mode": "bootstrap",
+                "source_type": "daily_diary",
+            },
+            episode_id=episode_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            timestamp=episode_timestamp,
+            session_id=None,
+        )
+        scan_result = scan_content(entry_text)
+        diary_trust, diary_meta = apply_scan(diary_trust, diary_meta, scan_result, log_context=f"episodic_writer/diary:{file_path}")
         episode = Episode(
             id=episode_id,
             timestamp=episode_timestamp,
@@ -158,22 +181,10 @@ async def write_daily_diary_episodes(
             user_id=str(user_id or owner_id),
             raw=f"Daily diary import: {file_path}",
             tags=["daily_diary"],
-            trust_score=score_source(SourceDescriptor(kind="bootstrap_diary")),
+            trust_score=diary_trust,
             content_hash=hash_episode_content(entry_text),
-            meta=normalize_episode_metadata(
-                {
-                    "source_kind": "daily_diary",
-                    "source_file": file_path,
-                    "diary_date": diary_date,
-                    "import_mode": "bootstrap",
-                    "source_type": "daily_diary",
-                },
-                episode_id=episode_id,
-                owner_type=owner_type,
-                owner_id=owner_id,
-                timestamp=episode_timestamp,
-                session_id=None,
-            ),
+            quarantined_at=(datetime.now(timezone.utc) if scan_result.severity == "high" and quarantine_enabled() else None),
+            meta=diary_meta,
             owner_type=owner_type,
             owner_id=owner_id,
         )

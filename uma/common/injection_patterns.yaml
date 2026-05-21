@@ -74,7 +74,7 @@ patterns:
       act_as_unfiltered_ai:          '(?i)\bact\s+as\s+an?\s+(uncensored|unfiltered|jailbroken|developer)\s+ai\b'
       named_jailbreak_persona:       '(?i)\b(DAN|DevMode|Doomer|Evil\s+Confidant|Based\s?GPT|ChatGPT\s+Jailbreak)\b'
       no_rules_clause:               '(?i)\b(no\s+rules|free\s+from\s+(?:any|all)\s+policies|not\s+restricted\s+by|no\s+longer\s+bound\s+by)\b.{0,40}\b(rules|guidelines|content\s+policy)\b'
-      fake_system_tag:               '(?i)\[?(System|Assistant|User)\]?\s*:'
+      fake_system_tag:               '(?i)\[(System|Assistant|User)\]\s*:'
       roleplay_unrestricted:         '(?i)\broleplay\b.{0,30}\bunrestricted\b.{0,30}\bassistant\b'
       lets_play_a_game_break_rules:  "(?i)\\blet\\'?s\\s+play\\s+a\\s+game\\b.{0,40}\\bbreak\\b.{0,20}\\brules\\b"
       roleplay_bypass_rules:         '(?i)\b(act\s+as|pretend|simulate|roleplay)\b.{0,40}\b(bypass|ignore|override)\b.{0,40}\b(restrictions|rules)\b'

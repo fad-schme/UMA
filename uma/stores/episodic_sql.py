@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .base_vector_sql_store import BaseVectorSQLStore
 from .base_sql_store import DEFAULT_TENANT_ID
@@ -86,6 +86,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             self._ensure_column(conn, "episodes", "scope_model_version", "TEXT")
             self._ensure_column(conn, "episodes", "trust_score", "REAL NOT NULL DEFAULT 0.5")
             self._ensure_column(conn, "episodes", "content_hash", "TEXT")
+            self._ensure_column(conn, "episodes", "quarantined_at", "DATETIME")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_user ON episodes(user_id);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_timestamp ON episodes(timestamp);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_owner ON episodes(owner_type, owner_id);")
@@ -204,6 +205,11 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             scope_model_version=(row["scope_model_version"] if "scope_model_version" in row_keys else None),
             trust_score=(float(row["trust_score"]) if "trust_score" in row_keys and row["trust_score"] is not None else 0.5),
             content_hash=(row["content_hash"] if "content_hash" in row_keys else None),
+            quarantined_at=(
+                datetime.fromisoformat(row["quarantined_at"])
+                if "quarantined_at" in row_keys and row["quarantined_at"] is not None
+                else None
+            ),
             user_id=user_id,
         )
 
@@ -288,8 +294,13 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 "origin_user_id": getattr(ep, "origin_user_id", None),
                 "origin_session_id": getattr(ep, "origin_session_id", None),
                 "scope_model_version": getattr(ep, "scope_model_version", None) or SCOPE_MODEL_VERSION,
-                "trust_score": float(getattr(ep, "trust_score", 0.5) or 0.5),
+                "trust_score": float(_ts if (_ts := getattr(ep, "trust_score", None)) is not None else 0.5),
                 "content_hash": getattr(ep, "content_hash", None),
+                "quarantined_at": (
+                    getattr(ep, "quarantined_at").isoformat()
+                    if getattr(ep, "quarantined_at", None) is not None
+                    else None
+                ),
                 "embedding": json.dumps(embedding),
                 "meta": json.dumps(normalized_meta),
             }
@@ -301,13 +312,13 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                     id, tenant_id, owner_type, owner_id, workspace_id, session_id,
                     user_id, timestamp, summary, raw, tags, origin_agent_id,
                     origin_user_id, origin_session_id, scope_model_version,
-                    trust_score, content_hash, embedding, meta
+                    trust_score, content_hash, quarantined_at, embedding, meta
                 )
                 VALUES (
                     :id, :tenant_id, :owner_type, :owner_id, :workspace_id, :session_id,
                     :user_id, :timestamp, :summary, :raw, :tags, :origin_agent_id,
                     :origin_user_id, :origin_session_id, :scope_model_version,
-                    :trust_score, :content_hash, :embedding, :meta
+                    :trust_score, :content_hash, :quarantined_at, :embedding, :meta
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     tenant_id=excluded.tenant_id,
@@ -326,6 +337,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                     scope_model_version=excluded.scope_model_version,
                     trust_score=excluded.trust_score,
                     content_hash=excluded.content_hash,
+                    quarantined_at=excluded.quarantined_at,
                     embedding=excluded.embedding,
                     meta=excluded.meta
                 """,
@@ -441,13 +453,20 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     # Listing / Retention Helpers
     # ------------------------------------------------------------------ #
 
-    async def list_episodes(self, tenant_id: Optional[str] = None, owner_type: str = "", owner_id: str = "") -> List[Episode]:
+    async def list_episodes(
+        self,
+        tenant_id: Optional[str] = None,
+        owner_type: str = "",
+        owner_id: str = "",
+        include_quarantined: bool = False,
+    ) -> List[Episode]:
         self._require_scope(tenant_id, owner_type, owner_id)
         conn = self._conn()
         try:
+            quarantine_clause = "" if include_quarantined else " AND quarantined_at IS NULL"
             rows = self._query_all(
                 conn,
-                "SELECT * FROM episodes WHERE tenant_id = ? AND owner_type = ? AND owner_id = ?",
+                f"SELECT * FROM episodes WHERE tenant_id = ? AND owner_type = ? AND owner_id = ?{quarantine_clause}",
                 params=[tenant_id, owner_type, owner_id],
                 log_context="list_episodes",
             )
@@ -477,6 +496,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 """
                 SELECT * FROM episodes
                 WHERE tenant_id = ? AND owner_type = ? AND owner_id = ?
+                  AND quarantined_at IS NULL
                 ORDER BY timestamp DESC
                 LIMIT ?
                 """,
@@ -691,7 +711,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         try:
             placeholders = ",".join("?" for _ in ids)
             params: List[str] = list(ids) + [tenant_id, owner_type, owner_id]
-            sql = f"SELECT * FROM episodes WHERE id IN ({placeholders}) AND tenant_id=? AND owner_type=? AND owner_id=?"
+            sql = f"SELECT * FROM episodes WHERE id IN ({placeholders}) AND tenant_id=? AND owner_type=? AND owner_id=? AND quarantined_at IS NULL"
             rows = self._query_all(conn, sql, params=params, log_context="fetch_episodes_by_ids")
             row_map = {r["id"]: r for r in rows}
             ordered: List[Episode] = []
@@ -928,6 +948,58 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 owner_id,
                 cluster_id,
             )
+            raise
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------------ #
+    # Quarantine Management
+    # ------------------------------------------------------------------ #
+
+    async def reinstate_quarantined_record(
+        self,
+        record_id: str,
+        *,
+        tenant_id: Optional[str],
+        owner_type: str,
+        owner_id: str,
+        audit_entry: Dict[str, Any],
+    ) -> bool:
+        """
+        Clear quarantined_at and append an audit log entry to meta.security.audit_log.
+        Returns True if a row was updated.
+        """
+        if not tenant_id or not owner_type or not owner_id:
+            raise ValueError("EpisodicSQLStore.reinstate_quarantined_record requires scope")
+        conn = self._conn()
+        try:
+            row = self._query_one(
+                conn,
+                "SELECT meta FROM episodes WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
+                params=[record_id, tenant_id, owner_type, owner_id],
+                log_context="reinstate_episode_fetch",
+            )
+            if row is None:
+                return False
+            try:
+                meta = json.loads(row["meta"]) if row["meta"] else {}
+            except Exception:
+                meta = {}
+            security = meta.setdefault("security", {})
+            audit_log = security.setdefault("audit_log", [])
+            audit_log.append(audit_entry)
+            self._execute(
+                conn,
+                "UPDATE episodes SET quarantined_at=NULL, meta=? WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
+                params=[json.dumps(meta), record_id, tenant_id, owner_type, owner_id],
+                log_context="reinstate_episode",
+            )
+            conn.commit()
+            logger.info("EpisodicSQLStore: reinstated episode id=%s owner=%s:%s", record_id, owner_type, owner_id)
+            return True
+        except Exception:
+            self._safe_rollback(conn, "reinstate_episode")
+            logger.exception("EpisodicSQLStore.reinstate_quarantined_record failed id=%s", record_id)
             raise
         finally:
             conn.close()

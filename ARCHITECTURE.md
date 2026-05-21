@@ -31,7 +31,9 @@ UMA stores and retrieves across six typed lanes. Lane selection is explicit — 
 
 Graph is disabled in all public profiles. It is a supporting lane for relationship traversal, not the primary truth.
 
-Each artifact (fact, episode, skill, chunk) additionally carries `trust_score` (float, classifier-derived via `uma.common.trust.score_source`) and `content_hash` (SHA-256 hex, where applicable) as security primitives (OWASP ASI06 baseline).
+Each artifact (fact, episode, skill, chunk) additionally carries `trust_score` (float, classifier-derived via `uma.common.trust.score_source`) and `content_hash` (SHA-256 hex, where applicable) as security primitives (OWASP ASI06 baseline). At every write boundary, `uma.common.injection_scan.scan_content` checks incoming text against the YAML pattern catalog; high-severity hits set `trust_score` to 0.0 and record the scan result in `meta["security"]["injection_scan"]`.
+
+Each artifact also carries a nullable `quarantined_at` timestamp. When a high-severity scan hit is detected and `SecurityConfig.quarantine_enabled=True`, the artifact is stored with `quarantined_at` set to the current UTC time. Quarantined artifacts are excluded from all normal retrieval queries (`AND quarantined_at IS NULL`) but remain in the database. The management API (`uma.api.management`) exposes `list_quarantined`, `reinstate_quarantined`, and `purge_quarantined` to review, restore, or permanently delete quarantined records.
 
 ---
 

@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import List, Optional, Any
+from typing import Any, Dict, List, Optional
 
 from .base_vector_sql_store import BaseVectorSQLStore
 from .base_sql_store import DEFAULT_TENANT_ID
@@ -106,6 +106,7 @@ class ProceduralSQLStore(BaseVectorSQLStore):
             self._ensure_column(conn, "skills", "scope_model_version", "TEXT")
             self._ensure_column(conn, "skills", "trust_score", "REAL NOT NULL DEFAULT 0.5")
             self._ensure_column(conn, "skills", "content_hash", "TEXT")
+            self._ensure_column(conn, "skills", "quarantined_at", "DATETIME")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_owner ON skills(owner_type, owner_id);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_tenant_owner ON skills(tenant_id, owner_type, owner_id);")
 
@@ -202,6 +203,11 @@ class ProceduralSQLStore(BaseVectorSQLStore):
             scope_model_version=(row["scope_model_version"] if "scope_model_version" in row_keys else None),
             trust_score=(float(row["trust_score"]) if "trust_score" in row_keys and row["trust_score"] is not None else 0.5),
             content_hash=(row["content_hash"] if "content_hash" in row_keys else None),
+            quarantined_at=(
+                datetime.fromisoformat(row["quarantined_at"])
+                if "quarantined_at" in row_keys and row["quarantined_at"] is not None
+                else None
+            ),
             trigger_phrases=trigger_phrases,
             trigger_patterns=trigger_patterns,
             plan=plan,
@@ -281,8 +287,13 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                 "origin_user_id": getattr(skill, "origin_user_id", None),
                 "origin_session_id": getattr(skill, "origin_session_id", None),
                 "scope_model_version": getattr(skill, "scope_model_version", None) or SCOPE_MODEL_VERSION,
-                "trust_score": float(getattr(skill, "trust_score", 0.5) or 0.5),
+                "trust_score": float(_ts if (_ts := getattr(skill, "trust_score", None)) is not None else 0.5),
                 "content_hash": getattr(skill, "content_hash", None),
+                "quarantined_at": (
+                    getattr(skill, "quarantined_at").isoformat()
+                    if getattr(skill, "quarantined_at", None) is not None
+                    else None
+                ),
             }
 
             self._execute(
@@ -293,14 +304,14 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                     tools, example, meta, created_at, updated_at, tenant_id,
                     owner_type, owner_id, workspace_id, origin_agent_id,
                     origin_user_id, origin_session_id, scope_model_version,
-                    trust_score, content_hash
+                    trust_score, content_hash, quarantined_at
                 )
                 VALUES (
                     :id, :name, :trigger_phrases, :trigger_patterns, :plan,
                     :tools, :example, :meta, :created_at, :updated_at, :tenant_id,
                     :owner_type, :owner_id, :workspace_id, :origin_agent_id,
                     :origin_user_id, :origin_session_id, :scope_model_version,
-                    :trust_score, :content_hash
+                    :trust_score, :content_hash, :quarantined_at
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name,
@@ -320,7 +331,8 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                     origin_session_id=excluded.origin_session_id,
                     scope_model_version=excluded.scope_model_version,
                     trust_score=excluded.trust_score,
-                    content_hash=excluded.content_hash
+                    content_hash=excluded.content_hash,
+                    quarantined_at=excluded.quarantined_at
                 """,
                 params=payload,
                 log_context="add_skill",
@@ -428,6 +440,7 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                   AND tenant_id = ?
                   AND owner_type = ?
                   AND owner_id = ?
+                  AND quarantined_at IS NULL
             """
             rows = self._query_all(conn, sql, params=params, log_context="fetch_skills_by_ids")
             row_map = {r["id"]: r for r in rows}
@@ -451,16 +464,18 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
         limit: Optional[int] = None,
+        include_quarantined: bool = False,
     ) -> List[Skill]:
         """
-        List skills ordered by updated_at DESC.
+        List skills ordered by updated_at DESC. Quarantined skills excluded by default.
         """
         if not tenant_id or not owner_type or not owner_id:
             logger.error("ProceduralSQLStore.list_skills requires tenant_id, owner_type and owner_id")
             raise ValueError("ProceduralSQLStore.list_skills requires tenant_id, owner_type and owner_id")
         conn = self._conn()
         try:
-            sql = "SELECT * FROM skills WHERE tenant_id=? AND owner_type=? AND owner_id=? ORDER BY updated_at DESC"
+            quarantine_clause = "" if include_quarantined else " AND quarantined_at IS NULL"
+            sql = f"SELECT * FROM skills WHERE tenant_id=? AND owner_type=? AND owner_id=?{quarantine_clause} ORDER BY updated_at DESC"
             if limit:
                 sql += f" LIMIT {int(limit)}"
             rows = self._query_all(
@@ -558,3 +573,55 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         except Exception:
             logger.exception("ProceduralSQLStore.search failed.")
             raise
+
+    # ------------------------------------------------------------------ #
+    # Quarantine Management
+    # ------------------------------------------------------------------ #
+
+    async def reinstate_quarantined_record(
+        self,
+        record_id: str,
+        *,
+        tenant_id: Optional[str],
+        owner_type: str,
+        owner_id: str,
+        audit_entry: Dict[str, Any],
+    ) -> bool:
+        """
+        Clear quarantined_at and append an audit log entry to meta.security.audit_log.
+        Returns True if a row was updated.
+        """
+        if not tenant_id or not owner_type or not owner_id:
+            raise ValueError("ProceduralSQLStore.reinstate_quarantined_record requires scope")
+        conn = self._conn()
+        try:
+            row = self._query_one(
+                conn,
+                "SELECT meta FROM skills WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
+                params=[record_id, tenant_id, owner_type, owner_id],
+                log_context="reinstate_skill_fetch",
+            )
+            if row is None:
+                return False
+            try:
+                meta = json.loads(row["meta"]) if row["meta"] else {}
+            except Exception:
+                meta = {}
+            security = meta.setdefault("security", {})
+            audit_log = security.setdefault("audit_log", [])
+            audit_log.append(audit_entry)
+            self._execute(
+                conn,
+                "UPDATE skills SET quarantined_at=NULL, meta=? WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
+                params=[json.dumps(meta), record_id, tenant_id, owner_type, owner_id],
+                log_context="reinstate_skill",
+            )
+            conn.commit()
+            logger.info("ProceduralSQLStore: reinstated skill id=%s owner=%s:%s", record_id, owner_type, owner_id)
+            return True
+        except Exception:
+            self._safe_rollback(conn, "reinstate_skill")
+            logger.exception("ProceduralSQLStore.reinstate_quarantined_record failed id=%s", record_id)
+            raise
+        finally:
+            conn.close()

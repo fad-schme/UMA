@@ -7,7 +7,9 @@ the normal product-facing `UMAMemory` surface.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, List, Mapping, Optional, Sequence
 
 from uma.common.provenance import provenance_for_artifact
 from uma.memory import wiki as wiki_module
@@ -16,6 +18,29 @@ if TYPE_CHECKING:
     from .memory import UMAMemory
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Quarantine types
+# ---------------------------------------------------------------------------
+
+_LANE_STORE_KEY = {
+    "semantic": "semantic",
+    "episodic": "episodic",
+    "procedural": "procedural",
+    "raw": "chunk",
+}
+
+
+@dataclass
+class QuarantinedRecord:
+    id: str
+    lane: str
+    quarantined_at: datetime
+    severity: str
+    matched_rules: List[str]
+    owner_type: str
+    owner_id: str
+    content_preview: str
 
 
 def _artifact_id(artifact: Any) -> str | None:
@@ -133,7 +158,207 @@ async def lint_memory_drift(
         "drift_statuses": statuses,
     }
 
+async def list_quarantined(
+    memory: "UMAMemory",
+    *,
+    owner_type: str,
+    owner_id: str,
+    tenant_id: str = "default",
+    lane: Optional[str] = None,
+    limit: int = 100,
+) -> List[QuarantinedRecord]:
+    """
+    Return quarantined records across all lanes (or a specific lane), owner-scoped.
+    lane must be one of: "semantic", "episodic", "procedural", "raw" (or None for all).
+    """
+    lanes_to_check = [lane] if lane else list(_LANE_STORE_KEY.keys())
+    results: List[QuarantinedRecord] = []
+
+    for ln in lanes_to_check:
+        store_key = _LANE_STORE_KEY.get(ln)
+        if store_key is None:
+            raise ValueError(f"list_quarantined: unknown lane {ln!r}")
+        store = memory._stores.get(store_key)
+        if store is None:
+            continue
+
+        try:
+            if ln == "semantic":
+                records = await store.list_facts_for_owner(
+                    tenant_id=tenant_id, owner_type=owner_type, owner_id=owner_id,
+                    include_quarantined=True,
+                )
+                for r in records:
+                    if r.quarantined_at is None:
+                        continue
+                    scan = (r.meta or {}).get("security", {}).get("injection_scan", {})
+                    results.append(QuarantinedRecord(
+                        id=r.id, lane=ln,
+                        quarantined_at=r.quarantined_at,
+                        severity=scan.get("severity", "high"),
+                        matched_rules=scan.get("matched_rules", []),
+                        owner_type=r.owner_type, owner_id=r.owner_id,
+                        content_preview=str(r.object)[:200] if r.object else "",
+                    ))
+            elif ln == "episodic":
+                records = await store.list_episodes(
+                    tenant_id, owner_type, owner_id, include_quarantined=True,
+                )
+                for r in records:
+                    if r.quarantined_at is None:
+                        continue
+                    scan = (r.meta or {}).get("security", {}).get("injection_scan", {})
+                    results.append(QuarantinedRecord(
+                        id=r.id, lane=ln,
+                        quarantined_at=r.quarantined_at,
+                        severity=scan.get("severity", "high"),
+                        matched_rules=scan.get("matched_rules", []),
+                        owner_type=r.owner_type, owner_id=r.owner_id,
+                        content_preview=(r.summary or "")[:200],
+                    ))
+            elif ln == "procedural":
+                records = await store.list_skills(
+                    tenant_id=tenant_id, owner_type=owner_type, owner_id=owner_id,
+                    include_quarantined=True,
+                )
+                for r in records:
+                    if r.quarantined_at is None:
+                        continue
+                    scan = (r.meta or {}).get("security", {}).get("injection_scan", {})
+                    results.append(QuarantinedRecord(
+                        id=r.id, lane=ln,
+                        quarantined_at=r.quarantined_at,
+                        severity=scan.get("severity", "high"),
+                        matched_rules=scan.get("matched_rules", []),
+                        owner_type=r.owner_type, owner_id=r.owner_id,
+                        content_preview=(r.description or r.name or "")[:200],
+                    ))
+            elif ln == "raw":
+                records = await store.list_chunks_for_owner(
+                    tenant_id=tenant_id, owner_type=owner_type, owner_id=owner_id,
+                    include_quarantined=True,
+                )
+                for r in records:
+                    if r.quarantined_at is None:
+                        continue
+                    scan = (r.meta or {}).get("security", {}).get("injection_scan", {})
+                    results.append(QuarantinedRecord(
+                        id=r.id, lane=ln,
+                        quarantined_at=r.quarantined_at,
+                        severity=scan.get("severity", "high"),
+                        matched_rules=scan.get("matched_rules", []),
+                        owner_type=r.owner_type, owner_id=r.owner_id,
+                        content_preview=(r.text or "")[:200],
+                    ))
+        except Exception:
+            logger.exception("list_quarantined: failed to query lane=%s owner=%s:%s", ln, owner_type, owner_id)
+
+    results.sort(key=lambda r: r.quarantined_at, reverse=True)
+    return results[:limit]
+
+
+async def reinstate_quarantined(
+    memory: "UMAMemory",
+    *,
+    record_id: str,
+    lane: str,
+    owner_type: str,
+    owner_id: str,
+    tenant_id: str = "default",
+    reason: str,
+) -> bool:
+    """
+    Reinstate a quarantined record: clear quarantined_at and append an audit log entry.
+    Returns True if the record was found and updated.
+    lane must be one of: "semantic", "episodic", "procedural", "raw".
+    """
+    store_key = _LANE_STORE_KEY.get(lane)
+    if store_key is None:
+        raise ValueError(f"reinstate_quarantined: unknown lane {lane!r}")
+    store = memory._stores.get(store_key)
+    if store is None:
+        raise RuntimeError(f"reinstate_quarantined: store for lane={lane!r} not found")
+
+    audit_entry = {
+        "action": "reinstate",
+        "lane": lane,
+        "reason": reason,
+        "reinstated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    updated = await store.reinstate_quarantined_record(
+        record_id,
+        tenant_id=tenant_id,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        audit_entry=audit_entry,
+    )
+    if updated:
+        logger.info(
+            "reinstate_quarantined: record=%s lane=%s owner=%s:%s reason=%r",
+            record_id, lane, owner_type, owner_id, reason,
+        )
+    return updated
+
+
+async def purge_quarantined(
+    memory: "UMAMemory",
+    *,
+    record_id: str,
+    lane: str,
+    owner_type: str,
+    owner_id: str,
+    tenant_id: str = "default",
+    reason: str,
+) -> bool:
+    """
+    Permanently delete a quarantined record from SQL and vector index.
+    The record must be quarantined (quarantined_at IS NOT NULL); active records are not purged.
+    Returns True if the record existed and was deleted.
+    lane must be one of: "semantic", "episodic", "procedural", "raw".
+    """
+    store_key = _LANE_STORE_KEY.get(lane)
+    if store_key is None:
+        raise ValueError(f"purge_quarantined: unknown lane {lane!r}")
+    store = memory._stores.get(store_key)
+    if store is None:
+        raise RuntimeError(f"purge_quarantined: store for lane={lane!r} not found")
+
+    # Safety check: only purge records that are actually quarantined.
+    quarantined = await list_quarantined(
+        memory,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        tenant_id=tenant_id,
+        lane=lane,
+    )
+    if not any(r.id == record_id for r in quarantined):
+        logger.warning(
+            "purge_quarantined: record=%s lane=%s not found in quarantine for owner=%s:%s",
+            record_id, lane, owner_type, owner_id,
+        )
+        return False
+
+    if lane == "semantic":
+        await store.delete_fact(record_id, tenant_id=tenant_id, owner_type=owner_type, owner_id=owner_id)
+    elif lane == "episodic":
+        await store.delete_episode(record_id, tenant_id=tenant_id, owner_type=owner_type, owner_id=owner_id)
+    elif lane == "procedural":
+        await store.delete_skill(record_id, tenant_id=tenant_id, owner_type=owner_type, owner_id=owner_id)
+    elif lane == "raw":
+        await store.delete_chunk(record_id, tenant_id=tenant_id, owner_type=owner_type, owner_id=owner_id)
+
+    logger.info(
+        "purge_quarantined: deleted record=%s lane=%s owner=%s:%s reason=%r",
+        record_id, lane, owner_type, owner_id, reason,
+    )
+    return True
+
+
 __all__ = [
     "explain_result",
     "lint_memory_drift",
+    "QuarantinedRecord",
+    "list_quarantined",
+    "reinstate_quarantined",
+    "purge_quarantined",
 ]

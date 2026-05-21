@@ -46,6 +46,7 @@ class Skill:
     # Security primitives (PR1 baseline: neutral defaults)
     trust_score: float = 0.5
     content_hash: Optional[str] = None
+    quarantined_at: Optional[datetime] = None
 
     salience: float = 0.0
     tags: Dict[str, Any] = field(default_factory=dict)

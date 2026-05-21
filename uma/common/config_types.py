@@ -416,6 +416,28 @@ class RetrievalContextConfig:
         )
 
 # ---------------------------------------------------------------------------
+# Security config
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class SecurityConfig:
+    scan_enabled: bool = True
+    scan_severity_threshold: str = "high"
+    custom_patterns_path: Optional[str] = None
+    quarantine_enabled: bool = True
+
+    @classmethod
+    def from_dict(cls, d: Optional[Dict[str, Any]]) -> "SecurityConfig":
+        d = d or {}
+        return cls(
+            scan_enabled=bool(d.get("scan_enabled", True)),
+            scan_severity_threshold=str(d.get("scan_severity_threshold", "high")),
+            custom_patterns_path=d.get("custom_patterns_path") or None,
+            quarantine_enabled=bool(d.get("quarantine_enabled", True)),
+        )
+
+
+# ---------------------------------------------------------------------------
 # Pipeline Config
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
@@ -520,6 +542,7 @@ class RuntimeConfig:
     features: FeaturesConfig
     consolidation: ConsolidationConfig
     pipeline: PipelineConfig
+    security: SecurityConfig
     semantic_salience_threshold: float
     semantic_salience_decay_days: float = 180.0
     profile: str = "lite"
@@ -539,6 +562,7 @@ class RuntimeConfig:
         consolidation_cfg = ConsolidationConfig.from_dict(cfg.get("consolidation"))
         storage_cfg = StorageConfig.from_dict(cfg["storage"])
         pipeline_cfg = PipelineConfig.from_dict(cfg.get("pipeline") or {})
+        security_cfg = SecurityConfig.from_dict(cfg.get("security") if isinstance(cfg, dict) else None)
 
         semantic_section = cfg.get("semantic", {}) if isinstance(cfg, dict) else {}
         semantic_salience = semantic_section.get("salience_threshold")
@@ -556,6 +580,7 @@ class RuntimeConfig:
             features=features_cfg,
             consolidation=consolidation_cfg,
             pipeline=pipeline_cfg,
+            security=security_cfg,
             semantic_salience_threshold=float(semantic_salience),
             semantic_salience_decay_days=semantic_decay_days,
             profile=profile,

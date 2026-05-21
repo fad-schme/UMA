@@ -33,6 +33,7 @@ from uma.retrieve.ranking import fuse_candidates
 from uma.common.identity import normalize_user_id
 from uma.common.dedupe import dedupe_by_id
 from uma.common.trust import SourceDescriptor, score_source
+from uma.common.injection_scan import scan_content, apply_scan, quarantine_enabled
 from .ingestor import SemanticIngestor
 
 logger = logging.getLogger(__name__)
@@ -159,6 +160,9 @@ class SemanticCore:
             logger.exception("SemanticCore.ingest: invalid user_id=%r", user_id)
             raise
 
+        # Scan raw user text once; result is captured by closure and applied per-fact before storage.
+        _text_scan = scan_content(text) if turn_context is not None else None
+
         def _apply_turn_scope(f: Fact) -> None:
             try:
                 f.owner_type = "user"
@@ -172,6 +176,16 @@ class SemanticCore:
                     f.origin_session_id = turn_context.session_id
                     f.scope_model_version = SCOPE_MODEL_VERSION
                     f.trust_score = score_source(SourceDescriptor(kind="turn_user", session_id=turn_context.session_id))
+                    if _text_scan is not None:
+                        f.trust_score, f.meta = apply_scan(
+                            f.trust_score,
+                            f.meta or {},
+                            _text_scan,
+                            log_context=f"semantic/user:{normalized_user_id}",
+                        )
+                        if _text_scan.severity == "high" and quarantine_enabled():
+                            from datetime import datetime, timezone
+                            f.quarantined_at = datetime.now(timezone.utc)
             except Exception:
                 logger.exception("SemanticCore.ingest: failed to set owner on fact id=%s", getattr(f, "id", None))
                 raise

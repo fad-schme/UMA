@@ -35,7 +35,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
 
 from .base_vector_sql_store import BaseVectorSQLStore
 from .base_sql_store import DEFAULT_TENANT_ID
@@ -140,6 +140,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
             self._ensure_column(conn, "facts", "scope_model_version", "TEXT")
             self._ensure_column(conn, "facts", "trust_score", "REAL NOT NULL DEFAULT 0.5")
             self._ensure_column(conn, "facts", "content_hash", "TEXT")
+            self._ensure_column(conn, "facts", "quarantined_at", "DATETIME")
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_facts_sub_pred
@@ -246,6 +247,11 @@ class SemanticSQLStore(BaseVectorSQLStore):
             scope_model_version=(row["scope_model_version"] if "scope_model_version" in row_keys else None),
             trust_score=(float(row["trust_score"]) if "trust_score" in row_keys and row["trust_score"] is not None else 0.5),
             content_hash=(row["content_hash"] if "content_hash" in row_keys else None),
+            quarantined_at=(
+                datetime.fromisoformat(row["quarantined_at"])
+                if "quarantined_at" in row_keys and row["quarantined_at"] is not None
+                else None
+            ),
         )
     # ------------------------------------------------------------------ #
     # Upsert Fact
@@ -393,8 +399,13 @@ class SemanticSQLStore(BaseVectorSQLStore):
                     if canonical.confidence is not None
                     else None
                 ),
-                "trust_score": float(getattr(canonical, "trust_score", 0.5) or 0.5),
+                "trust_score": float(_ts if (_ts := getattr(canonical, "trust_score", None)) is not None else 0.5),
                 "content_hash": getattr(canonical, "content_hash", None),
+                "quarantined_at": (
+                    getattr(canonical, "quarantined_at").isoformat()
+                    if getattr(canonical, "quarantined_at", None) is not None
+                    else None
+                ),
                 "meta": json.dumps(normalized_meta),
             }
 
@@ -408,14 +419,14 @@ class SemanticSQLStore(BaseVectorSQLStore):
                     confidence, meta, owner_type, owner_id, workspace_id,
                     session_id, origin_agent_id, origin_user_id,
                     origin_session_id, scope_model_version, salience,
-                    trust_score, content_hash
+                    trust_score, content_hash, quarantined_at
                 ) VALUES (
                     :id, :tenant_id, :subject, :predicate, :object,
                     :created_at, :updated_at, :source_ids, :source,
                     :confidence, :meta, :owner_type, :owner_id, :workspace_id,
                     :session_id, :origin_agent_id, :origin_user_id,
                     :origin_session_id, :scope_model_version, :salience,
-                    :trust_score, :content_hash
+                    :trust_score, :content_hash, :quarantined_at
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     tenant_id=excluded.tenant_id,
@@ -438,6 +449,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
                     confidence=excluded.confidence,
                     trust_score=excluded.trust_score,
                     content_hash=excluded.content_hash,
+                    quarantined_at=excluded.quarantined_at,
                     meta=excluded.meta;
                 """,
                 params=payload,
@@ -672,6 +684,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
             where_clauses.append("tenant_id=?")
             where_clauses.append("owner_type=?")
             where_clauses.append("owner_id=?")
+            where_clauses.append("quarantined_at IS NULL")
             params.extend([tenant_id, owner_type, owner_id])
 
             sql = f"SELECT * FROM facts WHERE {' AND '.join(where_clauses)} ORDER BY updated_at DESC"
@@ -696,16 +709,19 @@ class SemanticSQLStore(BaseVectorSQLStore):
         owner_type: str,
         owner_id: str,
         limit: Optional[int] = None,
+        include_quarantined: bool = False,
     ) -> List[Fact]:
         """
         Return all facts for a given owner scope, ordered by updated_at DESC.
+        Quarantined facts are excluded by default; pass include_quarantined=True for management use.
         """
         if not tenant_id or not owner_type or not owner_id:
             logger.error("SemanticSQLStore.list_facts_for_owner requires tenant_id, owner_type and owner_id")
             raise ValueError("SemanticSQLStore.list_facts_for_owner requires tenant_id, owner_type and owner_id")
         conn = self._conn()
         try:
-            sql = "SELECT * FROM facts WHERE tenant_id=? AND owner_type=? AND owner_id=? ORDER BY updated_at DESC, id ASC"
+            quarantine_clause = "" if include_quarantined else " AND quarantined_at IS NULL"
+            sql = f"SELECT * FROM facts WHERE tenant_id=? AND owner_type=? AND owner_id=?{quarantine_clause} ORDER BY updated_at DESC, id ASC"
             if limit:
                 sql += f" LIMIT {int(limit)}"
             rows = self._query_all(conn, sql, params=[tenant_id, owner_type, owner_id], log_context="list_facts_owner")
@@ -774,7 +790,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
             placeholders = ",".join("?" for _ in ids)
             params = ids[:]
             scope_clause = self._scope_where(tenant_id, owner_type, owner_id, params)
-            sql = f"SELECT * FROM facts WHERE id IN ({placeholders}) AND {scope_clause}"
+            sql = f"SELECT * FROM facts WHERE id IN ({placeholders}) AND {scope_clause} AND quarantined_at IS NULL"
             rows = self._query_all(
                 conn,
                 sql,
@@ -847,6 +863,58 @@ class SemanticSQLStore(BaseVectorSQLStore):
                 owner_type,
                 owner_id,
             )
+            raise
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------------ #
+    # Quarantine Management
+    # ------------------------------------------------------------------ #
+
+    async def reinstate_quarantined_record(
+        self,
+        record_id: str,
+        *,
+        tenant_id: Optional[str],
+        owner_type: str,
+        owner_id: str,
+        audit_entry: Dict[str, Any],
+    ) -> bool:
+        """
+        Clear quarantined_at and append an audit log entry to meta.security.audit_log.
+        Returns True if a row was updated.
+        """
+        if not tenant_id or not owner_type or not owner_id:
+            raise ValueError("SemanticSQLStore.reinstate_quarantined_record requires scope")
+        conn = self._conn()
+        try:
+            row = self._query_one(
+                conn,
+                "SELECT meta FROM facts WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
+                params=[record_id, tenant_id, owner_type, owner_id],
+                log_context="reinstate_fact_fetch",
+            )
+            if row is None:
+                return False
+            try:
+                meta = json.loads(row["meta"]) if row["meta"] else {}
+            except Exception:
+                meta = {}
+            security = meta.setdefault("security", {})
+            audit_log = security.setdefault("audit_log", [])
+            audit_log.append(audit_entry)
+            self._execute(
+                conn,
+                "UPDATE facts SET quarantined_at=NULL, meta=? WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
+                params=[json.dumps(meta), record_id, tenant_id, owner_type, owner_id],
+                log_context="reinstate_fact",
+            )
+            conn.commit()
+            logger.info("SemanticSQLStore: reinstated fact id=%s owner=%s:%s", record_id, owner_type, owner_id)
+            return True
+        except Exception:
+            self._safe_rollback(conn, "reinstate_fact")
+            logger.exception("SemanticSQLStore.reinstate_quarantined_record failed id=%s", record_id)
             raise
         finally:
             conn.close()

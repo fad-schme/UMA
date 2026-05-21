@@ -37,6 +37,7 @@ from uma.common.types import RuntimeContext, SCOPE_MODEL_VERSION
 from uma.common.dedupe import dedupe_by_id
 from uma.common.integrity import hash_episode_content
 from uma.common.trust import SourceDescriptor, score_source
+from uma.common.injection_scan import scan_content, apply_scan, quarantine_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,18 @@ class EpisodicCore:
             episode.scope_model_version = SCOPE_MODEL_VERSION
             episode.trust_score = score_source(SourceDescriptor(kind="turn_assistant", session_id=turn_context.session_id))
             episode.content_hash = hash_episode_content(episode.summary)
+
+            # Scan the raw assistant_reply (the actual input being stored, not the LLM-summarized output).
+            scan_result = scan_content(assistant_reply or "")
+            episode.trust_score, episode.meta = apply_scan(
+                episode.trust_score,
+                episode.meta or {},
+                scan_result,
+                log_context=f"episodic/{owner_type}:{owner_id}",
+            )
+            if scan_result.severity == "high" and quarantine_enabled():
+                from datetime import datetime as _dt, timezone
+                episode.quarantined_at = _dt.now(timezone.utc)
 
             # ------------------------------
             # 3. Store in episodic DB

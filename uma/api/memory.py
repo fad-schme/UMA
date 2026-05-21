@@ -137,6 +137,8 @@ class UMAMemory:
 
         # Unified runtime config
         self.cfg = RuntimeConfig.from_uma_config(config)
+        from uma.common.injection_scan import configure_security
+        configure_security(self.cfg.security)
         self.llm_cfg = self.cfg.llm
         self.agent_llm_cfg = self.cfg.agent_llm
         self.embedding_cfg = self.cfg.embedding

@@ -35,6 +35,7 @@ class Chunk:
 
     # Security primitives (trust_score only; content integrity lives in meta["text_hash"])
     trust_score: float = 0.5
+    quarantined_at: Optional[datetime] = None
 
     meta: Dict[str, Any] = field(default_factory=dict)
 

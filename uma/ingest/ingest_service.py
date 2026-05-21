@@ -31,6 +31,7 @@ from uma.common.ownership import validate_explicit_owner
 from uma.common.storage_metadata import normalize_document_metadata, normalize_fact_metadata
 from uma.common.integrity import hash_fact_content
 from uma.common.trust import SourceDescriptor, score_source
+from uma.common.injection_scan import scan_content, apply_scan, quarantine_enabled
 from uma.retrieve.user_query_helper import build_fact_embedding_text
 logger = logging.getLogger(__name__)
 
@@ -613,6 +614,18 @@ def _build_chunk_rows(
     now = datetime.now(timezone.utc)
     for chunk in final_chunks:
         text_hash = hashlib.sha256((chunk.text or "").encode("utf-8")).hexdigest()
+        chunk_trust = score_source(SourceDescriptor(kind="document"))
+        chunk_meta: Dict[str, Any] = {
+            "text_hash": text_hash,
+            "chunk_size_tokens": config.chunk_size_tokens,
+            "overlap_tokens": config.overlap_tokens,
+            "chunker_version": _CHUNKER_VERSION,
+            "paragraph_index_scope": "page_range",
+            "paragraph_index_start": chunk.paragraph_index_start,
+            "paragraph_index_end": chunk.paragraph_index_end,
+        }
+        scan_result = scan_content(chunk.text or "")
+        chunk_trust, chunk_meta = apply_scan(chunk_trust, chunk_meta, scan_result, log_context=f"ingest/{chunk.doc_id}")
         chunk_rows[chunk.chunk_id] = Chunk(
             id=chunk.chunk_id,
             doc_id=chunk.doc_id,
@@ -627,16 +640,9 @@ def _build_chunk_rows(
             owner_type=owner_type,
             owner_id=owner_id,
             workspace_id=workspace_id,
-            trust_score=score_source(SourceDescriptor(kind="document")),
-            meta={
-                "text_hash": text_hash,
-                "chunk_size_tokens": config.chunk_size_tokens,
-                "overlap_tokens": config.overlap_tokens,
-                "chunker_version": _CHUNKER_VERSION,
-                "paragraph_index_scope": "page_range",
-                "paragraph_index_start": chunk.paragraph_index_start,
-                "paragraph_index_end": chunk.paragraph_index_end,
-            },
+            trust_score=chunk_trust,
+            quarantined_at=(now if scan_result.severity == "high" and quarantine_enabled() else None),
+            meta=chunk_meta,
         )
     return chunk_rows
 
