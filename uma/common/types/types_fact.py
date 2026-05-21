@@ -57,6 +57,10 @@ class Fact:
     origin_session_id: Optional[str] = None
     scope_model_version: Optional[str] = "v2"
 
+    # Security primitives (PR1 baseline: neutral defaults)
+    trust_score: float = 0.5
+    content_hash: Optional[str] = None
+
     # Optional metadata
     salience: float = 0.0
 
@@ -85,6 +89,14 @@ class Fact:
             c = float(self.confidence)
             if not (0.0 <= c <= 1.0):
                 raise ValueError("Fact.confidence must be in [0, 1] when provided")
+
+        ts = float(self.trust_score)
+        if not (0.0 <= ts <= 1.0):
+            raise ValueError("Fact.trust_score must be in [0, 1]")
+        if self.content_hash is not None and not isinstance(self.content_hash, str):
+            raise ValueError("Fact.content_hash must be a string when provided")
+        if isinstance(self.content_hash, str) and not self.content_hash:
+            raise ValueError("Fact.content_hash must be non-empty when provided")
 
         if float(self.salience) < 0.0:
             raise ValueError("Fact.salience must be >= 0")

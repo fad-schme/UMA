@@ -223,12 +223,14 @@ class MemoryPipeline:
         - graph updates
         - after_turn hooks
         """
-        facts = facts or await self._semantic_ingest(
-            user_id,
-            assistant_reply,
-            turn_id=None,
-            turn_context=turn_context,
-        )
+        if not facts and isinstance(user_msg, str) and user_msg.strip():
+            facts = list(await self._semantic_ingest(
+                user_id,
+                user_msg,
+                turn_id=None,
+                turn_context=turn_context,
+            ) or [])
+        facts = facts or []
         if episode is not None and facts:
             for f in facts:
                 try:
@@ -345,21 +347,13 @@ class MemoryPipeline:
                     return
 
                 facts = []
-                for role, text in (
-                    ("user", user_msg),
-                    ("assistant", assistant_reply),
-                ):
-                    if not isinstance(text, str) or not text.strip():
-                        continue
-                    role_facts = await self._semantic_ingest(
+                if isinstance(user_msg, str) and user_msg.strip():
+                    facts = list(await self._semantic_ingest(
                         user_id,
-                        text,
+                        user_msg,
                         turn_id=turn_id,
                         turn_context=turn_context,
-                        source_role=role,
-                    )
-                    if role_facts:
-                        facts.extend(list(role_facts))
+                    ) or [])
 
                 if episode is not None and facts:
                     for fact in facts:
@@ -667,9 +661,8 @@ class MemoryPipeline:
         user_id: str,
         text: str,
         *,
-        turn_id: str,
+        turn_id: Optional[str],
         turn_context: RuntimeContext,
-        source_role: str,
     ) -> Any:
         sem = getattr(self.mem, "semantic_core", None)
         if sem is None:
@@ -688,10 +681,7 @@ class MemoryPipeline:
             return await sem.ingest(
                 user_subject,
                 text,
-                extra_meta={
-                    "turn_id": turn_id,
-                    "source_role": source_role,
-                },
+                extra_meta={"turn_id": turn_id} if turn_id else None,
                 turn_context=turn_context,
             )
         except Exception:

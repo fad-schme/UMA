@@ -84,6 +84,8 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             self._ensure_column(conn, "episodes", "origin_user_id", "TEXT")
             self._ensure_column(conn, "episodes", "origin_session_id", "TEXT")
             self._ensure_column(conn, "episodes", "scope_model_version", "TEXT")
+            self._ensure_column(conn, "episodes", "trust_score", "REAL NOT NULL DEFAULT 0.5")
+            self._ensure_column(conn, "episodes", "content_hash", "TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_user ON episodes(user_id);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_timestamp ON episodes(timestamp);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_owner ON episodes(owner_type, owner_id);")
@@ -182,6 +184,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             session_id=(row["session_id"] if "session_id" in row.keys() else None),
         )
 
+        row_keys = row.keys() if hasattr(row, "keys") else []
         return Episode(
             id=row["id"],
             timestamp=datetime.fromisoformat(row["timestamp"]),
@@ -190,15 +193,17 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             tags=json.loads(row["tags"]),
             embedding=embedding,
             meta=normalized_meta,
-            tenant_id=(row["tenant_id"] if "tenant_id" in row.keys() else DEFAULT_TENANT_ID),
+            tenant_id=(row["tenant_id"] if "tenant_id" in row_keys else DEFAULT_TENANT_ID),
             owner_type=owner_type,
             owner_id=owner_id,
-            workspace_id=(row["workspace_id"] if "workspace_id" in row.keys() else None),
-            session_id=(row["session_id"] if "session_id" in row.keys() else None),
-            origin_agent_id=(row["origin_agent_id"] if "origin_agent_id" in row.keys() else None),
-            origin_user_id=(row["origin_user_id"] if "origin_user_id" in row.keys() else None),
-            origin_session_id=(row["origin_session_id"] if "origin_session_id" in row.keys() else None),
-            scope_model_version=(row["scope_model_version"] if "scope_model_version" in row.keys() else None),
+            workspace_id=(row["workspace_id"] if "workspace_id" in row_keys else None),
+            session_id=(row["session_id"] if "session_id" in row_keys else None),
+            origin_agent_id=(row["origin_agent_id"] if "origin_agent_id" in row_keys else None),
+            origin_user_id=(row["origin_user_id"] if "origin_user_id" in row_keys else None),
+            origin_session_id=(row["origin_session_id"] if "origin_session_id" in row_keys else None),
+            scope_model_version=(row["scope_model_version"] if "scope_model_version" in row_keys else None),
+            trust_score=(float(row["trust_score"]) if "trust_score" in row_keys and row["trust_score"] is not None else 0.5),
+            content_hash=(row["content_hash"] if "content_hash" in row_keys else None),
             user_id=user_id,
         )
 
@@ -283,6 +288,8 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 "origin_user_id": getattr(ep, "origin_user_id", None),
                 "origin_session_id": getattr(ep, "origin_session_id", None),
                 "scope_model_version": getattr(ep, "scope_model_version", None) or SCOPE_MODEL_VERSION,
+                "trust_score": float(getattr(ep, "trust_score", 0.5) or 0.5),
+                "content_hash": getattr(ep, "content_hash", None),
                 "embedding": json.dumps(embedding),
                 "meta": json.dumps(normalized_meta),
             }
@@ -293,12 +300,14 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 INSERT INTO episodes (
                     id, tenant_id, owner_type, owner_id, workspace_id, session_id,
                     user_id, timestamp, summary, raw, tags, origin_agent_id,
-                    origin_user_id, origin_session_id, scope_model_version, embedding, meta
+                    origin_user_id, origin_session_id, scope_model_version,
+                    trust_score, content_hash, embedding, meta
                 )
                 VALUES (
                     :id, :tenant_id, :owner_type, :owner_id, :workspace_id, :session_id,
                     :user_id, :timestamp, :summary, :raw, :tags, :origin_agent_id,
-                    :origin_user_id, :origin_session_id, :scope_model_version, :embedding, :meta
+                    :origin_user_id, :origin_session_id, :scope_model_version,
+                    :trust_score, :content_hash, :embedding, :meta
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     tenant_id=excluded.tenant_id,
@@ -315,6 +324,8 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                     origin_user_id=excluded.origin_user_id,
                     origin_session_id=excluded.origin_session_id,
                     scope_model_version=excluded.scope_model_version,
+                    trust_score=excluded.trust_score,
+                    content_hash=excluded.content_hash,
                     embedding=excluded.embedding,
                     meta=excluded.meta
                 """,

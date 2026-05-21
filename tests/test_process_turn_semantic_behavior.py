@@ -1,0 +1,180 @@
+"""
+Tests for process_turn semantic memory behavior.
+
+Invariants verified:
+- Semantic facts are extracted only from user_msg, never from assistant_reply.
+- Empty user_msg produces no semantic facts even if assistant_reply contains facts.
+- The deferred path ingests user_msg (not assistant_reply).
+- Episodes store the full transcript (user_msg + assistant_reply with speaker roles).
+- Working memory is a distinct, un-lane-filtered section in retrieve_context output.
+"""
+from __future__ import annotations
+
+import types
+
+import pytest
+
+from tests.helpers.runtime import init_uma_for_tests
+
+
+@pytest.mark.asyncio
+async def test_semantic_ingest_extracts_only_from_user_msg(tmp_path):
+    """Facts come from user_msg; assistant_reply is never sent to semantic ingest."""
+    mem = await init_uma_for_tests(tmp_path)
+    try:
+        await mem.process_turn(
+            user_id="user:u1",
+            user_msg="I like sushi.",
+            assistant_reply="I like pizza.",   # must NOT be ingested
+            session_id="session-a",
+        )
+
+        facts = await mem.semantic_core.list_facts_for_owner(
+            tenant_id="default",
+            owner_type="user",
+            owner_id="user:u1",
+        )
+        fact_objects = [str(getattr(f, "object", "")).lower() for f in facts]
+
+        assert any("sushi" in o for o in fact_objects), (
+            f"expected a 'sushi' fact extracted from user_msg; got objects={fact_objects}"
+        )
+        assert not any("pizza" in o for o in fact_objects), (
+            f"'pizza' from assistant_reply leaked into semantic store; objects={fact_objects}"
+        )
+    finally:
+        mem.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_semantic_ingest_skips_when_user_msg_empty(tmp_path):
+    """Empty user_msg produces 0 semantic facts even if assistant_reply contains facts."""
+    mem = await init_uma_for_tests(tmp_path)
+    try:
+        await mem.process_turn(
+            user_id="user:u1",
+            user_msg="",
+            assistant_reply="I like coffee.",  # must NOT be ingested
+            session_id="session-a",
+        )
+
+        facts = await mem.semantic_core.list_facts_for_owner(
+            tenant_id="default",
+            owner_type="user",
+            owner_id="user:u1",
+        )
+        assert facts == [], (
+            f"expected 0 semantic facts for empty user_msg; got {len(facts)}"
+        )
+    finally:
+        mem.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_deferred_path_ingests_user_msg_not_assistant_reply(tmp_path):
+    """With defer_post_turn enabled, draining the queue extracts facts from user_msg only."""
+    mem = await init_uma_for_tests(tmp_path)
+    try:
+        mem.pipeline_cfg = types.SimpleNamespace(
+            defer_post_turn=True,
+            post_turn_queue_max=50,
+        )
+
+        await mem.process_turn(
+            user_id="user:u1",
+            user_msg="I like sushi.",
+            assistant_reply="I like pizza.",   # must NOT be ingested
+            session_id="session-a",
+        )
+
+        from uma.ingest.pipeline import MemoryPipeline
+        pipeline = mem.pipeline
+        assert isinstance(pipeline, MemoryPipeline)
+
+        processed = await pipeline.process_post_turn_queue()
+        assert processed == 1, f"expected 1 deferred task; got {processed}"
+
+        facts = await mem.semantic_core.list_facts_for_owner(
+            tenant_id="default",
+            owner_type="user",
+            owner_id="user:u1",
+        )
+        fact_objects = [str(getattr(f, "object", "")).lower() for f in facts]
+
+        assert any("sushi" in o for o in fact_objects), (
+            f"expected 'sushi' fact via deferred user_msg ingest; got objects={fact_objects}"
+        )
+        assert not any("pizza" in o for o in fact_objects), (
+            f"'pizza' from assistant_reply leaked via deferred path; objects={fact_objects}"
+        )
+    finally:
+        mem.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_episode_raw_transcript_contains_both_sides(tmp_path):
+    """Stored episode.raw preserves both user_msg and assistant_reply with speaker roles."""
+    mem = await init_uma_for_tests(tmp_path)
+    try:
+        await mem.process_turn(
+            user_id="user:u1",
+            user_msg="Hello there.",
+            assistant_reply="Hello back.",
+            session_id="session-a",
+        )
+
+        episodes = await mem.episodic_core.list_episodes(
+            tenant_id="default",
+            owner_type="user",
+            owner_id="user:u1",
+        )
+        assert episodes, "expected at least one stored episode"
+
+        raw = getattr(episodes[0], "raw", "") or ""
+        assert "user:" in raw.lower(), (
+            f"episode.raw missing 'user:' speaker label; raw={raw!r}"
+        )
+        assert "assistant:" in raw.lower(), (
+            f"episode.raw missing 'assistant:' speaker label; raw={raw!r}"
+        )
+        assert "Hello there." in raw, (
+            f"user_msg not found in episode.raw; raw={raw!r}"
+        )
+        assert "Hello back." in raw, (
+            f"assistant_reply not found in episode.raw; raw={raw!r}"
+        )
+    finally:
+        mem.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_retrieve_context_working_memory_populated_after_turn(tmp_path):
+    """Working memory appears in retrieve_context output independently of lane_filter."""
+    mem = await init_uma_for_tests(tmp_path)
+    try:
+        await mem.process_turn(
+            user_id="user:u1",
+            user_msg="Tell me about sushi.",
+            assistant_reply="Sushi is great.",
+            session_id="session-a",
+        )
+
+        result = await mem.retrieve_context(
+            query_text="sushi",
+            user_id="user:u1",
+            session_id="session-a",
+        )
+
+        wm = result.get("working_memory", [])
+        assert isinstance(wm, list), "working_memory must be a list"
+        assert len(wm) > 0, "working_memory should have entries after process_turn"
+
+        roles = [getattr(m, "role", None) for m in wm]
+        assert "user" in roles, (
+            f"expected 'user' role in working_memory; roles={roles}"
+        )
+        assert "assistant" in roles, (
+            f"expected 'assistant' role in working_memory; roles={roles}"
+        )
+    finally:
+        mem.shutdown()

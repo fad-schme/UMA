@@ -13,8 +13,8 @@ async def test_process_turn_writes_session_local_episode_and_fact_provenance(uma
 
     await mem.process_turn(
         user_id="user:u1",
-        user_msg="hello",
-        assistant_reply="user likes coffee.",
+        user_msg="I like coffee.",
+        assistant_reply="Good choice.",
         session_id="session-a",
         extra_meta={"request_id": "req-turn-a"},
     )
@@ -87,14 +87,14 @@ async def test_retrieval_does_not_see_prior_session_turn_artifacts_by_default(um
 
     await mem.process_turn(
         user_id="user:u1",
-        user_msg="first",
-        assistant_reply="user likes coffee.",
+        user_msg="I like coffee.",
+        assistant_reply="Good choice.",
         session_id="session-a",
     )
     await mem.process_turn(
         user_id="user:u1",
-        user_msg="second",
-        assistant_reply="user likes tea.",
+        user_msg="I like tea.",
+        assistant_reply="Nice.",
         session_id="session-b",
     )
 
@@ -155,16 +155,16 @@ async def test_retrieval_does_not_share_turn_artifacts_across_agents(uma_memory)
     mem._agent_id = "agent-a"
     await mem.process_turn(
         user_id="user:u1",
-        user_msg="first",
-        assistant_reply="user likes coffee.",
+        user_msg="I like coffee.",
+        assistant_reply="Good choice.",
         session_id="shared-session",
     )
 
     mem._agent_id = "agent-b"
     await mem.process_turn(
         user_id="user:u1",
-        user_msg="second",
-        assistant_reply="user likes tea.",
+        user_msg="I like tea.",
+        assistant_reply="Nice.",
         session_id="shared-session",
     )
 

@@ -29,6 +29,8 @@ from uma.common.types import Chunk, Fact
 from uma.stores.document_sql import DocumentRecord
 from uma.common.ownership import validate_explicit_owner
 from uma.common.storage_metadata import normalize_document_metadata, normalize_fact_metadata
+from uma.common.integrity import hash_fact_content
+from uma.common.trust import SourceDescriptor, score_source
 from uma.retrieve.user_query_helper import build_fact_embedding_text
 logger = logging.getLogger(__name__)
 
@@ -625,6 +627,7 @@ def _build_chunk_rows(
             owner_type=owner_type,
             owner_id=owner_id,
             workspace_id=workspace_id,
+            trust_score=score_source(SourceDescriptor(kind="document")),
             meta={
                 "text_hash": text_hash,
                 "chunk_size_tokens": config.chunk_size_tokens,
@@ -726,6 +729,7 @@ async def _extract_facts_and_update_graph(
             fact.owner_id = owner_id
         fact.tenant_id = tenant_id
         fact.workspace_id = workspace_id
+        fact.trust_score = score_source(SourceDescriptor(kind="document"))
         fact.meta = dict(fact.meta or {})
         fact.meta.setdefault("doc_id", parsed.doc_id)
         fact.meta.setdefault("source_path", parsed.source_path)
@@ -1093,6 +1097,7 @@ async def ingest_memory_bootstrap(
             owner_type="user",
             owner_id=user_id,
             workspace_id=workspace_id,
+            trust_score=score_source(SourceDescriptor(kind="bootstrap_memory")),
             meta={
                 "text_hash": text_hash,
                 "source_kind": "memory_bootstrap",
@@ -1127,6 +1132,8 @@ async def ingest_memory_bootstrap(
             owner_id=user_id,
             tenant_id=tenant_id,
             workspace_id=workspace_id,
+            trust_score=score_source(SourceDescriptor(kind="bootstrap_memory")),
+            content_hash=hash_fact_content(user_id, "STATES", doc_chunk.text),
             meta={
                 "doc_id": doc_id,
                 "source_path": normalized_path,

@@ -31,6 +31,8 @@ UMA stores and retrieves across six typed lanes. Lane selection is explicit — 
 
 Graph is disabled in all public profiles. It is a supporting lane for relationship traversal, not the primary truth.
 
+Each artifact (fact, episode, skill, chunk) additionally carries `trust_score` (float, classifier-derived via `uma.common.trust.score_source`) and `content_hash` (SHA-256 hex, where applicable) as security primitives (OWASP ASI06 baseline).
+
 ---
 
 ## Storage Model

@@ -77,6 +77,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
             self._ensure_column(conn, "chunks", "origin_user_id", "TEXT")
             self._ensure_column(conn, "chunks", "origin_session_id", "TEXT")
             self._ensure_column(conn, "chunks", "scope_model_version", "TEXT")
+            self._ensure_column(conn, "chunks", "trust_score", "REAL NOT NULL DEFAULT 0.5")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_chunks_tenant_owner ON chunks(tenant_id, owner_type, owner_id);"
             )
@@ -141,6 +142,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
             source_hash=row["source_hash"],
         )
 
+        row_keys = row.keys() if hasattr(row, "keys") else []
         return Chunk(
             id=row["id"],
             doc_id=row["doc_id"],
@@ -151,14 +153,15 @@ class ChunkSQLStore(BaseVectorSQLStore):
             source_hash=row["source_hash"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
-            tenant_id=(row["tenant_id"] if "tenant_id" in row.keys() else DEFAULT_TENANT_ID),
+            tenant_id=(row["tenant_id"] if "tenant_id" in row_keys else DEFAULT_TENANT_ID),
             owner_type=row["owner_type"],
             owner_id=row["owner_id"],
-            workspace_id=(row["workspace_id"] if "workspace_id" in row.keys() else None),
-            origin_agent_id=(row["origin_agent_id"] if "origin_agent_id" in row.keys() else None),
-            origin_user_id=(row["origin_user_id"] if "origin_user_id" in row.keys() else None),
-            origin_session_id=(row["origin_session_id"] if "origin_session_id" in row.keys() else None),
-            scope_model_version=(row["scope_model_version"] if "scope_model_version" in row.keys() else None),
+            workspace_id=(row["workspace_id"] if "workspace_id" in row_keys else None),
+            origin_agent_id=(row["origin_agent_id"] if "origin_agent_id" in row_keys else None),
+            origin_user_id=(row["origin_user_id"] if "origin_user_id" in row_keys else None),
+            origin_session_id=(row["origin_session_id"] if "origin_session_id" in row_keys else None),
+            scope_model_version=(row["scope_model_version"] if "scope_model_version" in row_keys else None),
+            trust_score=(float(row["trust_score"]) if "trust_score" in row_keys and row["trust_score"] is not None else 0.5),
             meta=normalized_meta,
         )
 
@@ -219,6 +222,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
                 "origin_user_id": getattr(chunk, "origin_user_id", None),
                 "origin_session_id": getattr(chunk, "origin_session_id", None),
                 "scope_model_version": getattr(chunk, "scope_model_version", None) or SCOPE_MODEL_VERSION,
+                "trust_score": float(getattr(chunk, "trust_score", 0.5) or 0.5),
                 "meta": json.dumps(normalized_meta),
             }
 
@@ -230,13 +234,13 @@ class ChunkSQLStore(BaseVectorSQLStore):
                     source_path, source_hash, created_at, updated_at,
                     tenant_id, owner_type, owner_id, workspace_id,
                     origin_agent_id, origin_user_id, origin_session_id,
-                    scope_model_version, meta
+                    scope_model_version, trust_score, meta
                 ) VALUES (
                     :id, :doc_id, :text, :page_start, :page_end, :position,
                     :source_path, :source_hash, :created_at, :updated_at,
                     :tenant_id, :owner_type, :owner_id, :workspace_id,
                     :origin_agent_id, :origin_user_id, :origin_session_id,
-                    :scope_model_version, :meta
+                    :scope_model_version, :trust_score, :meta
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     doc_id=excluded.doc_id,
@@ -256,6 +260,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
                     origin_user_id=excluded.origin_user_id,
                     origin_session_id=excluded.origin_session_id,
                     scope_model_version=excluded.scope_model_version,
+                    trust_score=excluded.trust_score,
                     meta=excluded.meta
                 """,
                 params=payload,

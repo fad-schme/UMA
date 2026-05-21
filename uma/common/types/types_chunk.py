@@ -32,6 +32,10 @@ class Chunk:
     origin_user_id: Optional[str] = None
     origin_session_id: Optional[str] = None
     scope_model_version: Optional[str] = "v2"
+
+    # Security primitives (trust_score only; content integrity lives in meta["text_hash"])
+    trust_score: float = 0.5
+
     meta: Dict[str, Any] = field(default_factory=dict)
 
     def validate(self) -> None:
@@ -43,3 +47,6 @@ class Chunk:
             raise ValueError("Chunk.page_range must be (start, end)")
         if self.owner_type not in ("agent", "user", "workspace", "system"):
             raise ValueError(f"Invalid owner_type: {self.owner_type!r}")
+        ts = float(self.trust_score)
+        if not (0.0 <= ts <= 1.0):
+            raise ValueError("Chunk.trust_score must be in [0, 1]")

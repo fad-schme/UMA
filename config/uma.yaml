@@ -24,7 +24,7 @@ working_memory:
 
 embedding:
   provider: "ollama"
-  model: "all-minilm:latest"
+  model: "nomic-embed-text"
   dimension: 768
   config:
     host: "http://localhost:11434"

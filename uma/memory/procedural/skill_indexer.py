@@ -26,6 +26,7 @@ from typing import Dict, List, Tuple, Any
 
 from uma.adapters.llm.base import LLMInterface, EmbeddingInterface
 from uma.common.types import Skill
+from uma.common.integrity import hash_skill_content
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,7 @@ class SkillIndexer:
             tools=tools,
             example=example,
             meta=meta,
+            content_hash=hash_skill_content(name, plan),
         )
 
         embed_text = self._build_embedding_text(

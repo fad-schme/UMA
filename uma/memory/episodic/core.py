@@ -35,6 +35,8 @@ from .policies import EpisodicRetentionPolicy
 from uma.common.types import Episode
 from uma.common.types import RuntimeContext, SCOPE_MODEL_VERSION
 from uma.common.dedupe import dedupe_by_id
+from uma.common.integrity import hash_episode_content
+from uma.common.trust import SourceDescriptor, score_source
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +110,8 @@ class EpisodicCore:
             episode.origin_user_id = turn_context.user_id
             episode.origin_session_id = turn_context.session_id
             episode.scope_model_version = SCOPE_MODEL_VERSION
+            episode.trust_score = score_source(SourceDescriptor(kind="turn_assistant", session_id=turn_context.session_id))
+            episode.content_hash = hash_episode_content(episode.summary)
 
             # ------------------------------
             # 3. Store in episodic DB

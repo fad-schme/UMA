@@ -23,6 +23,7 @@ from typing import Iterable, Optional, Set
 from uma.common.accessors import get_attr_or_key
 from uma.common.ownership import validate_explicit_owner
 from uma.common.types import Fact, SCOPE_MODEL_VERSION
+from uma.common.trust import SourceDescriptor, score_source
 
 logger = logging.getLogger(__name__)
 
@@ -350,6 +351,8 @@ class PromotionPolicy:
             origin_user_id=getattr(fact, "origin_user_id", None),
             origin_session_id=getattr(fact, "origin_session_id", None),
             scope_model_version=SCOPE_MODEL_VERSION,
+            trust_score=score_source(SourceDescriptor(kind="promotion", parent_trust_score=getattr(fact, "trust_score", None))),
+            content_hash=getattr(fact, "content_hash", None),
         )
 
         logger.info(

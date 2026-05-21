@@ -74,6 +74,12 @@ class Episode:
     scope_model_version: Optional[str] = "v2"
 
     # -------------------------
+    # Security primitives (PR1 baseline: neutral defaults)
+    # -------------------------
+    trust_score: float = 0.5
+    content_hash: Optional[str] = None
+
+    # -------------------------
     # Additional fields already referenced in design (optional)
     # -------------------------
     salience: float = 0.0
@@ -104,6 +110,14 @@ class Episode:
 
         if not isinstance(self.owner_id, str) or not self.owner_id.strip():
             raise ValueError("Episode.owner_id must be a non-empty string")
+
+        ts = float(self.trust_score)
+        if not (0.0 <= ts <= 1.0):
+            raise ValueError("Episode.trust_score must be in [0, 1]")
+        if self.content_hash is not None and not isinstance(self.content_hash, str):
+            raise ValueError("Episode.content_hash must be a string when provided")
+        if isinstance(self.content_hash, str) and not self.content_hash:
+            raise ValueError("Episode.content_hash must be non-empty when provided")
 
         if float(self.salience) < 0.0:
             raise ValueError("Episode.salience must be >= 0")

@@ -55,6 +55,7 @@ from uma.common.json_utils import try_parse_json_object
 from .scorer import SalienceScorer
 from . import extractor_utils as utils
 from uma.common.storage_metadata import normalize_fact_metadata
+from uma.common.integrity import hash_fact_content
 
 logger = logging.getLogger(__name__)
 
@@ -232,6 +233,7 @@ class FactExtractor:
                 salience=0.0,
                 owner_type=owner_type,
                 owner_id=owner_id,
+                content_hash=hash_fact_content(subj_n, pred_n, obj_n),
                 meta=normalize_fact_metadata(
                     {"domain": domain},
                     fact_id=f"fact_{utils.uuid_from_text(f'userfact:v1:{owner_type}:{owner_id}:{subj_n}:{pred_n}:{obj_n}')}",

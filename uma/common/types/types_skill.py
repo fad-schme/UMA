@@ -43,6 +43,10 @@ class Skill:
     origin_session_id: Optional[str] = None
     scope_model_version: Optional[str] = "v2"
 
+    # Security primitives (PR1 baseline: neutral defaults)
+    trust_score: float = 0.5
+    content_hash: Optional[str] = None
+
     salience: float = 0.0
     tags: Dict[str, Any] = field(default_factory=dict)
     source: Optional[str] = None
@@ -69,6 +73,14 @@ class Skill:
             raise ValueError(f"Invalid owner_type: {self.owner_type!r}")
         if self.owner_id is not None and not isinstance(self.owner_id, str):
             raise ValueError("Skill.owner_id must be a string")
+
+        ts = float(self.trust_score)
+        if not (0.0 <= ts <= 1.0):
+            raise ValueError("Skill.trust_score must be in [0, 1]")
+        if self.content_hash is not None and not isinstance(self.content_hash, str):
+            raise ValueError("Skill.content_hash must be a string when provided")
+        if isinstance(self.content_hash, str) and not self.content_hash:
+            raise ValueError("Skill.content_hash must be non-empty when provided")
 
         if float(self.salience) < 0.0:
             raise ValueError("Skill.salience must be >= 0")

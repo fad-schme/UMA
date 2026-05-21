@@ -150,6 +150,8 @@ await lint_memory_drift(memory, artifact, user_id=..., stale_after_seconds=86400
 | Wiki | SQLite (document store) | Vector index |
 | Graph (optional) | Graph backend (plugin) | — |
 
+**Security primitives:** Each artifact (fact, episode, skill, chunk) carries `trust_score` (float, default 0.5) and `content_hash` (SHA-256 hex, where applicable) as OWASP ASI06 baseline fields.
+
 **Invariant:** SQL is always authoritative. Vector stores are rebuildable from SQL at any time:
 ```python
 await memory.rebuild_vector_indexes(tenant_id="default", ...)

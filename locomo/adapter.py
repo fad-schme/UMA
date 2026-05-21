@@ -28,42 +28,33 @@ class LocomoUMAAdapter:
         self.memory.shutdown()
 
     async def ingest_conversation(self, conversation: ConversationRecord) -> list[str]:
+        """Ingest every turn as user_msg so that both speakers' facts are semantically indexed.
+
+        LoCoMo conversations are between two peers, not a user+assistant pair. Both sides
+        contain retrievable facts, so each turn is processed individually rather than paired.
+        """
         warnings: list[str] = []
         user_id = _user_id(conversation.conversation_id)
         session_id = _session_id(conversation.conversation_id, conversation.metadata)
         turns = conversation.turns
         distinct_speakers = sorted({turn.speaker for turn in turns})
-        if len(distinct_speakers) > 2:
-            warnings.append(
-                "Conversation has more than two speakers; UMA ingestion uses adjacent-turn pairing and preserves raw labels in metadata."
-            )
-        for start in range(0, len(turns), 2):
-            pair = turns[start : start + 2]
-            if len(pair) < 2:
-                warnings.append(
-                    f"Skipped trailing unpaired turn index={pair[0].index} conversation_id={conversation.conversation_id}."
-                )
+        for turn in turns:
+            if not (turn.text or "").strip():
                 continue
-            first, second = pair
             extra_meta = {
                 "locomo": {
                     "conversation_id": conversation.conversation_id,
-                    "source_turn_indices": [first.index, second.index],
-                    "source_speakers": [first.speaker, second.speaker],
-                    "source_timestamps": [first.timestamp, second.timestamp],
-                    "original_order": [first.index, second.index],
-                    "original_turn_text": [first.text, second.text],
-                    "raw_turn_count": len(pair),
+                    "source_turn_index": turn.index,
+                    "source_speaker": turn.speaker,
+                    "source_timestamp": turn.timestamp,
                     "conversation_speakers": distinct_speakers,
                 }
             }
-            if len(distinct_speakers) > 2:
-                extra_meta["locomo"]["speaker_mapping_warning"] = "more_than_two_distinct_speakers_in_pair"
             try:
                 await self.memory.process_turn(
                     user_id=user_id,
-                    user_msg=first.text,
-                    assistant_reply=second.text,
+                    user_msg=turn.text,
+                    assistant_reply="",
                     session_id=session_id,
                     extra_meta=extra_meta,
                 )
@@ -71,7 +62,7 @@ class LocomoUMAAdapter:
                 warnings.append(
                     "Turn ingest failed "
                     f"conversation_id={conversation.conversation_id} "
-                    f"turn_indices={[first.index, second.index]} "
+                    f"turn_index={turn.index} "
                     f"error={type(exc).__name__}: {exc}"
                 )
         return warnings

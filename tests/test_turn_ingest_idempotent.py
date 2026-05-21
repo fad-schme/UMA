@@ -10,14 +10,14 @@ async def test_process_turn_is_idempotent_by_turn_id(uma_memory):
     # Use an assistant reply that triggers deterministic fact extraction.
     await mem.process_turn(
         user_id="user:u1",
-        user_msg="hello",
-        assistant_reply="user likes coffee.",
+        user_msg="I like coffee.",
+        assistant_reply="Good choice.",
         session_id="session-a",
     )
     await mem.process_turn(
         user_id="user:u1",
-        user_msg="hello",
-        assistant_reply="user likes coffee.",
+        user_msg="I like coffee.",
+        assistant_reply="Good choice.",
         session_id="session-a",
     )
 

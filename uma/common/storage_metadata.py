@@ -233,6 +233,17 @@ def normalize_document_metadata(
     )
 
 
+def _extract_security_meta(meta: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Return security sub-dict if trust_score or content_hash are present in meta."""
+    existing = dict(meta or {})
+    security: dict[str, Any] = {}
+    if "trust_score" in existing:
+        security["trust_score"] = existing["trust_score"]
+    if "content_hash" in existing:
+        security["content_hash"] = existing["content_hash"]
+    return security if security else None
+
+
 def normalize_chunk_metadata(
     meta: Mapping[str, Any] | None,
     *,
@@ -276,6 +287,9 @@ def normalize_chunk_metadata(
         },
     )
     normalized.setdefault("domain", "kb_doc")
+    security = _extract_security_meta(meta)
+    if security is not None:
+        normalized["security"] = security
     return normalized
 
 
@@ -338,6 +352,9 @@ def normalize_fact_metadata(
         normalized.setdefault("domain", "user_profile")
     else:
         normalized.setdefault("domain", "kb_doc")
+    security = _extract_security_meta(meta)
+    if security is not None:
+        normalized["security"] = security
     return normalized
 
 
@@ -379,6 +396,9 @@ def normalize_episode_metadata(
             "import_mode": existing.get("import_mode"),
         },
     )
+    security = _extract_security_meta(meta)
+    if security is not None:
+        normalized["security"] = security
     return normalized
 
 
@@ -428,6 +448,9 @@ def normalize_skill_metadata(
         },
     )
     normalized.setdefault("domain", "procedural")
+    security = _extract_security_meta(meta)
+    if security is not None:
+        normalized["security"] = security
     return normalized
 
 

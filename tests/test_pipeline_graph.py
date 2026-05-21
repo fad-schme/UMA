@@ -15,14 +15,14 @@ async def test_pipeline_updates_graph_with_facts_and_temporal_links(tmp_path):
     try:
         await mem.process_turn(
             user_id="user:u1",
-            user_msg="hello",
-            assistant_reply="user likes sushi.",
+            user_msg="I like sushi.",
+            assistant_reply="Good to know.",
             session_id="session-a",
         )
         await mem.process_turn(
             user_id="user:u1",
-            user_msg="hello again",
-            assistant_reply="user likes pizza.",
+            user_msg="I also like pizza.",
+            assistant_reply="Pizza is delicious.",
             session_id="session-a",
         )
 

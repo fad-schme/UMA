@@ -229,8 +229,8 @@ async def test_retrieval_and_process_turn_overlap_preserve_session_isolation(tmp
 
         await memory.process_turn(
             user_id="user:u1",
-            user_msg="session a seed",
-            assistant_reply="user likes coffee in session a",
+            user_msg="I like coffee in session a.",
+            assistant_reply="Good to know.",
             session_id="session-a",
             extra_meta={"request_id": "req-seed-a"},
         )
@@ -249,8 +249,8 @@ async def test_retrieval_and_process_turn_overlap_preserve_session_isolation(tmp
         turn_task = asyncio.create_task(
             memory.process_turn(
                 user_id="user:u1",
-                user_msg="session b write",
-                assistant_reply="user likes tea in session b",
+                user_msg="I like tea in session b.",
+                assistant_reply="Nice.",
                 session_id="session-b",
                 extra_meta={"request_id": "req-write-b"},
             )

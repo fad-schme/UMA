@@ -32,6 +32,7 @@ from uma.common.types import Fact, RuntimeContext, SCOPE_MODEL_VERSION
 from uma.retrieve.ranking import fuse_candidates
 from uma.common.identity import normalize_user_id
 from uma.common.dedupe import dedupe_by_id
+from uma.common.trust import SourceDescriptor, score_source
 from .ingestor import SemanticIngestor
 
 logger = logging.getLogger(__name__)
@@ -170,6 +171,7 @@ class SemanticCore:
                     f.origin_user_id = normalized_user_id
                     f.origin_session_id = turn_context.session_id
                     f.scope_model_version = SCOPE_MODEL_VERSION
+                    f.trust_score = score_source(SourceDescriptor(kind="turn_user", session_id=turn_context.session_id))
             except Exception:
                 logger.exception("SemanticCore.ingest: failed to set owner on fact id=%s", getattr(f, "id", None))
                 raise

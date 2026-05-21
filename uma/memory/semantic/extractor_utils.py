@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from uma.common.types import Fact
 from uma.common.storage_metadata import normalize_fact_metadata
+from uma.common.integrity import hash_fact_content
 from uma.ingest.types import DocumentChunk
 from uma.retrieve.user_query_helper import get_generic_terms
 from .scorer import SalienceScorer
@@ -154,6 +155,7 @@ def _fallback_fact_for_chunk_as_fact(
         salience=0.0,
         owner_type=owner_type,
         owner_id=owner_id,
+        content_hash=hash_fact_content(subj, "STATES", obj),
         meta=normalize_fact_metadata(
             {
                 "doc_id": doc_id,
@@ -649,6 +651,7 @@ def parse_facts_list_into_facts(
                 salience=0.0,
                 owner_type=owner_type,
                 owner_id=owner_id,
+                content_hash=hash_fact_content(subj_n, pred_n, obj_n),
                 meta=meta,
             )
             f.salience = float(scorer.score(f))

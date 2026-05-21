@@ -104,6 +104,8 @@ class ProceduralSQLStore(BaseVectorSQLStore):
             self._ensure_column(conn, "skills", "origin_user_id", "TEXT")
             self._ensure_column(conn, "skills", "origin_session_id", "TEXT")
             self._ensure_column(conn, "skills", "scope_model_version", "TEXT")
+            self._ensure_column(conn, "skills", "trust_score", "REAL NOT NULL DEFAULT 0.5")
+            self._ensure_column(conn, "skills", "content_hash", "TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_owner ON skills(owner_type, owner_id);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_tenant_owner ON skills(tenant_id, owner_type, owner_id);")
 
@@ -183,20 +185,23 @@ class ProceduralSQLStore(BaseVectorSQLStore):
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
 
+        row_keys = row.keys() if hasattr(row, "keys") else []
         return Skill(
             id=row["id"],
             name=row["name"],
             description="",
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
-            tenant_id=(row["tenant_id"] if "tenant_id" in row.keys() else DEFAULT_TENANT_ID),
+            tenant_id=(row["tenant_id"] if "tenant_id" in row_keys else DEFAULT_TENANT_ID),
             owner_type=owner_type,
             owner_id=owner_id,
-            workspace_id=(row["workspace_id"] if "workspace_id" in row.keys() else None),
-            origin_agent_id=(row["origin_agent_id"] if "origin_agent_id" in row.keys() else None),
-            origin_user_id=(row["origin_user_id"] if "origin_user_id" in row.keys() else None),
-            origin_session_id=(row["origin_session_id"] if "origin_session_id" in row.keys() else None),
-            scope_model_version=(row["scope_model_version"] if "scope_model_version" in row.keys() else None),
+            workspace_id=(row["workspace_id"] if "workspace_id" in row_keys else None),
+            origin_agent_id=(row["origin_agent_id"] if "origin_agent_id" in row_keys else None),
+            origin_user_id=(row["origin_user_id"] if "origin_user_id" in row_keys else None),
+            origin_session_id=(row["origin_session_id"] if "origin_session_id" in row_keys else None),
+            scope_model_version=(row["scope_model_version"] if "scope_model_version" in row_keys else None),
+            trust_score=(float(row["trust_score"]) if "trust_score" in row_keys and row["trust_score"] is not None else 0.5),
+            content_hash=(row["content_hash"] if "content_hash" in row_keys else None),
             trigger_phrases=trigger_phrases,
             trigger_patterns=trigger_patterns,
             plan=plan,
@@ -276,6 +281,8 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                 "origin_user_id": getattr(skill, "origin_user_id", None),
                 "origin_session_id": getattr(skill, "origin_session_id", None),
                 "scope_model_version": getattr(skill, "scope_model_version", None) or SCOPE_MODEL_VERSION,
+                "trust_score": float(getattr(skill, "trust_score", 0.5) or 0.5),
+                "content_hash": getattr(skill, "content_hash", None),
             }
 
             self._execute(
@@ -285,13 +292,15 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                     id, name, trigger_phrases, trigger_patterns, plan,
                     tools, example, meta, created_at, updated_at, tenant_id,
                     owner_type, owner_id, workspace_id, origin_agent_id,
-                    origin_user_id, origin_session_id, scope_model_version
+                    origin_user_id, origin_session_id, scope_model_version,
+                    trust_score, content_hash
                 )
                 VALUES (
                     :id, :name, :trigger_phrases, :trigger_patterns, :plan,
                     :tools, :example, :meta, :created_at, :updated_at, :tenant_id,
                     :owner_type, :owner_id, :workspace_id, :origin_agent_id,
-                    :origin_user_id, :origin_session_id, :scope_model_version
+                    :origin_user_id, :origin_session_id, :scope_model_version,
+                    :trust_score, :content_hash
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name,
@@ -309,7 +318,9 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                     origin_agent_id=excluded.origin_agent_id,
                     origin_user_id=excluded.origin_user_id,
                     origin_session_id=excluded.origin_session_id,
-                    scope_model_version=excluded.scope_model_version
+                    scope_model_version=excluded.scope_model_version,
+                    trust_score=excluded.trust_score,
+                    content_hash=excluded.content_hash
                 """,
                 params=payload,
                 log_context="add_skill",

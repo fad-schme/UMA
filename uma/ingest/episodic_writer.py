@@ -7,6 +7,8 @@ from uuid import uuid4
 
 from uma.common.types import Episode
 from uma.common.storage_metadata import normalize_episode_metadata
+from uma.common.integrity import hash_episode_content
+from uma.common.trust import SourceDescriptor, score_source
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,8 @@ async def write_document_episode(
         user_id=str(user_id or owner_id),
         raw=f"Document ingested: {doc_id}",
         tags=["document_ingest"],
+        trust_score=score_source(SourceDescriptor(kind="document")),
+        content_hash=hash_episode_content(summary_text),
         meta=normalize_episode_metadata(
             {"doc_id": doc_id, "source_type": "document_ingest"},
             episode_id=episode_id,
@@ -154,6 +158,8 @@ async def write_daily_diary_episodes(
             user_id=str(user_id or owner_id),
             raw=f"Daily diary import: {file_path}",
             tags=["daily_diary"],
+            trust_score=score_source(SourceDescriptor(kind="bootstrap_diary")),
+            content_hash=hash_episode_content(entry_text),
             meta=normalize_episode_metadata(
                 {
                     "source_kind": "daily_diary",
