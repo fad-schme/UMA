@@ -29,7 +29,11 @@ _POISONED_USER = (
 @pytest.mark.asyncio
 async def test_poisoned_reply_episode_trust_zero(tmp_path):
     """Poisoned assistant_reply → episode trust_score == 0.0, scan result in meta."""
+    from uma.common.config_types import SecurityConfig
+    from uma.common.injection_scan import configure_security
     mem = await init_uma_for_tests(tmp_path)
+    # Disable quarantine so the episode remains visible in list_episodes for trust_score inspection.
+    configure_security(SecurityConfig(scan_enabled=True, quarantine_enabled=False))
     try:
         await mem.process_turn(
             user_id="user:alice",

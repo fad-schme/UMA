@@ -1,0 +1,140 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from typing import Optional, Sequence, Tuple
+
+
+@dataclass(frozen=True)
+class ContentType:
+    detected: str          # e.g. "application/pdf"
+    is_binary: bool
+
+
+@dataclass(frozen=True)
+class MimeCheckResult:
+    declared_extension: str
+    detected_type: str
+    consistent: bool
+
+
+class MimeRejection(ValueError):
+    """Raised when a file's byte-level content type is inconsistent with its extension."""
+
+    def __init__(self, *, detected_type: str, declared_extension: str, file_path: str) -> None:
+        self.detected_type = detected_type
+        self.declared_extension = declared_extension
+        self.file_path = file_path
+        super().__init__("mime mismatch or executable files are not supported")
+
+
+# (magic_bytes, offset, content_type, is_binary)
+_BYTE_SIGNATURES: Sequence[Tuple[bytes, int, str, bool]] = [
+    (b"%PDF-",                0, "application/pdf",            False),
+    (b"PK\x03\x04",          0, "application/zip",            True),
+    (b"MZ",                   0, "application/x-dosexec",      True),   # PE / Windows EXE
+    (b"\x7fELF",              0, "application/x-elf",          True),
+    (b"\xfe\xed\xfa\xce",    0, "application/x-mach-binary",  True),   # Mach-O 32-bit BE
+    (b"\xce\xfa\xed\xfe",    0, "application/x-mach-binary",  True),   # Mach-O 32-bit LE
+    (b"\xff\xfe\xfa\xce",    0, "application/x-mach-binary",  True),   # Mach-O 64-bit BE
+    (b"\xcf\xfa\xed\xfe",    0, "application/x-mach-binary",  True),   # Mach-O 64-bit LE
+    (b"{\\rtf",               0, "application/rtf",            False),
+    (b"\x1f\x8b",             0, "application/gzip",           True),
+    (b"\x89PNG\r\n\x1a\n",   0, "image/png",                  True),
+    (b"\xff\xd8\xff",         0, "image/jpeg",                 True),
+    (b"GIF87a",               0, "image/gif",                  True),
+    (b"GIF89a",               0, "image/gif",                  True),
+]
+
+# Extensions that are never acceptable regardless of detected type
+_ALWAYS_REJECTED_TYPES = frozenset({
+    "application/x-dosexec",
+    "application/x-elf",
+    "application/x-mach-binary",
+})
+
+# extension → set of acceptable detected content types
+_EXT_ALLOWED_TYPES: dict[str, frozenset[str]] = {
+    ".pdf":      frozenset({"application/pdf"}),
+    ".zip":      frozenset({"application/zip"}),
+    ".rtf":      frozenset({"application/rtf"}),
+    ".gz":       frozenset({"application/gzip"}),
+    ".png":      frozenset({"image/png"}),
+    ".jpg":      frozenset({"image/jpeg"}),
+    ".jpeg":     frozenset({"image/jpeg"}),
+    ".gif":      frozenset({"image/gif"}),
+    ".html":     frozenset({"text/html", "text/plain"}),
+    ".htm":      frozenset({"text/html", "text/plain"}),
+    ".xhtml":    frozenset({"text/html", "text/plain"}),
+    ".txt":      frozenset({"text/plain"}),
+    ".md":       frozenset({"text/plain"}),
+    ".markdown": frozenset({"text/plain"}),
+    ".json":     frozenset({"text/plain"}),
+    ".yaml":     frozenset({"text/plain"}),
+    ".yml":      frozenset({"text/plain"}),
+    ".csv":      frozenset({"text/plain"}),
+}
+
+_HEADER_BYTES = 16
+
+
+def detect_content_type(file_path: str) -> ContentType:
+    """Read the first 16 bytes and match against known signatures."""
+    try:
+        with open(file_path, "rb") as fh:
+            header = fh.read(_HEADER_BYTES)
+    except OSError:
+        return ContentType(detected="application/octet-stream", is_binary=True)
+
+    for magic, offset, ctype, is_bin in _BYTE_SIGNATURES:
+        end = offset + len(magic)
+        if len(header) >= end and header[offset:end] == magic:
+            return ContentType(detected=ctype, is_binary=is_bin)
+
+    # Heuristic: if header contains a null byte, treat as opaque binary
+    if b"\x00" in header:
+        return ContentType(detected="application/octet-stream", is_binary=True)
+
+    return ContentType(detected="text/plain", is_binary=False)
+
+
+def check_mime_consistency(
+    declared_extension: str,
+    detected_type: ContentType,
+) -> MimeCheckResult:
+    """Return a result describing whether the extension matches the detected type."""
+    ext = declared_extension.lower()
+    dt = detected_type.detected
+
+    # Executables are always rejected, regardless of declared extension
+    if dt in _ALWAYS_REJECTED_TYPES:
+        return MimeCheckResult(
+            declared_extension=ext,
+            detected_type=dt,
+            consistent=False,
+        )
+
+    allowed = _EXT_ALLOWED_TYPES.get(ext)
+    if allowed is None:
+        # Unknown extension — no constraint; allow it through
+        return MimeCheckResult(declared_extension=ext, detected_type=dt, consistent=True)
+
+    consistent = dt in allowed
+    return MimeCheckResult(declared_extension=ext, detected_type=dt, consistent=consistent)
+
+
+def enforce_mime_consistency(file_path: str) -> ContentType:
+    """
+    Detect the file's content type and raise MimeRejection if it is inconsistent
+    with the declared extension or is an unconditionally blocked type.
+    """
+    ext = os.path.splitext(file_path)[1].lower() or ""
+    ct = detect_content_type(file_path)
+    result = check_mime_consistency(ext, ct)
+    if not result.consistent:
+        raise MimeRejection(
+            detected_type=ct.detected,
+            declared_extension=ext,
+            file_path=file_path,
+        )
+    return ct

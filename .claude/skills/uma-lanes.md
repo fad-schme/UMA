@@ -150,7 +150,7 @@ await lint_memory_drift(memory, artifact, user_id=..., stale_after_seconds=86400
 | Wiki | SQLite (document store) | Vector index |
 | Graph (optional) | Graph backend (plugin) | — |
 
-**Security primitives:** Each artifact (fact, episode, skill, chunk) carries `trust_score` (float, default 0.5) and `content_hash` (SHA-256 hex, where applicable) as OWASP ASI06 baseline fields.
+**Security primitives:** Each artifact (fact, episode, skill, chunk) carries `trust_score` (float, default 0.5) and `content_hash` (SHA-256 hex, where applicable) as OWASP ASI06 baseline fields. Ingested files pass MIME consistency checking (`uma/ingest/mime_check.py`) before parsing; HTML and Markdown content is sanitized via `_sanitize_html` in `uma/ingest/parser.py` with per-category counts recorded in `meta["security"]["sanitization"]` on the document manifest.
 
 **Invariant:** SQL is always authoritative. Vector stores are rebuildable from SQL at any time:
 ```python

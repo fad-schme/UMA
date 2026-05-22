@@ -25,6 +25,10 @@ def test_management_module_exports_supported_operations_only() -> None:
     assert management_api.__all__ == [
         "explain_result",
         "lint_memory_drift",
+        "QuarantinedRecord",
+        "list_quarantined",
+        "reinstate_quarantined",
+        "purge_quarantined",
     ]
 
 

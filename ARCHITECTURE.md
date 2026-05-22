@@ -35,6 +35,8 @@ Each artifact (fact, episode, skill, chunk) additionally carries `trust_score` (
 
 Each artifact also carries a nullable `quarantined_at` timestamp. When a high-severity scan hit is detected and `SecurityConfig.quarantine_enabled=True`, the artifact is stored with `quarantined_at` set to the current UTC time. Quarantined artifacts are excluded from all normal retrieval queries (`AND quarantined_at IS NULL`) but remain in the database. The management API (`uma.api.management`) exposes `list_quarantined`, `reinstate_quarantined`, and `purge_quarantined` to review, restore, or permanently delete quarantined records.
 
+File ingestion validates caller inputs at `UMAMemory.ingest_document` (non-empty path, file must exist and be a regular file), checks byte-level MIME consistency via `uma/ingest/mime_check.py` before parsing (raising `MimeRejection` for executable types or extension/content mismatches), and sanitizes HTML and Markdown through `_sanitize_html` in `uma/ingest/parser.py` (stripping scripts, iframes, inline event handlers, javascript: and data: URLs, conditional comments, and inline SVG); per-category removal counts are stored in `meta["security"]["sanitization"]` on the document manifest.
+
 ---
 
 ## Storage Model

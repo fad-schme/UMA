@@ -390,6 +390,13 @@ class UMAMemory:
         config: Optional[Any] = None,
     ) -> Any:
         """Ingest an unstructured document into UMA memory."""
+        if not file_path or not isinstance(file_path, str) or not file_path.strip():
+            raise ValueError("file_path is required and cannot be empty")
+        import os as _os
+        if not _os.path.exists(file_path):
+            raise FileNotFoundError(f"file not found: {file_path}")
+        if not _os.path.isfile(file_path):
+            raise ValueError("file_path must point to a regular file")
         self._ensure_ingestion_ready()
 
         from uma.ingest.ingest_service import ingest_document as _ingest

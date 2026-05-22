@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
 
 from uma.common.types import Chunk, Fact
 
@@ -14,6 +14,7 @@ class ParsedDocument:
     source_hash: str
     pages: List[Tuple[int, str]]  # (page_num, text)
     extracted_at: datetime
+    sanitization_counts: Optional[Dict[str, int]] = None
 
 
 @dataclass(frozen=True)

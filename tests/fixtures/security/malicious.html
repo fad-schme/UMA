@@ -1,0 +1,8 @@
+<html><body>
+<script>alert("xss")</script>
+<p onclick="evil()">Click me</p>
+<a href="javascript:void(0)">link</a>
+<img src="data:image/png;base64,abc">
+<iframe src="http://evil.com"></iframe>
+<p>Safe content here</p>
+</body></html>

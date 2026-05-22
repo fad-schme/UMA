@@ -60,6 +60,7 @@ def _merge_manifest_meta(
     ingest_signature: dict,
     now: datetime,
     reingest_reason: str | None = None,
+    sanitization_counts: dict | None = None,
 ) -> dict:
     meta = dict(existing or {})
     meta.setdefault("created_by", _INGEST_PIPELINE_VERSION)
@@ -75,6 +76,11 @@ def _merge_manifest_meta(
 
     if reingest_reason:
         meta["reingest_reason"] = reingest_reason
+
+    if sanitization_counts:
+        security = dict(meta.get("security") or {})
+        security["sanitization"] = sanitization_counts
+        meta["security"] = security
 
     # Keep a short capped history for auditability / migrations.
     history = meta.get("ingest_history")
@@ -594,6 +600,7 @@ async def _persist_chunks(
             ingest_signature=ingest_signature,
             now=now_persist,
             reingest_reason=reingest_reason,
+            sanitization_counts=getattr(parsed, "sanitization_counts", None) or None,
         ),
         log_context="ingest_document",
     )
@@ -795,6 +802,9 @@ async def capture_source(
 
     if not file_path or not isinstance(file_path, str):
         raise ValueError("capture_source: file_path must be a non-empty string")
+
+    from uma.ingest.mime_check import enforce_mime_consistency
+    enforce_mime_consistency(file_path)
 
     parsed = parse_file(file_path)
     if not parsed.pages:

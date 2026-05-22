@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
@@ -20,6 +21,67 @@ def _hash_file(path: str) -> str:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
             sha.update(chunk)
     return sha.hexdigest()
+
+
+# ----------------------------- HTML sanitization --------------------------
+
+_STRIP_TAGS = {"script", "style", "noscript", "iframe", "object", "embed", "link", "meta", "svg"}
+_INLINE_EVENT_RE = re.compile(r'^on\w+$', re.IGNORECASE)
+_JS_HREF_RE = re.compile(r'javascript\s*:', re.IGNORECASE)
+_DATA_URI_RE = re.compile(r'data\s*:', re.IGNORECASE)
+_COND_COMMENT_RE = re.compile(r'<!--\[if.*?<!\[endif\]-->', re.DOTALL | re.IGNORECASE)
+
+
+def _sanitize_html(html_text: str) -> tuple[str, Dict[str, int]]:
+    """
+    Strip dangerous content from HTML and return (sanitized_text, counts).
+    counts keys: scripts, iframes, event_handlers, js_urls, data_urls, cond_comments, svg
+    """
+    try:
+        from bs4 import BeautifulSoup
+    except Exception as exc:  # pragma: no cover
+        raise ImportError(
+            "HTML sanitization requires beautifulsoup4: pip install beautifulsoup4"
+        ) from exc
+
+    counts: Dict[str, int] = {}
+
+    # Strip conditional comments before parsing
+    cond_hits = _COND_COMMENT_RE.findall(html_text)
+    if cond_hits:
+        counts["cond_comments"] = len(cond_hits)
+        html_text = _COND_COMMENT_RE.sub("", html_text)
+
+    soup = BeautifulSoup(html_text, "html.parser")
+
+    # Remove block-level dangerous tags
+    for tag_name in _STRIP_TAGS:
+        hits = soup.find_all(tag_name)
+        if hits:
+            category = "scripts" if tag_name in ("script", "noscript") else \
+                       "iframes" if tag_name == "iframe" else tag_name
+            counts[category] = counts.get(category, 0) + len(hits)
+            for t in hits:
+                t.extract()
+
+    # Strip inline event handler attributes and dangerous URL schemes from all remaining tags
+    for tag in soup.find_all(True):
+        attrs_to_remove = []
+        for attr, val in list(tag.attrs.items()):
+            val_str = val if isinstance(val, str) else " ".join(val) if isinstance(val, list) else ""
+            if _INLINE_EVENT_RE.match(attr):
+                attrs_to_remove.append(attr)
+                counts["event_handlers"] = counts.get("event_handlers", 0) + 1
+            elif _JS_HREF_RE.search(val_str):
+                attrs_to_remove.append(attr)
+                counts["js_urls"] = counts.get("js_urls", 0) + 1
+            elif _DATA_URI_RE.search(val_str):
+                attrs_to_remove.append(attr)
+                counts["data_urls"] = counts.get("data_urls", 0) + 1
+        for attr in attrs_to_remove:
+            del tag[attr]
+
+    return soup.get_text(separator="\n", strip=True), counts
 
 
 # ----------------------------- Strategy base -----------------------------
@@ -130,21 +192,17 @@ class YAMLParser(ParserStrategy):
 
 
 class HTMLParser(ParserStrategy):
-    """Strip scripts/styles and return visible text."""
+    """Sanitize and return visible text; record per-category removal counts."""
+
+    _last_sanitization_counts: Optional[Dict[str, int]] = None
 
     def read(self, file_path: str) -> str:
         try:
-            from bs4 import BeautifulSoup
-        except Exception as exc:
-            raise ImportError(
-                "HTMLParser requires beautifulsoup4: pip install beautifulsoup4"
-            ) from exc
-        try:
             with open(file_path, "r", encoding="utf-8") as fh:
-                soup = BeautifulSoup(fh, "html.parser")
-            for tag in soup(["script", "style", "noscript"]):
-                tag.extract()
-            return soup.get_text(separator="\n", strip=True)
+                raw = fh.read()
+            text, counts = _sanitize_html(raw)
+            self._last_sanitization_counts = counts or None
+            return text
         except Exception as exc:
             logger.error("HTMLParser failed for '%s': %s", file_path, exc)
             raise
@@ -170,21 +228,18 @@ class CSVParser(ParserStrategy):
 
 
 class MarkdownParser(ParserStrategy):
+    _last_sanitization_counts: Optional[Dict[str, int]] = None
+
     def read(self, file_path: str) -> str:
         try:
             import markdown
         except Exception as exc:
             raise ImportError("MarkdownParser requires markdown: pip install markdown") from exc
         try:
-            from bs4 import BeautifulSoup
-        except Exception as exc:
-            raise ImportError(
-                "MarkdownParser requires beautifulsoup4: pip install beautifulsoup4"
-            ) from exc
-        try:
             with open(file_path, "r", encoding="utf-8") as fh:
                 html = markdown.markdown(fh.read())
-            text = "".join(BeautifulSoup(html, "html.parser").find_all(string=True))
+            text, counts = _sanitize_html(html)
+            self._last_sanitization_counts = counts or None
             return text
         except Exception as exc:
             logger.error("MarkdownParser failed for '%s': %s", file_path, exc)
@@ -241,8 +296,8 @@ class FileContentParser:
         self._by_mime = {}
 
         self.register_parser(".txt", TXTParser())
-        self.register_parser(".md", TXTParser())
-        self.register_parser(".markdown", TXTParser())
+        self.register_parser(".md", MarkdownParser())
+        self.register_parser(".markdown", MarkdownParser())
         self.register_parser(".json", JSONParser())
         self.register_parser(".yaml", YAMLParser())
         self.register_parser(".yml", YAMLParser())
@@ -305,9 +360,12 @@ class FileContentParser:
                 )
                 return impl.read(file_path)
 
-        if ext in (".txt", ".md", ".markdown"):
+        if ext == ".txt":
             logger.debug("FileContentParser: falling back to TXTParser for %s", file_path)
             return TXTParser().read(file_path)
+        if ext in (".md", ".markdown"):
+            logger.debug("FileContentParser: falling back to MarkdownParser for %s", file_path)
+            return MarkdownParser().read(file_path)
 
         raise ValueError(
             f"No parser registered for extension '{ext or '<none>'}' "
@@ -337,12 +395,14 @@ class FileContentParser:
         source_hash = _hash_file(file_path)
         doc_id = f"doc_{source_hash[:24]}"
         pages = impl.read_pages(file_path)
+        san_counts = getattr(impl, "_last_sanitization_counts", None)
         return ParsedDocument(
             doc_id=doc_id,
             source_path=file_path,
             source_hash=source_hash,
             pages=pages,
             extracted_at=datetime.now(timezone.utc),
+            sanitization_counts=san_counts or None,
         )
 
 
