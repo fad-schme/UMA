@@ -11,6 +11,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, List, Mapping, Optional, Sequence
 
+from uma.common.integrity import (
+    hash_chunk_content,
+    hash_episode_content,
+    hash_fact_content,
+    hash_skill_content,
+)
 from uma.common.provenance import provenance_for_artifact
 from uma.memory import wiki as wiki_module
 
@@ -29,6 +35,16 @@ _LANE_STORE_KEY = {
     "procedural": "procedural",
     "raw": "chunk",
 }
+
+
+@dataclass
+class IntegrityVerificationResult:
+    record_id: str
+    lane: str
+    status: str                      # "verified" or "failed"
+    expected_hash: Optional[str]     # stored hash; populated on failure
+    actual_hash: Optional[str]       # recomputed hash; populated on failure
+    quarantined: bool                # True if this call quarantined the record
 
 
 @dataclass
@@ -113,6 +129,30 @@ async def explain_result(
     }
 
 
+_ARTIFACT_TYPE_LANE: dict[str, str] = {}  # populated lazily on first call
+
+
+def _detect_lane(artifact: Any) -> Optional[str]:
+    """Return the memory lane for a typed artifact, or None if it's a wiki/dict artifact."""
+    # Import here to avoid circular imports; cache class references on first call
+    global _ARTIFACT_TYPE_LANE
+    if not _ARTIFACT_TYPE_LANE:
+        try:
+            from uma.common.types import Fact, Episode, Skill, Chunk
+            _ARTIFACT_TYPE_LANE = {
+                Fact: "semantic",
+                Episode: "episodic",
+                Skill: "procedural",
+                Chunk: "raw",
+            }
+        except ImportError:
+            return None
+    for cls, lane in _ARTIFACT_TYPE_LANE.items():
+        if isinstance(artifact, cls):
+            return lane
+    return None
+
+
 async def lint_memory_drift(
     memory: "UMAMemory",
     artifacts: Any | Sequence[Any],
@@ -122,7 +162,11 @@ async def lint_memory_drift(
     workspace_id: str | None = None,
     stale_after_seconds: int | None = None,
 ) -> dict[str, Any]:
-    """Lint compiled memory artifacts for provenance drift without mutating them."""
+    """Lint compiled memory artifacts for provenance drift without mutating them.
+
+    For typed lane artifacts (Fact, Episode, Skill, Chunk), also runs verify_integrity.
+    Integrity failures are included as findings with category "integrity_failure".
+    """
     items = (
         list(artifacts)
         if isinstance(artifacts, Sequence)
@@ -133,6 +177,45 @@ async def lint_memory_drift(
     statuses: list[str] = []
 
     for artifact in items:
+        lane = _detect_lane(artifact)
+        if lane is not None:
+            # Typed lane record: run integrity verification only
+            record_id = getattr(artifact, "id", None)
+            owner_type = getattr(artifact, "owner_type", None)
+            owner_id = getattr(artifact, "owner_id", None)
+            if record_id and owner_type and owner_id:
+                try:
+                    iv_result = await verify_integrity(
+                        memory,
+                        record_id=record_id,
+                        lane=lane,
+                        owner_type=owner_type,
+                        owner_id=owner_id,
+                        tenant_id=tenant_id,
+                    )
+                    if iv_result.status == "failed":
+                        findings.append({
+                            "category": "integrity_failure",
+                            "record_id": record_id,
+                            "lane": lane,
+                            "expected_hash": iv_result.expected_hash,
+                            "actual_hash": iv_result.actual_hash,
+                            "quarantined": iv_result.quarantined,
+                        })
+                        statuses.append("integrity_failure")
+                    else:
+                        statuses.append("ok")
+                except Exception as exc:
+                    findings.append({
+                        "category": "integrity_check_error",
+                        "record_id": record_id,
+                        "lane": lane,
+                        "error": str(exc),
+                    })
+                    statuses.append("error")
+            continue
+
+        # Wiki/compiled artifact: run the existing provenance drift check
         lint_result = await wiki_module.lint_wiki_page(
             memory,
             artifact,
@@ -157,6 +240,120 @@ async def lint_memory_drift(
         "findings": findings,
         "drift_statuses": statuses,
     }
+
+async def verify_integrity(
+    memory: "UMAMemory",
+    *,
+    record_id: str,
+    lane: str,
+    owner_type: str,
+    owner_id: str,
+    tenant_id: str = "default",
+) -> IntegrityVerificationResult:
+    """
+    Re-compute the canonical hash of a stored record and compare it to the stored content_hash.
+
+    On mismatch, the record is quarantined through the same path PR4 uses and an
+    "integrity_failure" entry is appended to meta.security.audit_log.
+
+    lane must be one of: "semantic", "episodic", "procedural", "raw".
+    A missing content_hash indicates a programming error and raises RuntimeError.
+    """
+    store_key = _LANE_STORE_KEY.get(lane)
+    if store_key is None:
+        raise ValueError(f"verify_integrity: unknown lane {lane!r}")
+    store = memory._stores.get(store_key)
+    if store is None:
+        raise RuntimeError(f"verify_integrity: store for lane={lane!r} not found")
+
+    # Fetch the record (bypasses quarantine filter — forensics may need to verify quarantined records)
+    record = None
+    if lane == "semantic":
+        record = await store.get_fact(record_id, tenant_id=tenant_id, owner_type=owner_type, owner_id=owner_id)
+    elif lane == "episodic":
+        record = await store.get_episode(record_id, tenant_id=tenant_id, owner_type=owner_type, owner_id=owner_id)
+    elif lane == "procedural":
+        record = await store.get_skill(record_id, tenant_id=tenant_id, owner_type=owner_type, owner_id=owner_id)
+    elif lane == "raw":
+        record = await store.get_chunk(record_id, tenant_id=tenant_id, owner_type=owner_type, owner_id=owner_id)
+
+    if record is None:
+        raise ValueError(f"verify_integrity: record {record_id!r} not found in lane={lane!r}")
+
+    # Retrieve stored hash and recompute canonical hash
+    if lane == "semantic":
+        stored_hash = getattr(record, "content_hash", None)
+        if not stored_hash:
+            raise RuntimeError(
+                f"verify_integrity: fact {record_id!r} has no content_hash — this is a programming error"
+            )
+        actual_hash = hash_fact_content(record.subject, record.predicate, record.object)
+    elif lane == "episodic":
+        stored_hash = getattr(record, "content_hash", None)
+        if not stored_hash:
+            raise RuntimeError(
+                f"verify_integrity: episode {record_id!r} has no content_hash — this is a programming error"
+            )
+        actual_hash = hash_episode_content(record.summary)
+    elif lane == "procedural":
+        stored_hash = getattr(record, "content_hash", None)
+        if not stored_hash:
+            raise RuntimeError(
+                f"verify_integrity: skill {record_id!r} has no content_hash — this is a programming error"
+            )
+        actual_hash = hash_skill_content(record.name, record.plan)
+    elif lane == "raw":
+        # Chunks store their text hash in meta["text_hash"] (PR1 invariant)
+        stored_hash = (getattr(record, "meta", None) or {}).get("text_hash")
+        if not stored_hash:
+            raise RuntimeError(
+                f"verify_integrity: chunk {record_id!r} has no meta.text_hash — this is a programming error"
+            )
+        actual_hash = hash_chunk_content(record.text)
+
+    if actual_hash == stored_hash:
+        logger.info(
+            "verify_integrity: ok record=%s lane=%s owner=%s:%s",
+            record_id, lane, owner_type, owner_id,
+        )
+        return IntegrityVerificationResult(
+            record_id=record_id,
+            lane=lane,
+            status="verified",
+            expected_hash=None,
+            actual_hash=None,
+            quarantined=False,
+        )
+
+    # Mismatch: quarantine the record
+    now = datetime.now(timezone.utc)
+    audit_entry = {
+        "event": "integrity_failure",
+        "timestamp": now.isoformat(),
+        "expected_hash": stored_hash,
+        "actual_hash": actual_hash,
+    }
+    quarantined = await store.quarantine_record(
+        record_id,
+        tenant_id=tenant_id,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        quarantined_at=now.isoformat(),
+        audit_entry=audit_entry,
+    )
+    logger.warning(
+        "verify_integrity: MISMATCH record=%s lane=%s owner=%s:%s quarantined=%s",
+        record_id, lane, owner_type, owner_id, quarantined,
+    )
+    return IntegrityVerificationResult(
+        record_id=record_id,
+        lane=lane,
+        status="failed",
+        expected_hash=stored_hash,
+        actual_hash=actual_hash,
+        quarantined=quarantined,
+    )
+
 
 async def list_quarantined(
     memory: "UMAMemory",
@@ -361,4 +558,6 @@ __all__ = [
     "list_quarantined",
     "reinstate_quarantined",
     "purge_quarantined",
+    "IntegrityVerificationResult",
+    "verify_integrity",
 ]

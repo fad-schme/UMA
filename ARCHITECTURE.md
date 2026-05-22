@@ -37,6 +37,8 @@ Each artifact also carries a nullable `quarantined_at` timestamp. When a high-se
 
 File ingestion validates caller inputs at `UMAMemory.ingest_document` (non-empty path, file must exist and be a regular file), checks byte-level MIME consistency via `uma/ingest/mime_check.py` before parsing (raising `MimeRejection` for executable types or extension/content mismatches), and sanitizes HTML and Markdown through `_sanitize_html` in `uma/ingest/parser.py` (stripping scripts, iframes, inline event handlers, javascript: and data: URLs, conditional comments, and inline SVG); per-category removal counts are stored in `meta["security"]["sanitization"]` on the document manifest.
 
+On-demand integrity verification is available through `uma.api.management.verify_integrity(memory, record_id, lane, ...)`. It recomputes the canonical content hash for any stored Fact, Episode, Skill, or Chunk and compares it to the stored `content_hash` (or `meta["text_hash"]` for chunks). On mismatch, the record is quarantined through the same PR4 path (`quarantined_at` set, audit log entry appended) and an `IntegrityVerificationResult(status="failed", ...)` is returned. A clean record returns `status="verified"` without mutation. `lint_memory_drift` automatically routes typed lane artifacts through `verify_integrity` so batch integrity checks can be run without calling the function directly. Background scanning across the full dataset is an Enterprise capability and is not part of this SDK.
+
 ---
 
 ## Storage Model

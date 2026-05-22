@@ -868,8 +868,83 @@ class SemanticSQLStore(BaseVectorSQLStore):
             conn.close()
 
     # ------------------------------------------------------------------ #
+    # Single-record fetch (bypass quarantine filter for management use)
+    # ------------------------------------------------------------------ #
+
+    async def get_fact(
+        self,
+        fact_id: str,
+        *,
+        tenant_id: Optional[str] = None,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+    ) -> Optional[Fact]:
+        """Fetch a single fact by ID. Returns None if not found (quarantined records included)."""
+        if not tenant_id or not owner_type or not owner_id:
+            raise ValueError("SemanticSQLStore.get_fact requires tenant_id, owner_type and owner_id")
+        conn = self._conn()
+        try:
+            row = self._query_one(
+                conn,
+                "SELECT * FROM facts WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
+                params=[fact_id, tenant_id, owner_type, owner_id],
+                log_context="get_fact",
+            )
+            return self._row_to_object(row) if row else None
+        except Exception:
+            logger.exception("SemanticSQLStore.get_fact failed id=%s", fact_id)
+            raise
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------------ #
     # Quarantine Management
     # ------------------------------------------------------------------ #
+
+    async def quarantine_record(
+        self,
+        record_id: str,
+        *,
+        tenant_id: Optional[str],
+        owner_type: str,
+        owner_id: str,
+        quarantined_at: str,
+        audit_entry: Dict[str, Any],
+    ) -> bool:
+        """Set quarantined_at and append an audit log entry. Returns True if updated."""
+        if not tenant_id or not owner_type or not owner_id:
+            raise ValueError("SemanticSQLStore.quarantine_record requires scope")
+        conn = self._conn()
+        try:
+            row = self._query_one(
+                conn,
+                "SELECT meta FROM facts WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
+                params=[record_id, tenant_id, owner_type, owner_id],
+                log_context="quarantine_fact_fetch",
+            )
+            if row is None:
+                return False
+            try:
+                meta = json.loads(row["meta"]) if row["meta"] else {}
+            except Exception:
+                meta = {}
+            security = meta.setdefault("security", {})
+            security.setdefault("audit_log", []).append(audit_entry)
+            self._execute(
+                conn,
+                "UPDATE facts SET quarantined_at=?, meta=? WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
+                params=[quarantined_at, json.dumps(meta), record_id, tenant_id, owner_type, owner_id],
+                log_context="quarantine_fact",
+            )
+            conn.commit()
+            logger.info("SemanticSQLStore: quarantined fact id=%s owner=%s:%s", record_id, owner_type, owner_id)
+            return True
+        except Exception:
+            self._safe_rollback(conn, "quarantine_fact")
+            logger.exception("SemanticSQLStore.quarantine_record failed id=%s", record_id)
+            raise
+        finally:
+            conn.close()
 
     async def reinstate_quarantined_record(
         self,

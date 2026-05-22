@@ -189,6 +189,27 @@ result = await lint_memory_drift(
 # Returns: status, artifacts_scanned, findings, drift_statuses
 ```
 
+Typed lane artifacts (Fact, Episode, Skill, Chunk) are automatically routed through `verify_integrity`. Integrity failures appear as findings with `category="integrity_failure"` and the tampered record is quarantined.
+
+### `verify_integrity` — On-demand content hash verification
+
+```python
+from uma.api.management import verify_integrity, IntegrityVerificationResult
+
+result = await verify_integrity(
+    memory,
+    record_id="fact-abc",
+    lane="semantic",        # one of: semantic, episodic, procedural, raw
+    owner_type="user",
+    owner_id="user-123",
+    tenant_id="default",
+)
+# result.status == "verified" | "failed"
+# result.quarantined == True if a mismatch was detected and the record was quarantined
+```
+
+Recomputes the canonical hash of a stored record and compares it to `content_hash` (or `meta["text_hash"]` for chunks). On mismatch, quarantines the record through the PR4 path and appends an `integrity_failure` entry to `meta.security.audit_log`. Raises `ValueError` for unknown lane or missing record; raises `RuntimeError` if `content_hash` is absent (programming error).
+
 ---
 
 ## Scope Fields Reference

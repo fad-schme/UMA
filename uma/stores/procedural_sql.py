@@ -625,3 +625,48 @@ class ProceduralSQLStore(BaseVectorSQLStore):
             raise
         finally:
             conn.close()
+
+    async def quarantine_record(
+        self,
+        record_id: str,
+        *,
+        tenant_id: Optional[str],
+        owner_type: str,
+        owner_id: str,
+        quarantined_at: str,
+        audit_entry: Dict[str, Any],
+    ) -> bool:
+        """Set quarantined_at and append an audit log entry. Returns True if updated."""
+        if not tenant_id or not owner_type or not owner_id:
+            raise ValueError("ProceduralSQLStore.quarantine_record requires scope")
+        conn = self._conn()
+        try:
+            row = self._query_one(
+                conn,
+                "SELECT meta FROM skills WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
+                params=[record_id, tenant_id, owner_type, owner_id],
+                log_context="quarantine_skill_fetch",
+            )
+            if row is None:
+                return False
+            try:
+                meta = json.loads(row["meta"]) if row["meta"] else {}
+            except Exception:
+                meta = {}
+            security = meta.setdefault("security", {})
+            security.setdefault("audit_log", []).append(audit_entry)
+            self._execute(
+                conn,
+                "UPDATE skills SET quarantined_at=?, meta=? WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
+                params=[quarantined_at, json.dumps(meta), record_id, tenant_id, owner_type, owner_id],
+                log_context="quarantine_skill",
+            )
+            conn.commit()
+            logger.info("ProceduralSQLStore: quarantined skill id=%s owner=%s:%s", record_id, owner_type, owner_id)
+            return True
+        except Exception:
+            self._safe_rollback(conn, "quarantine_skill")
+            logger.exception("ProceduralSQLStore.quarantine_record failed id=%s", record_id)
+            raise
+        finally:
+            conn.close()

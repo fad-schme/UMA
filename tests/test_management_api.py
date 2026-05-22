@@ -29,6 +29,8 @@ def test_management_module_exports_supported_operations_only() -> None:
         "list_quarantined",
         "reinstate_quarantined",
         "purge_quarantined",
+        "IntegrityVerificationResult",
+        "verify_integrity",
     ]
 
 

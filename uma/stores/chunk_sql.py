@@ -752,3 +752,74 @@ class ChunkSQLStore(BaseVectorSQLStore):
             raise
         finally:
             conn.close()
+
+    async def get_chunk(
+        self,
+        chunk_id: str,
+        *,
+        tenant_id: Optional[str] = None,
+        owner_type: str,
+        owner_id: str,
+    ) -> Optional["Chunk"]:
+        """Fetch a single chunk by ID (quarantined records included)."""
+        if not tenant_id or not owner_type or not owner_id:
+            raise ValueError("ChunkSQLStore.get_chunk requires tenant_id, owner_type and owner_id")
+        conn = self._conn()
+        try:
+            row = self._query_one(
+                conn,
+                "SELECT * FROM chunks WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
+                params=[chunk_id, tenant_id, owner_type, owner_id],
+                log_context="get_chunk",
+            )
+            return self._row_to_object(row) if row else None
+        except Exception:
+            logger.exception("ChunkSQLStore.get_chunk failed id=%s", chunk_id)
+            raise
+        finally:
+            conn.close()
+
+    async def quarantine_record(
+        self,
+        record_id: str,
+        *,
+        tenant_id: Optional[str],
+        owner_type: str,
+        owner_id: str,
+        quarantined_at: str,
+        audit_entry: Dict[str, Any],
+    ) -> bool:
+        """Set quarantined_at and append an audit log entry. Returns True if updated."""
+        if not tenant_id or not owner_type or not owner_id:
+            raise ValueError("ChunkSQLStore.quarantine_record requires scope")
+        conn = self._conn()
+        try:
+            row = self._query_one(
+                conn,
+                "SELECT meta FROM chunks WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
+                params=[record_id, tenant_id, owner_type, owner_id],
+                log_context="quarantine_chunk_fetch",
+            )
+            if row is None:
+                return False
+            try:
+                meta = json.loads(row["meta"]) if row["meta"] else {}
+            except Exception:
+                meta = {}
+            security = meta.setdefault("security", {})
+            security.setdefault("audit_log", []).append(audit_entry)
+            self._execute(
+                conn,
+                "UPDATE chunks SET quarantined_at=?, meta=? WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
+                params=[quarantined_at, json.dumps(meta), record_id, tenant_id, owner_type, owner_id],
+                log_context="quarantine_chunk",
+            )
+            conn.commit()
+            logger.info("ChunkSQLStore: quarantined chunk id=%s owner=%s:%s", record_id, owner_type, owner_id)
+            return True
+        except Exception:
+            self._safe_rollback(conn, "quarantine_chunk")
+            logger.exception("ChunkSQLStore.quarantine_record failed id=%s", record_id)
+            raise
+        finally:
+            conn.close()

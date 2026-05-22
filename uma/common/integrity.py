@@ -32,3 +32,8 @@ def hash_skill_content(name: str, plan: Any) -> str:
     """SHA-256 hex digest over a skill's canonical (name, plan) pair."""
     payload = f"{name}|{json.dumps(plan, sort_keys=True, ensure_ascii=False)}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def hash_chunk_content(text: str) -> str:
+    """SHA-256 hex digest over a chunk's canonical text content."""
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
