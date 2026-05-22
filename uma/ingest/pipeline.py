@@ -13,7 +13,7 @@ developer's agent and performs **memory management only**:
     2. Working memory update (user + assistant)
     3. Working memory compaction
     4. Episodic memory storage
-    5. Semantic ingestion (facts extracted from assistant reply)
+    5. Semantic ingestion (facts extracted from user message)
     6. Graph update
     7. after_turn hooks
 
@@ -30,6 +30,7 @@ from __future__ import annotations
 from collections import deque
 import copy
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import logging
 import hashlib
 import threading
@@ -38,8 +39,9 @@ from uma.memory.promotion import PromotionPolicy
 from uma.adapters.observability.context import request_context
 from uma.adapters.observability.metrics import increment, timed
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
-from uma.common.types import RuntimeContext, SessionScope
+from uma.common.types import RuntimeContext, SessionScope, Chunk
 from uma.common.identity import normalize_user_id
+from uma.common.trust import SourceDescriptor, score_source
 logger = logging.getLogger(__name__)
 
 
@@ -229,6 +231,7 @@ class MemoryPipeline:
                 user_msg,
                 turn_id=None,
                 turn_context=turn_context,
+                source_ids=list((extra_meta or {}).get("user_source_ids") or []),
             ) or [])
         facts = facts or []
         if episode is not None and facts:
@@ -321,6 +324,14 @@ class MemoryPipeline:
 
                 await self._maybe_compact_working_memory(wm_scope)
 
+                chunk_refs = await self._store_turn_chunks(
+                    user_id,
+                    user_msg,
+                    assistant_reply,
+                    turn_id=turn_id,
+                    turn_context=turn_context,
+                )
+
                 episode = await self._store_episode(
                     user_id,
                     user_msg,
@@ -339,7 +350,11 @@ class MemoryPipeline:
                             "episode": episode,
                             "facts": None,
                             "turn_context": turn_context,
-                            "extra_meta": meta,
+                            "extra_meta": {
+                                **meta,
+                                "user_source_ids": list(chunk_refs.get("user_source_ids") or []),
+                                "assistant_source_ids": list(chunk_refs.get("assistant_source_ids") or []),
+                            },
                         }
                     )
                     if enqueued:
@@ -353,6 +368,7 @@ class MemoryPipeline:
                         user_msg,
                         turn_id=turn_id,
                         turn_context=turn_context,
+                        source_ids=list(chunk_refs.get("user_source_ids") or []),
                     ) or [])
 
                 if episode is not None and facts:
@@ -652,6 +668,90 @@ class MemoryPipeline:
             logger.exception("EpisodicCore.store_episode failed.")
             return None
 
+    async def _store_turn_chunks(
+        self,
+        user_id: str,
+        user_msg: str,
+        assistant_reply: str,
+        *,
+        turn_id: str,
+        turn_context: RuntimeContext,
+    ) -> Dict[str, List[str]]:
+        chunk_core = getattr(self.mem, "chunk_core", None)
+        embedder = getattr(self.mem, "embedder", None)
+        if chunk_core is None or embedder is None:
+            logger.warning("ChunkCore or embedder not initialized; skipping turn chunk persistence.")
+            return {"user_source_ids": [], "assistant_source_ids": []}
+
+        owner_id = normalize_user_id(user_id)
+        doc_id = f"turn:{turn_context.session_id}:{turn_id}"
+        now = datetime.now(timezone.utc)
+        rows: List[tuple[str, Chunk]] = []
+        for position, (role, text) in enumerate((("user", user_msg), ("assistant", assistant_reply))):
+            if not isinstance(text, str) or not text.strip():
+                continue
+            chunk_id = hashlib.sha256(
+                f"turn_chunk:{owner_id}:{turn_context.session_id}:{turn_id}:{role}".encode("utf-8")
+            ).hexdigest()
+            text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            rows.append(
+                (
+                    role,
+                    Chunk(
+                        id=chunk_id,
+                        doc_id=doc_id,
+                        text=text,
+                        page_range=(1, 1),
+                        position=position,
+                        source_path=f"turn://{turn_context.session_id}/{turn_id}/{role}",
+                        source_hash=text_hash,
+                        created_at=now,
+                        updated_at=now,
+                        owner_type="user",
+                        owner_id=owner_id,
+                        tenant_id=turn_context.tenant_id,
+                        workspace_id=turn_context.workspace_id,
+                        origin_agent_id=turn_context.agent_id,
+                        origin_user_id=owner_id,
+                        origin_session_id=turn_context.session_id,
+                        trust_score=score_source(
+                            SourceDescriptor(
+                                kind="turn_user" if role == "user" else "turn_assistant",
+                                session_id=turn_context.session_id,
+                            )
+                        ),
+                        meta={
+                            "text_hash": text_hash,
+                            "source_kind": "turn",
+                            "source_role": role,
+                            "turn_id": turn_id,
+                        },
+                    ),
+                )
+            )
+        if not rows:
+            return {"user_source_ids": [], "assistant_source_ids": []}
+
+        try:
+            vectors = await embedder.embed([chunk.text for _, chunk in rows])
+        except Exception:
+            logger.exception("MemoryPipeline: turn chunk embedding failed.")
+            return {"user_source_ids": [], "assistant_source_ids": []}
+
+        persisted: Dict[str, List[str]] = {"user_source_ids": [], "assistant_source_ids": []}
+        for (role, chunk), vec in zip(rows, vectors):
+            try:
+                ok = await chunk_core.upsert_chunk(chunk, vec)
+                if ok:
+                    persisted[f"{role}_source_ids"].append(chunk.id)
+            except Exception:
+                logger.exception(
+                    "MemoryPipeline: turn chunk upsert failed role=%s chunk_id=%s",
+                    role,
+                    chunk.id,
+                )
+        return persisted
+
     # ------------------------------------------------------------------
     # SEMANTIC INGESTION
     # ------------------------------------------------------------------
@@ -663,6 +763,7 @@ class MemoryPipeline:
         *,
         turn_id: Optional[str],
         turn_context: RuntimeContext,
+        source_ids: Optional[List[str]] = None,
     ) -> Any:
         sem = getattr(self.mem, "semantic_core", None)
         if sem is None:
@@ -681,7 +782,17 @@ class MemoryPipeline:
             return await sem.ingest(
                 user_subject,
                 text,
-                extra_meta={"turn_id": turn_id} if turn_id else None,
+                extra_meta=(
+                    {
+                        key: value
+                        for key, value in {
+                            "turn_id": turn_id,
+                            "source_ids": list(source_ids or []),
+                        }.items()
+                        if value
+                    }
+                    or None
+                ),
                 turn_context=turn_context,
             )
         except Exception:

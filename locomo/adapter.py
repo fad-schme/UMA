@@ -1,560 +1,181 @@
+"""LoCoMo adapter for UMA-RLM.
+
+Design
+------
+LoCoMo conversations are between two peers (e.g. Caroline & Melanie). UMA's
+tenant model expects a single user, so each conversation gets one synthetic
+user that owns the whole dialogue:
+
+    user_id    = f"locomo_user_{conversation_id}"
+    session_id = f"locomo_{conversation_id}"
+
+Subject attribution is handled in the *text itself* via speaker prefixes,
+not by ownership. Every turn carries its speaker as the first token after
+the timestamp:
+
+    "[<timestamp>] <Speaker>: <text>"
+
+The speaker name is part of the indexed text, so retrieval ("What did
+Caroline say about X") hits the right turns and any fact extractor sees
+the subject up front. dia_id and session_n are also passed in extra_meta
+so a future scorer can map retrieved chunks back to LoCoMo gold-evidence
+pointers without parsing strings.
+
+Ingest pairing (sliding window)
+-------------------------------
+LoCoMo is peer-to-peer, not user→assistant. Pairing adjacent turns is a
+pragmatic compromise that keeps assistant_reply non-empty (avoiding any
+empty-string guards in the derive stage) and gives working memory a
+coherent transcript shape. Each utterance appears exactly once as
+user_msg — that determines long-term storage. It also appears once as
+assistant_reply in the previous pair, which feeds working memory only.
+
+    turn 1: user=Caroline_1, assistant=Melanie_1
+    turn 2: user=Melanie_1,  assistant=Caroline_2
+    turn 3: user=Caroline_2, assistant=Melanie_2
+    ...
+    turn N: user=last_turn,  assistant=""   (no successor)
+
+UMA is a Python package, not an agent. This adapter does not generate
+answers; it returns the raw retrieve_memory result for an external scorer.
+"""
+
 from __future__ import annotations
 
-import inspect
-import os
-import shutil
 import time
-from pathlib import Path
 from typing import Any
 
-import yaml
-
 from uma import UMAMemory
-from uma.retrieve.context_pack_builder import ContextPackBuilder
 
 from locomo.loader import ConversationRecord, QARecord, TurnRecord
 
 
+AGENT_ID = "locomo_agent"
+
+
+def user_id_for(conversation_id: str) -> str:
+    return f"locomo_user_{conversation_id}"
+
+
+def session_id_for(conversation_id: str) -> str:
+    return f"locomo_{conversation_id}"
+
+
 class LocomoUMAAdapter:
-    def __init__(self, config_path: str, *, disable_llm: bool = False) -> None:
-        self.config_path = config_path
-        self.disable_llm = disable_llm
-        self.agent_id = "locomo_agent"
-        self.memory = UMAMemory.from_yaml(config_path).set_context(agent_id=self.agent_id)
-        self.context_cfg = getattr(getattr(self.memory, "retrieval_cfg", None), "context", None)
-        self.llm = None if disable_llm else (getattr(self.memory, "agent_llm", None) or getattr(self.memory, "llm", None))
+    """Drives UMAMemory for LoCoMo benchmark runs."""
+
+    def __init__(self, config_path: str) -> None:
+        self.memory = UMAMemory.from_yaml(config_path).set_context(agent_id=AGENT_ID)
 
     def close(self) -> None:
         self.memory.shutdown()
 
-    async def ingest_conversation(self, conversation: ConversationRecord) -> list[str]:
-        """Ingest every turn as user_msg so that both speakers' facts are semantically indexed.
+    # ------------------------------------------------------------------ ingest
 
-        LoCoMo conversations are between two peers, not a user+assistant pair. Both sides
-        contain retrievable facts, so each turn is processed individually rather than paired.
+    async def ingest_conversation(self, conversation: ConversationRecord) -> list[str]:
+        """Ingest turns via sliding-window pairs through process_turn.
+
+        Each turn is the user_msg of exactly one process_turn call. The next
+        turn (if any) is its assistant_reply. Every utterance therefore hits
+        long-term storage exactly once via the user_msg path.
         """
+        user_id = user_id_for(conversation.conversation_id)
+        session_id = session_id_for(conversation.conversation_id)
+        turns = [t for t in conversation.turns if (t.text or "").strip()]
         warnings: list[str] = []
-        user_id = _user_id(conversation.conversation_id)
-        session_id = _session_id(conversation.conversation_id, conversation.metadata)
-        turns = conversation.turns
-        distinct_speakers = sorted({turn.speaker for turn in turns})
-        for turn in turns:
-            if not (turn.text or "").strip():
-                continue
+
+        for i, turn in enumerate(turns):
+            next_turn = turns[i + 1] if i + 1 < len(turns) else None
+            user_msg = _format_turn(turn)
+            assistant_reply = _format_turn(next_turn) if next_turn is not None else ""
             extra_meta = {
                 "locomo": {
                     "conversation_id": conversation.conversation_id,
-                    "source_turn_index": turn.index,
-                    "source_speaker": turn.speaker,
-                    "source_timestamp": turn.timestamp,
-                    "conversation_speakers": distinct_speakers,
+                    "dia_id": turn.raw.get("dia_id"),
+                    "session_n": turn.raw.get("session_n"),
+                    "speaker": turn.speaker,
+                    "timestamp": turn.timestamp,
+                    "turn_index": turn.index,
+                    "paired_with_dia_id": next_turn.raw.get("dia_id") if next_turn else None,
                 }
             }
             try:
                 await self.memory.process_turn(
                     user_id=user_id,
-                    user_msg=turn.text,
-                    assistant_reply="",
+                    user_msg=user_msg,
+                    assistant_reply=assistant_reply,
                     session_id=session_id,
                     extra_meta=extra_meta,
                 )
+                print(f"process_turn: {i}")
+
             except Exception as exc:
                 warnings.append(
-                    "Turn ingest failed "
-                    f"conversation_id={conversation.conversation_id} "
-                    f"turn_index={turn.index} "
+                    f"ingest failed conversation_id={conversation.conversation_id} "
+                    f"turn_index={turn.index} dia_id={turn.raw.get('dia_id')!r} "
                     f"error={type(exc).__name__}: {exc}"
                 )
         return warnings
 
-    async def run_question(self, conversation: ConversationRecord, qa: QARecord) -> dict[str, Any]:
-        user_id = _user_id(conversation.conversation_id)
-        session_id = _session_id(conversation.conversation_id, conversation.metadata)
+    # ----------------------------------------------------------------- retrieve
+
+    async def run_question(
+        self,
+        conversation: ConversationRecord,
+        qa: QARecord,
+    ) -> dict[str, Any]:
+        """Retrieve memory for one QA item. No answer generation."""
+        user_id = user_id_for(conversation.conversation_id)
+        session_id = session_id_for(conversation.conversation_id)
         record: dict[str, Any] = {
             "conversation_id": conversation.conversation_id,
             "question_id": qa.question_id,
             "question": qa.question,
             "expected_answer": qa.expected_answer,
-            "predicted_answer": None,
-            "memory_results": [],
-            "context_result": {
-                "rendered_context": "",
-                "facts": [],
-                "chunks": [],
-                "episodic": [],
-                "documents": [],
-                "trace": {},
-                "provenance": {},
-            },
-            "active_lanes": [],
-            "latency_ms": {
-                "retrieve_memory": None,
-                "retrieve_context": None,
-                "answer_generation": None,
-            },
-            "token_counts": {},
-            "warnings": [],
+            "memory_result": None,
+            "latency_ms": {},
             "error": None,
         }
 
-        memory_result: dict[str, Any] = {}
-        context_result: dict[str, Any] = {}
-
         try:
-            started = time.perf_counter()
+            t0 = time.perf_counter()
             memory_result = await self.memory.retrieve_memory(
                 query_text=qa.question,
                 user_id=user_id,
                 session_id=session_id,
                 include_debug=True,
             )
-            record["latency_ms"]["retrieve_memory"] = round((time.perf_counter() - started) * 1000, 3)
-            record["memory_results"] = _normalize_memory_results(memory_result)
-
-            started = time.perf_counter()
-            context_result = await self.memory.retrieve_context(
-                query_text=qa.question,
-                user_id=user_id,
-                session_id=session_id,
-            )
-            record["latency_ms"]["retrieve_context"] = round((time.perf_counter() - started) * 1000, 3)
-            record["active_lanes"] = list(context_result.get("active_lanes") or [])
-            record["context_result"] = await _normalize_context_result(
-                qa.question,
-                context_result,
-                context_cfg=self.context_cfg,
-                llm=self.llm,
-            )
-
-            if self.disable_llm:
-                record["warnings"].append("LLM answer generation disabled by --no-llm.")
-            elif self.llm is None:
-                record["warnings"].append("No configured LLM available for answer generation.")
-            else:
-                started = time.perf_counter()
-                record["predicted_answer"] = await self._generate_answer(
-                    question=qa.question,
-                    rendered_context=record["context_result"]["rendered_context"],
-                )
-                record["latency_ms"]["answer_generation"] = round((time.perf_counter() - started) * 1000, 3)
+            record["latency_ms"]["retrieve_memory"] = round((time.perf_counter() - t0) * 1000, 3)
+            record["memory_result"] = _jsonable(memory_result)
         except Exception as exc:
             record["error"] = f"{type(exc).__name__}: {exc}"
-            if not record["memory_results"] and memory_result:
-                record["memory_results"] = _normalize_memory_results(memory_result)
-            if context_result and not record["context_result"]["rendered_context"]:
-                record["context_result"] = await _normalize_context_result(
-                    qa.question,
-                    context_result,
-                    context_cfg=self.context_cfg,
-                    llm=None,
-                )
         return record
 
-    async def _generate_answer(self, *, question: str, rendered_context: str) -> str:
-        user_content = question
-        if rendered_context.strip():
-            user_content = f"Context:\n{rendered_context}\n\nQuestion: {question}"
-        reply = await self.llm.generate(
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Answer the user's question using the provided context. "
-                        "If the context is insufficient, say so explicitly."
-                    ),
-                },
-                {"role": "user", "content": user_content},
-            ],
-            max_tokens=256,
-            temperature=0.1,
-        )
-        return reply.strip() if isinstance(reply, str) else repr(reply)
+
+# ---------------------------------------------------------------------- helpers
 
 
-def safe_reset_from_config(config_path: str) -> tuple[bool, str]:
-    cfg = yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {}
-    if not isinstance(cfg, dict):
-        return False, f"Invalid config format in {config_path}."
-    storage = cfg.get("storage")
-    if not isinstance(storage, dict):
-        return False, "Config does not contain a storage section."
-    db_root = storage.get("db_root")
-    if not isinstance(db_root, str) or not db_root.strip():
-        return False, "storage.db_root is missing or empty."
-
-    root = _resolve_storage_path(
-        db_root=db_root,
-        db_root_base=str(storage.get("db_root_base") or "auto"),
-        config_path=config_path,
-    )
-    repo_root = Path.cwd().resolve()
-    targets = [root]
-    vector_cfg = storage.get("vector_config")
-    if isinstance(vector_cfg, dict):
-        vector_path = vector_cfg.get("path")
-        if isinstance(vector_path, str) and vector_path.strip():
-            targets.append(
-                _resolve_storage_path(
-                    db_root=vector_path,
-                    db_root_base=str(storage.get("db_root_base") or "auto"),
-                    config_path=config_path,
-                )
-            )
-
-    deleted: list[str] = []
-    skipped: list[str] = []
-    for target in targets:
-        if not _is_safe_local_reset_target(target, repo_root):
-            skipped.append(f"{target} (outside repo boundary)")
-            continue
-        if not target.exists():
-            continue
-        _remove_tree(target)
-        deleted.append(str(target))
-
-    if deleted:
-        suffix = f" Skipped: {', '.join(skipped)}." if skipped else ""
-        return True, f"Deleted local UMA storage paths: {', '.join(deleted)}.{suffix}"
-    if skipped:
-        return False, f"No storage paths deleted. Skipped: {', '.join(skipped)}."
-    return True, "No local UMA storage paths existed; nothing to delete."
-
-
-def _resolve_storage_path(*, db_root: str, db_root_base: str, config_path: str) -> Path:
-    expanded = Path(os.path.expandvars(os.path.expanduser(db_root)))
-    if expanded.is_absolute():
-        return expanded.resolve()
-
-    cwd_root = (Path.cwd() / expanded).resolve()
-    config_root = (Path(config_path).resolve().parent / expanded).resolve()
-    base = db_root_base.strip().lower() or "auto"
-    if base in {"config", "config_dir"}:
-        return config_root
-    if base in {"cwd", "workdir"}:
-        return cwd_root
-    if base == "auto":
-        return cwd_root if cwd_root.exists() or not config_root.exists() else config_root
-    return cwd_root
-
-
-def _is_safe_local_reset_target(path: Path, repo_root: Path) -> bool:
-    try:
-        path.relative_to(repo_root)
-        return True
-    except ValueError:
-        return False
-
-
-def _remove_tree(path: Path) -> None:
-    last_error: Exception | None = None
-    for _ in range(3):
-        try:
-            shutil.rmtree(path)
-            return
-        except FileNotFoundError:
-            return
-        except OSError as exc:
-            last_error = exc
-            time.sleep(0.2)
-    if last_error is not None:
-        raise last_error
-
-
-def _user_id(conversation_id: str) -> str:
-    return f"locomo_user_{conversation_id}"
-
-
-def _session_id(conversation_id: str, metadata: dict[str, Any]) -> str:
-    session_value = metadata.get("session_id") or metadata.get("session") or metadata.get("dialogue_id")
-    if isinstance(session_value, str) and session_value.strip():
-        return f"locomo_{session_value.strip()}"
-    return f"locomo_{conversation_id}"
-
-
-async def _normalize_context_result(
-    question: str,
-    context_result: dict[str, Any],
-    *,
-    context_cfg: Any,
-    llm: Any,
-) -> dict[str, Any]:
-    pack = ContextPackBuilder.build(question, context_result)
-    rendered_context = await ContextPackBuilder.render_snippet_async(pack, context_cfg=context_cfg, llm=llm)
-    return {
-        "rendered_context": rendered_context,
-        "facts": [_normalize_context_fact(item) for item in context_result.get("facts") or []],
-        "chunks": [_normalize_context_chunk(item) for item in context_result.get("chunks") or []],
-        "episodic": [_normalize_context_episode(item) for item in context_result.get("episodic") or []],
-        "documents": [_sanitize_for_benchmark(_jsonable(item)) for item in context_result.get("documents") or []],
-        "trace": _sanitize_for_benchmark(_jsonable(context_result.get("trace") or [])),
-        "provenance": _sanitize_for_benchmark(_jsonable(context_result.get("provenance") or {})),
-    }
-
-
-def _normalize_memory_results(memory_result: dict[str, Any]) -> list[dict[str, Any]]:
-    normalized: list[dict[str, Any]] = []
-    debug_payload = memory_result.get("debug")
-    debug_memories: list[Any] = []
-    if isinstance(debug_payload, dict):
-        debug_memories = list(debug_payload.get("memories") or [])
-
-    facts = list(memory_result.get("facts") or [])
-    evidence = list(memory_result.get("evidence") or [])
-    for rank, fact in enumerate(facts, start=1):
-        item = _normalize_memory_fact(fact, rank=rank)
-        if item is not None:
-            normalized.append(item)
-    start_rank = len(normalized) + 1
-    for offset, item in enumerate(evidence, start=0):
-        normalized_item = _normalize_memory_evidence(item, rank=start_rank + offset)
-        if normalized_item is not None:
-            normalized.append(normalized_item)
-
-    memories = debug_memories
-
-    for rank, item in enumerate(memories, start=1):
-        obj = _jsonable(item)
-        if not isinstance(obj, dict):
-            obj = {"value": obj}
-        normalized_item = _normalize_debug_memory(obj, rank=rank)
-        if normalized_item is not None:
-            normalized.append(normalized_item)
-    return normalized
-
-
-def _normalize_context_fact(item: Any) -> dict[str, Any]:
-    obj = _jsonable(item)
-    if not isinstance(obj, dict):
-        obj = {"value": obj}
-    text = _fact_text(obj)
-    source_ids = list(obj.get("source_ids") or obj.get("source_chunk_ids") or [])
-    normalized = {
-        "id": obj.get("id"),
-        "text": text,
-        "subject": obj.get("subject"),
-        "predicate": obj.get("predicate"),
-        "object": _stringify_text(obj.get("object")),
-        "confidence": obj.get("confidence"),
-        "salience": obj.get("salience"),
-        "source_ids": source_ids,
-        "metadata": _sanitize_for_benchmark(_jsonable(obj.get("meta") or {})),
-    }
-    return _sanitize_for_benchmark(normalized)
-
-
-def _normalize_context_chunk(item: Any) -> dict[str, Any]:
-    obj = _jsonable(item)
-    if not isinstance(obj, dict):
-        obj = {"value": obj}
-    text = (
-        obj.get("text")
-        or obj.get("snippet")
-        or obj.get("content")
-        or obj.get("summary")
-        or _stringify_text(obj.get("value"))
-    )
-    normalized = {
-        "id": obj.get("id") or obj.get("chunk_id"),
-        "text": text,
-        "source_document_id": obj.get("source_document_id") or obj.get("doc_id"),
-        "metadata": _sanitize_for_benchmark(_jsonable(obj.get("meta") or {})),
-    }
-    return _sanitize_for_benchmark(normalized)
-
-
-def _normalize_context_episode(item: Any) -> dict[str, Any]:
-    obj = _jsonable(item)
-    if not isinstance(obj, dict):
-        obj = {"value": obj}
-    normalized = _sanitize_for_benchmark(obj)
-    if isinstance(normalized, dict) and not normalized.get("text"):
-        normalized["text"] = (
-            normalized.get("summary")
-            or normalized.get("raw")
-            or normalized.get("transcript")
-            or normalized.get("content")
-        )
-    return normalized
-
-
-def _normalize_memory_fact(item: Any, *, rank: int) -> dict[str, Any] | None:
-    obj = _jsonable(item)
-    if not isinstance(obj, dict):
-        obj = {"value": obj}
-    text = _fact_text(obj)
-    if not text:
-        return None
-    return {
-        "id": obj.get("id"),
-        "lane": "semantic",
-        "type": "fact",
-        "text": text,
-        "score": obj.get("confidence"),
-        "rank": rank,
-        "source_ids": list(obj.get("source_ids") or obj.get("source_chunk_ids") or []),
-        "provenance": _sanitize_for_benchmark(_jsonable(obj.get("provenance") or {})),
-        "timestamp": obj.get("timestamp") or obj.get("created_at"),
-        "metadata": _sanitize_for_benchmark(
-            {
-                "subject": obj.get("subject"),
-                "predicate": obj.get("predicate"),
-                "object": _stringify_text(obj.get("object")),
-                "salience": obj.get("salience"),
-            }
-        ),
-    }
-
-
-def _normalize_memory_evidence(item: Any, *, rank: int) -> dict[str, Any] | None:
-    obj = _jsonable(item)
-    if not isinstance(obj, dict):
-        obj = {"value": obj}
-    text = (
-        obj.get("text")
-        or obj.get("snippet")
-        or obj.get("content")
-        or obj.get("summary")
-        or _stringify_text(obj.get("value"))
-    )
-    if not text:
-        return None
-    return {
-        "id": obj.get("id") or obj.get("chunk_id"),
-        "lane": "raw",
-        "type": "evidence",
-        "text": text,
-        "score": None,
-        "rank": rank,
-        "source_ids": [obj.get("source_document_id")] if obj.get("source_document_id") else [],
-        "provenance": _sanitize_for_benchmark(_jsonable(obj.get("provenance") or {})),
-        "timestamp": obj.get("timestamp") or obj.get("created_at"),
-        "metadata": _sanitize_for_benchmark(_jsonable(obj.get("meta") or {})),
-    }
-
-
-def _normalize_debug_memory(obj: dict[str, Any], *, rank: int) -> dict[str, Any] | None:
-    text = (
-        obj.get("text")
-        or obj.get("summary")
-        or obj.get("content")
-        or obj.get("snippet")
-        or _fact_text(obj)
-    )
-    if not text:
-        return None
-    source_ids = _collect_source_ids(obj)
-    return {
-        "id": obj.get("id") or obj.get("artifact_id") or obj.get("doc_id"),
-        "lane": obj.get("kb_lane") or obj.get("lane") or obj.get("artifact_lane"),
-        "type": obj.get("artifact_kind") or obj.get("artifact_type") or obj.get("kind") or obj.get("type"),
-        "text": text,
-        "score": obj.get("score") or obj.get("final_score") or obj.get("confidence"),
-        "rank": rank,
-        "source_ids": source_ids,
-        "provenance": _sanitize_for_benchmark(_jsonable(obj.get("provenance") or {})),
-        "timestamp": obj.get("timestamp") or obj.get("derived_at") or obj.get("created_at"),
-        "metadata": _sanitize_for_benchmark(_jsonable(obj.get("metadata") or obj.get("meta") or {})),
-    }
-
-
-def _fact_text(obj: dict[str, Any]) -> str | None:
-    direct = obj.get("text") or obj.get("fact") or obj.get("claim") or obj.get("content") or obj.get("summary")
-    if isinstance(direct, str) and direct.strip():
-        return direct.strip()
-    subject = _stringify_text(obj.get("subject"))
-    predicate = _stringify_text(obj.get("predicate"))
-    object_text = _stringify_text(obj.get("object") or obj.get("value"))
-    parts = [part for part in (subject, predicate, object_text) if part]
-    if not parts:
-        return None
-    return " ".join(parts)
-
-
-def _stringify_text(value: Any) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        cleaned = value.strip().strip('"')
-        return cleaned or None
-    if isinstance(value, (int, float, bool)):
-        return str(value)
-    if isinstance(value, dict):
-        for key in ("text", "value", "name", "id"):
-            candidate = value.get(key)
-            if isinstance(candidate, str) and candidate.strip():
-                return candidate.strip()
-        return None
-    if isinstance(value, (list, tuple, set)):
-        parts = [_stringify_text(item) for item in value]
-        joined = ", ".join(part for part in parts if part)
-        return joined or None
-    return str(value)
-
-
-def _collect_source_ids(obj: dict[str, Any]) -> list[Any]:
-    source_ids: list[Any] = []
-    for key in (
-        "source_ids",
-        "chunk_ids",
-        "direct_source_chunk_ids",
-        "direct_source_document_ids",
-        "parent_artifact_ids",
-        "related_artifact_ids",
-    ):
-        value = obj.get(key)
-        if isinstance(value, list):
-            source_ids.extend(item for item in value if item is not None)
-    return source_ids
+def _format_turn(turn: TurnRecord) -> str:
+    """Render a single turn as 'speaker: text', with an optional timestamp."""
+    speaker = turn.speaker or "Unknown"
+    text = (turn.text or "").strip()
+    if turn.timestamp:
+        return f"[{turn.timestamp}] {speaker}: {text}"
+    return f"{speaker}: {text}"
 
 
 def _jsonable(value: Any) -> Any:
+    """Shallow coercion to JSON-safe types. No field renaming, no stripping."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
     if isinstance(value, dict):
-        return {str(key): _jsonable(val) for key, val in value.items()}
+        return {str(k): _jsonable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple, set)):
         return [_jsonable(item) for item in value]
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
     if hasattr(value, "model_dump") and callable(value.model_dump):
         return _jsonable(value.model_dump())
     if hasattr(value, "dict") and callable(value.dict):
         return _jsonable(value.dict())
-    for attr in ("__dict__",):
-        raw = getattr(value, attr, None)
-        if isinstance(raw, dict):
-            return _jsonable(raw)
-    candidate: dict[str, Any] = {}
-    for name in dir(value):
-        if name.startswith("_"):
-            continue
-        member = getattr(value, name, None)
-        if inspect.ismethod(member) or inspect.isfunction(member):
-            continue
-        if isinstance(member, (str, int, float, bool)) or member is None:
-            candidate[name] = member
-        elif isinstance(member, (list, tuple, set, dict)):
-            candidate[name] = _jsonable(member)
-    return candidate or repr(value)
-
-
-def _sanitize_for_benchmark(value: Any) -> Any:
-    blocked = {"vector", "embedding", "embeddings", "dense_vector", "sparse_vector", "query_vector"}
-    if isinstance(value, dict):
-        cleaned: dict[str, Any] = {}
-        embedding_removed = False
-        embedding_dim: int | None = None
-        for key, item in value.items():
-            key_str = str(key)
-            if key_str.lower() in blocked:
-                embedding_removed = True
-                if isinstance(item, list) and item and all(isinstance(x, (int, float)) for x in item):
-                    embedding_dim = len(item)
-                continue
-            cleaned[key_str] = _sanitize_for_benchmark(item)
-        if embedding_removed:
-            cleaned["embedding_removed"] = True
-            if embedding_dim is not None:
-                cleaned["embedding_dim"] = embedding_dim
-        return cleaned
-    if isinstance(value, list):
-        return [_sanitize_for_benchmark(item) for item in value]
-    return value
+    if hasattr(value, "__dict__"):
+        return _jsonable(vars(value))
+    return repr(value)

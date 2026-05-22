@@ -300,6 +300,63 @@ async def test_runtime_memory_retrieval_can_expose_debug_payload(uma_memory) -> 
 
 
 @pytest.mark.asyncio
+async def test_runtime_memory_zero_evidence_returns_honest_fallback_debug_shape(uma_memory) -> None:
+    runtime = UMARuntime.from_memory(uma_memory)
+    context = RuntimeContext(
+        tenant_id="tenant-1",
+        agent_id=uma_memory.agent_id or "agent-default",
+        request_id="req-memory-fallback",
+        user_id="user:u1",
+    )
+
+    async def fake_context(
+        bound_context: RuntimeContext,
+        *,
+        query_text: str,
+        lane_filter=None,
+    ) -> Dict[str, list]:
+        return {
+            "product": "context",
+            "query": query_text,
+            "lane_filter": [],
+            "working_memory": [],
+            "episodic": [],
+            "facts": [
+                {
+                    "id": "fact-missing-evidence",
+                    "subject": "user",
+                    "predicate": "current research topic",
+                    "object": "adoption agencies",
+                    "source_ids": [],
+                }
+            ],
+            "chunks": [],
+            "documents": [],
+            "skills": [],
+            "graph": [],
+            "trace": [{"event": "lane_plan"}],
+            "confidence": {"score": 0.2},
+            "provenance": {"valid": False, "source_chunk_ids": [], "invalid_reasons": ["missing_source_chunk_ids"]},
+        }
+
+    runtime.retrieve_context = fake_context  # type: ignore[method-assign]
+
+    result = await runtime.retrieve_memory(
+        context,
+        query_text="What did the user research?",
+        memory_intent="continuity",
+        include_debug=True,
+    )
+
+    assert result["facts"]
+    assert result["provenance_valid"] is False
+    assert result["provenance_error"] == "missing_source_chunk_ids"
+    assert result["debug"]["compiled_answer"] is None
+    assert result["debug"]["supporting_facts"]
+    assert result["debug"]["trace"]
+
+
+@pytest.mark.asyncio
 async def test_runtime_context_trace_surfaces_lane_plan(uma_memory) -> None:
     runtime = UMARuntime.from_memory(uma_memory)
     context = RuntimeContext(

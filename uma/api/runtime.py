@@ -883,37 +883,39 @@ class UMARuntime:
             if isinstance(conflict, Mapping)
         ]
         supporting_evidence = [_chunk_payload(chunk) for chunk in chunks]
-        compiled_answer = build_compiled_memory_artifact(
-            artifact_id=f"memory:{runtime_context.request_id}:{memory_intent.strip()}",
-            title=f"Memory {memory_intent.strip()}",
-            owner_type="user",
-            owner_id=str(runtime_context.user_id or ""),
-            artifact_kind="compiled_memory_answer",
-            text=None,
-            summary=None,
-            topic_key=memory_intent.strip(),
-            derived_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            derivation_type="memory_compiled",
-            direct_source_chunk_ids=[item["id"] for item in supporting_evidence if item.get("id")],
-            direct_source_document_ids=[item.get("doc_id") for item in supporting_evidence if item.get("doc_id")],
-            parent_artifacts=[artifact for artifact in memory_sources if artifact.get("artifact_type") == "compiled_memory_artifact"],
-            parent_artifact_ids=[artifact.get("id") or artifact.get("doc_id") for artifact in memory_sources if artifact.get("id") or artifact.get("doc_id")],
-            related_artifact_ids=[artifact.get("id") or artifact.get("doc_id") for artifact in memory_sources if artifact.get("id") or artifact.get("doc_id")],
-            retrieval_tags=[memory_intent.strip()],
-            retrieval_path=trace,
-            support_density=support_density,
-            confidence=confidence.get("score"),
-            conflicts=compiled_conflicts,
-            manual=False,
-            metadata={"memory_intent": memory_intent.strip()},
-            event_type="memory_compiled",
-        )
-        compiled_answer["memory_intent"] = memory_intent.strip()
-        compiled_answer["status"] = "evidence_only" if chunks else "invalid"
-        compiled_answer["supporting_evidence"] = supporting_evidence
-        memories: List[Dict[str, Any]] = [compiled_answer]
         fallback_used = not chunks
         fallback_reason = "no_compiled_memory_available" if fallback_used else None
+        compiled_answer = None
+        if not fallback_used:
+            compiled_answer = build_compiled_memory_artifact(
+                artifact_id=f"memory:{runtime_context.request_id}:{memory_intent.strip()}",
+                title=f"Memory {memory_intent.strip()}",
+                owner_type="user",
+                owner_id=str(runtime_context.user_id or ""),
+                artifact_kind="compiled_memory_answer",
+                text=None,
+                summary=None,
+                topic_key=memory_intent.strip(),
+                derived_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                derivation_type="memory_compiled",
+                direct_source_chunk_ids=[item["id"] for item in supporting_evidence if item.get("id")],
+                direct_source_document_ids=[item.get("doc_id") for item in supporting_evidence if item.get("doc_id")],
+                parent_artifacts=[artifact for artifact in memory_sources if artifact.get("artifact_type") == "compiled_memory_artifact"],
+                parent_artifact_ids=[artifact.get("id") or artifact.get("doc_id") for artifact in memory_sources if artifact.get("id") or artifact.get("doc_id")],
+                related_artifact_ids=[artifact.get("id") or artifact.get("doc_id") for artifact in memory_sources if artifact.get("id") or artifact.get("doc_id")],
+                retrieval_tags=[memory_intent.strip()],
+                retrieval_path=trace,
+                support_density=support_density,
+                confidence=confidence.get("score"),
+                conflicts=compiled_conflicts,
+                manual=False,
+                metadata={"memory_intent": memory_intent.strip()},
+                event_type="memory_compiled",
+            )
+            compiled_answer["memory_intent"] = memory_intent.strip()
+            compiled_answer["status"] = "evidence_only"
+            compiled_answer["supporting_evidence"] = supporting_evidence
+        memories: List[Dict[str, Any]] = [compiled_answer] if compiled_answer is not None else []
         if fallback_used:
             logger.info(
                 "UMARuntime.retrieve_memory: explicit evidence-only fallback tenant=%s agent=%s user=%s intent=%s chunks=%d",
@@ -931,11 +933,11 @@ class UMARuntime:
         )
         compiled_memory_index = [
             build_compiled_memory_index_entry(artifact)
-            for artifact in [*memory_sources, compiled_answer]
+            for artifact in [*memory_sources, *([compiled_answer] if compiled_answer is not None else [])]
             if artifact.get("artifact_type") == "compiled_memory_artifact"
         ]
         compiled_memory_log = [semantic_retrieved_event]
-        for artifact in [*memory_sources, compiled_answer]:
+        for artifact in [*memory_sources, *([compiled_answer] if compiled_answer is not None else [])]:
             compiled_memory_log.extend(list(artifact.get("compiled_memory_log") or []))
         detailed_result = {
             "query": query_text.strip(),
@@ -944,7 +946,7 @@ class UMARuntime:
             "memories": memories,
             "compiled_answer": compiled_answer,
             "evidence": chunks,
-            "supporting_evidence": compiled_answer["supporting_evidence"],
+            "supporting_evidence": supporting_evidence,
             "supporting_facts": list(context.get("facts") or []),
             "supporting_skills": list(context.get("skills") or []),
             "conflicts": [],
@@ -963,7 +965,11 @@ class UMARuntime:
             "compiled_memory_index": compiled_memory_index,
             "compiled_memory_log": compiled_memory_log,
             "confidence": confidence,
-            "provenance": compiled_answer["provenance"],
+            "provenance": (
+                compiled_answer["provenance"]
+                if compiled_answer is not None
+                else dict(context.get("provenance") or {})
+            ),
             "trace": trace
             + [
                 {

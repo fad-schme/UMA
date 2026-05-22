@@ -178,3 +178,72 @@ async def test_retrieve_context_working_memory_populated_after_turn(tmp_path):
         )
     finally:
         mem.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_process_turn_persists_raw_chunks_and_fact_provenance(tmp_path):
+    mem = await init_uma_for_tests(tmp_path)
+    try:
+        user_msg = (
+            "I am researching adoption agencies and I am interested in "
+            "counseling or mental health work."
+        )
+        assistant_reply = "Thanks, I will remember that context."
+        await mem.process_turn(
+            user_id="user:u1",
+            user_msg=user_msg,
+            assistant_reply=assistant_reply,
+            session_id="session-turn-provenance",
+        )
+
+        facts = await mem.semantic_core.list_facts_for_owner(
+            tenant_id="default",
+            owner_type="user",
+            owner_id="user:u1",
+        )
+        source_chunk_ids = sorted(
+            {
+                str(chunk_id)
+                for fact in facts
+                for chunk_id in list(getattr(fact, "source_ids", None) or [])
+                if chunk_id
+            }
+        )
+        assert source_chunk_ids, "expected turn-derived semantic facts with source_ids"
+
+        evidence_chunks = await mem.chunk_core._fetch_by_ids(
+            source_chunk_ids,
+            tenant_id="default",
+            owner_type="user",
+            owner_id="user:u1",
+        )
+        assert evidence_chunks, "expected raw turn chunks to be persisted for the same owner scope"
+        owner_chunks = await mem.chunk_core.store.list_chunks_for_owner(
+            tenant_id="default",
+            owner_type="user",
+            owner_id="user:u1",
+        )
+        meta_by_role = {
+            str((getattr(chunk, "meta", None) or {}).get("source_role")): getattr(chunk, "meta", None) or {}
+            for chunk in owner_chunks
+        }
+        texts = {chunk.text for chunk in owner_chunks}
+        assert user_msg in texts
+        assert assistant_reply in texts
+        assert meta_by_role["user"]["kind"] == "raw_source"
+        assert meta_by_role["user"]["kb_lane"] == "raw"
+        assert meta_by_role["assistant"]["kind"] == "raw_source"
+        assert meta_by_role["assistant"]["kb_lane"] == "raw"
+
+        recalled = await mem.retrieve_memory(
+            query_text="adoption agencies",
+            user_id="user:u1",
+            tenant_id="default",
+            request_id="req-turn-provenance",
+            session_id="session-turn-provenance",
+        )
+        assert recalled["facts"], "expected retrieve_memory to return semantic facts"
+        assert recalled["evidence"], "expected retrieve_memory to expand source_ids into evidence chunks"
+        assert recalled["provenance_valid"] is True
+    finally:
+        mem.shutdown()

@@ -628,11 +628,17 @@ class SemanticSQLStore(BaseVectorSQLStore):
 
         conn = self._conn()
         try:
-            where = ["predicate='document'"]
+            where: List[str] = []
             params: List[Any] = []
+            term_clauses: List[str] = []
             for term in terms:
-                where.append("LOWER(object) LIKE ?")
-                params.append(f"%{term}%")
+                term_clauses.append(
+                    "(LOWER(subject) LIKE ? OR LOWER(predicate) LIKE ? OR LOWER(object) LIKE ?)"
+                )
+                like = f"%{term.lower()}%"
+                params.extend([like, like, like])
+            if term_clauses:
+                where.append(f"({' OR '.join(term_clauses)})")
             where.append(self._scope_where(tenant_id, owner_type, owner_id, params))
 
             sql = f"""

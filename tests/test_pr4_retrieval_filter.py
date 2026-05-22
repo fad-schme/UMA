@@ -99,6 +99,41 @@ async def test_semantic_fetch_by_ids_omits_quarantined(tmp_path):
     assert [r.id for r in fetched] == ["fa"]
 
 
+@pytest.mark.asyncio
+async def test_semantic_lexical_search_matches_turn_facts_with_owner_scope(tmp_path):
+    store = _semantic_store(tmp_path)
+    scope_a = dict(tenant_id="default", owner_type="user", owner_id="user:A")
+    scope_b = dict(tenant_id="default", owner_type="user", owner_id="user:B")
+
+    fact_a = Fact(
+        id="fact_a",
+        subject="user:A",
+        predicate="current projects or research topics",
+        object="adoption agencies",
+        created_at=_NOW,
+        updated_at=_NOW,
+        **scope_a,
+        trust_score=0.8,
+    )
+    fact_b = Fact(
+        id="fact_b",
+        subject="user:B",
+        predicate="current projects or research topics",
+        object="adoption agencies",
+        created_at=_NOW,
+        updated_at=_NOW,
+        **scope_b,
+        trust_score=0.8,
+    )
+    await store.upsert_fact(fact_a, _VEC)
+    await store.upsert_fact(fact_b, _VEC)
+
+    results = await store.lexical_search("adoption agencies", **scope_a, k=10)
+    ids = {row.id for row in results}
+    assert "fact_a" in ids
+    assert "fact_b" not in ids
+
+
 # ---------------------------------------------------------------------------
 # Episodic
 # ---------------------------------------------------------------------------

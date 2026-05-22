@@ -162,11 +162,18 @@ class SemanticCore:
 
         # Scan raw user text once; result is captured by closure and applied per-fact before storage.
         _text_scan = scan_content(text) if turn_context is not None else None
+        _source_ids = [
+            str(item)
+            for item in list((extra_meta or {}).get("source_ids") or [])
+            if item
+        ]
 
         def _apply_turn_scope(f: Fact) -> None:
             try:
                 f.owner_type = "user"
                 f.owner_id = normalized_user_id
+                if _source_ids and not list(getattr(f, "source_ids", None) or []):
+                    f.source_ids = list(_source_ids)
                 if turn_context is not None:
                     f.tenant_id = turn_context.tenant_id
                     f.workspace_id = turn_context.workspace_id
