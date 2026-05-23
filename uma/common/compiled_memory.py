@@ -142,7 +142,6 @@ def build_compiled_memory_index_entry(artifact: Any) -> dict[str, Any]:
         "summary": _artifact_value(artifact, "summary"),
         "has_conflicts": bool(conflicts),
         "conflict_count": len(conflicts),
-        "navigation_only": True,
         "provenance_valid": bool(provenance.get("valid")),
     }
 

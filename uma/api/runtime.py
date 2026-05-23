@@ -1004,10 +1004,7 @@ class UMARuntime:
             object_text = str(getattr(fact, "object", "") or "").strip()
             confidence = getattr(fact, "confidence", None)
             salience = getattr(fact, "salience", None)
-        if object_text:
-            text = object_text
-        else:
-            text = " ".join(part for part in (subject, predicate) if part).strip()
+        text = " ".join(part for part in (subject, predicate, object_text) if part).strip()
         return {
             "text": text,
             "confidence": confidence,
@@ -1055,8 +1052,20 @@ class UMARuntime:
 
         ]
         provenance = dict(detailed_result.get("provenance") or {})
+        ca = detailed_result.get("compiled_answer")
+        compiled_memory = (
+            {
+                "status": ca.get("status"),
+                "summary": ca.get("summary"),
+                "memory_intent": ca.get("memory_intent"),
+                "provenance_valid": bool((ca.get("provenance") or {}).get("valid", True)),
+            }
+            if ca is not None
+            else None
+        )
         public_result: Dict[str, Any] = {
             "query": detailed_result.get("query"),
+            "compiled_memory": compiled_memory,
             "facts": facts,
             "evidence": evidence,
             "provenance_valid": bool(provenance.get("valid")),

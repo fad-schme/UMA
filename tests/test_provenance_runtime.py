@@ -97,7 +97,6 @@ async def test_provenance_chain_supports_fact_memory_and_wiki_artifact_expansion
     assert memory_result["debug"]["compiled_answer"]["provenance"]["source_chunk_ids"]
     assert memory_result["debug"]["compiled_memory_index"]
     assert memory_result["debug"]["compiled_memory_log"]
-    assert memory_result["debug"]["compiled_memory_index"][0]["navigation_only"] is True
 
     fact_evidence = await explain_result(memory, fact, user_id="user:u1")
     assert fact_evidence["evidence"]
@@ -193,7 +192,6 @@ async def test_compiled_memory_artifact_builds_index_log_and_transitive_raw_evid
     assert artifact["artifact_type"] == "compiled_memory_artifact"
     assert artifact["provenance"]["valid"] is True
     assert artifact["compiled_memory_index"]["artifact_id"] == "wiki:operations/monitoring"
-    assert artifact["compiled_memory_index"]["navigation_only"] is True
     assert artifact["compiled_memory_index"]["source_chunk_ids"] == artifact["provenance"]["source_chunk_ids"]
     assert artifact["compiled_memory_log"][0]["event_type"] == "wiki_artifact_created"
     assert artifact["compiled_memory_log"][0]["parent_artifact_ids"] == [memory_result["debug"]["compiled_answer"]["id"]]

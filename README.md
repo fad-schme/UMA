@@ -92,6 +92,10 @@ memory_result = await memory.retrieve_memory(
     session_id="session-1",
     memory_intent="continuity",
 )
+# memory_result keys: compiled_memory, facts, evidence, provenance_valid
+# compiled_memory: {status, summary, memory_intent, provenance_valid}
+# facts: [{text, confidence, salience, source_chunk_ids}] — text is "subject predicate object"
+# evidence: [{id, text, source, source_document_id}]
 
 explanation = await explain_result(memory, memory_result, user_id="user-123")
 

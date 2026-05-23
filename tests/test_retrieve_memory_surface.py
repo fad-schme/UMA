@@ -23,6 +23,7 @@ async def test_retrieve_memory_empty_result_shape(uma_memory) -> None:
         session_id="session-mem-empty",
     )
 
+    assert "compiled_memory" in result
     assert "facts" in result
     assert "evidence" in result
     assert "provenance_valid" in result
@@ -149,12 +150,12 @@ async def test_retrieve_memory_third_person_fact_stays_within_same_user_scope(tm
         session_id="session-bob",
     )
 
-    objects = {
-        str(item.get("object") or item.get("text") or "").lower()
+    fact_texts = {
+        str(item.get("text") or "").lower()
         for item in list(bob_after.get("facts") or [])
         if isinstance(item, dict)
     }
-    assert any("red hair" in value for value in objects)
+    assert any("red hair" in t for t in fact_texts)
 
 
 @pytest.mark.asyncio

@@ -62,12 +62,12 @@ result = await memory.retrieve_memory(
 ```
 
 **Contract:**
-- `memories` is the primary compiled-memory field in the result
+- `compiled_memory` is the primary field: `{status, summary, memory_intent, provenance_valid}`; `status="evidence_only"` when no wiki artifact exists
+- `facts` are full subject-predicate-object triples serialized as `text="subject predicate object"`; predicate is never dropped
 - `evidence` is mandatory and attached to every result path
-- Does NOT degrade silently into plain chunk retrieval — `fallback` field signals degradation
-- Supporting facts/skills are secondary evidence, not the product identity
+- Does NOT degrade silently into plain chunk retrieval — `fallback` in `debug` signals degradation
 
-**Returns:** `Dict[str, Any]` — compiled memory result with `memories`, `evidence`, `product`, `fallback`
+**Returns:** `Dict[str, Any]` with keys: `compiled_memory`, `facts`, `evidence`, `provenance_valid`
 
 ---
 

@@ -9,7 +9,7 @@ UMA-RLM is a memory and context runtime SDK for AI agents. It ingests data, stor
 | API | Purpose |
 |-----|---------|
 | `retrieve_context(...)` | Evidence-oriented RAG context for LLM prompting |
-| `retrieve_memory(...)` | Compiled, evidence-backed memory for continuity |
+| `retrieve_memory(...)` | Compiled, evidence-backed memory for continuity — returns `compiled_memory`, `facts` (full subject-predicate-object triples), and `evidence` |
 
 Both products are owned by `UMAMemory`, initialized from a config file, and operated with explicit per-call request scope.
 
@@ -183,6 +183,10 @@ memory = UMAMemory.from_yaml("config/uma.yaml").set_context(agent_id="agent-defa
 # Retrieve
 context = await memory.retrieve_context(query_text=..., user_id=..., session_id=..., tenant_id=...)
 result  = await memory.retrieve_memory(query_text=..., user_id=..., session_id=..., tenant_id=...)
+# result keys: compiled_memory, facts, evidence, provenance_valid
+# compiled_memory: {status, summary, memory_intent, provenance_valid}
+# facts: [{text, confidence, salience, source_chunk_ids}] — text is full "subject predicate object" triple
+# evidence: [{id, text, source, source_document_id}]
 
 # Ingest
 await memory.process_turn(user_id=..., user_msg=..., assistant_reply=..., session_id=...)
