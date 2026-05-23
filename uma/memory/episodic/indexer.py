@@ -61,37 +61,45 @@ class EpisodeIndexer:
         *,
         owner_type: str,
         owner_id: str,
-        wm_entries: List[Any],
+        turn_entries: List[Any],
+        wm_context: List[Any] | None = None,
     ):
         """
-        Build a structured Episode from WM entries.
+        Build a structured Episode from the current turn.
 
         Parameters
         ----------
         owner_type : str
         owner_id : str
-        wm_entries : List[WMEntry or mapping]
-            A sequence of working-memory turns. Items may be WMEntry objects
-            or dicts with keys {"role", "content"}. EpisodeMapper produces
-            dicts from WMEntry; EpisodicCore appends its own dict entries.
+        turn_entries : List[dict]
+            The current turn only — [{"role": "user", ...}, {"role": "assistant", ...}].
+            This is the content that gets summarized into the episode.
+        wm_context : List[Any], optional
+            Prior working-memory entries (WMEntry objects or dicts). Used as
+            background context in the prompt so the LLM understands the
+            conversation, but NOT summarized into the episode.
 
         Returns
         -------
         (Episode, embedding_vector)
         """
         try:
-            transcript = self._wm_to_transcript(wm_entries)
+            turn_transcript = self._wm_to_transcript(turn_entries or [])
 
-            # Summarize using LLM
+            # Build system prompt — include WM as background if available
+            system_parts = [
+                "Summarize the following conversation turn into a short episode memory. "
+                "Limit to one concise paragraph."
+            ]
+            if wm_context:
+                wm_transcript = self._wm_to_transcript(wm_context)
+                system_parts.append(
+                    f"\nPrevious conversation context (for reference only — do not summarize):\n{wm_transcript}"
+                )
+
             summary_msgs = [
-                {
-                    "role": "system",
-                    "content": (
-                        "Summarize the following conversation into a short episode. "
-                        "Limit to one concise paragraph."
-                    ),
-                },
-                {"role": "user", "content": transcript},
+                {"role": "system", "content": "\n".join(system_parts)},
+                {"role": "user", "content": turn_transcript},
             ]
 
             try:
@@ -105,10 +113,10 @@ class EpisodeIndexer:
                 logger.exception("EpisodeIndexer: LLM summary failed.")
                 summary = "Conversation summary unavailable."
 
-            # Build episode model
+            # Build episode model — turn_id comes from turn entries
             turn_id = None
             try:
-                for ent in reversed(wm_entries or []):
+                for ent in reversed(turn_entries or []):
                     md = ent.get("metadata") if isinstance(ent, dict) else getattr(ent, "metadata", None)
                     if isinstance(md, dict) and md.get("turn_id"):
                         turn_id = str(md["turn_id"])
@@ -121,7 +129,7 @@ class EpisodeIndexer:
                 timestamp=datetime.utcnow(),
                 summary=summary,
                 user_id=owner_id,
-                raw=transcript,
+                raw=turn_transcript,
                 tags=[],
                 meta={"turn_id": turn_id} if turn_id else {},
                 owner_type=owner_type,

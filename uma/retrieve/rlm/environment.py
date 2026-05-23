@@ -789,7 +789,7 @@ class UMAMemoryEnvironment:
                 owner_id=lane_owner_id,
                 k=k,
             )
-            return self._filter_session_local_items(request, episodes or [])
+            return list(episodes or [])
 
         if a == "episodic_clusters":
             return await self.episodic_cluster_summaries(

@@ -36,7 +36,6 @@ from uma.common.types import Episode
 from uma.common.types import RuntimeContext, SCOPE_MODEL_VERSION
 from uma.common.dedupe import dedupe_by_id
 from uma.common.integrity import hash_episode_content
-from uma.common.trust import SourceDescriptor, score_source
 from uma.common.injection_scan import scan_content, apply_scan, quarantine_enabled
 
 logger = logging.getLogger(__name__)
@@ -88,22 +87,22 @@ class EpisodicCore:
             # ------------------------------
             # 1. Build transcript entries
             # ------------------------------
-            mapped_wm = self.mapper.map_entries(working_memory_context)
+            wm_context = self.mapper.map_entries(working_memory_context)
 
             turn_entries = [
                 {"role": "user", "content": user_message},
                 {"role": "assistant", "content": assistant_reply},
             ]
 
-            all_entries = mapped_wm + turn_entries
-
             # ------------------------------
             # 2. Build episode via LLM + embedder
+            # Summarize current turn only; wm_context is background reference.
             # ------------------------------
             episode, embedding = await self.indexer.build_episode(
                 owner_type=owner_type,
                 owner_id=owner_id,
-                wm_entries=all_entries,
+                turn_entries=turn_entries,
+                wm_context=wm_context or None,
             )
             episode.tenant_id = turn_context.tenant_id
             episode.workspace_id = turn_context.workspace_id
@@ -112,7 +111,7 @@ class EpisodicCore:
             episode.origin_user_id = turn_context.user_id
             episode.origin_session_id = turn_context.session_id
             episode.scope_model_version = SCOPE_MODEL_VERSION
-            episode.trust_score = score_source(SourceDescriptor(kind="turn_assistant", session_id=turn_context.session_id))
+            episode.trust_score = 0.8  # UMA-synthesised turn summary; between user (0.9) and assistant (0.7)
             episode.content_hash = hash_episode_content(episode.summary)
 
             # Scan assistant_reply — user_message is already gated at UMAMemory.process_turn().
