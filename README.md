@@ -113,12 +113,96 @@ await memory.process_turn(
 )
 ```
 
+## Input Security
+
+UMA scans all user input for prompt injection before it reaches storage or an LLM.
+
+### Two-layer model
+
+**Layer 1 — Pre-LLM gate.** Call `scan_user_input` at the top of your agent loop, before `retrieve_context` and before any LLM call. It returns a result dict and never raises — you decide what to do.
+
+```python
+from uma import UMAMemory, InjectionDetectedError
+
+scan = memory.scan_user_input(user_msg)
+if scan["severity"] == "high":
+    # do not forward to LLM, do not call process_turn
+    return "I can't process that request."
+
+context = await memory.retrieve_context(query_text=user_msg, ...)
+reply = await your_llm(context, user_msg)
+```
+
+**Layer 2 — Defense-in-depth.** `process_turn` rescans `user_msg` before writing anything. On high severity it raises `InjectionDetectedError` — nothing is stored.
+
+```python
+try:
+    await memory.process_turn(
+        user_id="user-123",
+        user_msg=user_msg,
+        assistant_reply=reply,
+        session_id="session-1",
+    )
+except InjectionDetectedError as e:
+    print(e.severity)       # "high"
+    print(e.matched_rules)  # ["prompt_override", ...]
+    print(e.score)          # numeric scan score
+    # surface error, alert, block user — your decision
+```
+
+### Severity behaviour
+
+| Severity | `scan_user_input` | `process_turn` | Artifact trust |
+|---|---|---|---|
+| `none` | `{"severity": "none", ...}` | Proceeds normally | Unchanged |
+| `low` | `{"severity": "low", ...}` | Logged, proceeds | Reduced by 20% |
+| `medium` | `{"severity": "medium", ...}` | Logged, proceeds | Reduced by 50% |
+| `high` | `{"severity": "high", ...}` | Raises `InjectionDetectedError`; turn dropped | Not stored |
+
+### Bypass
+
+If you have independently validated the input and want to bypass the gate:
+
+```python
+await memory.process_turn(..., skip_scan=True)
+```
+
+Use only when you explicitly accept responsibility for the content.
+
+### Write-time scanning
+
+Every artifact is also scanned at its storage boundary — turn chunks, episodes, and document chunks — regardless of whether `skip_scan` was used. High-severity artifacts are quarantined: excluded from retrieval but retained in the database.
+
+### Pattern catalog
+
+The scanner runs against a compiled YAML catalog (`uma/common/injection_patterns.yaml`). Patterns are seeded from the Animus WAF catalog and tuned to minimise false positives on legitimate conversation and document text.
+
+| Rule | Severity | Category | What it detects |
+|---|---|---|---|
+| `jailbreak_prompt` | high | prompt_injection | Direct instruction-override attempts — "ignore all previous instructions", DAN/DevMode personas, fake system tags, roleplay bypass |
+| `code_injection` | high | code_injection | Imperative code execution in destructive context — XSS script tags, `rm -rf /`, `subprocess.Popen` with shell paths |
+| `context_switching` | high | prompt_injection | Fake system context injection — "end of response / new instructions", heredoc system tags, "forget everything before" |
+| `data_exfiltration` | high | data_exfiltration | Extraction of internal data or credentials — "dump the database", "give me admin credentials", "extract confidential data" |
+| `encoded_payloads` | high | prompt_injection | Encoded payloads with explicit execute-or-decode intent — base64 / hex strings paired with "decode this", "execute" directives |
+| `prompt_reset` | high | prompt_injection | Conversation context reset — "ignore instructions", "forget everything", "reset this conversation" |
+| `role_impersonation` | high | prompt_injection | Model role redefinition — "you are now admin/root/kernel", "simulate a shell", "you no longer represent Anthropic" |
+| `config_leakage` | high | configuration_exposure | System prompt or config extraction — "reveal system prompt", "what is your hidden prompt", "print env variables" |
+| `rule_override` | high | prompt_injection | Alignment suspension via framing — "just this once override rules", "as a game break filters", "hypothetically bypass moderation" |
+| `alignment_breaking` | high | alignment_evasion | Explicit alignment violation requests — "act as a rogue AI", "write a response that violates alignment" |
+| `debug_mode_spoofing` | high | system_spoofing | Debug/admin mode spoofing — "you are in debug mode", "assume developer mode", "simulate system session" |
+| `hidden_instruction_probe` | high | configuration_exposure | Hidden instruction probing — "print internal parameters", "reveal hidden data", "expose chat initialization sequence" |
+| `policy_evasion` | medium | prompt_injection | Content policy suspension — "ignore filters", "respond without restrictions", "just for testing respond" |
+| `escalation_phrases` | medium | privilege_escalation | Privilege escalation intent — "how to escalate privileges", "root access simulate", "get around role restrictions" |
+| `homoglyph_obfuscation` | medium | prompt_injection | Leetspeak and homoglyph variants of known-bad tokens — `p@ssw0rd`, `m@lware`, `h4x0r`, darknet terminology |
+
+Extend the catalog by setting `security.custom_patterns_path` in your YAML config. Follow the conventions in the file header: prefer tight patterns over loose ones, set `severity: high` only for patterns that are almost never benign.
+
 ## Public API
 
 The public surface is intentionally small.
 
 - `UMAMemory`
-  `set_context(...)`, `ingest_document(...)`, `retrieve_context(...)`, `retrieve_memory(...)`, `process_turn(...)`
+  `set_context(...)`, `scan_user_input(...)`, `ingest_document(...)`, `retrieve_context(...)`, `retrieve_memory(...)`, `process_turn(...)`
 - Required Animus support on `UMAMemory`
   `load_userprofile(...)`, `load_agentprofile(...)`, `load_memory_bootstrap(...)`, `load_daily_diary_bootstrap(...)`
 - Developer and admin management APIs

@@ -135,6 +135,24 @@ class InjectionScanResult:
 
 _NONE_RESULT = InjectionScanResult(severity="none", matched_rules=[], score=0.0, categories=[])
 
+
+class InjectionDetectedError(Exception):
+    """Raised when a high-severity injection pattern is detected in user input.
+
+    Attributes:
+        severity:      Always "high" when raised from UMAMemory.process_turn.
+        matched_rules: Names of the rules that triggered the detection.
+        score:         Numeric scan score.
+    """
+
+    def __init__(self, severity: str, matched_rules: List[str], score: float) -> None:
+        self.severity = severity
+        self.matched_rules = matched_rules
+        self.score = score
+        super().__init__(
+            f"Injection detected: severity={severity} score={score:.2f} rules={matched_rules}"
+        )
+
 # ---------------------------------------------------------------------------
 # Module-level security config — set once at UMAMemory init
 # ---------------------------------------------------------------------------
@@ -257,6 +275,25 @@ def scan_content(text: str) -> InjectionScanResult:
 # ---------------------------------------------------------------------------
 # Apply helper — used at every write boundary
 # ---------------------------------------------------------------------------
+
+_SEVERITY_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3}
+
+
+def merge_scan_results(a: InjectionScanResult, b: InjectionScanResult) -> InjectionScanResult:
+    """Return the stricter of two scan results, merging matched rules and categories."""
+    if _SEVERITY_RANK.get(a.severity, 0) >= _SEVERITY_RANK.get(b.severity, 0):
+        dominant, other = a, b
+    else:
+        dominant, other = b, a
+    if other.severity == "none":
+        return dominant
+    return InjectionScanResult(
+        severity=dominant.severity,
+        matched_rules=list(dict.fromkeys(dominant.matched_rules + other.matched_rules)),
+        score=round(dominant.score + other.score, 2),
+        categories=list(set(dominant.categories) | set(other.categories)),
+    )
+
 
 def apply_scan(
     trust_score: float,

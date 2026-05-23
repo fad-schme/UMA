@@ -147,12 +147,76 @@ The manifest is always written after embedding succeeds. If embedding raises, no
 Conversation turns flow through `MemoryPipeline.process_turn`:
 
 ```
-process_turn(user_id, user_msg, assistant_reply, session_id)
+UMAMemory.process_turn(user_id, user_msg, assistant_reply, session_id)
+  → injection scan on user_msg (raises InjectionDetectedError on high severity)
   → append to working memory
-  → index as episodic event
+  → index as episodic event (assistant_reply scanned at write time)
+  → store raw turn chunks (each chunk scanned at write time)
   → extract semantic facts (session-local)
   → optional: promote facts to durable memory (explicit policy)
 ```
+
+---
+
+## Input Security: Injection Scanning
+
+UMA scans all user input for prompt injection patterns at two layers.
+
+**Layer 1 — Pre-LLM gate (`scan_user_input`)**
+
+Call this before `retrieve_context` and before any LLM call. It returns a result dict and never raises — the caller decides what to do.
+
+```python
+scan = memory.scan_user_input(user_msg)
+if scan["severity"] == "high":
+    # do not forward to LLM, do not call process_turn
+    return safe_rejection_response()
+```
+
+**Layer 2 — Defense-in-depth (`process_turn`)**
+
+`UMAMemory.process_turn` rescans `user_msg` before any storage. On high severity it raises `InjectionDetectedError` and nothing is stored — no working memory, no episode, no chunks, no facts. Lower severities are logged and continue; trust is adjusted at the artifact level.
+
+| Severity | `process_turn` behaviour | Artifact trust |
+|---|---|---|
+| `none` | Proceeds normally | Unchanged |
+| `low` | Logged, proceeds | Reduced by 20% |
+| `medium` | Logged, proceeds | Reduced by 50% |
+| `high` | Raises `InjectionDetectedError`; turn dropped | Not stored |
+
+The caller catches `InjectionDetectedError` and decides: surface an error to the user, alert, or retry with `skip_scan=True` if the input has been independently validated.
+
+```python
+from uma import UMAMemory, InjectionDetectedError
+
+try:
+    await memory.process_turn(user_msg=user_msg, assistant_reply=reply, ...)
+except InjectionDetectedError as e:
+    # e.severity, e.matched_rules, e.score
+    handle_security_event(e)
+```
+
+**Bypass**
+
+Pass `skip_scan=True` to `process_turn` to skip the input gate. Use only when the caller has already validated the content and explicitly accepts responsibility.
+
+```python
+await memory.process_turn(..., skip_scan=True)
+```
+
+**Write-time scanning**
+
+Beyond the input gate, UMA scans every artifact at its storage boundary:
+
+- Turn chunks — scanned in `_store_turn_chunks`; `quarantined_at` set on high severity
+- Episode — `assistant_reply` scanned in `EpisodicCore.store_episode`
+- Document chunks — scanned in `ingest_service` per chunk
+
+Quarantined artifacts are excluded from all retrieval queries but remain in the database. The management API exposes `list_quarantined`, `reinstate_quarantined`, and `purge_quarantined`.
+
+**Pattern catalog**
+
+`uma/common/injection_patterns.yaml` — compiled once at module import. The catalog is YAML-configurable; set `security.custom_patterns_path` in your runtime config to extend it. High-severity rule hits set `trust_score` to 0.0 and record the result in `meta["security"]["injection_scan"]`.
 
 ---
 
@@ -188,8 +252,12 @@ result  = await memory.retrieve_memory(query_text=..., user_id=..., session_id=.
 # facts: [{text, confidence, salience, source_chunk_ids}] — text is full "subject predicate object" triple
 # evidence: [{id, text, source, source_document_id}]
 
-# Ingest
+# Security (call before retrieve_context and LLM)
+scan  = memory.scan_user_input(user_msg)   # {"severity", "matched_rules", "score"}
+
+# Ingest — raises InjectionDetectedError on high-severity user_msg
 await memory.process_turn(user_id=..., user_msg=..., assistant_reply=..., session_id=...)
+await memory.process_turn(..., skip_scan=True)  # bypass gate (caller validates)
 report = await memory.ingest_document(file_path, owner_type="agent", owner_id=...)
 
 # Bootstrap

@@ -1,6 +1,6 @@
 # UMA injection-pattern catalog
 # ==============================
-# Seeded from the Animus WAF catalog (May 2026). Cleaned and tuned for use
+# Seeded from the WAFsUP catalog (May 2026). Cleaned and tuned for use
 # at the UMA memory-write boundary, where false positives on legitimate
 # conversation and document text are the dominant cost.
 #

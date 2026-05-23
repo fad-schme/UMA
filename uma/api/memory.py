@@ -80,6 +80,7 @@ from uma.common.initializers.runtime import (
 from uma.common.registry import FeatureLoader, FeaturePolicy, default_feature_registry
 from .runtime import AnimusProfileProvider, UMARuntime
 from uma.common.types import RuntimeContext
+from uma.common.injection_scan import scan_content, quarantine_enabled, InjectionDetectedError
 
 logger = logging.getLogger(__name__)
 
@@ -336,6 +337,20 @@ class UMAMemory:
     # ----------------------------------------------------------------------
     # Core API: Data Ingestion
     # ----------------------------------------------------------------------
+
+    def scan_user_input(self, text: str) -> dict:
+        """Scan user input for injection patterns before forwarding to an LLM.
+
+        Call this at the top of your agent loop, before retrieve_context and
+        before any LLM call. On a high-severity result, do not forward the
+        message to the LLM and do not call process_turn.
+
+        Returns a dict with keys: severity, matched_rules, score.
+        Raises nothing — the caller decides what to do with the result.
+        """
+        result = scan_content(text or "")
+        return {"severity": result.severity, "matched_rules": result.matched_rules, "score": result.score}
+
     async def process_turn(
         self,
         *,
@@ -346,17 +361,46 @@ class UMAMemory:
         tenant_id: str = "default",
         workspace_id: Optional[str] = None,
         extra_meta: Optional[Dict[str, Any]] = None,
+        skip_scan: bool = False,
     ) -> None:
         """Public turn-ingest entrypoint.
 
         This is the supported memory-surface wrapper over the canonical
         pipeline turn processor. Session scope is explicit at this boundary;
         `extra_meta` remains optional non-session metadata.
+
+        Raises InjectionDetectedError if a high-severity injection pattern is
+        detected in user_msg. Pass skip_scan=True only when the caller has
+        already validated the input and explicitly accepts responsibility.
         """
         self._ensure_ingestion_ready()
 
         if not isinstance(session_id, str) or not session_id.strip():
             raise ValueError("UMAMemory.process_turn requires a non-empty session_id.")
+
+        if not skip_scan:
+            scan = scan_content(user_msg or "")
+            if scan.severity == "high":
+                logger.warning(
+                    "UMAMemory.process_turn: high-severity injection in user_msg "
+                    "user_id=%s session_id=%s rules=%s",
+                    user_id,
+                    session_id,
+                    scan.matched_rules,
+                )
+                raise InjectionDetectedError(
+                    severity=scan.severity,
+                    matched_rules=scan.matched_rules,
+                    score=scan.score,
+                )
+            if scan.severity != "none":
+                logger.warning(
+                    "UMAMemory.process_turn: injection scan severity=%s user_id=%s session_id=%s rules=%s",
+                    scan.severity,
+                    user_id,
+                    session_id,
+                    scan.matched_rules,
+                )
 
         if self.pipeline is None:
             from uma.ingest.pipeline import MemoryPipeline

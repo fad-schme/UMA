@@ -28,6 +28,7 @@ from uma.common.provenance import (
     collect_transitive_source_chunk_ids,
     provenance_for_artifact,
 )
+from uma.common.dedupe import dedupe_evidence_by_text
 from uma.common.identity import normalize_user_id
 from uma.common.types import RuntimeContext
 from uma.common.storage_metadata import (
@@ -1041,16 +1042,14 @@ class UMARuntime:
             self._serialize_memory_fact(fact)
             for fact in list(detailed_result.get("supporting_facts") or [])
         ]
-        evidence = [
-            item 
+        evidence = dedupe_evidence_by_text([
+            item
             for item in (
                 self._serialize_memory_evidence(chunk)
                 for chunk in list(detailed_result.get("supporting_evidence") or [])
             )
-
             if any(item.get(key) for key in ("id", "text", "source", "source_document_id"))
-
-        ]
+        ])
         provenance = dict(detailed_result.get("provenance") or {})
         ca = detailed_result.get("compiled_answer")
         compiled_memory = (

@@ -42,6 +42,7 @@ from uma.stores.base_sql_store import DEFAULT_TENANT_ID
 from uma.common.types import RuntimeContext, SessionScope, Chunk
 from uma.common.identity import normalize_user_id
 from uma.common.trust import SourceDescriptor, score_source
+from uma.common.injection_scan import scan_content, apply_scan, quarantine_enabled
 logger = logging.getLogger(__name__)
 
 
@@ -330,6 +331,7 @@ class MemoryPipeline:
                     assistant_reply,
                     turn_id=turn_id,
                     turn_context=turn_context,
+                    extra_meta=meta,
                 )
 
                 episode = await self._store_episode(
@@ -339,6 +341,7 @@ class MemoryPipeline:
                     turn_id=turn_id,
                     working_memory_scope=wm_scope,
                     turn_context=turn_context,
+                    extra_meta=meta,
                 )
 
                 if self._post_turn_defer_enabled():
@@ -639,6 +642,7 @@ class MemoryPipeline:
         turn_id: str,
         working_memory_scope: Optional[SessionScope],
         turn_context: RuntimeContext,
+        extra_meta: Optional[Dict[str, Any]] = None,
     ) -> Any:
         epi = getattr(self.mem, "episodic_core", None)
         wm = getattr(self.mem, "working_memory", None)
@@ -663,6 +667,7 @@ class MemoryPipeline:
                 assistant_reply=assistant_reply,
                 working_memory_context=wm_context,
                 turn_context=turn_context,
+                extra_meta=extra_meta,
             )
         except Exception:
             logger.exception("EpisodicCore.store_episode failed.")
@@ -676,6 +681,7 @@ class MemoryPipeline:
         *,
         turn_id: str,
         turn_context: RuntimeContext,
+        extra_meta: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, List[str]]:
         chunk_core = getattr(self.mem, "chunk_core", None)
         embedder = getattr(self.mem, "embedder", None)
@@ -686,6 +692,7 @@ class MemoryPipeline:
         owner_id = normalize_user_id(user_id)
         doc_id = f"turn:{turn_context.session_id}:{turn_id}"
         now = datetime.now(timezone.utc)
+        caller_meta = {k: v for k, v in (extra_meta or {}).items() if k not in ("owner_type", "owner_id", "tenant_id", "session_id")} or None
         rows: List[tuple[str, Chunk]] = []
         for position, (role, text) in enumerate((("user", user_msg), ("assistant", assistant_reply))):
             if not isinstance(text, str) or not text.strip():
@@ -694,6 +701,22 @@ class MemoryPipeline:
                 f"turn_chunk:{owner_id}:{turn_context.session_id}:{turn_id}:{role}".encode("utf-8")
             ).hexdigest()
             text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            trust_score = score_source(
+                SourceDescriptor(
+                    kind="turn_user" if role == "user" else "turn_assistant",
+                    session_id=turn_context.session_id,
+                )
+            )
+            chunk_meta: Dict[str, Any] = {
+                "text_hash": text_hash,
+                "source_kind": "turn",
+                "source_role": role,
+                "turn_id": turn_id,
+            }
+            if caller_meta:
+                chunk_meta["caller"] = caller_meta
+            scan_result = scan_content(text)
+            trust_score, chunk_meta = apply_scan(trust_score, chunk_meta, scan_result, log_context=f"turn_chunk/{role}:{turn_id}")
             rows.append(
                 (
                     role,
@@ -714,18 +737,9 @@ class MemoryPipeline:
                         origin_agent_id=turn_context.agent_id,
                         origin_user_id=owner_id,
                         origin_session_id=turn_context.session_id,
-                        trust_score=score_source(
-                            SourceDescriptor(
-                                kind="turn_user" if role == "user" else "turn_assistant",
-                                session_id=turn_context.session_id,
-                            )
-                        ),
-                        meta={
-                            "text_hash": text_hash,
-                            "source_kind": "turn",
-                            "source_role": role,
-                            "turn_id": turn_id,
-                        },
+                        trust_score=trust_score,
+                        quarantined_at=(now if scan_result.severity == "high" and quarantine_enabled() else None),
+                        meta=chunk_meta,
                     ),
                 )
             )

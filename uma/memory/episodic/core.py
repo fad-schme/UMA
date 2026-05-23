@@ -77,6 +77,7 @@ class EpisodicCore:
         assistant_reply: str,
         working_memory_context: List[Any],
         turn_context: RuntimeContext,
+        extra_meta: Optional[dict] = None,
     ) -> Optional[Episode]:
         """
         Build and persist an Episode from a conversation turn.
@@ -114,11 +115,14 @@ class EpisodicCore:
             episode.trust_score = score_source(SourceDescriptor(kind="turn_assistant", session_id=turn_context.session_id))
             episode.content_hash = hash_episode_content(episode.summary)
 
-            # Scan the raw assistant_reply (the actual input being stored, not the LLM-summarized output).
+            # Scan assistant_reply — user_message is already gated at UMAMemory.process_turn().
             scan_result = scan_content(assistant_reply or "")
+            episode_meta = dict(episode.meta or {})
+            if extra_meta:
+                episode_meta["caller"] = {k: v for k, v in extra_meta.items() if k not in ("owner_type", "owner_id", "tenant_id", "session_id")}
             episode.trust_score, episode.meta = apply_scan(
                 episode.trust_score,
-                episode.meta or {},
+                episode_meta,
                 scan_result,
                 log_context=f"episodic/{owner_type}:{owner_id}",
             )
