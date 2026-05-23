@@ -385,11 +385,13 @@ class Ranker:
         debug_scores: bool = False,
         trust_weight: float = 0.15,
         min_trust_score: float = 0.0,
+        recency_decay_days: int = 90,
     ) -> None:
         self._debug = bool(debug_scores)
         self._trust_weight = max(0.0, min(1.0, float(trust_weight)))
         self._trust_alpha = 1.0 - self._trust_weight
         self._min_trust_score = max(0.0, float(min_trust_score))
+        self._recency_decay_days = max(1, int(recency_decay_days))
 
     # ----------------------------- Public -----------------------------
 
@@ -467,7 +469,7 @@ class Ranker:
                     if getattr(ts, "tzinfo", None) is None:
                         ts = ts.replace(tzinfo=timezone.utc)
                     age_days = (now - ts).total_seconds() / 86400.0
-                    recency = max(0.0, 1.0 - age_days / 90.0)
+                    recency = max(0.0, 1.0 - age_days / self._recency_decay_days)
             except Exception:
                 recency = 0.0
 

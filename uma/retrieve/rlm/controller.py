@@ -80,6 +80,7 @@ class RLMController:
         self.min_cluster_summaries = max(0, int(getattr(rlm_cfg, "min_cluster_summaries", 1)))
 
         self.cluster_k = max(1, int(getattr(rlm_cfg, "cluster_k", 3)))
+        self.episodic_k = max(1, int(getattr(rlm_cfg, "episodic_k", self.max_items_per_type)))
         self.graph_predicate_limit = max(1, int(getattr(rlm_cfg, "graph_predicate_limit", 2)))
         self.predicate_weights = self._normalize_predicate_weights(
             getattr(rlm_cfg, "predicate_weights", None)
@@ -89,6 +90,7 @@ class RLMController:
             debug_scores=debug_scores,
             trust_weight=float(getattr(retrieval_cfg, "trust_weight", 0.15)),
             min_trust_score=float(getattr(retrieval_cfg, "min_trust_score", 0.0)),
+            recency_decay_days=max(1, int(getattr(rlm_cfg, "recency_decay_days", 90))),
         )
 
         self.novelty_window = max(1, int(getattr(rlm_cfg, "novelty_window", 2)))
@@ -101,6 +103,9 @@ class RLMController:
         self.chunk_fallback_k_multiplier = max(1, int(getattr(rlm_cfg, "chunk_fallback_k_multiplier", 2)))
 
         self.max_state_chars = max(200, int(getattr(rlm_cfg, "max_state_chars", 1200)))
+        self.prune_threshold = max(0.0, min(1.0, float(getattr(rlm_cfg, "prune_threshold", 0.6))))
+        self.prune_max_keep = max(1, int(getattr(rlm_cfg, "prune_max_keep", 12)))
+        self.prune_max_candidates = max(1, int(getattr(rlm_cfg, "prune_max_candidates", 20)))
         self.test_mode = bool(getattr(rlm_cfg, "test_mode", False))
         self.semantic_first = bool(getattr(rlm_cfg, "semantic_first", True))
         self.clusters_first = bool(getattr(rlm_cfg, "clusters_first", True))
@@ -807,7 +812,7 @@ class RLMController:
                 # Lite/cont: no consolidation, direct vector search over raw episodes.
                 episodes = await self.env.execute_action(
                     request=request,
-                    action=RetrievalAction(action="search_episodic", k=self.cluster_k, reason="baseline"),
+                    action=RetrievalAction(action="search_episodic", k=self.episodic_k, reason="baseline"),
                     query_embedding=list(query_embedding),
                     query_text=pack.query_text,
                     owner_type=owner_type,
@@ -960,9 +965,9 @@ class RLMController:
             llm=self.llm,
             query_text=pack.query_text,
             facts=list(pack.facts),
-            threshold=0.6,
-            max_keep=12,
-            max_candidates=20,
+            threshold=self.prune_threshold,
+            max_keep=self.prune_max_keep,
+            max_candidates=self.prune_max_candidates,
         )
         pack.facts = self._dedupe_facts_by_signature(pack.facts)
         logger.info("RLMController: prune kept %d facts", len(pack.facts))

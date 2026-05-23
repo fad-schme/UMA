@@ -914,7 +914,6 @@ class UMARuntime:
                 event_type="memory_compiled",
             )
             compiled_answer["memory_intent"] = memory_intent.strip()
-            compiled_answer["status"] = "evidence_only"
             compiled_answer["supporting_evidence"] = supporting_evidence
         memories: List[Dict[str, Any]] = [compiled_answer] if compiled_answer is not None else []
         if fallback_used:
@@ -1054,8 +1053,6 @@ class UMARuntime:
         ca = detailed_result.get("compiled_answer")
         compiled_memory = (
             {
-                "status": ca.get("status"),
-                "summary": ca.get("summary"),
                 "memory_intent": ca.get("memory_intent"),
                 "provenance_valid": bool((ca.get("provenance") or {}).get("valid", True)),
             }

@@ -781,6 +781,13 @@ class UMAMemoryEnvironment:
             if episodic_core is None:
                 logger.error("Environment.execute_action: episodic_core is None")
                 raise RuntimeError("Environment.execute_action: episodic_core is None")
+            ep_offset = 0
+            ep_filters = getattr(action, "filters", None)
+            if isinstance(ep_filters, dict):
+                try:
+                    ep_offset = int(ep_filters.get("offset", 0) or 0)
+                except Exception:
+                    ep_offset = 0
             episodes = await episodic_core.search(
                 user_id=request.normalized_user_id,
                 query_embedding=[float(x) for x in query_embedding],
@@ -788,6 +795,7 @@ class UMAMemoryEnvironment:
                 owner_type=lane_owner_type,
                 owner_id=lane_owner_id,
                 k=k,
+                offset=ep_offset,
             )
             return list(episodes or [])
 
