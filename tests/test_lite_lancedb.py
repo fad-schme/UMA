@@ -65,7 +65,7 @@ def test_lancedb_index_upsert_query_and_filters(tmp_path) -> None:
 async def test_lite_config_initializes_sqlite_and_lancedb_without_graph_services(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(shared_module, "AsyncOpenAI", _FakeAsyncOpenAI)
 
-    config_data = yaml.safe_load(Path("config/uma_lite.yaml").read_text(encoding="utf-8"))
+    config_data = yaml.safe_load(Path("config/uma.yaml").read_text(encoding="utf-8"))
     config_data["storage"]["db_root"] = str(tmp_path / "db")
     config_data["storage"]["vector_config"]["path"] = str(tmp_path / "vectors")
     config_data["embedding"] = {
@@ -83,7 +83,7 @@ async def test_lite_config_initializes_sqlite_and_lancedb_without_graph_services
     }
     config_data["features"]["load"] = []
 
-    config_path = tmp_path / "uma_lite_test.yaml"
+    config_path = tmp_path / "uma_test.yaml"
     config_path.write_text(yaml.safe_dump(config_data), encoding="utf-8")
 
     memory = UMAMemory.from_yaml(str(config_path))

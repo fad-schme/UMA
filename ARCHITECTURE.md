@@ -286,7 +286,6 @@ UMA uses a single embedded profile: SQLite (authoritative) + LanceDB (vector ind
 | Config | Use |
 |--------|-----|
 | `config/uma.yaml` | Default runnable config |
-| `config/uma_lite.yaml` | Reference embedded profile (same storage settings) |
 
 LLM and embedding values in both files are user-customizable baselines — set provider, model, and host to match your environment. All initialization goes through the same path: `UMAMemory.from_yaml(path)`.
 

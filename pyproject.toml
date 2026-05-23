@@ -25,7 +25,7 @@ dependencies = [
 
 [project.optional-dependencies]
 llm = ["anthropic"]
-vector = ["faiss-cpu", "weaviate-client", "pinecone-client", "qdrant-client", "fastembed"]
+vector = ["faiss-cpu", "weaviate-client", "pinecone-client", "fastembed"]
 graph = ["neo4j"]
 dev = ["pytest", "matplotlib", "PyPDF2", "pytest-asyncio"]
 ollama = ["ollama"]

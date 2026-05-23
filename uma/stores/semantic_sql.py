@@ -77,7 +77,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
         vector_index : VectorIndex
             Pluggable vector backend for semantic search.
         index : VectorIndex
-            Vector index backend (FAISS/Qdrant/etc).
+            Vector index backend (FAISS/etc).
         fact_resolver : Optional[FactResolver]
             Conflict resolution strategy. Defaults to LatestWinsFactResolver.
         """

@@ -33,12 +33,7 @@ def _format_startup_error(config_path: str, exc: Exception) -> str:
     lowered = text.lower()
     if isinstance(exc, ModuleNotFoundError):
         lines.append("The example must be run as a module from the repo root.")
-    if "qdrant-client is not installed" in lowered or "no module named 'qdrant_client'" in lowered:
-        lines.append(
-            "Install vector dependencies with `pip install '.[vector]'` or switch "
-            "`storage.vector_backend` to a backend available in your environment."
-        )
-    elif "neo4j" in lowered and ("not installed" in lowered or "no module named" in lowered):
+    if "neo4j" in lowered and ("not installed" in lowered or "no module named" in lowered):
         lines.append(
             "Install graph dependencies with `pip install '.[graph]'` or set "
             "`storage.graph_backend: disabled`."
@@ -86,44 +81,6 @@ def _find_neo4j_config(cfg: Any) -> Optional[Dict[str, Any]]:
             if found:
                 return found
     return None
-
-
-def _reset_qdrant_from_config(cfg: Dict[str, Any]) -> Tuple[bool, str]:
-    try:
-        storage = cfg.get("storage") if isinstance(cfg.get("storage"), dict) else {}
-        vector_backend = storage.get("vector_backend")
-        vcfg = storage.get("vector_config") if isinstance(storage.get("vector_config"), dict) else {}
-        if "qdrant" not in str(vector_backend or "").lower():
-            return False, "Qdrant backend not configured; skipping."
-        collection = vcfg.get("collection")
-        if not collection:
-            return False, "Qdrant collection not set; skipping."
-        try:
-            from qdrant_client import QdrantClient
-        except Exception as exc:
-            return False, f"qdrant-client not installed; cannot reset Qdrant ({exc})."
-        url = vcfg.get("url")
-        api_key = vcfg.get("api_key")
-        path = vcfg.get("path")
-        client = None
-        if url:
-            client = QdrantClient(url=url, api_key=api_key, timeout=10.0)
-        elif path:
-            client = QdrantClient(path=path, timeout=10.0)
-        else:
-            return False, "Qdrant vector_config must include either url or path; skipping."
-        try:
-            if client.collection_exists(collection):
-                client.delete_collection(collection_name=str(collection))
-                return True, f"Deleted Qdrant collection '{collection}'."
-            return True, f"Qdrant collection '{collection}' does not exist; nothing to delete."
-        finally:
-            try:
-                client.close()
-            except Exception:
-                pass
-    except Exception as exc:
-        return False, f"Failed to reset Qdrant (best-effort): {exc}"
 
 
 def _reset_neo4j_from_config(cfg: Dict[str, Any]) -> Tuple[bool, str]:
@@ -334,9 +291,6 @@ def main():
             logger.warning("Failed to load YAML config for --clear-all: %s", exc)
             cfg = {}
 
-        ok, msg = _reset_qdrant_from_config(cfg)
-        if msg:
-            print(f"Qdrant: {msg}")
         ok2, msg2 = _reset_neo4j_from_config(cfg)
         if msg2:
             print(f"Graph: {msg2}")

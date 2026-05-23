@@ -19,7 +19,6 @@ UMA uses a single embedded runtime profile: SQLite for authoritative storage and
 | Config file | Use |
 | --- | --- |
 | `config/uma.yaml` | Default runnable config |
-| `config/uma_lite.yaml` | Reference embedded profile (same storage settings) |
 
 `config/uma.yaml` is the default. LLM and embedding values in these files are user-customizable baselines — set the provider, model, and host to match your environment before running.
 

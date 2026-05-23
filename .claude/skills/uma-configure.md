@@ -7,9 +7,8 @@ UMA has one embedded profile: SQLite (authoritative) + LanceDB (vector index). N
 | Config file | Use |
 |---|---|
 | `config/uma.yaml` | Default runnable config |
-| `config/uma_lite.yaml` | Reference embedded profile (same storage settings) |
 
-LLM and embedding values in both files are user-customizable baselines — set provider, model, and host to match your environment.
+LLM and embedding values are user-customizable baselines — set provider, model, and host to match your environment.
 
 ---
 
@@ -214,16 +213,6 @@ vector_config:
   path: ".uma/vectors/faiss"
 ```
 
-**Qdrant (external service):**
-```bash
-pip install -e '.[vector]'
-```
-```yaml
-vector_backend: "uma.adapters.vector.qdrant:QdrantIndex"
-vector_config:
-  url: "http://localhost:6333"
-```
-
 Vector indexes can always be rebuilt from authoritative SQLite data:
 ```python
 await memory.rebuild_vector_indexes(tenant_id="default")
@@ -237,7 +226,7 @@ await memory.rebuild_vector_indexes(tenant_id="default")
 # Minimal (Lite profile — no external services)
 pip install -e .
 
-# With Qdrant or FAISS support
+# With FAISS support
 pip install -e '.[vector]'
 
 # With Anthropic LLM support

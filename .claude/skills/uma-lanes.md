@@ -16,7 +16,7 @@ UMA stores and retrieves memory across six typed lanes. Each lane has a distinct
 
 **Storage:** In-memory buffer managed by `WorkingMemoryCore`. Backed by session-scoped state; not persisted across sessions.
 
-**Config (in `uma_lite.yaml`):**
+**Config (in `uma.yaml`):**
 ```yaml
 working_memory:
   max_tokens: 4096

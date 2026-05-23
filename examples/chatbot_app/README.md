@@ -17,7 +17,7 @@ cp config/uma.yaml config/uma.local.yaml
 4. Update `config/uma.local.yaml` for the backends you actually want to use.
 5. Install any optional extras required by that local config.
    Examples:
-   `pip install '.[vector]'` for Qdrant/FAISS-related vector backends
+   `pip install '.[vector]'` for FAISS vector backend
    `pip install '.[graph]'` for Neo4j
    `pip install '.[ollama]'` for Ollama-based providers
 6. (Optional) install parser extras for document ingestion, e.g. `pip install '.[parsers]'`

@@ -77,7 +77,7 @@ See `uma-api.md` for full signatures and contracts.
 | Layer | Role |
 |---|---|
 | SQLite | Authoritative source of truth for chunk text and metadata |
-| LanceDB / Qdrant / FAISS | Retrieval accelerator — rebuildable from SQL |
+| LanceDB / FAISS | Retrieval accelerator — rebuildable from SQL |
 | Graph (optional) | Relationship routing; disabled in public profiles |
 
 Vector store is never the source of truth. It stores only ids and filterable metadata, not full chunk text.
@@ -89,6 +89,5 @@ UMA uses a single embedded profile: SQLite (authoritative) + LanceDB (vector ind
 | Config | Use |
 |---|---|
 | `config/uma.yaml` | Default runnable config |
-| `config/uma_lite.yaml` | Reference embedded profile (same storage settings) |
 
 LLM and embedding values are user-customizable baselines. See `uma-configure.md` for full configuration details.

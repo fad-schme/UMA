@@ -46,7 +46,7 @@ setup(
     ],
     extras_require={
         "llm": ["anthropic"],
-        "vector": ["faiss-cpu", "weaviate-client", "pinecone-client", "qdrant-client", "fastembed"],
+        "vector": ["faiss-cpu", "weaviate-client", "pinecone-client", "fastembed"],
         "graph": ["neo4j"],
         "postgres": ["psycopg2-binary>=2.9"],
         "dev": ["pytest", "matplotlib", "PyPDF2", "pytest-asyncio"],

@@ -151,7 +151,7 @@ def _context_requested_lanes(
     if query_intent == QueryIntent.PERSONAL.value:
         return (PROFILE_LANE, PROCEDURAL_LANE, SEMANTIC_LANE, EPISODIC_LANE)
     if query_intent == QueryIntent.MIXED.value:
-        return (RAW_LANE, SEMANTIC_LANE, PROFILE_LANE, PROCEDURAL_LANE)
+        return (RAW_LANE, SEMANTIC_LANE, PROFILE_LANE, PROCEDURAL_LANE, EPISODIC_LANE)
     if _is_history_query(query_text):
         return (RAW_LANE, EPISODIC_LANE, SEMANTIC_LANE)
     return (RAW_LANE, SEMANTIC_LANE)
