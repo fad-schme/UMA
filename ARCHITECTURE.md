@@ -24,7 +24,7 @@ UMA stores and retrieves across six typed lanes. Lane selection is explicit — 
 | Working Memory | In-memory buffer | Recent message continuity within a session | Session-local |
 | Raw Chunks (`raw`) | SQLite + vector index | Immutable source evidence from ingested documents | Durable |
 | Semantic Facts (`semantic`) | SQLite + vector index | Structured statements extracted from chunks/turns | Session-local; promotable |
-| Episodic (`episodic`) | SQLite + vector index | Time-ordered interaction history | Session-local; promotable |
+| Episodic (`episodic`) | SQLite + vector index | Time-ordered interaction history | Cross-session; session_id is provenance metadata only |
 | Procedural / Skills (`procedural`) | SQLite + vector index | Named skills and how-to knowledge | Durable |
 | Compiled Wiki (`wiki`) | SQLite (document store) | Mutable, evidence-backed synthesis artifacts | Durable |
 | Graph (optional) | Plugin backend | Relationship routing and entity expansion | — |
@@ -150,9 +150,16 @@ Conversation turns flow through `MemoryPipeline.process_turn`:
 UMAMemory.process_turn(user_id, user_msg, assistant_reply, session_id)
   → injection scan on user_msg (raises InjectionDetectedError on high severity)
   → append to working memory
-  → index as episodic event (assistant_reply scanned at write time)
+  → index as episodic event
+      · summarizes current turn (user_msg + assistant_reply) only
+      · prior working memory is background context in the prompt, not summarized
+      · assistant_reply scanned at write time; trust_score = 0.8
+      · session_id is stored as provenance; episodes are retrievable cross-session
   → store raw turn chunks (each chunk scanned at write time)
   → extract semantic facts (session-local)
+      · user_msg  → facts with trust_score = 0.9 (turn_user)
+      · assistant_reply → facts with trust_score = 0.7 (turn_assistant)
+      · both sets deduplicated before storage
   → optional: promote facts to durable memory (explicit policy)
 ```
 

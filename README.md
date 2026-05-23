@@ -113,6 +113,19 @@ await memory.process_turn(
 )
 ```
 
+## Memory Extraction
+
+`process_turn` extracts semantic facts from both sides of the conversation turn.
+
+- Facts from `user_msg` carry trust 0.9 — the user stated it directly.
+- Facts from `assistant_reply` carry trust 0.7 — the assistant may synthesize or hallucinate.
+
+Trust scores are preserved through storage and applied during retrieval ranking (`trust_weight` in config). Artifacts below `min_trust_score` are dropped from results before they reach the caller.
+
+Episodes are built from the current turn only (`user_msg` + `assistant_reply`). Prior working memory is available to the LLM as background context so the summary is coherent, but it is not re-summarized on every turn. Full session history compaction only occurs when working memory capacity thresholds are exceeded.
+
+Episodes are retrievable across sessions — `session_id` is stored as provenance metadata, not as a retrieval gate.
+
 ## Input Security
 
 UMA scans all user input for prompt injection before it reaches storage or an LLM.

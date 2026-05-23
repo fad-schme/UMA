@@ -226,14 +226,26 @@ class MemoryPipeline:
         - graph updates
         - after_turn hooks
         """
-        if not facts and isinstance(user_msg, str) and user_msg.strip():
-            facts = list(await self._semantic_ingest(
-                user_id,
-                user_msg,
-                turn_id=None,
-                turn_context=turn_context,
-                source_ids=list((extra_meta or {}).get("user_source_ids") or []),
-            ) or [])
+        if not facts:
+            if isinstance(user_msg, str) and user_msg.strip():
+                facts = list(await self._semantic_ingest(
+                    user_id,
+                    user_msg,
+                    turn_id=None,
+                    turn_context=turn_context,
+                    source_ids=list((extra_meta or {}).get("user_source_ids") or []),
+                    source_kind="turn_user",
+                ) or [])
+            if isinstance(assistant_reply, str) and assistant_reply.strip():
+                assistant_facts = list(await self._semantic_ingest(
+                    user_id,
+                    assistant_reply,
+                    turn_id=None,
+                    turn_context=turn_context,
+                    source_ids=list((extra_meta or {}).get("assistant_source_ids") or []),
+                    source_kind="turn_assistant",
+                ) or [])
+                facts = (facts or []) + assistant_facts
         facts = facts or []
         if episode is not None and facts:
             for f in facts:
@@ -372,7 +384,19 @@ class MemoryPipeline:
                         turn_id=turn_id,
                         turn_context=turn_context,
                         source_ids=list(chunk_refs.get("user_source_ids") or []),
+                        source_kind="turn_user",
                     ) or [])
+
+                if isinstance(assistant_reply, str) and assistant_reply.strip():
+                    assistant_facts = list(await self._semantic_ingest(
+                        user_id,
+                        assistant_reply,
+                        turn_id=turn_id,
+                        turn_context=turn_context,
+                        source_ids=list(chunk_refs.get("assistant_source_ids") or []),
+                        source_kind="turn_assistant",
+                    ) or [])
+                    facts = facts + assistant_facts
 
                 if episode is not None and facts:
                     for fact in facts:
@@ -778,6 +802,7 @@ class MemoryPipeline:
         turn_id: Optional[str],
         turn_context: RuntimeContext,
         source_ids: Optional[List[str]] = None,
+        source_kind: str = "turn_user",
     ) -> Any:
         sem = getattr(self.mem, "semantic_core", None)
         if sem is None:
@@ -808,6 +833,7 @@ class MemoryPipeline:
                     or None
                 ),
                 turn_context=turn_context,
+                source_kind=source_kind,
             )
         except Exception:
             logger.exception("SemanticCore.ingest failed; continuing.")

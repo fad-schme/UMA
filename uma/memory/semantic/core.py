@@ -146,6 +146,7 @@ class SemanticCore:
         *,
         extra_meta: dict | None = None,
         turn_context: Optional[RuntimeContext] = None,
+        source_kind: str = "turn_user",
     ) -> List[Fact]:
         """
         Extract + ingest facts into the semantic self.store.
@@ -182,7 +183,7 @@ class SemanticCore:
                     f.origin_user_id = normalized_user_id
                     f.origin_session_id = turn_context.session_id
                     f.scope_model_version = SCOPE_MODEL_VERSION
-                    f.trust_score = score_source(SourceDescriptor(kind="turn_user", session_id=turn_context.session_id))
+                    f.trust_score = score_source(SourceDescriptor(kind=source_kind, session_id=turn_context.session_id))
                     if _text_scan is not None:
                         f.trust_score, f.meta = apply_scan(
                             f.trust_score,
