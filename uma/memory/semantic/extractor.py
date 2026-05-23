@@ -128,6 +128,8 @@ class FactExtractor:
             "- career or education plans\n"
             "- important life context\n"
             "- preferences when explicitly stated\n"
+            "- information about the user's environment or circumstances\n"
+            "- information about the user's family, friends, colleagues or social context\n"
             "Do NOT include:\n"
             "- transient filler or chit-chat\n"
             "- generic emotional tone without durable content\n"
@@ -138,24 +140,20 @@ class FactExtractor:
             "Return ONLY valid JSON in this schema:\n"
             "{\n"
             '  "facts": [\n'
-            "    {\n"
-            '      "predicate": "likes",\n'
-            '      "object": "sushi",\n'
-            '      "confidence": 0.0-1.0,\n'
-            '      "source_ids": []\n'
-            "    }\n"
+            '    {"subject": "user", "predicate": "prefers", "object": "vegetarian food over meat", "confidence": 0.0-1.0, "source_ids": []},\n'
+            '    {"subject": "my friend Maria", "predicate": "likes", "object": "painting landscapes", "confidence": 0.0-1.0, "source_ids": []}\n'
             "  ]\n"
             "}\n"
             f"Rules: return AT MOST {max_facts} facts. "
             f"Each object must be at least {min_fact_words} words long.\n"
-            "Prefer concrete, human-readable objects that preserve the meaningful content.\n"
-            "Do not collapse specific facts into vague abstractions like 'stability' or 'support'.\n"
+            "Each object MUST be a complete, self-contained phrase — not a single word or vague topic label.\n"
+            "Do not collapse specific facts into abstractions like 'stability', 'support', or 'food'.\n"
             "No prose. No markdown."
         )
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"SUBJECT: {subject}\nTEXT:\n{text}\n"},
+            {"role": "user", "content": f"OWNER: {subject}\nTEXT:\n{text}\n"},
         ]
 
         try:
@@ -190,6 +188,7 @@ class FactExtractor:
 
             predicate = item.get("predicate")
             obj = item.get("object")
+            subj_text = (str(item.get("subject") or "").strip()) or subject
             conf = item.get("confidence", 0.7)
             source_ids = item.get("source_ids", [])
 
@@ -206,7 +205,7 @@ class FactExtractor:
 
             # Keep user facts reasonably bounded (still generic).
             subj_n, pred_n, obj_n = utils.enforce_fact_limits(
-                subj=subject,
+                subj=subj_text,
                 pred=str(predicate),
                 obj_text=obj_text,
                 object_max_words=utils.DEFAULT_OBJECT_MAX_WORDS,
@@ -553,43 +552,43 @@ class FactExtractor:
         )
 
         # Salvage: same payload but relaxed min_fact_words
-        # if not out and min_fact_words > 0:
-        #     out = utils.parse_facts_list_into_facts(
-        #         facts_payload=facts_payload,
-        #         chunk=chunk,
-        #         min_fact_words=0,
-        #         scorer=self.scorer,
-        #         max_facts_per_chunk=int(max_facts),
-        #         object_max_words=int(object_max_words),
-        #         max_fact_tokens=int(max_fact_tokens),
-        #         predicate_default="STATES",
-        #         owner_type=owner_type,
-        #         owner_id=owner_id,
-        #         now=now,
-        #         doc_id=doc_id,
-        #         source_path=source_path,
-        #         source_hash=source_hash,
-        #     )
+        if not out and min_fact_words > 0:
+            out = utils.parse_facts_list_into_facts(
+                facts_payload=facts_payload,
+                chunk=chunk,
+                min_fact_words=0,
+                scorer=self.scorer,
+                max_facts_per_chunk=int(max_facts),
+                object_max_words=int(object_max_words),
+                max_fact_tokens=int(max_fact_tokens),
+                predicate_default="STATES",
+                owner_type=owner_type,
+                owner_id=owner_id,
+                now=now,
+                doc_id=doc_id,
+                source_path=source_path,
+                source_hash=source_hash,
+            )
 
-        # if not out:
-        #     logger.warning(
-        #         "FactExtractor.extract_chunk_facts_one: no facts after parsing; forcing fallback chunk_id=%s",
-        #         chunk.chunk_id,
-        #     )
-        #     out = [
-        #         utils.fallback_fact_for_chunk(
-        #             chunk,
-        #             owner_type=owner_type,
-        #             owner_id=owner_id,
-        #             doc_id=doc_id,
-        #             source_path=source_path,
-        #             source_hash=source_hash,
-        #             now=now,
-        #             object_max_words=int(object_max_words),
-        #             max_fact_tokens=int(max_fact_tokens),
-        #             scorer=self.scorer,
-        #         )
-        #     ]
+        if not out:
+            logger.warning(
+                "FactExtractor.extract_chunk_facts_one: no facts after parsing; forcing fallback chunk_id=%s",
+                chunk.chunk_id,
+            )
+            out = [
+                utils.fallback_fact_for_chunk(
+                    chunk,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    doc_id=doc_id,
+                    source_path=source_path,
+                    source_hash=source_hash,
+                    now=now,
+                    object_max_words=int(object_max_words),
+                    max_fact_tokens=int(max_fact_tokens),
+                    scorer=self.scorer,
+                )
+            ]
         return out
 
     async def extract_chunk_facts(
