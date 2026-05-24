@@ -38,8 +38,8 @@ def test_context_plan_uses_profile_lane_without_confusing_it_with_user_kb() -> N
         available_lanes=[RAW_LANE, SEMANTIC_LANE, EPISODIC_LANE, PROCEDURAL_LANE, PROFILE_LANE],
     )
 
-    assert plan.participating_lanes == (PROFILE_LANE, PROCEDURAL_LANE)
-    assert plan.active_domains == ("user_profile", "procedural")
+    assert plan.participating_lanes == (PROFILE_LANE, PROCEDURAL_LANE, SEMANTIC_LANE, EPISODIC_LANE)
+    assert plan.active_domains == ("user_profile", "procedural", "kb_doc")
 
 
 def test_memory_plan_prefers_wiki_but_surfaces_runtime_unavailability_explicitly() -> None:

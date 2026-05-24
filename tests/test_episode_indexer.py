@@ -36,7 +36,7 @@ def test_episode_indexer_builds_episode_with_valid_embedding_shape():
     ]
 
     ep, embedding = asyncio.run(
-        indexer.build_episode(owner_type="user", owner_id="user:u1", wm_entries=wm_entries)
+        indexer.build_episode(owner_type="user", owner_id="user:u1", turn_entries=wm_entries)
     )
     assert isinstance(ep.summary, str) and ep.summary.strip()
     assert isinstance(embedding, list) and len(embedding) == 16

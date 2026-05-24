@@ -31,6 +31,7 @@ async def test_document_manifest_persistence(uma_memory):
         )
         assert rows and rows[0]["source_hash"] == "hash123"
         stored = await mem.document_store.get_by_owner_and_hash(
+            tenant_id="default",
             owner_type="user",
             owner_id="user:u1",
             source_hash="hash123",

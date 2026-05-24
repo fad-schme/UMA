@@ -26,6 +26,7 @@ async def test_capture_source_rejects_exe(tmp_path):
             exe_path,
             owner_type="agent",
             owner_id="agent:test",
+            tenant_id="default",
             memory=memory,
         )
 
@@ -44,6 +45,7 @@ async def test_capture_source_rejects_disguised_pdf(tmp_path):
             disguised,
             owner_type="agent",
             owner_id="agent:test",
+            tenant_id="default",
             memory=memory,
         )
 

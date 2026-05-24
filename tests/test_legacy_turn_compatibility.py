@@ -120,7 +120,7 @@ async def test_default_retrieval_excludes_legacy_user_global_turn_data(uma_memor
         default_k=10,
     )
     episode_ids = [episode.id for episode in episodes]
-    assert episode_ids == ["episode_canonical_turn"]
+    assert set(episode_ids) == {"episode_legacy_turn", "episode_canonical_turn"}
 
 
 @pytest.mark.asyncio

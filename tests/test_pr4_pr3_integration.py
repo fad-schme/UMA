@@ -90,22 +90,22 @@ async def test_poisoned_reply_episode_absent_from_normal_retrieval(tmp_path):
 @pytest.mark.asyncio
 async def test_poisoned_user_msg_facts_quarantined(tmp_path):
     memory = await init_uma_for_tests(tmp_path)
-    await memory.process_turn(
-        user_id="carol",
-        user_msg=_POISONED,
-        assistant_reply="Noted.",
-        session_id="s3",
-    )
+    from uma.common.injection_scan import InjectionDetectedError
+
+    with pytest.raises(InjectionDetectedError):
+        await memory.process_turn(
+            user_id="carol",
+            user_msg=_POISONED,
+            assistant_reply="Noted.",
+            session_id="s3",
+        )
 
     store = memory._stores["semantic"]
     all_facts = await store.list_facts_for_owner(
         tenant_id="default", owner_type="user", owner_id="user:carol",
         include_quarantined=True,
     )
-    if all_facts:
-        quarantined = [f for f in all_facts if f.quarantined_at is not None]
-        assert quarantined, "facts extracted from poisoned user message must be quarantined"
-        assert all(f.trust_score == 0.0 for f in quarantined)
+    assert all_facts == []
 
 
 # ---------------------------------------------------------------------------

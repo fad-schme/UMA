@@ -107,6 +107,7 @@ async def test_ingest_document_reingests_when_signature_changes(uma_memory, tmp_
         str(p),
         owner_type="user",
         owner_id="user:u1",
+        tenant_id="default",
         config=IngestConfig(chunk_size_tokens=60, overlap_tokens=10),
         memory=memory,
     )
@@ -117,6 +118,7 @@ async def test_ingest_document_reingests_when_signature_changes(uma_memory, tmp_
 
     parsed = parse_file(str(p))
     manifest = await memory.document_store.get_by_owner_and_hash(
+        tenant_id="default",
         owner_type="user",
         owner_id="user:u1",
         source_hash=parsed.source_hash,

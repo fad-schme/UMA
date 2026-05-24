@@ -3,7 +3,7 @@
 Tests:
 - A poisoned assistant_reply causes the stored episode to have trust_score == 0.0
   and meta.security.injection_scan populated.
-- A poisoned user_msg causes stored facts to have trust_score == 0.0.
+- A poisoned user_msg is rejected at the write boundary before facts are stored.
 - A clean turn is unaffected (trust_score unchanged by scanner).
 """
 from __future__ import annotations
@@ -66,32 +66,27 @@ async def test_poisoned_reply_episode_trust_zero(tmp_path):
 
 @pytest.mark.asyncio
 async def test_poisoned_user_msg_facts_trust_zero(tmp_path):
-    """Poisoned user_msg → extracted facts trust_score == 0.0."""
+    """Poisoned user_msg is rejected before semantic ingestion runs."""
     mem = await init_uma_for_tests(tmp_path)
     try:
-        await mem.process_turn(
-            user_id="user:bob",
-            user_msg=_POISONED_USER,
-            assistant_reply=_CLEAN_REPLY,
-            session_id="session-pr3-facts",
-        )
+        from uma.common.injection_scan import InjectionDetectedError
+
+        with pytest.raises(InjectionDetectedError):
+            await mem.process_turn(
+                user_id="user:bob",
+                user_msg=_POISONED_USER,
+                assistant_reply=_CLEAN_REPLY,
+                session_id="session-pr3-facts",
+            )
 
         sem_store = mem._stores["semantic"]
         facts = await sem_store.list_facts_for_owner(
             tenant_id="default",
             owner_type="user",
             owner_id="user:bob",
+            include_quarantined=True,
         )
-
-        if not facts:
-            pytest.skip("fake_llm produced no facts for this input; skipping assertion")
-
-        for fact in facts:
-            assert fact.trust_score == pytest.approx(0.0), (
-                f"fact id={fact.id} from poisoned user_msg must have trust_score=0.0; got {fact.trust_score}"
-            )
-            sec = (fact.meta or {}).get("security", {})
-            assert "injection_scan" in sec
+        assert facts == []
     finally:
         try:
             mem.shutdown()
@@ -101,7 +96,7 @@ async def test_poisoned_user_msg_facts_trust_zero(tmp_path):
 
 @pytest.mark.asyncio
 async def test_clean_turn_trust_score_unaffected(tmp_path):
-    """Clean turn → episode trust_score == 0.7 (unaffected by scanner)."""
+    """Clean turn → episode trust_score == 0.8 (unaffected by scanner)."""
     mem = await init_uma_for_tests(tmp_path)
     try:
         await mem.process_turn(
@@ -121,8 +116,8 @@ async def test_clean_turn_trust_score_unaffected(tmp_path):
 
         ep = episodes[0]
         # Scanner must not penalize clean content; trust_score stays at classifier value (0.7)
-        assert ep.trust_score == pytest.approx(0.7), (
-            f"clean episode trust_score must be 0.7; got {ep.trust_score}"
+        assert ep.trust_score == pytest.approx(0.8), (
+            f"clean episode trust_score must be 0.8; got {ep.trust_score}"
         )
         sec = (ep.meta or {}).get("security", {})
         assert "injection_scan" not in sec, "clean episode must not have injection_scan in meta"

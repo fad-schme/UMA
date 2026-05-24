@@ -35,7 +35,7 @@ async def test_episode_has_content_hash_and_trust_score_after_process_turn(uma_m
     assert episodes, "expected at least one episode after process_turn"
 
     ep = episodes[0]
-    assert ep.trust_score == pytest.approx(0.7), "episode trust_score must be 0.7 (turn_assistant, authenticated session)"
+    assert ep.trust_score == pytest.approx(0.8), "episode trust_score must be 0.8 for synthesized turn summaries"
 
     # content_hash must be non-empty and match the canonical hash of the summary.
     assert ep.content_hash is not None, "content_hash must be populated"
@@ -65,11 +65,11 @@ async def test_facts_have_content_hash_and_trust_score_after_process_turn(uma_me
     if not facts:
         pytest.skip("fake_llm produced no facts for this input; skipping assertion")
 
-    for fact in facts:
-        assert fact.trust_score == pytest.approx(0.9), (
-            f"fact id={fact.id} must have trust_score=0.9 (turn_user, authenticated session)"
-        )
+    trust_scores = {round(float(fact.trust_score or 0.0), 1) for fact in facts}
+    assert trust_scores.issubset({0.7, 0.9})
+    assert 0.9 in trust_scores
         # content_hash is optional (fallback facts may not populate it in all codepaths)
+    for fact in facts:
         if fact.content_hash is not None:
             assert len(fact.content_hash) == 64, (
                 f"fact id={fact.id} content_hash must be 64-char SHA-256 hex"

@@ -30,7 +30,7 @@ def fixture_doc(tmp_path) -> str:
 
 @pytest.mark.asyncio
 async def test_process_turn_episode_trust_score(uma_memory):
-    """Episode from a turn with a session_id must have trust_score == 0.7."""
+    """Episode from a turn with a session_id carries synthesized-summary trust."""
     mem = uma_memory
 
     await mem.process_turn(
@@ -49,14 +49,14 @@ async def test_process_turn_episode_trust_score(uma_memory):
     assert episodes, "expected at least one episode after process_turn"
 
     ep = episodes[0]
-    assert ep.trust_score == pytest.approx(0.7), (
-        f"episode trust_score must be 0.7 (turn_assistant, authenticated); got {ep.trust_score}"
+    assert ep.trust_score == pytest.approx(0.8), (
+        f"episode trust_score must be 0.8 for synthesized turn summaries; got {ep.trust_score}"
     )
 
 
 @pytest.mark.asyncio
 async def test_process_turn_facts_trust_score(uma_memory):
-    """Facts extracted from a turn with a session_id must have trust_score == 0.9."""
+    """Turn facts inherit trust from their source side of the transcript."""
     mem = uma_memory
 
     await mem.process_turn(
@@ -76,10 +76,9 @@ async def test_process_turn_facts_trust_score(uma_memory):
     if not facts:
         pytest.skip("fake_llm produced no facts for this input; skipping assertion")
 
-    for fact in facts:
-        assert fact.trust_score == pytest.approx(0.9), (
-            f"fact id={fact.id} must have trust_score=0.9 (turn_user, authenticated); got {fact.trust_score}"
-        )
+    trust_scores = {round(float(fact.trust_score or 0.0), 1) for fact in facts}
+    assert trust_scores.issubset({0.7, 0.9})
+    assert 0.9 in trust_scores
 
 
 @pytest.mark.asyncio

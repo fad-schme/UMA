@@ -390,11 +390,11 @@ async def test_runtime_context_trace_surfaces_lane_plan(uma_memory) -> None:
     )
 
     assert result["product"] == "context"
-    assert result["active_lanes"] == ["profile", "procedural"]
+    assert result["active_lanes"] == ["profile", "procedural", "semantic", "episodic"]
     lane_plan = next(step for step in result["trace"] if step.get("event") == "lane_plan")
     assert lane_plan["product"] == "context"
-    assert lane_plan["participating_lanes"] == ["profile", "procedural"]
-    assert lane_plan["active_domains"] == ["user_profile", "procedural"]
+    assert lane_plan["participating_lanes"] == ["profile", "procedural", "semantic", "episodic"]
+    assert lane_plan["active_domains"] == ["user_profile", "procedural", "kb_doc"]
 
 def test_umamemory_retrieval_shims_are_removed() -> None:
     assert hasattr(UMAMemory, "retrieve_context")

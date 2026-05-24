@@ -723,6 +723,7 @@ async def _extract_facts_and_update_graph(
     *,
     parsed: ParsedDocument,
     final_chunks: List[DocumentChunk],
+    persisted_chunks: List[Chunk],
     config: IngestConfig,
     runtime: _IngestRuntime,
     owner_type: str,
@@ -731,12 +732,49 @@ async def _extract_facts_and_update_graph(
     workspace_id: str | None,
     warnings: List[str],
 ) -> tuple[List[Fact], int, int, List[str]]:
+    # H3 defense: drop quarantined chunks before fact extraction.
+    # Quarantine means "do not use this artifact for anything." Sending a
+    # quarantined chunk to the LLM is a use — it pays for the call, may
+    # leak the payload into provider logs, and produces facts that have
+    # to be quarantined anyway. Filtering upstream is cheaper and stricter.
+    #
+    # Pairing rule: captured_chunk_inputs[i] corresponds to captured_chunks[i]
+    # by chunk_id. We build a set of quarantined chunk_ids from the persisted
+    # Chunk records and drop the matching DocumentChunk inputs.
+    quarantined_ids: set[str] = set()
+    for ch in persisted_chunks or []:
+        if getattr(ch, "quarantined_at", None) is not None:
+            cid = getattr(ch, "id", None)
+            if isinstance(cid, str) and cid:
+                quarantined_ids.add(cid)
+
+    if quarantined_ids:
+        safe_inputs = [c for c in final_chunks if c.chunk_id not in quarantined_ids]
+        dropped = len(final_chunks) - len(safe_inputs)
+        if dropped:
+            logger.info(
+                "ingest_document: skipped %d quarantined chunk(s) before fact extraction doc_id=%s",
+                dropped,
+                parsed.doc_id,
+            )
+            warnings.append(
+                f"fact extraction: {dropped} quarantined chunk(s) skipped"
+            )
+        final_chunks = safe_inputs
+
     extract_chunks = final_chunks
     if config.extract_max_chunks is not None:
         extract_chunks = semantic_extractor.FactExtractor.select_chunks_for_fact_extraction(
             final_chunks,
             max_chunks=int(config.extract_max_chunks),
         )
+
+    if not extract_chunks:
+        logger.info(
+            "ingest_document: no eligible chunks for fact extraction doc_id=%s",
+            parsed.doc_id,
+        )
+        return [], 0, 0, []
 
     fact_extractor = semantic_extractor.FactExtractor(llm=runtime.llm)
     extracted_fact_records, llm_batch_failures = await fact_extractor.extract_chunk_facts_batch(
@@ -943,6 +981,7 @@ async def derive_memory_artifacts(
     derived_facts, facts_created, graph_edges, fact_ids = await _extract_facts_and_update_graph(
         parsed=capture.parsed,
         final_chunks=capture.captured_chunk_inputs,
+        persisted_chunks=capture.captured_chunks,
         config=config,
         runtime=runtime,
         owner_type=capture.owner_type,

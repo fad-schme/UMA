@@ -2,9 +2,9 @@
 Tests for process_turn semantic memory behavior.
 
 Invariants verified:
-- Semantic facts are extracted only from user_msg, never from assistant_reply.
-- Empty user_msg produces no semantic facts even if assistant_reply contains facts.
-- The deferred path ingests user_msg (not assistant_reply).
+- Semantic facts are extracted from both user_msg and assistant_reply.
+- Empty user_msg still allows assistant_reply-derived semantic facts.
+- The deferred path ingests both sides of the turn.
 - Episodes store the full transcript (user_msg + assistant_reply with speaker roles).
 - Working memory is a distinct, un-lane-filtered section in retrieve_context output.
 """
@@ -19,7 +19,7 @@ from tests.helpers.runtime import init_uma_for_tests
 
 @pytest.mark.asyncio
 async def test_semantic_ingest_extracts_only_from_user_msg(tmp_path):
-    """Facts come from user_msg; assistant_reply is never sent to semantic ingest."""
+    """Facts are extracted from both sides of the turn with source-specific trust."""
     mem = await init_uma_for_tests(tmp_path)
     try:
         await mem.process_turn(
@@ -39,16 +39,19 @@ async def test_semantic_ingest_extracts_only_from_user_msg(tmp_path):
         assert any("sushi" in o for o in fact_objects), (
             f"expected a 'sushi' fact extracted from user_msg; got objects={fact_objects}"
         )
-        assert not any("pizza" in o for o in fact_objects), (
-            f"'pizza' from assistant_reply leaked into semantic store; objects={fact_objects}"
+        assert any("pizza" in o for o in fact_objects), (
+            f"expected assistant_reply facts to be persisted too; objects={fact_objects}"
         )
+        by_object = {str(getattr(f, "object", "")).lower(): f for f in facts}
+        assert by_object["sushi"].trust_score == pytest.approx(0.9)
+        assert by_object["pizza"].trust_score == pytest.approx(0.7)
     finally:
         mem.shutdown()
 
 
 @pytest.mark.asyncio
 async def test_semantic_ingest_skips_when_user_msg_empty(tmp_path):
-    """Empty user_msg produces 0 semantic facts even if assistant_reply contains facts."""
+    """Empty user_msg still ingests assistant_reply facts."""
     mem = await init_uma_for_tests(tmp_path)
     try:
         await mem.process_turn(
@@ -63,16 +66,18 @@ async def test_semantic_ingest_skips_when_user_msg_empty(tmp_path):
             owner_type="user",
             owner_id="user:u1",
         )
-        assert facts == [], (
-            f"expected 0 semantic facts for empty user_msg; got {len(facts)}"
+        fact_objects = [str(getattr(f, "object", "")).lower() for f in facts]
+        assert any("coffee" in o for o in fact_objects), (
+            f"expected assistant-derived fact for empty user_msg; got objects={fact_objects}"
         )
+        assert all(float(getattr(f, "trust_score", 0.0) or 0.0) == pytest.approx(0.7) for f in facts)
     finally:
         mem.shutdown()
 
 
 @pytest.mark.asyncio
 async def test_deferred_path_ingests_user_msg_not_assistant_reply(tmp_path):
-    """With defer_post_turn enabled, draining the queue extracts facts from user_msg only."""
+    """With defer_post_turn enabled, draining the queue extracts facts from both sides."""
     mem = await init_uma_for_tests(tmp_path)
     try:
         mem.pipeline_cfg = types.SimpleNamespace(
@@ -104,8 +109,8 @@ async def test_deferred_path_ingests_user_msg_not_assistant_reply(tmp_path):
         assert any("sushi" in o for o in fact_objects), (
             f"expected 'sushi' fact via deferred user_msg ingest; got objects={fact_objects}"
         )
-        assert not any("pizza" in o for o in fact_objects), (
-            f"'pizza' from assistant_reply leaked via deferred path; objects={fact_objects}"
+        assert any("pizza" in o for o in fact_objects), (
+            f"expected deferred assistant_reply ingest too; objects={fact_objects}"
         )
     finally:
         mem.shutdown()

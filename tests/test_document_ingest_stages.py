@@ -19,6 +19,7 @@ async def test_capture_source_persists_terminal_evidence_without_forcing_derivat
         str(path),
         owner_type="user",
         owner_id="user:u1",
+        tenant_id="default",
         memory=memory,
     )
 
@@ -26,6 +27,7 @@ async def test_capture_source_persists_terminal_evidence_without_forcing_derivat
     assert capture.captured_chunks
     assert capture.captured_chunk_inputs
     facts = await memory.semantic_core.list_facts_for_owner(
+        tenant_id="default",
         owner_type="user",
         owner_id="user:u1",
         limit=None,
@@ -46,12 +48,14 @@ async def test_capture_source_rerun_is_idempotent_and_returns_existing_chunks(um
         str(path),
         owner_type="user",
         owner_id="user:u1",
+        tenant_id="default",
         memory=memory,
     )
     second = await capture_source(
         str(path),
         owner_type="user",
         owner_id="user:u1",
+        tenant_id="default",
         memory=memory,
     )
 
@@ -75,6 +79,7 @@ async def test_derive_memory_artifacts_reruns_from_capture_outputs_without_repar
         str(path),
         owner_type="user",
         owner_id="user:u1",
+        tenant_id="default",
         config=config,
         memory=memory,
     )
@@ -85,6 +90,7 @@ async def test_derive_memory_artifacts_reruns_from_capture_outputs_without_repar
         memory=memory,
     )
     before = await memory.semantic_core.list_facts_for_owner(
+        tenant_id="default",
         owner_type="user",
         owner_id="user:u1",
         limit=None,
@@ -96,6 +102,7 @@ async def test_derive_memory_artifacts_reruns_from_capture_outputs_without_repar
         memory=memory,
     )
     after = await memory.semantic_core.list_facts_for_owner(
+        tenant_id="default",
         owner_type="user",
         owner_id="user:u1",
         limit=None,
@@ -118,6 +125,7 @@ async def test_curate_compiled_memory_rebuilds_from_capture_and_derivation_outpu
         str(path),
         owner_type="user",
         owner_id="user:u1",
+        tenant_id="default",
         config=config,
         memory=memory,
     )

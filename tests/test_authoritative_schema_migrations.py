@@ -72,7 +72,12 @@ async def test_document_store_migrates_legacy_rows_and_persists_scope_fields(tmp
         conn.close()
 
     store = DocumentSQLStore(db_adapter=SQLiteAdapter(db_path))
-    record = await store.get_by_owner_and_hash(owner_type="user", owner_id="user:u1", source_hash="hash-old")
+    record = await store.get_by_owner_and_hash(
+        tenant_id="default",
+        owner_type="user",
+        owner_id="user:u1",
+        source_hash="hash-old",
+    )
     assert record is not None
     assert record.doc_id == "doc_old"
     assert record.tenant_id == "default"

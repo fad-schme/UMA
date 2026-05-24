@@ -87,10 +87,11 @@ async def test_daily_diary_bootstrap_wrapper_delegates_to_ingest_service(uma_mem
     diary_path.write_text("- preserved chronology\n", encoding="utf-8")
     calls: dict[str, object] = {}
 
-    async def _fake_ingest_daily_diary_bootstrap(file_path, *, memory, runtime_context):
+    async def _fake_ingest_daily_diary_bootstrap(file_path, *, memory, runtime_context, config=None):
         calls["file_path"] = file_path
         calls["memory"] = memory
         calls["runtime_context"] = runtime_context
+        calls["config"] = config
         return {"status": "ingested", "path": file_path, "episodes_created": 1}
 
     monkeypatch.setattr(ingest_service, "ingest_daily_diary_bootstrap", _fake_ingest_daily_diary_bootstrap)
@@ -105,6 +106,7 @@ async def test_daily_diary_bootstrap_wrapper_delegates_to_ingest_service(uma_mem
     assert result == {"status": "ingested", "path": str(diary_path), "episodes_created": 1}
     assert calls["file_path"] == str(diary_path)
     assert calls["memory"] is uma_memory
+    assert calls["config"] is None
     assert calls["runtime_context"] is not None
     assert calls["runtime_context"].user_id == "user:u1"
     assert calls["runtime_context"].session_id == "session-diary"

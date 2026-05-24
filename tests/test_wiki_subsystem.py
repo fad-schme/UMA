@@ -128,6 +128,7 @@ async def test_stage3_curation_uses_wiki_subsystem(uma_memory, tmp_path, monkeyp
         str(path),
         owner_type="user",
         owner_id="user:u1",
+        tenant_id="default",
         config=config,
         memory=memory,
     )
@@ -149,5 +150,4 @@ async def test_stage3_curation_uses_wiki_subsystem(uma_memory, tmp_path, monkeyp
 
     assert seen == [capture.parsed.doc_id]
     assert curated.compiled_artifacts[0]["id"].startswith("wiki:")
-
 

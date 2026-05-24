@@ -79,3 +79,6 @@ CLAUDE.md
 memory.md
 session_log.md
 locomo/runs/*
+tmp.py
+*.zip
+*.tar.gz
