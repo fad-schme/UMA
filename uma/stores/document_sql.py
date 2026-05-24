@@ -89,16 +89,23 @@ class DocumentSQLStore(BaseSQLStore):
     async def get_by_owner_and_hash(
         self,
         *,
+        tenant_id: str,
         owner_type: str,
         owner_id: str,
         source_hash: str,
     ) -> DocumentRecord | None:
         """
-        Return the most recently ingested document record for an owner+hash.
+        Return the most recently ingested document record for a tenant + owner + hash.
+
+        tenant_id is required (DAT invariant). The lookup is scoped to a single
+        tenant: two tenants with overlapping owner_id values will never see
+        each other's manifests through this method. Earlier versions of this
+        function omitted the tenant predicate; calling code that relied on
+        that behavior was unsafe.
 
         This is used for idempotent ingestion gates.
         """
-        if not owner_type or not owner_id or not source_hash:
+        if not tenant_id or not owner_type or not owner_id or not source_hash:
             return None
 
         conn = self._conn()
@@ -121,12 +128,12 @@ class DocumentSQLStore(BaseSQLStore):
                     scope_model_version,
                     meta
                 FROM documents
-                WHERE owner_type = ? AND owner_id = ? AND source_hash = ?
+                WHERE tenant_id = ? AND owner_type = ? AND owner_id = ? AND source_hash = ?
                 ORDER BY ingested_at DESC
                 LIMIT 1
                 """,
-                params=[owner_type, owner_id, source_hash],
-                log_context="documents_get_by_owner_hash",
+                params=[tenant_id, owner_type, owner_id, source_hash],
+                log_context="documents_get_by_tenant_owner_hash",
             )
             if not row:
                 return None
@@ -172,7 +179,8 @@ class DocumentSQLStore(BaseSQLStore):
             )
         except Exception:
             logger.exception(
-                "DocumentSQLStore.get_by_owner_and_hash failed owner=%s:%s",
+                "DocumentSQLStore.get_by_owner_and_hash failed tenant=%s owner=%s:%s",
+                tenant_id,
                 owner_type,
                 owner_id,
             )

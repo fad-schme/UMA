@@ -111,6 +111,8 @@ async def write_daily_diary_episodes(
     entries: Sequence[str],
     owner_type: str,
     owner_id: str,
+    tenant_id: str,
+    workspace_id: str | None,
     user_id: str | None,
     embedder: Any,
     episodic_core: Any | None = None,
@@ -123,6 +125,10 @@ async def write_daily_diary_episodes(
     - headings and file structure are handled upstream
     - the diary file is imported once, then UMA becomes the source of truth
 
+    tenant_id is required (DAT invariant). Episodes are stamped with the
+    tenant and workspace at construction time; EpisodicCore.add_episode
+    does NOT assign tenant_id, so every caller must pass it explicitly.
+
     Returns the list of created episode ids.
     """
     if episodic_core is None:
@@ -134,6 +140,9 @@ async def write_daily_diary_episodes(
     if not isinstance(file_path, str) or not file_path.strip():
         logger.warning("write_daily_diary_episodes: missing file_path")
         return []
+    if not isinstance(tenant_id, str) or not tenant_id.strip():
+        logger.error("write_daily_diary_episodes: tenant_id is required")
+        raise ValueError("write_daily_diary_episodes: tenant_id is required")
 
     cleaned_entries = [
         entry.strip()
@@ -198,6 +207,8 @@ async def write_daily_diary_episodes(
             meta=diary_meta,
             owner_type=owner_type,
             owner_id=owner_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
         )
 
         try:

@@ -238,6 +238,7 @@ async def _embed_and_persist_facts(
 async def _load_existing_manifest(
     *,
     document_store: Any,
+    tenant_id: str,
     owner_type: str,
     owner_id: str,
     source_hash: str,
@@ -245,8 +246,12 @@ async def _load_existing_manifest(
 ) -> Any | None:
     if document_store is None or not hasattr(document_store, "get_by_owner_and_hash"):
         return None
+    if not tenant_id:
+        logger.error("%s: _load_existing_manifest requires tenant_id", log_context)
+        raise ValueError(f"{log_context}: tenant_id is required for manifest lookup")
     try:
         return await document_store.get_by_owner_and_hash(
+            tenant_id=tenant_id,
             owner_type=owner_type,
             owner_id=owner_id,
             source_hash=source_hash,
@@ -371,6 +376,7 @@ async def _capture_bootstrap_source(
     source_hash = str(ingest_signature.get("content_hash") or "")
     existing_manifest = await _load_existing_manifest(
         document_store=document_store,
+        tenant_id=normalized_tenant_id,
         owner_type="user",
         owner_id=normalized_user_id,
         source_hash=source_hash,
@@ -404,6 +410,7 @@ async def _run_manifest_gate(
     existing_manifest = None
     existing_manifest = await _load_existing_manifest(
         document_store=runtime.document_store,
+        tenant_id=tenant_id,
         owner_type=owner_type,
         owner_id=owner_id,
         source_hash=parsed.source_hash,
@@ -1271,6 +1278,8 @@ async def ingest_daily_diary_bootstrap(
         normalized_path,
         owner_type="user",
         owner_id=normalized_user_id,
+        tenant_id=normalized_tenant_id,
+        workspace_id=workspace_id,
         memory=memory,
     )
     logger.info(
@@ -1291,6 +1300,8 @@ async def ingest_daily_diary_bootstrap(
         entries=entries,
         owner_type="user",
         owner_id=normalized_user_id,
+        tenant_id=normalized_tenant_id,
+        workspace_id=workspace_id,
         user_id=normalized_user_id,
         embedder=runtime.embedder,
         episodic_core=runtime.episodic_core,
