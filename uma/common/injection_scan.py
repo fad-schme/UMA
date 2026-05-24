@@ -330,3 +330,42 @@ def apply_scan(
     sec["injection_scan"] = result.to_dict()
     new_meta["security"] = sec
     return new_trust, new_meta
+
+
+def scan_artifact_text(
+    text: str,
+    trust_score: float,
+    meta: Dict[str, Any],
+    *,
+    log_context: str,
+    now: "datetime | None" = None,
+) -> Tuple[float, Dict[str, Any], "datetime | None"]:
+    """
+    Canonical write-time scan for any UMA artifact (chunk, fact, episode, skill).
+
+    Combines the three steps every ingestion path must run before storage:
+      1. scan_content on the artifact's text
+      2. apply_scan to adjust trust_score and record the result in meta.security
+      3. compute quarantined_at if the hit is high-severity and quarantine is on
+
+    Every ingestion path MUST use this helper (or the equivalent three-step
+    sequence) before constructing the artifact. Skipping it produces an
+    artifact that retrieval cannot reason about: trust_score will not reflect
+    injection-scan signal, meta.security.injection_scan will be missing, and
+    quarantined_at will be None even for known-malicious content.
+
+    Returns (adjusted_trust_score, updated_meta, quarantined_at).
+
+    The returned quarantined_at is the timestamp to stamp on the artifact's
+    quarantined_at field, or None if no quarantine is needed. Use the `now`
+    argument to ensure all artifacts written in the same ingestion call share
+    a single timestamp; if omitted, datetime.now(timezone.utc) is used.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+
+    result = scan_content(text or "")
+    new_trust, new_meta = apply_scan(trust_score, meta, result, log_context=log_context)
+    quarantined_at = None
+    if result.severity == "high" and quarantine_enabled():
+        quarantined_at = now if now is not None else _dt.now(_tz.utc)
+    return new_trust, new_meta, quarantined_at

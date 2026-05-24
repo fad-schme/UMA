@@ -42,7 +42,7 @@ from uma.stores.base_sql_store import DEFAULT_TENANT_ID
 from uma.common.types import RuntimeContext, SessionScope, Chunk
 from uma.common.identity import normalize_user_id
 from uma.common.trust import SourceDescriptor, score_source
-from uma.common.injection_scan import scan_content, apply_scan, quarantine_enabled
+from uma.common.injection_scan import scan_content, apply_scan, quarantine_enabled, scan_artifact_text
 logger = logging.getLogger(__name__)
 
 
@@ -739,8 +739,13 @@ class MemoryPipeline:
             }
             if caller_meta:
                 chunk_meta["caller"] = caller_meta
-            scan_result = scan_content(text)
-            trust_score, chunk_meta = apply_scan(trust_score, chunk_meta, scan_result, log_context=f"turn_chunk/{role}:{turn_id}")
+            trust_score, chunk_meta, chunk_quarantined_at = scan_artifact_text(
+                text,
+                trust_score,
+                chunk_meta,
+                log_context=f"turn_chunk/{role}:{turn_id}",
+                now=now,
+            )
             rows.append(
                 (
                     role,
@@ -762,7 +767,7 @@ class MemoryPipeline:
                         origin_user_id=owner_id,
                         origin_session_id=turn_context.session_id,
                         trust_score=trust_score,
-                        quarantined_at=(now if scan_result.severity == "high" and quarantine_enabled() else None),
+                        quarantined_at=chunk_quarantined_at,
                         meta=chunk_meta,
                     ),
                 )

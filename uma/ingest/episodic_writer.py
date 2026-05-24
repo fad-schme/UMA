@@ -9,7 +9,7 @@ from uma.common.types import Episode
 from uma.common.storage_metadata import normalize_episode_metadata
 from uma.common.integrity import hash_episode_content
 from uma.common.trust import SourceDescriptor, score_source
-from uma.common.injection_scan import scan_content, apply_scan, quarantine_enabled
+from uma.common.injection_scan import scan_content, apply_scan, quarantine_enabled, scan_artifact_text
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +77,13 @@ async def write_document_episode(
         timestamp=episode_timestamp,
         session_id=None,
     )
-    scan_result = scan_content(summary_text)
-    doc_trust, doc_meta = apply_scan(doc_trust, doc_meta, scan_result, log_context=f"episodic_writer/doc:{doc_id}")
+    doc_trust, doc_meta, doc_quarantined_at = scan_artifact_text(
+        summary_text,
+        doc_trust,
+        doc_meta,
+        log_context=f"episodic_writer/doc:{doc_id}",
+        now=episode_timestamp,
+    )
     ep = Episode(
         id=episode_id,
         timestamp=episode_timestamp,
@@ -88,7 +93,7 @@ async def write_document_episode(
         tags=["document_ingest"],
         trust_score=doc_trust,
         content_hash=hash_episode_content(summary_text),
-        quarantined_at=(datetime.now(timezone.utc) if scan_result.severity == "high" and quarantine_enabled() else None),
+        quarantined_at=doc_quarantined_at,
         meta=doc_meta,
         owner_type=owner_type,
         owner_id=owner_id,
@@ -192,8 +197,13 @@ async def write_daily_diary_episodes(
             timestamp=episode_timestamp,
             session_id=None,
         )
-        scan_result = scan_content(entry_text)
-        diary_trust, diary_meta = apply_scan(diary_trust, diary_meta, scan_result, log_context=f"episodic_writer/diary:{file_path}")
+        diary_trust, diary_meta, diary_quarantined_at = scan_artifact_text(
+            entry_text,
+            diary_trust,
+            diary_meta,
+            log_context=f"episodic_writer/diary:{file_path}",
+            now=episode_timestamp,
+        )
         episode = Episode(
             id=episode_id,
             timestamp=episode_timestamp,
@@ -203,7 +213,7 @@ async def write_daily_diary_episodes(
             tags=["daily_diary"],
             trust_score=diary_trust,
             content_hash=hash_episode_content(entry_text),
-            quarantined_at=(datetime.now(timezone.utc) if scan_result.severity == "high" and quarantine_enabled() else None),
+            quarantined_at=diary_quarantined_at,
             meta=diary_meta,
             owner_type=owner_type,
             owner_id=owner_id,

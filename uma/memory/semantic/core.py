@@ -154,6 +154,14 @@ class SemanticCore:
         Ownership consistency:
         - Facts extracted from user-scoped turns MUST be persisted as:
           owner_type="user", owner_id="user:<id>"
+
+        Write-time scanning:
+        - The raw input text is always scanned at the boundary; the verdict
+          (trust adjustment, security metadata, quarantine timestamp) is
+          inherited by every fact derived from it. The earlier behavior of
+          gating the scan on `turn_context is not None` is removed: a caller
+          providing text without a turn_context is still introducing text
+          into UMA, and the boundary scan must run.
         """
         try:
             normalized_user_id = normalize_user_id(user_id)
@@ -161,8 +169,10 @@ class SemanticCore:
             logger.exception("SemanticCore.ingest: invalid user_id=%r", user_id)
             raise
 
-        # Scan raw user text once; result is captured by closure and applied per-fact before storage.
-        _text_scan = scan_content(text) if turn_context is not None else None
+        # Scan input text once at the boundary; result is captured by closure
+        # and applied per-fact before storage. Option A discipline: scan at
+        # the boundary; everything derived inherits.
+        _text_scan = scan_content(text or "")
         _source_ids = [
             str(item)
             for item in list((extra_meta or {}).get("source_ids") or [])
@@ -184,16 +194,20 @@ class SemanticCore:
                     f.origin_session_id = turn_context.session_id
                     f.scope_model_version = SCOPE_MODEL_VERSION
                     f.trust_score = score_source(SourceDescriptor(kind=source_kind, session_id=turn_context.session_id))
-                    if _text_scan is not None:
-                        f.trust_score, f.meta = apply_scan(
-                            f.trust_score,
-                            f.meta or {},
-                            _text_scan,
-                            log_context=f"semantic/user:{normalized_user_id}",
-                        )
-                        if _text_scan.severity == "high" and quarantine_enabled():
-                            from datetime import datetime, timezone
-                            f.quarantined_at = datetime.now(timezone.utc)
+                # Apply the boundary scan verdict to the derived fact. This
+                # runs whether or not turn_context was provided — the scan
+                # ran at the boundary regardless. Trust starts from whatever
+                # was set above (turn-context branch) or the extractor's
+                # default; apply_scan adjusts it according to severity.
+                f.trust_score, f.meta = apply_scan(
+                    f.trust_score,
+                    f.meta or {},
+                    _text_scan,
+                    log_context=f"semantic/user:{normalized_user_id}",
+                )
+                if _text_scan.severity == "high" and quarantine_enabled():
+                    from datetime import datetime, timezone
+                    f.quarantined_at = datetime.now(timezone.utc)
             except Exception:
                 logger.exception("SemanticCore.ingest: failed to set owner on fact id=%s", getattr(f, "id", None))
                 raise

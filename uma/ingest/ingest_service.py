@@ -31,7 +31,7 @@ from uma.common.ownership import validate_explicit_owner
 from uma.common.storage_metadata import normalize_document_metadata, normalize_fact_metadata
 from uma.common.integrity import hash_fact_content
 from uma.common.trust import SourceDescriptor, score_source
-from uma.common.injection_scan import scan_content, apply_scan, quarantine_enabled
+from uma.common.injection_scan import scan_content, apply_scan, quarantine_enabled, scan_artifact_text
 from uma.retrieve.user_query_helper import build_fact_embedding_text
 logger = logging.getLogger(__name__)
 
@@ -638,8 +638,13 @@ def _build_chunk_rows(
             "paragraph_index_start": chunk.paragraph_index_start,
             "paragraph_index_end": chunk.paragraph_index_end,
         }
-        scan_result = scan_content(chunk.text or "")
-        chunk_trust, chunk_meta = apply_scan(chunk_trust, chunk_meta, scan_result, log_context=f"ingest/{chunk.doc_id}")
+        chunk_trust, chunk_meta, chunk_quarantined_at = scan_artifact_text(
+            chunk.text or "",
+            chunk_trust,
+            chunk_meta,
+            log_context=f"ingest/{chunk.doc_id}",
+            now=now,
+        )
         chunk_rows[chunk.chunk_id] = Chunk(
             id=chunk.chunk_id,
             doc_id=chunk.doc_id,
@@ -655,7 +660,7 @@ def _build_chunk_rows(
             owner_id=owner_id,
             workspace_id=workspace_id,
             trust_score=chunk_trust,
-            quarantined_at=(now if scan_result.severity == "high" and quarantine_enabled() else None),
+            quarantined_at=chunk_quarantined_at,
             meta=chunk_meta,
         )
     return chunk_rows
@@ -1105,6 +1110,10 @@ async def ingest_memory_bootstrap(
 
     final_chunks: List[DocumentChunk] = []
     chunk_rows: Dict[str, Any] = {}
+    # Per-chunk scan verdicts are computed at the boundary (when bullet text
+    # enters UMA) and inherited by the derived fact. Option A discipline:
+    # scan at the boundary; everything derived inherits.
+    chunk_scan_verdicts: Dict[str, tuple[float, Dict[str, Any], "datetime | None"]] = {}
 
     for i, entry in enumerate(entries):
         chunk_id = hashlib.sha256(
@@ -1119,6 +1128,22 @@ async def ingest_memory_bootstrap(
             position=i,
         )
         final_chunks.append(doc_chunk)
+
+        chunk_trust = score_source(SourceDescriptor(kind="bootstrap_memory"))
+        chunk_meta: Dict[str, Any] = {
+            "text_hash": text_hash,
+            "source_kind": "memory_bootstrap",
+            "chunker_version": _MEMORY_BOOTSTRAP_VERSION,
+        }
+        chunk_trust, chunk_meta, chunk_quarantined_at = scan_artifact_text(
+            entry,
+            chunk_trust,
+            chunk_meta,
+            log_context=f"memory_bootstrap/{user_id}/{i}",
+            now=now,
+        )
+        chunk_scan_verdicts[chunk_id] = (chunk_trust, chunk_meta, chunk_quarantined_at)
+
         chunk_rows[chunk_id] = Chunk(
             id=chunk_id,
             doc_id=doc_id,
@@ -1133,12 +1158,9 @@ async def ingest_memory_bootstrap(
             owner_type="user",
             owner_id=user_id,
             workspace_id=workspace_id,
-            trust_score=score_source(SourceDescriptor(kind="bootstrap_memory")),
-            meta={
-                "text_hash": text_hash,
-                "source_kind": "memory_bootstrap",
-                "chunker_version": _MEMORY_BOOTSTRAP_VERSION,
-            },
+            trust_score=chunk_trust,
+            quarantined_at=chunk_quarantined_at,
+            meta=chunk_meta,
         )
 
     created_chunks = await _embed_and_upsert_chunks(
@@ -1150,11 +1172,29 @@ async def ingest_memory_bootstrap(
     )
 
     # One fact per entry, citing its chunk for provenance.
+    # Facts inherit the scan verdict from their source chunk (Option A): the
+    # boundary scan happened at chunk-construction time above; nothing new
+    # enters UMA at this step. Inheriting keeps trust scores consistent and
+    # ensures a quarantined chunk produces a quarantined fact.
     facts: List[Fact] = []
     for doc_chunk in final_chunks:
         fact_id = "fact_" + hashlib.sha256(
             f"memory_fact:{user_id}:{source_hash}:{doc_chunk.chunk_id}".encode("utf-8")
         ).hexdigest()
+        inherited_trust, chunk_meta_for_fact, inherited_quarantined_at = chunk_scan_verdicts[doc_chunk.chunk_id]
+        fact_meta: Dict[str, Any] = {
+            "doc_id": doc_id,
+            "source_path": normalized_path,
+            "source_hash": source_hash,
+            "fact_text": doc_chunk.text,
+            "fact_type": "claim",
+            "ingest_pipeline_version": _MEMORY_BOOTSTRAP_VERSION,
+        }
+        # Propagate the chunk's security record so retrieval and audit can see
+        # the same scan verdict on both artifacts.
+        chunk_security = (chunk_meta_for_fact or {}).get("security")
+        if chunk_security:
+            fact_meta["security"] = dict(chunk_security)
         f = Fact(
             id=fact_id,
             subject=user_id,
@@ -1168,16 +1208,10 @@ async def ingest_memory_bootstrap(
             owner_id=user_id,
             tenant_id=tenant_id,
             workspace_id=workspace_id,
-            trust_score=score_source(SourceDescriptor(kind="bootstrap_memory")),
+            trust_score=inherited_trust,
+            quarantined_at=inherited_quarantined_at,
             content_hash=hash_fact_content(user_id, "STATES", doc_chunk.text),
-            meta={
-                "doc_id": doc_id,
-                "source_path": normalized_path,
-                "source_hash": source_hash,
-                "fact_text": doc_chunk.text,
-                "fact_type": "claim",
-                "ingest_pipeline_version": _MEMORY_BOOTSTRAP_VERSION,
-            },
+            meta=fact_meta,
         )
         facts.append(f)
 

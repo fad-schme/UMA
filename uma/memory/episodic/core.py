@@ -36,7 +36,7 @@ from uma.common.types import Episode
 from uma.common.types import RuntimeContext, SCOPE_MODEL_VERSION
 from uma.common.dedupe import dedupe_by_id
 from uma.common.integrity import hash_episode_content
-from uma.common.injection_scan import scan_content, apply_scan, quarantine_enabled
+from uma.common.injection_scan import scan_content, apply_scan, quarantine_enabled, scan_artifact_text
 
 logger = logging.getLogger(__name__)
 
@@ -115,19 +115,16 @@ class EpisodicCore:
             episode.content_hash = hash_episode_content(episode.summary)
 
             # Scan assistant_reply — user_message is already gated at UMAMemory.process_turn().
-            scan_result = scan_content(assistant_reply or "")
             episode_meta = dict(episode.meta or {})
             if extra_meta:
                 episode_meta["caller"] = {k: v for k, v in extra_meta.items() if k not in ("owner_type", "owner_id", "tenant_id", "session_id")}
-            episode.trust_score, episode.meta = apply_scan(
+            episode.trust_score, episode.meta, episode.quarantined_at = scan_artifact_text(
+                assistant_reply or "",
                 episode.trust_score,
                 episode_meta,
-                scan_result,
                 log_context=f"episodic/{owner_type}:{owner_id}",
+                now=episode.timestamp,
             )
-            if scan_result.severity == "high" and quarantine_enabled():
-                from datetime import datetime as _dt, timezone
-                episode.quarantined_at = _dt.now(timezone.utc)
 
             # ------------------------------
             # 3. Store in episodic DB
