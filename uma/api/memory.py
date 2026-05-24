@@ -512,8 +512,14 @@ class UMAMemory:
         request_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        config: Optional[Any] = None,
     ) -> Dict[str, Any]:
-        """Bootstrap a daily diary file through the ingest layer."""
+        """Bootstrap a daily diary file through the ingest layer.
+
+        Pass an IngestConfig via `config` to override defaults like
+        max_file_bytes and pdf_max_pages. If omitted, the default
+        IngestConfig is used (50 MiB file cap, 5000-page PDF cap).
+        """
         runtime_context = self._resolve_runtime_context(
             user_id=user_id,
             tenant_id=tenant_id,
@@ -529,6 +535,7 @@ class UMAMemory:
             file_path,
             memory=self,
             runtime_context=runtime_context,
+            config=config,
         )
 
     # ----------------------------------------------------------------------

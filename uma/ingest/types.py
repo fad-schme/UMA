@@ -109,3 +109,15 @@ class IngestConfig:
     graph_update_concurrency: int = 8
     fact_extraction_batch_size_chunks: int = 4
     fact_extraction_batch_max_chars: int = 12000
+    # ---- Resource limits (H2: file-size and parser-amplification defense) ----
+    # max_file_bytes caps the on-disk size of any file accepted by ingestion.
+    # The check runs before any parser is invoked, so it bounds memory use
+    # even on malformed PDFs, oversized JSON, or other parser-amplification
+    # attacks. 50 MiB is generous for ordinary documents (books, reports,
+    # transcripts) and small enough to refuse decompression bombs.
+    max_file_bytes: int = 50 * 1024 * 1024
+    # pdf_max_pages caps the number of pages a PDF can declare. PyPDF2
+    # allocates per page during traversal; a small file claiming millions of
+    # pages amplifies into memory exhaustion. 5000 pages covers any
+    # legitimate document in normal use.
+    pdf_max_pages: int = 5000

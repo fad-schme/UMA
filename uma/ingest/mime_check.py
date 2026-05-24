@@ -28,6 +28,22 @@ class MimeRejection(ValueError):
         super().__init__("mime mismatch or executable files are not supported")
 
 
+class FileSizeRejection(ValueError):
+    """Raised when a file exceeds the configured size cap.
+
+    Distinct from MimeRejection so callers can log and report the two failure
+    modes separately. Both fail closed before any parser is invoked.
+    """
+
+    def __init__(self, *, file_path: str, size_bytes: int, max_bytes: int) -> None:
+        self.file_path = file_path
+        self.size_bytes = size_bytes
+        self.max_bytes = max_bytes
+        super().__init__(
+            f"file exceeds size cap: {size_bytes} > {max_bytes} bytes (path={file_path})"
+        )
+
+
 # (magic_bytes, offset, content_type, is_binary)
 _BYTE_SIGNATURES: Sequence[Tuple[bytes, int, str, bool]] = [
     (b"%PDF-",                0, "application/pdf",            False),
@@ -146,11 +162,48 @@ def check_mime_consistency(
     return MimeCheckResult(declared_extension=ext, detected_type=dt, consistent=consistent)
 
 
-def enforce_mime_consistency(file_path: str) -> ContentType:
+def enforce_file_size_limit(file_path: str, max_bytes: int) -> int:
+    """
+    Raise FileSizeRejection if the file at file_path exceeds max_bytes.
+
+    Returns the actual size in bytes on success. Bounds memory and CPU
+    consumed by every downstream parser regardless of the file format.
+    This is the first defense against decompression bombs, oversized PDFs,
+    and malformed inputs that amplify into parser memory blow-ups.
+
+    A max_bytes of 0 or negative means "no limit" — useful for tests and
+    explicit opt-out, but should not be the production default.
+    """
+    if max_bytes is None or max_bytes <= 0:
+        try:
+            return os.path.getsize(file_path)
+        except OSError:
+            return 0
+
+    try:
+        size = os.path.getsize(file_path)
+    except OSError:
+        # If we can't stat the file, fail closed — every parser path past
+        # here needs to read it, so an unreadable file is not ingestable.
+        raise FileSizeRejection(file_path=file_path, size_bytes=0, max_bytes=max_bytes)
+
+    if size > max_bytes:
+        raise FileSizeRejection(file_path=file_path, size_bytes=size, max_bytes=max_bytes)
+    return size
+
+
+def enforce_mime_consistency(file_path: str, *, max_bytes: int | None = None) -> ContentType:
     """
     Detect the file's content type and raise MimeRejection if it is inconsistent
     with the declared extension or is an unconditionally blocked type.
+
+    When max_bytes is provided and positive, also raise FileSizeRejection if
+    the file exceeds the cap. Size is checked BEFORE content-type detection
+    so an oversized file never gets its first 16 bytes opened — fail as
+    early as possible.
     """
+    if max_bytes is not None and max_bytes > 0:
+        enforce_file_size_limit(file_path, max_bytes)
     ext = os.path.splitext(file_path)[1].lower() or ""
     ct = detect_content_type(file_path)
     result = check_mime_consistency(ext, ct)

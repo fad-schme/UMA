@@ -128,34 +128,72 @@ class TXTParser(ParserStrategy):
 
 
 class PDFParser(ParserStrategy):
-    def read(self, file_path: str) -> str:
+    """Parse PDFs page-by-page; refuse files declaring excessive page counts.
+
+    H2 defense: PyPDF2 allocates per-page during traversal, so a small file
+    claiming millions of pages amplifies into memory exhaustion. The
+    max_pages constructor argument bounds this — a PDF declaring more pages
+    than the cap raises ValueError before any text extraction runs.
+    """
+
+    # Default cap when constructed without an explicit max_pages. Conservative
+    # enough to cover any legitimate document; small enough to refuse the
+    # "PDF claiming 10 million pages" class of attack. Override at parser
+    # construction time via parse_file(..., pdf_max_pages=N).
+    DEFAULT_MAX_PAGES = 5000
+
+    def __init__(self, *, max_pages: Optional[int] = None) -> None:
+        if max_pages is None or max_pages <= 0:
+            self.max_pages = self.DEFAULT_MAX_PAGES
+        else:
+            self.max_pages = int(max_pages)
+
+    def _open_reader(self, file_path: str):
         try:
             from PyPDF2 import PdfReader
         except Exception as exc:
             raise ImportError("PDFParser requires PyPDF2: pip install PyPDF2") from exc
+        reader = PdfReader(file_path)
+        # Page-count guard: len(reader.pages) is O(1) on PyPDF2 and runs
+        # before any per-page allocation. Refuse the file if it declares
+        # more pages than the cap.
         try:
-            reader = PdfReader(file_path)
+            declared_pages = len(reader.pages)
+        except Exception:
+            # If the reader can't even report a page count, treat as
+            # malformed and refuse rather than risk an unbounded traversal.
+            raise ValueError(f"PDFParser: cannot determine page count for '{file_path}'")
+        if declared_pages > self.max_pages:
+            raise ValueError(
+                f"PDFParser: PDF declares {declared_pages} pages, exceeds cap of "
+                f"{self.max_pages} (path={file_path})"
+            )
+        return reader
+
+    def read(self, file_path: str) -> str:
+        try:
+            reader = self._open_reader(file_path)
             parts = []
             for page in reader.pages:
                 t = page.extract_text() or ""
                 if t:
                     parts.append(t)
             return "\n".join(parts).strip()
+        except (ImportError, ValueError):
+            raise
         except Exception as exc:
             logger.error("PDFParser failed for '%s': %s", file_path, exc)
             raise
 
     def read_pages(self, file_path: str) -> List[Tuple[int, str]]:
         try:
-            from PyPDF2 import PdfReader
-        except Exception as exc:
-            raise ImportError("PDFParser requires PyPDF2: pip install PyPDF2") from exc
-        try:
-            reader = PdfReader(file_path)
+            reader = self._open_reader(file_path)
             pages: List[Tuple[int, str]] = []
             for i, page in enumerate(reader.pages, start=1):
                 pages.append((i, page.extract_text() or ""))
             return pages
+        except (ImportError, ValueError):
+            raise
         except Exception as exc:
             logger.error("PDFParser failed for '%s': %s", file_path, exc)
             raise
@@ -274,14 +312,23 @@ class ParquetParser(ParserStrategy):
 
 @dataclass
 class FileContentParser:
-    """Centralized dispatcher (ext/MIME -> ParserStrategy)."""
+    """Centralized dispatcher (ext/MIME -> ParserStrategy).
+
+    pdf_max_pages is propagated to every PDFParser instance the dispatcher
+    constructs. None means use PDFParser.DEFAULT_MAX_PAGES.
+    """
 
     _by_ext: Dict[str, ParserStrategy] = None
     _by_mime: Dict[str, ParserStrategy] = None
+    pdf_max_pages: Optional[int] = None
 
     def __post_init__(self) -> None:
         self._by_ext = {}
         self._by_mime = {}
+
+        # PDF parsers share the configured page cap so any caller path
+        # (extension dispatch or MIME dispatch) gets the same defense.
+        _pdf = PDFParser(max_pages=self.pdf_max_pages)
 
         self.register_parser(".txt", TXTParser())
         self.register_parser(".md", MarkdownParser())
@@ -293,7 +340,7 @@ class FileContentParser:
         self.register_parser(".html", HTMLParser())
         self.register_parser(".htm", HTMLParser())
         self.register_parser(".xhtml", HTMLParser())
-        self.register_parser(".pdf", PDFParser())
+        self.register_parser(".pdf", _pdf)
         self.register_parser(".parquet", ParquetParser())
         # ".pkl" intentionally NOT registered: pickle.load is RCE-by-design.
 
@@ -302,7 +349,7 @@ class FileContentParser:
         self.register_mime("application/json", JSONParser())
         self.register_mime("application/x-yaml", YAMLParser())
         self.register_mime("text/html", HTMLParser())
-        self.register_mime("application/pdf", PDFParser())
+        self.register_mime("application/pdf", _pdf)
         # "application/octet-stream" intentionally NOT registered: it is the
         # default MIME for unknown binary content and previously dispatched to
         # PickleParser, which is RCE-by-design. Unknown binary uploads must
@@ -400,14 +447,23 @@ class FileContentParser:
 # ----------------------------- Public API ----------------------------------
 
 
-def parse_file(file_path: str, *, content_type: Optional[str] = None) -> ParsedDocument:
+def parse_file(
+    file_path: str,
+    *,
+    content_type: Optional[str] = None,
+    pdf_max_pages: Optional[int] = None,
+) -> ParsedDocument:
     """
     Parse a local file into ParsedDocument.
 
     - PDFs preserve per-page text.
     - Other formats return a single-page text payload.
+
+    pdf_max_pages caps the page count a PDF can declare before any text
+    extraction runs (H2 defense against page-count amplification). None
+    means use PDFParser.DEFAULT_MAX_PAGES.
     """
     if not file_path or not isinstance(file_path, str):
         raise ValueError("parse_file: file_path must be a non-empty string")
-    parser = FileContentParser()
+    parser = FileContentParser(pdf_max_pages=pdf_max_pages)
     return parser.parse(file_path, content_type=content_type)

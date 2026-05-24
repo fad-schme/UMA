@@ -1,889 +1,856 @@
-"""
-pipeline.py
-===========
+r"""
+  _   _ __  __   _      ___ _    __  __
+ | | | |  \/  | /_\ ___| _ \ |  |  \/  |
+ | |_| | |\/| |/ _ \___|   / |__| |\/| |
+  \___/|_|  |_/_/ \_\  |_|_\____|_|  |_|
 
-UMA Memory Pipeline (Memory-Only Mode)
+    UMAMemory — Core UMA Memory Runtime
+    =====================================
 
-This pipeline **does not perform retrieval** and **does not generate replies**.
-It does use LLMs for summarization and semantic fact extraction.
-It receives both the user message and the final assistant reply from the
-developer's agent and performs **memory management only**:
+UMA is a **memory SDK**, not an autonomous agent.
 
-    1. before_turn hooks
-    2. Working memory update (user + assistant)
-    3. Working memory compaction
-    4. Episodic memory storage
-    5. Semantic ingestion (facts extracted from user message)
-    6. Graph update
-    7. after_turn hooks
+This class owns and orchestrates all UMA memory subsystems:
 
-Coding Agent Instructions
--------------------------
-- DO NOT add LLM calls here.
-- DO NOT add any retrieval logic here.
-- Assume UMAMemory.initialize() has already been called.
-- All operations must fail gracefully with logging.
+    • Working Memory (short-term conversational state)
+    • Episodic Memory (indexed event history)
+    • Fact Memory (facts, preferences, domain knowledge)
+    • Skill Memory (skills, routines)
+    • Temporal Graph (optional knowledge graph)
+
+UMA does not generate assistant replies and does not perform agent reasoning.
+Developers bring their own LLM or agent loop and use UMA strictly for memory
+management.
+
+Typical developer workflow
+--------------------------
+
+1. Initialize UMA:
+
+    memory = UMAMemory.from_yaml("uma.yaml")
+
+2. Optionally bind the fixed agent identity:
+
+    memory = memory.set_context(
+        agent_id="agent-default",
+    )
+
+3. Retrieve context with explicit per-call request scope:
+
+    context = await memory.retrieve_context(
+        query_text="the user's current question or task",
+        user_id=user_id,
+        tenant_id="default",
+        request_id="req-1",
+        session_id="session-1",
+    )
+
+4. Ingest conversation turns or documents through the public APIs on UMAMemory.
+
+Design Philosophy
+-----------------
+- UMA provides *memory operations*, not agent behaviors.
+- All reasoning, tool use, and final reply generation happen outside UMA.
+- UMA focuses on correctness, retrieval quality, summarization, and
+  long-term memory structure.
 """
 
 from __future__ import annotations
 
-from collections import deque
-import copy
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import logging
-import hashlib
 import threading
-from typing import Any, Dict, Optional, List
-from uma.memory.promotion import PromotionPolicy
-from uma.adapters.observability.context import request_context
-from uma.adapters.observability.metrics import increment, timed
-from uma.stores.base_sql_store import DEFAULT_TENANT_ID
-from uma.common.types import RuntimeContext, SessionScope, Chunk
+from typing import Any, Dict, Optional
+
+from uma.common.config import UMAConfig
+from uma.common.config_types import RuntimeConfig, parse_plugin_spec
+from uma.common.hooks import UMAHooks
 from uma.common.identity import normalize_user_id
-from uma.common.trust import SourceDescriptor, score_source
-from uma.common.injection_scan import scan_content, apply_scan, quarantine_enabled, scan_artifact_text
+from uma.memory.working_memory.core import WorkingMemoryCore
+from uma.memory.episodic.core import EpisodicCore
+from uma.memory.episodic.indexer import EpisodeIndexer
+from uma.memory.episodic.policies import EpisodicRetentionPolicy
+from uma.memory.semantic.core import SemanticCore
+from uma.memory.procedural.core import ProceduralCore
+from uma.memory.chunk.core import ChunkCore
+from uma.memory.graph import TemporalGraphCore
+from uma.common.initializers.runtime import (
+    init_retrieval_ready,
+    init_ingestion_ready,
+    schedule_ingestion_warmup,
+)
+from uma.common.registry import FeatureLoader, FeaturePolicy, default_feature_registry
+from .runtime import AnimusProfileProvider, UMARuntime
+from uma.common.types import RuntimeContext
+from uma.common.injection_scan import scan_content, quarantine_enabled, InjectionDetectedError
+
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class _DeferredPostTurnTask:
-    user_id: str
-    user_msg: str
-    assistant_reply: str
-    episode: Any
-    facts: Any
-    turn_context: RuntimeContext
-    extra_meta: Dict[str, Any]
+class UMAMemory:
+    """UMA Memory Runtime Container.
+
+    This class:
+        - initializes all core subsystems lazily
+        - provides public APIs for retrieval, ingestion, and maintenance
+        - loads optional features via direct attachment
 
 
-def _get_fact_embedding(fact: Any) -> Optional[List[float]]:
-    """Extract an embedding from fact.meta if present."""
-    try:
-        meta = getattr(fact, "meta", None) or {}
-        emb = meta.get("embedding")
-        if isinstance(emb, list) and emb:
-            return [float(x) for x in emb]
-    except Exception:
+    UMARuntime remains internal and canonical for retrieval execution.
+    """
+
+    # ------------------------------------------------------------------
+    # Constructors
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_yaml(cls, path: str) -> "UMAMemory":
+        """Create a UMAMemory instance from YAML config."""
+        cfg = UMAConfig.load_yaml(path)
+        mem = cls(cfg, config_path=path)
+
+        # Predictable startup cost: make retrieval instant thereafter.
+        init_retrieval_ready(mem)
+        mem._retrieval_ready = True
+        mem.initialized = True
+
+        # Background warmup: ingestion subsystems and optional memory features.
+        schedule_ingestion_warmup(mem)
+
+        return mem
+
+    def __init__(self, config: UMAConfig, config_path: Optional[str] = None) -> None:
+        """Initialize the UMA memory container from validated config."""
+        self.raw_config = config
+        self._config_path = config_path or getattr(config, "_source_path", None)
+        self._config_dir = getattr(config, "_source_dir", None)
+        self.initialized: bool = False
+        self._features_initialized: bool = False
+        self._base_ready: bool = False
+        self._retrieval_ready: bool = False
+        self._ingestion_ready: bool = False
+        self._warmup_scheduled: bool = False
+        self._lifecycle_lock = threading.RLock()
+        self._init_condition = threading.Condition(self._lifecycle_lock)
+        self._init_inflight: set[str] = set()
+
+        # RLM components (initialized later)
+        self.memory_env = None
+        self._rlm_controller = None
+
+        # Unified runtime config
+        self.cfg = RuntimeConfig.from_uma_config(config)
+        from uma.common.injection_scan import configure_security
+        configure_security(self.cfg.security)
+        self.llm_cfg = self.cfg.llm
+        self.agent_llm_cfg = self.cfg.agent_llm
+        self.embedding_cfg = self.cfg.embedding
+        self.working_memory_cfg = self.cfg.working_memory
+        self.retrieval_cfg = self.cfg.retrieval
+        self.features_cfg = self.cfg.features
+        self.consolidation_cfg = self.cfg.consolidation
+        self.pipeline_cfg = self.cfg.pipeline
+        self.semantic_salience_threshold = self.cfg.semantic_salience_threshold
+        self._agent_id: Optional[str] = None
+        self._runtime: Optional[UMARuntime] = None
+        self.animus_profile_provider = AnimusProfileProvider()
+
+        # Internal store registry (core-only access; no direct store usage outside cores)
+        self._stores: Dict[str, Any] = {}
+
+        # Hooks + Feature attachment registry
+        self.hooks = UMAHooks()
+        self.features: Dict[str, Any] = {}
+        self._feature_policy = FeaturePolicy()
+
+        # Optional promotion policy (set by features or left None)
+        self.promotion_policy: Optional[Any] = None
+
+        # Core runtime components (initialized later)
+        self.llm: Any = None
+        self.agent_llm: Any = None
+        self.embedder: Any = None
+        self.pipeline: Optional[Any] = None
+        self.document_store: Optional[Any] = None
+
+        self.working_memory: Optional[WorkingMemoryCore] = None
+        self.semantic_core: Optional[SemanticCore] = None
+        self.episodic_core: Optional[EpisodicCore] = None
+        self.graph_core: Optional[TemporalGraphCore] = None
+        self.procedural_core: Optional[ProceduralCore] = None
+        self.chunk_core: Optional[ChunkCore] = None
+
+        logger.debug("UMAMemory instance created with unified storage config.")
+
+    # ----------------------------------------------------------------------
+    # Internal lazy initialization
+    # ----------------------------------------------------------------------
+
+    @property
+    def runtime(self) -> UMARuntime:
+        """Return the shared internal runtime view over this memory instance."""
+        if self._runtime is None:
+            with self._lifecycle_lock:
+                if self._runtime is None:
+                    self._runtime = UMARuntime.from_memory(self)
+        return self._runtime
+
+    @property
+    def agent_id(self) -> Optional[str]:
+        """Return the current runtime agent identity, if one is known."""
+        if isinstance(self._agent_id, str):
+            normalized = self._agent_id.strip()
+            return normalized or None
         return None
-    return None
-
-
-def _compute_turn_id(
-    *,
-    user_id: str,
-    user_msg: str,
-    assistant_reply: str,
-    request_id: Optional[str] = None,
-) -> str:
-    """
-    Deterministic idempotency key for a turn.
-
-    Notes
-    -----
-    - Uses user_id + user_msg + assistant_reply.
-    - Optionally includes request_id when present (to separate identical turns from distinct requests).
-    """
-    h = hashlib.sha256()
-    h.update((user_id or "").encode("utf-8"))
-    h.update(b"\n")
-    h.update((user_msg or "").encode("utf-8"))
-    h.update(b"\n")
-    h.update((assistant_reply or "").encode("utf-8"))
-    if request_id:
-        h.update(b"\n")
-        h.update(str(request_id).encode("utf-8"))
-    return f"turn_{h.hexdigest()[:24]}"
-
-
-
-class MemoryPipeline:
-    """
-    UMA internal memory pipeline (memory-only, no LLM).
-
-    Expected UMAMemory shape:
-        - working_memory
-        - episodic_core
-        - semantic_core
-        - graph_core (optional)
-        - hooks
-
-    Retrieval happens outside this pipeline through the bound runtime/request-handle path.
-    """
-
-    def __init__(self, memory_client: Any, hooks: Any, promotion_policy: Optional[PromotionPolicy] = None) -> None:
-        self.mem = memory_client
-        self.hooks = hooks
-        self.promotion_policy = promotion_policy
-        self._post_turn_queue: deque[_DeferredPostTurnTask] = deque()
-        self._post_turn_queue_lock = threading.Lock()
-        if promotion_policy is None:
-            logger.info("PromotionPolicy disabled (none provided).")
-        else:
-            try:
-                enabled = promotion_policy.is_enabled() if hasattr(promotion_policy, "is_enabled") else True
-                logger.info("PromotionPolicy configured (enabled=%s, max_promotions_per_turn=%s).", enabled, getattr(promotion_policy, "max_promotions_per_turn", "<unset>"))
-            except Exception:
-                logger.exception("PromotionPolicy provided but failed during initialization checks; disabling promotion.")
-                self.promotion_policy = None
-
-    def _post_turn_defer_enabled(self) -> bool:
-        """
-        Return True if post-turn maintenance should be queued for background execution.
-        """
-        try:
-            cfg = getattr(self.mem, "pipeline_cfg", None)
-            if cfg is None:
-                return False
-            return bool(getattr(cfg, "defer_post_turn", False))
-        except Exception:
-            return False
-
-    def _post_turn_queue_limit(self) -> int:
-        """
-        Return max queued post-turn tasks before dropping new ones.
-        """
-        try:
-            cfg = getattr(self.mem, "pipeline_cfg", None)
-            limit = int(getattr(cfg, "post_turn_queue_max", 100))
-            return max(1, limit)
-        except Exception:
-            return 100
-
-    def _enqueue_post_turn(self, payload: Dict[str, Any]) -> bool:
-        """
-        Best-effort enqueue for deferred post-turn tasks.
-        """
-        limit = self._post_turn_queue_limit()
-        task = _DeferredPostTurnTask(
-            user_id=payload["user_id"],
-            user_msg=payload["user_msg"],
-            assistant_reply=payload["assistant_reply"],
-            episode=copy.deepcopy(payload["episode"]),
-            facts=copy.deepcopy(payload["facts"]),
-            turn_context=payload["turn_context"],
-            extra_meta=dict(payload.get("extra_meta") or {}),
-        )
-        with self._post_turn_queue_lock:
-            queue_size = len(self._post_turn_queue)
-            if queue_size >= limit:
-                logger.warning(
-                    "MemoryPipeline: post-turn queue full (size=%d limit=%d). Dropping task.",
-                    queue_size,
-                    limit,
-                )
-                return False
-            self._post_turn_queue.append(task)
-            return True
-
-    async def process_post_turn_queue(self, *, max_items: Optional[int] = None) -> int:
-        """
-        Drain deferred post-turn tasks.
-        Returns the number of tasks processed.
-        """
-        with self._post_turn_queue_lock:
-            queue_size = len(self._post_turn_queue)
-        if queue_size == 0:
-            return 0
-        count = 0
-        limit = queue_size if max_items is None else max(0, int(max_items))
-        while count < limit:
-            with self._post_turn_queue_lock:
-                if not self._post_turn_queue:
-                    break
-                payload = self._post_turn_queue.popleft()
-            try:
-                await self._run_post_turn_tasks(
-                    user_id=payload.user_id,
-                    user_msg=payload.user_msg,
-                    assistant_reply=payload.assistant_reply,
-                    episode=payload.episode,
-                    facts=payload.facts,
-                    turn_context=payload.turn_context,
-                    extra_meta=payload.extra_meta,
-                )
-                count += 1
-            except Exception:
-                logger.exception("MemoryPipeline: deferred post-turn task failed; continuing.")
-                count += 1
-        return count
-
-    async def _run_post_turn_tasks(
+    
+    def _resolve_runtime_context(
         self,
         *,
-        user_id: str,
-        user_msg: str,
-        assistant_reply: str,
-        episode: Any,
-        facts: Any,
-        turn_context: RuntimeContext,
-        extra_meta: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """
-        Execute post-turn tasks that can be deferred for performance:
-        - semantic ingestion (facts)
-        - optional promotion
-        - graph updates
-        - after_turn hooks
-        """
-        if not facts:
-            if isinstance(user_msg, str) and user_msg.strip():
-                facts = list(await self._semantic_ingest(
-                    user_id,
-                    user_msg,
-                    turn_id=None,
-                    turn_context=turn_context,
-                    source_ids=list((extra_meta or {}).get("user_source_ids") or []),
-                    source_kind="turn_user",
-                ) or [])
-            if isinstance(assistant_reply, str) and assistant_reply.strip():
-                assistant_facts = list(await self._semantic_ingest(
-                    user_id,
-                    assistant_reply,
-                    turn_id=None,
-                    turn_context=turn_context,
-                    source_ids=list((extra_meta or {}).get("assistant_source_ids") or []),
-                    source_kind="turn_assistant",
-                ) or [])
-                facts = (facts or []) + assistant_facts
-        facts = facts or []
-        if episode is not None and facts:
-            for f in facts:
-                try:
-                    meta = getattr(f, "meta", None) or {}
-                    meta.setdefault("source_episode_id", getattr(episode, "id", None))
-                    f.meta = meta
-                except Exception:
-                    continue
-
-        await self._maybe_promote_facts(user_id=user_id, facts=facts)
-        await self._update_graph(user_id, episode, facts, turn_context=turn_context)
-        await self._run_after_turn_hooks(
-            user_id=user_id,
-            user_msg=user_msg,
-            reply=assistant_reply,
-            extra_meta=extra_meta or {},
-        )
-
-    # ------------------------------------------------------------------
-    # PUBLIC ENTRYPOINT
-    # ------------------------------------------------------------------
-
-    async def process_turn(
-        self,
-        user_id: str,
-        user_msg: str,
-        assistant_reply: str,
-        session_id: str,
-        tenant_id: str = DEFAULT_TENANT_ID,
+        user_id: Optional[str],
+        tenant_id: str = "default",
+        request_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
-        extra_meta: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """
-        Perform memory updates for a single turn using:
-
-            user_msg          -> final user input
-            assistant_reply   -> final agent output
-
-        UMA stores:
-            - WM messages
-            - Episodic memory
-            - Semantic facts
-            - Temporal graph edges
-
-        Required execution scope is passed explicitly through function parameters.
-        `extra_meta` is optional non-scope metadata only.
-
-        No reply is returned.
-        """
-        if not isinstance(session_id, str) or not session_id.strip():
-            raise ValueError("MemoryPipeline.process_turn requires a non-empty session_id.")
-
-        resolved_tenant_id = str(tenant_id or DEFAULT_TENANT_ID).strip()
-        if not resolved_tenant_id:
-            raise ValueError("MemoryPipeline.process_turn requires a non-empty tenant_id.")
-
-        resolved_session_id = session_id.strip()
-        resolved_workspace_id = str(workspace_id).strip() if workspace_id is not None else None
-        meta = dict(extra_meta or {})
-
-        with request_context(resolved_session_id):
-            with timed("pipeline.process_turn.latency_s"):
-                increment("pipeline.process_turn.count")
-
-                turn_id = _compute_turn_id(
-                    user_id=user_id,
-                    user_msg=user_msg,
-                    assistant_reply=assistant_reply,
-                    request_id=resolved_session_id,
-                )
-
-                turn_context = self._resolve_turn_context(
-                    user_id=user_id,
-                    session_id=resolved_session_id,
-                    tenant_id=resolved_tenant_id,
-                    workspace_id=resolved_workspace_id,
-                )
-                wm_scope = self._resolve_working_memory_scope(turn_context=turn_context)
-
-                await self._run_before_turn_hooks(user_id, user_msg)
-
-                self._update_working_memory(
-                    wm_scope,
-                    user_msg,
-                    assistant_reply,
-                    turn_id=turn_id,
-                )
-
-                await self._maybe_compact_working_memory(wm_scope)
-
-                chunk_refs = await self._store_turn_chunks(
-                    user_id,
-                    user_msg,
-                    assistant_reply,
-                    turn_id=turn_id,
-                    turn_context=turn_context,
-                    extra_meta=meta,
-                )
-
-                episode = await self._store_episode(
-                    user_id,
-                    user_msg,
-                    assistant_reply,
-                    turn_id=turn_id,
-                    working_memory_scope=wm_scope,
-                    turn_context=turn_context,
-                    extra_meta=meta,
-                )
-
-                if self._post_turn_defer_enabled():
-                    enqueued = self._enqueue_post_turn(
-                        {
-                            "user_id": user_id,
-                            "user_msg": user_msg,
-                            "assistant_reply": assistant_reply,
-                            "episode": episode,
-                            "facts": None,
-                            "turn_context": turn_context,
-                            "extra_meta": {
-                                **meta,
-                                "user_source_ids": list(chunk_refs.get("user_source_ids") or []),
-                                "assistant_source_ids": list(chunk_refs.get("assistant_source_ids") or []),
-                            },
-                        }
-                    )
-                    if enqueued:
-                        logger.info("MemoryPipeline: deferred post-turn tasks queued.")
-                    return
-
-                facts = []
-                if isinstance(user_msg, str) and user_msg.strip():
-                    facts = list(await self._semantic_ingest(
-                        user_id,
-                        user_msg,
-                        turn_id=turn_id,
-                        turn_context=turn_context,
-                        source_ids=list(chunk_refs.get("user_source_ids") or []),
-                        source_kind="turn_user",
-                    ) or [])
-
-                if isinstance(assistant_reply, str) and assistant_reply.strip():
-                    assistant_facts = list(await self._semantic_ingest(
-                        user_id,
-                        assistant_reply,
-                        turn_id=turn_id,
-                        turn_context=turn_context,
-                        source_ids=list(chunk_refs.get("assistant_source_ids") or []),
-                        source_kind="turn_assistant",
-                    ) or [])
-                    facts = facts + assistant_facts
-
-                if episode is not None and facts:
-                    for fact in facts:
-                        try:
-                            fact_meta = getattr(fact, "meta", None) or {}
-                            fact_meta.setdefault("source_episode_id", getattr(episode, "id", None))
-                            fact.meta = fact_meta
-                        except Exception:
-                            continue
-
-                await self._maybe_promote_facts(user_id=user_id, facts=facts)
-
-                await self._update_graph(
-                    user_id,
-                    episode,
-                    facts,
-                    turn_context=turn_context,
-                )
-
-                await self._run_after_turn_hooks(
-                    user_id=user_id,
-                    user_msg=user_msg,
-                    reply=assistant_reply,
-                    extra_meta=meta,
-                )
-    # ------------------------------------------------------------------
-    # PROMOTION (OPTIONAL)
-    # ------------------------------------------------------------------
-    async def _maybe_promote_facts(self, user_id: str, facts: Any) -> None:
-        """Optionally promote eligible facts to agent-scoped knowledge.
-
-        This is a best-effort stage:
-        - NEVER raises to caller
-        - bounded by policy.max_promotions_per_turn
-        - only promotes if we can supply an embedding (so vector search stays correct)
-
-        Requirements on UMAMemory shape:
-        - semantic_core with async upsert_fact(fact, embedding)
-        # NOTE:
-        # Promotion requires embeddings to already exist on facts.
-        # v1 does NOT compute embeddings here to avoid adding LLM / embedder calls
-        # to the pipeline. Facts without embeddings are skipped intentionally.
-
-        """
-        policy = getattr(self, "promotion_policy", None)
-        if policy is None:
-            return
-
-        try:
-            if hasattr(policy, "is_enabled") and not policy.is_enabled():
-                return
-        except Exception:
-            logger.exception("PromotionPolicy.is_enabled() failed; disabling promotion for this turn.")
-            return
-
-        if not facts:
-            return
-
-        # Ensure iterable
-        try:
-            fact_list = list(facts)
-        except Exception:
-            logger.exception("Promotion stage received non-iterable facts; skipping.")
-            return
-
-        sem_core = getattr(self.mem, "semantic_core", None)
-        if sem_core is None:
-            logger.warning("Promotion enabled but semantic_core is missing; skipping promotions.")
-            return
-
-        max_promotions = getattr(policy, "max_promotions_per_turn", 5)
-        try:
-            max_promotions = int(max_promotions)
-        except Exception:
-            max_promotions = 5
-        if max_promotions <= 0:
-            return
-
-        promoted_count = 0
-
-        for fact in fact_list:
-            if promoted_count >= max_promotions:
-                break
-
-            try:
-                if not policy.is_eligible(fact):
-                    continue
-                target = policy.select_promotion_target(fact)
-                if target is None:
-                    continue
-            except Exception:
-                logger.exception("PromotionPolicy target selection failed; skipping fact.")
-                continue
-
-            # Require embedding to keep the agent KB searchable. If absent, skip.
-            embedding = _get_fact_embedding(fact)
-            if embedding is None:
-                logger.debug(
-                    "Skipping promotion for fact id=%r (no embedding present in fact.meta).",
-                    getattr(fact, "id", None),
-                )
-                continue
-
-            try:
-                promoted = policy.promote(
-                    fact,
-                    tenant_id=target[0],
-                    owner_type=target[1],
-                    owner_id=target[2],
-                    workspace_id=target[3],
-                    reason="pipeline_policy",
-                )
-            except Exception:
-                logger.exception("PromotionPolicy.promote failed; skipping fact.")
-                continue
-
-            # Persist promoted fact into agent KB.
-            try:
-                await sem_core.upsert_fact(promoted, embedding=embedding)
-                promoted_count += 1
-                logger.info(
-                    "Promoted fact id=%r predicate=%r (user_id=%s)",
-                    getattr(promoted, "id", getattr(fact, "id", None)),
-                    getattr(promoted, "predicate", getattr(fact, "predicate", None)),
-                    user_id,
-                )
-            except Exception:
-                logger.exception("Failed to persist promoted fact; continuing.")
-
-        if promoted_count:
-            increment("pipeline.promotion.count")
-
-    # ------------------------------------------------------------------
-    # HOOKS
-    # ------------------------------------------------------------------
-
-    async def _run_before_turn_hooks(self, user_id: str, user_msg: str) -> None:
-        if not self.hooks or not hasattr(self.hooks, "run_before_turn"):
-            return
-        try:
-            await self.hooks.run_before_turn(user_id=user_id, user_message=user_msg)
-        except Exception:
-            logger.exception("before_turn hooks failed; continuing.")
-
-    async def _run_after_turn_hooks(
-        self,
-        user_id: str,
-        user_msg: str,
-        reply: str,
-        extra_meta: Dict[str, Any],
-    ) -> None:
-        if not self.hooks or not hasattr(self.hooks, "run_after_turn"):
-            return
-        
-        try:
-            await self.hooks.run_after_turn(
-                user_id=user_id,
-                user_message=user_msg,
-                assistant_reply=reply,
-                extra_meta=extra_meta,
-            )
-        except Exception:
-            logger.exception("after_turn hooks failed; continuing.")
-
-    # ------------------------------------------------------------------
-    # WORKING MEMORY
-    # ------------------------------------------------------------------
-
-    def _resolve_turn_context(
-        self,
-        *,
-        user_id: str,
-        session_id: str,
-        tenant_id: str = DEFAULT_TENANT_ID,
-        workspace_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> RuntimeContext:
-        agent_id = getattr(self.mem, "agent_id", None)
-        if not agent_id:
-            raise ValueError("MemoryPipeline.process_turn requires agent_id for scoped turn processing.")
+        """Resolve request scope for public APIs from explicit per-call values only."""
+        if not isinstance(user_id, str) or not user_id.strip():
+            raise ValueError("UMAMemory requires an explicit user_id.")
 
-        normalized_user_id = normalize_user_id(user_id)
+        resolved_agent_id = (self.agent_id or "agent-default").strip()
+        if not resolved_agent_id:
+            raise ValueError("UMAMemory retrieval requires a non-empty agent_id.")
 
-        resolved_tenant_id = str(tenant_id or DEFAULT_TENANT_ID).strip()
+        resolved_tenant_id = (tenant_id or "default").strip()
         if not resolved_tenant_id:
-            raise ValueError("MemoryPipeline.process_turn requires a non-empty tenant_id.")
+            raise ValueError("UMAMemory retrieval requires a non-empty tenant_id.")
 
-        if not isinstance(session_id, str) or not session_id.strip():
-            raise ValueError("MemoryPipeline.process_turn requires a non-empty session_id.")
-
-        resolved_session_id = session_id.strip()
-        resolved_workspace_id = str(workspace_id).strip() if workspace_id is not None else None
+        resolved_request_id = (request_id or f"request:{user_id.strip()}").strip()
+        if not resolved_request_id:
+            raise ValueError("UMAMemory retrieval requires a non-empty request_id.")
 
         return RuntimeContext(
             tenant_id=resolved_tenant_id,
-            agent_id=agent_id,
-            request_id=resolved_session_id,
-            user_id=normalized_user_id,
-            workspace_id=resolved_workspace_id,
-            session_id=resolved_session_id,
+            agent_id=resolved_agent_id,
+            request_id=resolved_request_id,
+            user_id=user_id.strip(),
+            workspace_id=workspace_id,
+            session_id=session_id,
+        )
+
+    def _ensure_retrieval_ready(self) -> None:
+        """Ensure retrieval-only dependencies are ready."""
+        if not getattr(self, "_retrieval_ready", False):
+            init_retrieval_ready(self)
+        self.initialized = True
+
+    def _ensure_ingestion_ready(self) -> None:
+        """Ensure ingestion dependencies are ready."""
+        if not getattr(self, "_ingestion_ready", False):
+            init_ingestion_ready(self)
+        self.initialized = True
+
+    # ----------------------------------------------------------------------
+    # -------------------- Core Public APIs -------------------------------
+    # ----------------------------------------------------------------------
+    def set_context(
+        self,
+        *,
+        agent_id: Optional[str] = None,
+    ) -> "UMAMemory":
+        """Bind the fixed UMA agent identity."""
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise ValueError("UMAMemory.set_context requires a non-empty agent_id.")
+
+        self._agent_id = agent_id.strip()
+        logger.debug("UMAMemory.set_context: bound agent identity agent=%s", self._agent_id)
+        return self
+    
+    # ----------------------------------------------------------------------
+    # Core API: Retrieval
+    # ----------------------------------------------------------------------
+    async def retrieve_context(
+        self,
+        *,
+        query_text: str,
+        user_id: Optional[str] = None,
+        tenant_id: str = "default",
+        request_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        lane_filter: Optional[list[str]] = None,
+    ) -> Dict[str, Any]:
+        """Return curated LLM context for the explicit request scope.
+
+        Contract:
+        - intended for LLM context assembly, not durable memory projection
+        - returns the canonical evidence-oriented context bundle
+        - chunks/documents remain the primary retrieval product
+        - optional `lane_filter` narrows persisted retrieval lanes without requiring wiki state
+        - persisted artifacts expose canonical UMA metadata through `meta`
+        - lane contents remain source-traceable through facts, chunks, skills, and graph items
+        """
+        runtime_context = self._resolve_runtime_context(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            request_id=request_id,
+            workspace_id=workspace_id,
+            session_id=session_id,
+        )
+        return await self.runtime.retrieve_context(
+            runtime_context,
+            query_text=query_text,
+            lane_filter=lane_filter,
+        )
+
+    async def retrieve_memory(
+        self,
+        *,
+        query_text: str,
+        user_id: Optional[str] = None,
+        tenant_id: str = "default",
+        request_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        memory_intent: str = "continuity",
+        include_debug: bool = False,
+    ) -> Dict[str, Any]:
+        """Return compiled, evidence-backed memory results for the explicit request scope.
+
+        Contract:
+        - `memories` is the primary compiled-memory field
+        - `evidence` is mandatory and attached to every result path
+        - supporting facts/skills remain secondary evidence, not the product identity
+        - explicit `fallback` prevents silent degradation into chunk-only context retrieval
+        """
+        runtime_context = self._resolve_runtime_context(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            request_id=request_id,
+            workspace_id=workspace_id,
+            session_id=session_id
+        )
+        return await self.runtime.retrieve_memory(
+            runtime_context,
+            query_text=query_text,
+            memory_intent=memory_intent,
+            include_debug=include_debug,
         )
     
+    # ----------------------------------------------------------------------
+    # Core API: Data Ingestion
+    # ----------------------------------------------------------------------
 
-    def _resolve_working_memory_scope(
+    def scan_user_input(self, text: str) -> dict:
+        """Scan user input for injection patterns before forwarding to an LLM.
+
+        Call this at the top of your agent loop, before retrieve_context and
+        before any LLM call. On a high-severity result, do not forward the
+        message to the LLM and do not call process_turn.
+
+        Returns a dict with keys: severity, matched_rules, score.
+        Raises nothing — the caller decides what to do with the result.
+        """
+        result = scan_content(text or "")
+        return {"severity": result.severity, "matched_rules": result.matched_rules, "score": result.score}
+
+    async def process_turn(
         self,
         *,
-        turn_context: RuntimeContext,
-    ) -> SessionScope:
-        return SessionScope(
-            tenant_id=turn_context.tenant_id,
-            agent_id=turn_context.agent_id,
-            session_id=str(turn_context.session_id),
-            user_id=turn_context.user_id,
-            workspace_id=turn_context.workspace_id,
+        user_id: str,
+        user_msg: str,
+        assistant_reply: str,
+        session_id: Optional[str] = None,
+        tenant_id: str = "default",
+        workspace_id: Optional[str] = None,
+        extra_meta: Optional[Dict[str, Any]] = None,
+        skip_scan: bool = False,
+    ) -> None:
+        """Public turn-ingest entrypoint.
+
+        This is the supported memory-surface wrapper over the canonical
+        pipeline turn processor. Session scope is explicit at this boundary;
+        `extra_meta` remains optional non-session metadata.
+
+        Raises InjectionDetectedError if a high-severity injection pattern is
+        detected in user_msg. Pass skip_scan=True only when the caller has
+        already validated the input and explicitly accepts responsibility.
+        """
+        self._ensure_ingestion_ready()
+
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise ValueError("UMAMemory.process_turn requires a non-empty session_id.")
+
+        if not skip_scan:
+            scan = scan_content(user_msg or "")
+            if scan.severity == "high":
+                logger.warning(
+                    "UMAMemory.process_turn: high-severity injection in user_msg "
+                    "user_id=%s session_id=%s rules=%s",
+                    user_id,
+                    session_id,
+                    scan.matched_rules,
+                )
+                raise InjectionDetectedError(
+                    severity=scan.severity,
+                    matched_rules=scan.matched_rules,
+                    score=scan.score,
+                )
+            if scan.severity != "none":
+                logger.warning(
+                    "UMAMemory.process_turn: injection scan severity=%s user_id=%s session_id=%s rules=%s",
+                    scan.severity,
+                    user_id,
+                    session_id,
+                    scan.matched_rules,
+                )
+
+        if self.pipeline is None:
+            from uma.ingest.pipeline import MemoryPipeline
+
+            self.pipeline = MemoryPipeline(
+                memory_client=self,
+                hooks=self.hooks,
+                promotion_policy=self.promotion_policy,
+            )
+            logger.debug("UMAMemory.process_turn: MemoryPipeline initialized lazily.")
+
+        normalized_user_id = normalize_user_id(user_id)
+        await self.pipeline.process_turn(
+            user_id=normalized_user_id,
+            user_msg=user_msg,
+            assistant_reply=assistant_reply,
+            session_id=session_id.strip(),
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            extra_meta=extra_meta,
         )
 
-    def _update_working_memory(
+
+
+    async def ingest_document(
         self,
-        scope: Optional[SessionScope],
-        user_msg: str,
-        assistant_reply: str,
+        file_path: str,
         *,
-        turn_id: str,
-    ) -> None:
-        wm = getattr(self.mem, "working_memory", None)
-        if wm is None:
-            logger.warning("WorkingMemoryCore not initialized; skipping WM updates.")
-            return
-        if scope is None:
-            return
-
-        try:
-            wm.append(
-                scope=scope,
-                role="user",
-                content=user_msg,
-                metadata={"source": "user", "turn_id": turn_id},
-            )
-            if assistant_reply and assistant_reply.strip():
-                wm.append(
-                    scope=scope,
-                    role="assistant",
-                    content=assistant_reply,
-                    metadata={"source": "assistant", "turn_id": turn_id},
-                )
-        except Exception:
-            logger.exception("Failed to append messages to WorkingMemory; continuing.")
-
-    async def _maybe_compact_working_memory(self, scope: Optional[SessionScope]) -> None:
-        wm = getattr(self.mem, "working_memory", None)
-        if wm is None or scope is None:
-            return
-        try:
-            await wm.compact(scope=scope)
-        except Exception:
-            logger.exception("WorkingMemory compact failed; continuing.")
-
-    # ------------------------------------------------------------------
-    # EPISODIC STORAGE
-    # ------------------------------------------------------------------
-
-    async def _store_episode(
-        self,
-        user_id: str,
-        user_msg: str,
-        assistant_reply: str,
-        *,
-        turn_id: str,
-        working_memory_scope: Optional[SessionScope],
-        turn_context: RuntimeContext,
-        extra_meta: Optional[Dict[str, Any]] = None,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+        tenant_id: str = "default",
+        workspace_id: Optional[str] = None,
+        config: Optional[Any] = None,
     ) -> Any:
-        epi = getattr(self.mem, "episodic_core", None)
-        wm = getattr(self.mem, "working_memory", None)
+        """Ingest an unstructured document into UMA memory.
 
-        if epi is None:
-            logger.warning("EpisodicCore not initialized; skipping episode storage.")
-            return None
+        tenant_id is required for durable artifacts (DAT invariant). It
+        defaults to "default" to preserve the single-tenant Lite experience,
+        but multi-tenant deployments MUST pass an explicit value. The same
+        rule already applies to load_memory_bootstrap and
+        load_daily_diary_bootstrap; ingest_document now matches.
+        """
+        if not file_path or not isinstance(file_path, str) or not file_path.strip():
+            raise ValueError("file_path is required and cannot be empty")
+        import os as _os
+        if not _os.path.exists(file_path):
+            raise FileNotFoundError(f"file not found: {file_path}")
+        if not _os.path.isfile(file_path):
+            raise ValueError("file_path must point to a regular file")
+        self._ensure_ingestion_ready()
 
-        try:
-            wm_context = wm.get_context(working_memory_scope) if wm and working_memory_scope else []
-        except Exception:
-            logger.exception("Failed to get WM context for episodic store.")
-            wm_context = []
+        from uma.ingest.ingest_service import ingest_document as _ingest
+        return await _ingest(
+            file_path,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            config=config,
+            memory=self,
+        )
 
-        try:
-            from uma.common.identity import normalize_user_id
-            normalized_user_id = normalize_user_id(user_id)
-            return await epi.store_episode(
-                owner_type="user",
-                owner_id=normalized_user_id,
-                user_message=user_msg,
-                assistant_reply=assistant_reply,
-                working_memory_context=wm_context,
-                turn_context=turn_context,
-                extra_meta=extra_meta,
-            )
-        except Exception:
-            logger.exception("EpisodicCore.store_episode failed.")
-            return None
+    def load_userprofile(self, path: str) -> "UMAMemory":
+        """Load USER.md into the in-memory Animus profile cache."""
+        self.animus_profile_provider.load_user_profile(path)
+        return self
 
-    async def _store_turn_chunks(
+    def load_agentprofile(self, path: str) -> "UMAMemory":
+        """Load SOUL.md into the in-memory Animus profile cache."""
+        self.animus_profile_provider.load_agent_profile(path)
+        return self
+
+    async def load_memory_bootstrap(
         self,
-        user_id: str,
-        user_msg: str,
-        assistant_reply: str,
+        file_path: str,
         *,
-        turn_id: str,
-        turn_context: RuntimeContext,
-        extra_meta: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, List[str]]:
-        chunk_core = getattr(self.mem, "chunk_core", None)
-        embedder = getattr(self.mem, "embedder", None)
-        if chunk_core is None or embedder is None:
-            logger.warning("ChunkCore or embedder not initialized; skipping turn chunk persistence.")
-            return {"user_source_ids": [], "assistant_source_ids": []}
+        user_id: Optional[str] = None,
+        tenant_id: str = "default",
+        request_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        config: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """Bootstrap long-term memory facts from MEMORY.md through the ingest layer."""
+        runtime_context = self._resolve_runtime_context(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            request_id=request_id,
+            workspace_id=workspace_id,
+            session_id=session_id,
+        )
+        self._ensure_ingestion_ready()
 
-        owner_id = normalize_user_id(user_id)
-        doc_id = f"turn:{turn_context.session_id}:{turn_id}"
-        now = datetime.now(timezone.utc)
-        caller_meta = {k: v for k, v in (extra_meta or {}).items() if k not in ("owner_type", "owner_id", "tenant_id", "session_id")} or None
-        rows: List[tuple[str, Chunk]] = []
-        for position, (role, text) in enumerate((("user", user_msg), ("assistant", assistant_reply))):
-            if not isinstance(text, str) or not text.strip():
-                continue
-            chunk_id = hashlib.sha256(
-                f"turn_chunk:{owner_id}:{turn_context.session_id}:{turn_id}:{role}".encode("utf-8")
-            ).hexdigest()
-            text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
-            trust_score = score_source(
-                SourceDescriptor(
-                    kind="turn_user" if role == "user" else "turn_assistant",
-                    session_id=turn_context.session_id,
-                )
-            )
-            chunk_meta: Dict[str, Any] = {
-                "text_hash": text_hash,
-                "source_kind": "turn",
-                "source_role": role,
-                "turn_id": turn_id,
-            }
-            if caller_meta:
-                chunk_meta["caller"] = caller_meta
-            trust_score, chunk_meta, chunk_quarantined_at = scan_artifact_text(
-                text,
-                trust_score,
-                chunk_meta,
-                log_context=f"turn_chunk/{role}:{turn_id}",
-                now=now,
-            )
-            rows.append(
-                (
-                    role,
-                    Chunk(
-                        id=chunk_id,
-                        doc_id=doc_id,
-                        text=text,
-                        page_range=(1, 1),
-                        position=position,
-                        source_path=f"turn://{turn_context.session_id}/{turn_id}/{role}",
-                        source_hash=text_hash,
-                        created_at=now,
-                        updated_at=now,
-                        owner_type="user",
-                        owner_id=owner_id,
-                        tenant_id=turn_context.tenant_id,
-                        workspace_id=turn_context.workspace_id,
-                        origin_agent_id=turn_context.agent_id,
-                        origin_user_id=owner_id,
-                        origin_session_id=turn_context.session_id,
-                        trust_score=trust_score,
-                        quarantined_at=chunk_quarantined_at,
-                        meta=chunk_meta,
-                    ),
-                )
-            )
-        if not rows:
-            return {"user_source_ids": [], "assistant_source_ids": []}
+        from uma.ingest.ingest_service import ingest_memory_bootstrap
 
-        try:
-            vectors = await embedder.embed([chunk.text for _, chunk in rows])
-        except Exception:
-            logger.exception("MemoryPipeline: turn chunk embedding failed.")
-            return {"user_source_ids": [], "assistant_source_ids": []}
+        return await ingest_memory_bootstrap(
+            file_path,
+            memory=self,
+            runtime_context=runtime_context,
+            config=config,
+        )
 
-        persisted: Dict[str, List[str]] = {"user_source_ids": [], "assistant_source_ids": []}
-        for (role, chunk), vec in zip(rows, vectors):
-            try:
-                ok = await chunk_core.upsert_chunk(chunk, vec)
-                if ok:
-                    persisted[f"{role}_source_ids"].append(chunk.id)
-            except Exception:
-                logger.exception(
-                    "MemoryPipeline: turn chunk upsert failed role=%s chunk_id=%s",
-                    role,
-                    chunk.id,
-                )
-        return persisted
-
-    # ------------------------------------------------------------------
-    # SEMANTIC INGESTION
-    # ------------------------------------------------------------------
-
-    async def _semantic_ingest(
+    async def load_daily_diary_bootstrap(
         self,
-        user_id: str,
-        text: str,
+        file_path: str,
         *,
-        turn_id: Optional[str],
-        turn_context: RuntimeContext,
-        source_ids: Optional[List[str]] = None,
-        source_kind: str = "turn_user",
-    ) -> Any:
-        sem = getattr(self.mem, "semantic_core", None)
-        if sem is None:
-            logger.warning("SemanticCore not initialized; skipping fact ingestion.")
-            return []
+        user_id: Optional[str] = None,
+        tenant_id: str = "default",
+        request_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        config: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """Bootstrap a daily diary file through the ingest layer.
 
-        # Canonical subject format in UMA v1: "user:<id>"
-        from uma.common.identity import normalize_user_id
-        try:
-            user_subject = normalize_user_id(user_id)
-        except Exception:
-            logger.exception("SemanticCore.ingest failed; invalid subject user_id=%r", user_id)
-            return []
+        Pass an IngestConfig via `config` to override defaults like
+        max_file_bytes and pdf_max_pages. If omitted, the default
+        IngestConfig is used (50 MiB file cap, 5000-page PDF cap).
+        """
+        runtime_context = self._resolve_runtime_context(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            request_id=request_id,
+            workspace_id=workspace_id,
+            session_id=session_id,
+        )
+        self._ensure_ingestion_ready()
 
-        try:
-            return await sem.ingest(
-                user_subject,
-                text,
-                extra_meta=(
-                    {
-                        key: value
-                        for key, value in {
-                            "turn_id": turn_id,
-                            "source_ids": list(source_ids or []),
-                        }.items()
-                        if value
+        from uma.ingest.ingest_service import ingest_daily_diary_bootstrap
+
+        return await ingest_daily_diary_bootstrap(
+            file_path,
+            memory=self,
+            runtime_context=runtime_context,
+            config=config,
+        )
+
+    # ----------------------------------------------------------------------
+    # Core API: Health and maintenance
+    # ----------------------------------------------------------------------
+
+    def health_check(self) -> Dict[str, Any]:
+        """Run basic dependency readiness checks."""
+        if not self.initialized:
+            return {
+                "status": "error",
+                "checks": {
+                    "memory": {
+                        "name": "memory",
+                        "status": "error",
+                        "detail": "UMAMemory not initialized",
+                        "latency_ms": None,
                     }
-                    or None
-                ),
-                turn_context=turn_context,
-                source_kind=source_kind,
-            )
-        except Exception:
-            logger.exception("SemanticCore.ingest failed; continuing.")
-            return []
+                },
+            }
 
-    # ------------------------------------------------------------------
-    # GRAPH UPDATE
-    # ------------------------------------------------------------------
+        from uma.common.health import run_health_checks
 
-    async def _update_graph(self, user_id: str, episode: Any, facts: Any, *, turn_context: RuntimeContext) -> None:
-        graph = getattr(self.mem, "graph_core", None)
-        if graph is None or episode is None:
-            return
-        try:
-            graph.add_episode(episode)
-        except Exception:
-            logger.exception("GraphCore.add_episode failed; continuing.")
+        return run_health_checks(self)
 
-        if facts:
+    async def rebuild_vector_indexes(
+        self,
+        *,
+        tenant_id: Optional[str] = None,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+        include_episodic: bool = True,
+        include_semantic: bool = True,
+        include_procedural: bool = True,
+        batch_size: int = 32,
+    ) -> Dict[str, Any]:
+        """Rebuild vector indexes from SQL-backed data."""
+        from uma.common.maintenance import rebuild_vector_indexes
+
+        return await rebuild_vector_indexes(
+            self,
+            tenant_id=tenant_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            include_episodic=include_episodic,
+            include_semantic=include_semantic,
+            include_procedural=include_procedural,
+            batch_size=batch_size,
+        )
+
+    async def rebuild_derived_indexes(
+        self,
+        *,
+        tenant_id: Optional[str] = None,
+        owner_type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+        include_episodic: bool = True,
+        include_semantic: bool = True,
+        include_procedural: bool = True,
+        include_graph: bool = True,
+        batch_size: int = 32,
+    ) -> Dict[str, Any]:
+        """Rebuild derived vector and graph indexes from authoritative SQL-backed data."""
+        from uma.common.maintenance import rebuild_derived_indexes
+
+        return await rebuild_derived_indexes(
+            self,
+            tenant_id=tenant_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            include_episodic=include_episodic,
+            include_semantic=include_semantic,
+            include_procedural=include_procedural,
+            include_graph=include_graph,
+            batch_size=batch_size,
+        )
+
+    # ----------------------------------------------------------------------
+    # Core API: Shutdown
+    # ----------------------------------------------------------------------
+
+    def shutdown(self) -> None:
+        """Clean up backend resources."""
+        if self.graph_core:
             try:
-                graph.add_facts(list(facts))
-                graph.link_episode_to_facts(episode, list(facts))
+                self.graph_core.close()
             except Exception:
-                logger.exception("GraphCore fact linking failed; continuing.")
+                logger.exception("Error shutting down GraphCore.")
 
-        # Link temporal sequence (previous episode -> current)
-        try:
-            core = getattr(self.mem, "episodic_core", None)
-            if core is None:
-                return
-            from uma.common.identity import normalize_user_id
-            normalized_user_id = normalize_user_id(user_id)
-            recent = await core.list_recent(
-                turn_context.tenant_id,
-                owner_type="user",
-                owner_id=normalized_user_id,
-                n=20,
+
+    # ----------------------------------------------------------------------
+    # Core subsystem initialization
+    # ----------------------------------------------------------------------
+
+    def _init_core_subsystems(self) -> None:
+        """Initialize core UMA subsystems that depend on LLM/embedder/stores."""
+        if self.llm is None or self.embedder is None:
+            raise RuntimeError(
+                "UMAMemory._init_core_subsystems: LLM and embedder must "
+                "be initialized before core subsystems."
             )
-            scoped_recent = [
-                ep for ep in (recent or [])
-                if getattr(ep, "session_id", None) == turn_context.session_id
-                and getattr(ep, "origin_agent_id", None) == turn_context.agent_id
-            ]
-            if len(scoped_recent) >= 2:
-                prev = scoped_recent[1]
-                graph.link_temporal(prev, episode)
+
+        if not self._stores:
+            raise RuntimeError(
+                "UMAMemory._init_core_subsystems: stores must be initialized "
+                "before core subsystems."
+            )
+
+        # Build all core subsystems first so a failed init cannot leave a
+        # partially-ready core graph on the shared memory instance.
+        working_memory: Optional[WorkingMemoryCore] = None
+        episodic_core: Optional[EpisodicCore] = None
+        semantic_core: Optional[SemanticCore] = None
+        procedural_core: Optional[ProceduralCore] = None
+        chunk_core: Optional[ChunkCore] = None
+
+        # ---------------------- Working Memory Core ----------------------
+        try:
+            working_memory = WorkingMemoryCore(
+                llm=self.llm,
+                memory_client=self,
+            )
+            logger.debug("WorkingMemoryCore initialized.")
         except Exception:
-            logger.exception("GraphCore temporal link failed; continuing.")
+            logger.exception("UMAMemory: failed to initialize WorkingMemoryCore.")
+            raise
+
+        # ---------------------- Episodic Core ---------------------------
+        try:
+            indexer = EpisodeIndexer(
+                llm=self.llm,
+                embedder=self.embedder,
+            )
+
+            retention = EpisodicRetentionPolicy(
+                max_episodes=self.consolidation_cfg.max_episodes_per_cycle
+            )
+
+            episodic_core = EpisodicCore(
+                episodic_store=self._stores["episodic"],
+                episode_indexer=indexer,
+                retention_policy=retention,
+            )
+            logger.debug("EpisodicCore initialized.")
+        except Exception:
+            logger.exception("UMAMemory: failed to initialize EpisodicCore.")
+            raise
+
+        # ---------------------- Semantic Core ---------------------------
+        try:
+            salience = self.semantic_salience_threshold
+            decay_days = self.cfg.semantic_salience_decay_days
+            semantic_core = SemanticCore(
+                llm=self.llm,
+                embedder=self.embedder,
+                semantic_store=self._stores["semantic"],
+                salience_threshold=salience,
+                salience_decay_days=decay_days,
+                memory=self,
+            )
+            logger.info(
+                "SemanticCore initialized (salience_threshold=%.2f, decay_days=%.0f).",
+                salience,
+                decay_days,
+            )
+        except Exception:
+            logger.exception("UMAMemory: failed to initialize SemanticCore.")
+            raise
+
+        # ---------------------- Procedural Core -------------------------
+        try:
+            procedural_core = ProceduralCore(self._stores["procedural"])
+            logger.debug("ProceduralCore initialized.")
+        except Exception:
+            logger.exception("UMAMemory: failed to initialize ProceduralCore.")
+            raise
+
+        # ---------------------- Chunk Core ------------------------------
+        try:
+            chunk_core = ChunkCore(self._stores["chunk"], memory=self)
+            logger.debug("ChunkCore initialized.")
+        except Exception:
+            logger.exception("UMAMemory: failed to initialize ChunkCore.")
+            raise
+
+        self.working_memory = working_memory
+        self.episodic_core = episodic_core
+        self.semantic_core = semantic_core
+        self.procedural_core = procedural_core
+        self.chunk_core = chunk_core
+
+    # ----------------------------------------------------------------------
+    # Graph subsystem initialization
+    # ----------------------------------------------------------------------
+
+    def _init_graph_core(self) -> None:
+        """Initialize the graph subsystem using the unified storage config."""
+        storage_cfg = self.raw_config.storage
+        backend = storage_cfg.graph_backend
+
+        # --------------------------------------------------------------
+        # 1) Disabled backend → skip cleanly
+        # --------------------------------------------------------------
+        if backend == "disabled":
+            self.graph_core = None
+            logger.info("Graph subsystem disabled via config.storage.graph_backend.")
+            return
+
+        # --------------------------------------------------------------
+        # 2) Load graph config block
+        # --------------------------------------------------------------
+        if "graph_config" not in storage_cfg:
+            raise ValueError(
+                "Missing required 'storage.graph_config' section in config when "
+                f"graph_backend is '{backend}'."
+            )
+
+        graph_cfg = storage_cfg.get("graph_config") or {}
+
+        # --------------------------------------------------------------
+        # 3) Backend selection
+        # --------------------------------------------------------------
+        if backend in {"neo4j", "memgraph"}:
+            raise ValueError(
+                "Graph backends must be loaded via a plugin spec. "
+                "Set storage.graph_backend to a plugin spec 'module:callable'."
+            )
+
+        if ":" not in str(backend):
+            raise ValueError(
+                f"Unsupported storage.graph_backend={backend!r}. "
+                "Expected: 'disabled' or plugin spec 'module:callable'."
+            )
+
+        if not isinstance(graph_cfg, dict):
+            raise ValueError("'storage.graph_config' must be a mapping for plugin graph backends")
+
+        try:
+            adapter_factory = parse_plugin_spec(backend)
+            if not callable(adapter_factory):
+                raise TypeError("storage.graph_backend plugin must be a callable 'module:attr'")
+            adapter = adapter_factory(**graph_cfg)
+        except Exception as exc:
+            logger.exception("Graph adapter initialization failed.")
+            raise RuntimeError(
+                "Failed to initialize graph adapter. "
+                "Verify plugin path and configuration."
+            ) from exc
+
+        # --------------------------------------------------------------
+        # 4) Connect adapter to TemporalGraphCore
+        # --------------------------------------------------------------
+        try:
+            self.graph_core = TemporalGraphCore(adapter)
+            logger.info(
+                "TemporalGraphCore initialized (backend=%s, uri=%s).",
+                backend,
+                graph_cfg.get("uri"),
+            )
+        except Exception as exc:
+            logger.exception("Failed to initialize TemporalGraphCore.")
+            raise RuntimeError(
+                "Graph core initialization failed. "
+                "Verify graph adapter dependencies and configuration."
+            ) from exc
+
+    # ----------------------------------------------------------------------
+    # Optional Features
+    # ----------------------------------------------------------------------
+
+    def _init_optional_features(self) -> None:
+        """Attach optional UMA features from config."""
+        policy_cfg = self.features_cfg.policy or {}
+        self._feature_policy = FeaturePolicy(
+            on_attach_error=str(policy_cfg.get("on_attach_error", "log_and_skip")),
+            allow_method_override=bool(policy_cfg.get("allow_method_override", False)),
+        )
+
+        registry = default_feature_registry()
+        registry.register_entry_points()
+        loader = FeatureLoader(registry, self._feature_policy)
+
+        services = {
+            "procedural_core": self.procedural_core,
+            "episodic_core": self.episodic_core,
+            "semantic_core": self.semantic_core,
+            "llm": self.llm,
+            "embedder": self.embedder,
+            "hooks": self.hooks,
+            "graph_core": self.graph_core,
+            "cluster_similarity": self.consolidation_cfg.cluster_similarity,
+            "max_episodes_per_cycle": self.consolidation_cfg.max_episodes_per_cycle,
+        }
+
+        loader.load_from_config(
+            memory_client=self,
+            feature_cfgs=self.features_cfg.load,
+            services=services,
+        )
+
+    def register_methods(
+        self,
+        feature_name: str,
+        methods: Dict[str, Any],
+        allow_override: Optional[bool] = None,
+    ) -> None:
+        """Attach feature methods to UMAMemory with collision checks."""
+        allow_override = (
+            self._feature_policy.allow_method_override
+            if allow_override is None
+            else allow_override
+        )
+        for name, func in methods.items():
+            if not allow_override and hasattr(self, name):
+                raise ValueError(
+                    f"Feature '{feature_name}' attempted to override '{name}'"
+                )
+            setattr(self, name, func)

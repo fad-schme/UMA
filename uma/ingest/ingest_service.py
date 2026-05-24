@@ -336,6 +336,7 @@ async def _capture_bootstrap_source(
     source_kind: str,
     signature_builder: Any,
     entry_extractor: Any,
+    config: Any | None = None,
 ) -> tuple[str, str, list[str], dict[str, Any], str, Dict[str, Any] | None]:
     normalized_user_id = runtime_context.user_id
     normalized_tenant_id = runtime_context.tenant_id
@@ -350,6 +351,16 @@ async def _capture_bootstrap_source(
             user_id=normalized_user_id,
             tenant_id=normalized_tenant_id,
         )
+
+    # H2 defense: bound the file size before reading. Bootstrap files are
+    # typically tiny (MEMORY.md, daily diary entries), so the cap rarely
+    # matters in practice but provides defense against a caller pointing at
+    # an unintended large file.
+    if config is not None:
+        from uma.ingest.mime_check import enforce_file_size_limit
+        max_bytes = int(getattr(config, "max_file_bytes", 0) or 0)
+        if max_bytes > 0:
+            enforce_file_size_limit(normalized_path, max_bytes)
 
     raw_text = _read_text_source(
         normalized_path,
@@ -826,10 +837,14 @@ async def capture_source(
     if not file_path or not isinstance(file_path, str):
         raise ValueError("capture_source: file_path must be a non-empty string")
 
+    # H2 defense: bound on-disk file size and PDF page count before any
+    # parser is invoked. enforce_mime_consistency checks size first when
+    # max_bytes is positive, so an oversized file never gets its bytes
+    # opened beyond the stat() call.
     from uma.ingest.mime_check import enforce_mime_consistency
-    enforce_mime_consistency(file_path)
+    enforce_mime_consistency(file_path, max_bytes=config.max_file_bytes)
 
-    parsed = parse_file(file_path)
+    parsed = parse_file(file_path, pdf_max_pages=config.pdf_max_pages)
     if not parsed.pages:
         if config.allow_empty_pages:
             warnings.append("document has no extractable pages")
@@ -1082,8 +1097,11 @@ async def ingest_memory_bootstrap(
 
     Bypasses the LLM extraction pipeline (which skips chunks < 300 chars) to ensure
     short MEMORY.md bullets are stored with full chunk-backed fact provenance.
+
+    config is forwarded to the capture step for H2 file-size enforcement. If
+    omitted, a default IngestConfig is used.
     """
-    del config
+    resolved_config = config if config is not None else IngestConfig()
 
     runtime = _resolve_ingest_runtime(memory)
     user_id = runtime_context.user_id
@@ -1099,6 +1117,7 @@ async def ingest_memory_bootstrap(
         source_kind="memory_bootstrap",
         signature_builder=_build_memory_bootstrap_signature,
         entry_extractor=_extract_daily_diary_entries,
+        config=resolved_config,
     )
     if skip is not None:
         return skip
@@ -1273,6 +1292,7 @@ async def ingest_daily_diary_bootstrap(
     *,
     memory: Any,
     runtime_context: Any,
+    config: Any | None = None,
 ) -> Dict[str, Any]:
     """Ingest a daily diary file.
 
@@ -1280,7 +1300,13 @@ async def ingest_daily_diary_bootstrap(
     chunk/fact/wiki lanes, then writes one episode per diary entry for the
     episodic lane. The two manifest gates are independent so each lane is
     idempotent on re-ingest.
+
+    config is forwarded to both the capture step (H2 file-size limit) and
+    the document pipeline (chunk sizing, embedding retries, page cap, etc.).
+    If omitted, a default IngestConfig is used.
     """
+    resolved_config = config if config is not None else IngestConfig()
+
     runtime = _resolve_ingest_runtime(memory)
     normalized_user_id = runtime_context.user_id
     normalized_tenant_id = runtime_context.tenant_id
@@ -1296,6 +1322,7 @@ async def ingest_daily_diary_bootstrap(
         source_kind="daily_diary",
         signature_builder=_build_daily_diary_bootstrap_signature,
         entry_extractor=_extract_daily_diary_entries,
+        config=resolved_config,
     )
 
     if skip is not None:
@@ -1314,6 +1341,7 @@ async def ingest_daily_diary_bootstrap(
         owner_id=normalized_user_id,
         tenant_id=normalized_tenant_id,
         workspace_id=workspace_id,
+        config=resolved_config,
         memory=memory,
     )
     logger.info(
