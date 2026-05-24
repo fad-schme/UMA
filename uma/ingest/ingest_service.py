@@ -776,10 +776,17 @@ async def capture_source(
     *,
     owner_type: str | None = None,
     owner_id: str | None = None,
+    tenant_id: str | None = None,
+    workspace_id: str | None = None,
     config: IngestConfig | None = None,
     memory: Any,
 ) -> CaptureSourceResult:
-    """Stage 1: capture raw input into normalized source records and terminal chunks."""
+    """Stage 1: capture raw input into normalized source records and terminal chunks.
+
+    tenant_id is required for durable artifacts (DAT invariant). It MUST be
+    passed explicitly by the caller; falling back to DEFAULT_TENANT_ID silently
+    is a tenancy break and is no longer allowed at this layer.
+    """
     warnings: List[str] = []
     if memory is None:
         raise ValueError("capture_source: memory is required")
@@ -789,9 +796,13 @@ async def capture_source(
 
     if not owner_type or not owner_id:
         raise ValueError("capture_source: owner_type and owner_id are required")
+    if not tenant_id or not isinstance(tenant_id, str) or not tenant_id.strip():
+        raise ValueError("capture_source: tenant_id is required")
     owner = validate_explicit_owner(
+        tenant_id=tenant_id,
         owner_type=owner_type,
         owner_id=owner_id,
+        workspace_id=workspace_id,
     )
     if owner["owner_type"] not in {"agent", "user", "workspace"}:
         raise ValueError("owner_type must be one of: agent, user, workspace")
@@ -920,6 +931,8 @@ async def derive_memory_artifacts(
             summary_text=f"Document ingested: {capture.parsed.source_path}",
             owner_type=capture.owner_type,
             owner_id=capture.owner_id,
+            tenant_id=capture.tenant_id,
+            workspace_id=capture.workspace_id,
             user_id=capture.owner_id if capture.owner_type == "user" else None,
             embedder=runtime.embedder,
             episodic_core=runtime.episodic_core,
@@ -1336,11 +1349,17 @@ async def ingest_document(
     *,
     owner_type: str | None = None,
     owner_id: str | None = None,
+    tenant_id: str | None = None,
+    workspace_id: str | None = None,
     config: IngestConfig | None = None,
     memory: Any,
 ) -> IngestReport:
     """
     End-to-end ingestion of an unstructured document.
+
+    tenant_id is required for durable artifacts (DAT invariant). Callers must
+    pass it explicitly; no implicit fallback to the default tenant is provided
+    at this layer.
 
     Returns IngestReport with counts + warnings.
     """
@@ -1349,6 +1368,8 @@ async def ingest_document(
         file_path,
         owner_type=owner_type,
         owner_id=owner_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
         config=config,
         memory=memory,
     )

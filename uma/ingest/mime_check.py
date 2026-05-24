@@ -53,6 +53,15 @@ _ALWAYS_REJECTED_TYPES = frozenset({
     "application/x-mach-binary",
 })
 
+# Extensions that are never acceptable regardless of detected content type.
+# These represent file formats where parsing is, by design, unsafe on
+# attacker-controlled input (e.g. pickle.load is arbitrary code execution).
+# Reject early at the MIME gate so they never reach a parser strategy.
+_ALWAYS_REJECTED_EXTS = frozenset({
+    ".pkl",
+    ".pickle",
+})
+
 # extension → set of acceptable detected content types
 _EXT_ALLOWED_TYPES: dict[str, frozenset[str]] = {
     ".pdf":      frozenset({"application/pdf"}),
@@ -106,6 +115,15 @@ def check_mime_consistency(
     ext = declared_extension.lower()
     dt = detected_type.detected
 
+    # Extensions that are unsafe to parse on attacker input (e.g. pickle).
+    # Reject regardless of detected content type.
+    if ext in _ALWAYS_REJECTED_EXTS:
+        return MimeCheckResult(
+            declared_extension=ext,
+            detected_type=dt,
+            consistent=False,
+        )
+
     # Executables are always rejected, regardless of declared extension
     if dt in _ALWAYS_REJECTED_TYPES:
         return MimeCheckResult(
@@ -116,7 +134,12 @@ def check_mime_consistency(
 
     allowed = _EXT_ALLOWED_TYPES.get(ext)
     if allowed is None:
-        # Unknown extension — no constraint; allow it through
+        # Unknown extension: fail closed on opaque binary content.
+        # Text-detected payloads are allowed through (TXT/MD/Markdown parser
+        # fallbacks in parser.FileContentParser.read handle them), but we
+        # refuse to dispatch unknown-extension binaries to any parser.
+        if detected_type.is_binary or dt == "application/octet-stream":
+            return MimeCheckResult(declared_extension=ext, detected_type=dt, consistent=False)
         return MimeCheckResult(declared_extension=ext, detected_type=dt, consistent=True)
 
     consistent = dt in allowed

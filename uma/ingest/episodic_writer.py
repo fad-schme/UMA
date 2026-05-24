@@ -20,12 +20,18 @@ async def write_document_episode(
     summary_text: str,
     owner_type: str,
     owner_id: str,
+    tenant_id: str,
+    workspace_id: str | None,
     user_id: str | None,
     embedder: Any,
     episodic_core: Any | None = None,
 ) -> Optional[str]:
     """
     Persist a document ingestion episode.
+
+    tenant_id is required (DAT invariant). The Episode dataclass defaults
+    tenant_id to "default" for backward compatibility, but every ingestion
+    path MUST stamp the correct value before storage.
 
     Returns episode_id if written.
     """
@@ -39,6 +45,9 @@ async def write_document_episode(
     if not doc_id or not summary_text:
         logger.warning("write_document_episode: missing doc_id or summary_text")
         return None
+    if not isinstance(tenant_id, str) or not tenant_id.strip():
+        logger.error("write_document_episode: tenant_id is required")
+        raise ValueError("write_document_episode: tenant_id is required")
 
     try:
         expected_dim = getattr(embedder, "dimension", None)
@@ -83,6 +92,8 @@ async def write_document_episode(
         meta=doc_meta,
         owner_type=owner_type,
         owner_id=owner_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
     )
 
     try:

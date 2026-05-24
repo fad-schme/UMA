@@ -262,23 +262,11 @@ class ParquetParser(ParserStrategy):
             raise
 
 
-class PickleParser(ParserStrategy):
-    def read(self, file_path: str) -> str:
-        try:
-            import pickle
-        except Exception as exc:
-            raise ImportError("PickleParser requires pickle (std lib).") from exc
-
-        try:
-            with open(file_path, "rb") as fh:
-                data = pickle.load(fh)
-            try:
-                return json.dumps(data, ensure_ascii=False, default=str)
-            except Exception:
-                return repr(data)
-        except Exception as exc:
-            logger.error("PickleParser failed for '%s': %s", file_path, exc)
-            raise
+# NOTE: PickleParser was removed for security (CVE-class issue).
+# `pickle.load` on attacker-controlled bytes is arbitrary code execution.
+# Do not reintroduce. If pickle-shaped data must be ingested, the caller is
+# responsible for converting it to a safe representation (e.g. JSON) before
+# handing the file to UMA.
 
 
 # ----------------------------- Registry -----------------------------------
@@ -307,7 +295,7 @@ class FileContentParser:
         self.register_parser(".xhtml", HTMLParser())
         self.register_parser(".pdf", PDFParser())
         self.register_parser(".parquet", ParquetParser())
-        self.register_parser(".pkl", PickleParser())
+        # ".pkl" intentionally NOT registered: pickle.load is RCE-by-design.
 
         self.register_mime("text/plain", TXTParser())
         self.register_mime("text/markdown", TXTParser())
@@ -315,7 +303,10 @@ class FileContentParser:
         self.register_mime("application/x-yaml", YAMLParser())
         self.register_mime("text/html", HTMLParser())
         self.register_mime("application/pdf", PDFParser())
-        self.register_mime("application/octet-stream", PickleParser())
+        # "application/octet-stream" intentionally NOT registered: it is the
+        # default MIME for unknown binary content and previously dispatched to
+        # PickleParser, which is RCE-by-design. Unknown binary uploads must
+        # fail closed in mime_check.enforce_mime_consistency.
 
     def register_parser(self, ext: str, impl: ParserStrategy) -> None:
         key = (ext or "").strip().lower()
