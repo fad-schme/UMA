@@ -1,255 +1,146 @@
 # UMA
 
-Universal Memory Architecture for AI agents.
+**Universal Memory Architecture** — long-lived, evidence-backed memory for AI agents, with security built into every write and every read.
 
-UMA is a memory and context runtime for developers building AI agents. It stores raw evidence, semantic facts, episodic memory, procedural knowledge, profiles, traces, and compiled wiki artifacts behind a small retrieval surface. UMA manages memory only; your application still owns prompts, tool use, reasoning, and final responses.
+UMA is a memory and context runtime SDK for developers building AI agents. It ingests data, stores it across six typed memory lanes, and exposes a small retrieval surface. **UMA manages memory only** — your application owns prompts, tool use, reasoning, and final responses.
 
-## What UMA Is
+> **Status:** beta. No backward-compatibility guarantees.
 
-UMA helps agents work with long-lived memory without turning memory into unstructured prompt text.
+---
 
-- `retrieve_context(...)` returns evidence-oriented context for RAG-style use.
-- `retrieve_memory(...)` returns compiled, evidence-backed memory for continuity-oriented use.
-- `process_turn(...)` persists new interactions into UMA's memory lanes.
+## ✨ Why UMA
 
-## Runtime Profile
+- 🧠 **Six typed memory lanes** — working memory, semantic facts, raw chunks, episodic, procedural, compiled wiki. You choose what to query.
+- 🪶 **One install, zero external services** — embedded SQLite + LanceDB. `pip install -e .` and you're running.
+- 🛡️ **Security by design** — every artifact is owner-scoped, injection-scanned, trust-scored, and content-hashed before it touches storage.
+- 🔍 **Evidence-backed retrieval** — every fact carries provenance back to source chunks. No silent degradation into "vibes-based" RAG.
+- 🏢 **Multi-tenant by construction** — cross-tenant access is impossible at the storage layer, not by application-layer convention.
 
-UMA uses a single embedded runtime profile: SQLite for authoritative storage and LanceDB for vector retrieval. No external database services are required.
+---
 
-| Config file | Use |
-| --- | --- |
-| `config/uma.yaml` | Default runnable config |
+## 🏛️ Architecture
 
-`config/uma.yaml` is the default. LLM and embedding values in these files are user-customizable baselines — set the provider, model, and host to match your environment before running.
+![UMA architecture diagram](docs/uma-architecture.png)
 
-## Quickstart: UMA Lite
+UMA is a thin SDK around three concerns: **ingest** (data flows in, gets scanned, chunked, embedded), **storage** (SQLite is authoritative, LanceDB is a rebuildable accelerator), and **retrieval** (a canonical pipeline through candidate discovery, fusion, trust-aware ranking, and snippet rendering). Every write boundary scans for prompt injection; every read boundary enforces tenant/owner isolation and filters quarantined records.
 
-UMA Lite is the default path. It runs with embedded SQLite and LanceDB, so no external database services are required for the storage stack.
+For the full architectural model — invariants, pipelines, the vector isolation contract, and the OWASP Top 10 mapping — see [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+---
+
+## 🛡️ Security by Design
+
+Security in UMA isn't a feature — it's the shape of every code path. Five primitives compose:
+
+1. **Two-layer injection scanning** — pre-LLM advisory gate + write-time defense-in-depth
+2. **Trust scoring + quarantine** — every artifact carries a trust score and quarantine flag; retrieval excludes quarantined records by construction
+3. **Content hashing + integrity verification** — SHA-256 on every typed artifact; on-demand verification quarantines tampered records
+4. **Ingest gating** — MIME consistency, file size caps, HTML/Markdown sanitization
+5. **Retrieval audit log** — every retrieve call is recorded with a hashed query preview
+
+### Mapping to OWASP Top 10 for LLM Applications 2025
+
+The [OWASP Top 10 for LLM Applications 2025](https://genai.owasp.org/llm-top-10/) is the de-facto reference for AI application security. UMA is a memory SDK — not every category applies. Here's the honest mapping:
+
+| OWASP 2025 Category | Scope | UMA's contribution |
+| --- | --- | --- |
+| 🟢 **LLM01: Prompt Injection** | In scope | Two-layer scanning: advisory pre-LLM gate (`scan_user_input`) + write-time per-artifact scan. High severity → quarantine; medium/low → trust reduction. |
+| 🟢 **LLM02: Sensitive Information Disclosure** | Partial | Audit log stores SHA-256-hashed query previews only. HTML sanitization strips scripts and active URLs at ingest. |
+| ⚪ **LLM03: Supply Chain** | Out of scope | No training, no fine-tuning. `PickleParser` was removed as adjacent ingest hardening. |
+| 🟢 **LLM04: Data and Model Poisoning** | In scope (RAG path) | Quarantined chunks dropped before fact extraction. SHA-256 `content_hash` + `verify_integrity` detect post-hoc tampering. |
+| ⚪ **LLM05: Improper Output Handling** | Out of scope | UMA returns context, not output. Caller owns rendering and escaping. |
+| ⚪ **LLM06: Excessive Agency** | Out of scope | No tool use, no function calling, no autonomy. Pure memory. |
+| ⚪ **LLM07: System Prompt Leakage** | Out of scope | System prompts live in the calling application, not UMA. |
+| 🟢 **LLM08: Vector and Embedding Weaknesses** | In scope — primary | LanceDB promotes `tenant_id` / `owner_type` / `owner_id` to indexed columns and pushes them into `WHERE` before the k-nearest cap. Cross-tenant access impossible by construction. |
+| 🟢 **LLM09: Misinformation** | Partial | Every fact carries provenance back to source chunks. `LatestWinsFactResolver` excludes quarantined facts from canonical selection. |
+| 🟢 **LLM10: Unbounded Consumption** | In scope | Optional `set_rate_limit_hook` on every public method. `max_file_bytes` and `pdf_max_pages` cap ingest resource use. |
+| 🟢 **ASI03: Identity & Privilege Abuse** (Agentic AI) | Partial — memory-layer | Explicit `tenant_id` / `owner_type` / `owner_id` on every artifact, enforced at the storage layer. Agent identity itself is the caller's concern. |
+| 🟢 **ASI05: Unexpected Code Execution** (Agentic AI) | Partial — ingest-only | `PickleParser` removed; MIME consistency check rejects executables; HTML/Markdown sanitized before storage. UMA itself executes no code from memory. |
+| 🟢 **ASI06: Memory Poisoning** (Agentic AI) | In scope | Write-time scan + quarantine at every storage boundary. Quarantined artifacts never enter retrieval and never seed fact extraction. |
+
+**Six of ten LLM categories apply.** UMA is honest about what it covers and what's out of scope — there's no security theater. The four out-of-scope categories belong to the calling application: output handling, agent design, system prompts, and supply-chain procurement of models. Pair UMA with the controls appropriate to those layers for full coverage.
+
+**Three of ten ASI categories apply.** UMA is a memory SDK, not an agent. The remaining seven belong to the agent layer above UMA — they require tool use, autonomy, or inter-agent communication that UMA doesn't have.
+
+For the full security model — including the injection pattern catalog, severity behavior, quarantine lifecycle, and integrity verification — see [`.claude/skills/uma-security.md`](.claude/skills/uma-security.md) for the deep dive, or [`ARCHITECTURE.md`](ARCHITECTURE.md) for the architectural model.
+
+---
+
+## Quickstart
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
 pip install -e .
-python - <<'PY'
-from uma import UMAMemory
-
-memory = UMAMemory.from_yaml("config/uma.yaml")
-print(memory.health_check())
-PY
 ```
-
-The embedded storage stack requires no external database services. Configure your LLM and embedding provider in the YAML before running.
-
-## Graph Is Optional
-
-Graph memory is optional and disabled by default.
-
-UMA still provides value through raw, semantic, episodic, procedural, profile, trace, and wiki lanes without a graph database. Graph support can be added later for relationship traversal and associative recall, but it is not required for first-run usage.
-
-## Install Surfaces
-
-For the default embedded profile:
-
-```bash
-pip install -e .
-```
-
-For development and test workflows:
-
-```bash
-pip install -r requirements.txt
-```
-
-Optional extras are available for additional providers and development workflows. The default embedded path requires no extra installs. Use `pip install -e '.[vector]'` only if you are configuring an alternate vector backend (e.g. FAISS). LLM and embedding providers are configured in your YAML file.
-
-Supported LLM providers are `ollama`, `openai`, and `anthropic`. Supported embedding providers are `ollama` and `openai`. Anthropic/Claude is LLM-only in the public repo; install `pip install -e '.[llm]'` if you want to configure `provider: anthropic`.
-
-## Typical Usage
 
 ```python
 from uma import UMAMemory
-from uma.api.management import explain_result
 
-memory = UMAMemory.from_yaml("config/uma.yaml").set_context(
-    agent_id="agent-default",
-)
+memory = UMAMemory.from_yaml("config/uma.yaml").set_context(agent_id="my-agent")
 
 context = await memory.retrieve_context(
     query_text=user_message,
     user_id="user-123",
     tenant_id="default",
-    request_id="req-1",
     session_id="session-1",
-    lane_filter=["raw", "semantic"],
 )
 
-memory_result = await memory.retrieve_memory(
-    query_text=user_message,
-    user_id="user-123",
-    tenant_id="default",
-    request_id="req-1",
-    session_id="session-1",
-    memory_intent="continuity",
-)
-# memory_result keys: compiled_memory, facts, evidence, provenance_valid
-# compiled_memory: {status, summary, memory_intent, provenance_valid}
-# facts: [{text, confidence, salience, source_chunk_ids}] — text is "subject predicate object"
-# evidence: [{id, text, source, source_document_id}]
-
-explanation = await explain_result(memory, memory_result, user_id="user-123")
-
-messages = [
-    {"role": "system", "content": system_prompt},
-    {"role": "system", "content": str(context)},
-]
-agent_reply = await agent_llm_generate(messages)
+reply = await your_llm(context, user_message)   # you own this
 
 await memory.process_turn(
     user_id="user-123",
     user_msg=user_message,
-    assistant_reply=agent_reply,
+    assistant_reply=reply,
     session_id="session-1",
+    tenant_id="default",
 )
 ```
 
-## Memory Extraction
+That's the whole loop. For the full agent integration pattern — pre-LLM injection scanning, error handling, multi-tenant SaaS, rate limiting — **ask your coding assistant** (see below).
 
-`process_turn` extracts semantic facts from both sides of the conversation turn.
+---
 
-- Facts from `user_msg` carry trust 0.9 — the user stated it directly.
-- Facts from `assistant_reply` carry trust 0.7 — the assistant may synthesize or hallucinate.
+## 🤖 Living Docs for AI Assistants
 
-Trust scores are preserved through storage and applied during retrieval ranking (`trust_weight` in config). Artifacts below `min_trust_score` are dropped from results before they reach the caller.
+**You shouldn't have to read tons of documentation to use UMA.** Ask your coding agent instead.
 
-Episodes are built from the current turn only (`user_msg` + `assistant_reply`). Prior working memory is available to the LLM as background context so the summary is coherent, but it is not re-summarized on every turn. Full session history compaction only occurs when working memory capacity thresholds are exceeded.
+UMA ships eight Agent Skills under `.claude/skills/`. They're structured markdown files with YAML frontmatter that Claude Code (and any [Agent Skills](https://docs.claude.com/en/agents-and-tools/agent-skills/overview)-compatible assistant) automatically loads as context when you ask questions about the project. No setup. No `@` mentions. Just ask:
 
-Episodes are retrievable across sessions — `session_id` is stored as provenance metadata, not as a retrieval gate.
+> *"How do I integrate UMA into my chatbot?"*
+> → `uma-agent-loop.md` loads — end-to-end pattern with code
 
-## Input Security
+> *"What happens when a user sends a prompt injection?"*
+> → `uma-security.md` + `uma-quarantine.md` load — full flow from scan to storage
 
-UMA scans all user input for prompt injection before it reaches storage or an LLM.
+> *"How do I write a custom vector backend?"*
+> → `uma-vector-contract.md` loads — the contract, atomicity, score normalization
 
-### Two-layer model
+> *"How do I filter by lane?"*
+> → `uma-lanes.md` loads — the six lanes, when to use each
 
-**Layer 1 — Pre-LLM gate.** Call `scan_user_input` at the top of your agent loop, before `retrieve_context` and before any LLM call. It returns a result dict and never raises — you decide what to do.
+> *"My YAML — can you help me configure Anthropic as the LLM?"*
+> → `uma-configure.md` loads — full YAML reference
 
-```python
-from uma import UMAMemory, InjectionDetectedError
+### The eight skills
 
-scan = memory.scan_user_input(user_msg)
-if scan["severity"] == "high":
-    # do not forward to LLM, do not call process_turn
-    return "I can't process that request."
-
-context = await memory.retrieve_context(query_text=user_msg, ...)
-reply = await your_llm(context, user_msg)
-```
-
-**Layer 2 — Defense-in-depth.** `process_turn` rescans `user_msg` before writing anything. On high severity it raises `InjectionDetectedError` — nothing is stored.
-
-```python
-try:
-    await memory.process_turn(
-        user_id="user-123",
-        user_msg=user_msg,
-        assistant_reply=reply,
-        session_id="session-1",
-    )
-except InjectionDetectedError as e:
-    print(e.severity)       # "high"
-    print(e.matched_rules)  # ["prompt_override", ...]
-    print(e.score)          # numeric scan score
-    # surface error, alert, block user — your decision
-```
-
-### Severity behaviour
-
-| Severity | `scan_user_input` | `process_turn` | Artifact trust |
-|---|---|---|---|
-| `none` | `{"severity": "none", ...}` | Proceeds normally | Unchanged |
-| `low` | `{"severity": "low", ...}` | Logged, proceeds | Reduced by 20% |
-| `medium` | `{"severity": "medium", ...}` | Logged, proceeds | Reduced by 50% |
-| `high` | `{"severity": "high", ...}` | Raises `InjectionDetectedError`; turn dropped | Not stored |
-
-### Bypass
-
-If you have independently validated the input and want to bypass the gate:
-
-```python
-await memory.process_turn(..., skip_scan=True)
-```
-
-Use only when you explicitly accept responsibility for the content.
-
-### Write-time scanning
-
-Every artifact is also scanned at its storage boundary — turn chunks, episodes, and document chunks — regardless of whether `skip_scan` was used. High-severity artifacts are quarantined: excluded from retrieval but retained in the database.
-
-### Pattern catalog
-
-The scanner runs against a compiled YAML catalog (`uma/common/injection_patterns.yaml`). Patterns are seeded from the Animus WAF catalog and tuned to minimise false positives on legitimate conversation and document text.
-
-| Rule | Severity | Category | What it detects |
-|---|---|---|---|
-| `jailbreak_prompt` | high | prompt_injection | Direct instruction-override attempts — "ignore all previous instructions", DAN/DevMode personas, fake system tags, roleplay bypass |
-| `code_injection` | high | code_injection | Imperative code execution in destructive context — XSS script tags, `rm -rf /`, `subprocess.Popen` with shell paths |
-| `context_switching` | high | prompt_injection | Fake system context injection — "end of response / new instructions", heredoc system tags, "forget everything before" |
-| `data_exfiltration` | high | data_exfiltration | Extraction of internal data or credentials — "dump the database", "give me admin credentials", "extract confidential data" |
-| `encoded_payloads` | high | prompt_injection | Encoded payloads with explicit execute-or-decode intent — base64 / hex strings paired with "decode this", "execute" directives |
-| `prompt_reset` | high | prompt_injection | Conversation context reset — "ignore instructions", "forget everything", "reset this conversation" |
-| `role_impersonation` | high | prompt_injection | Model role redefinition — "you are now admin/root/kernel", "simulate a shell", "you no longer represent Anthropic" |
-| `config_leakage` | high | configuration_exposure | System prompt or config extraction — "reveal system prompt", "what is your hidden prompt", "print env variables" |
-| `rule_override` | high | prompt_injection | Alignment suspension via framing — "just this once override rules", "as a game break filters", "hypothetically bypass moderation" |
-| `alignment_breaking` | high | alignment_evasion | Explicit alignment violation requests — "act as a rogue AI", "write a response that violates alignment" |
-| `debug_mode_spoofing` | high | system_spoofing | Debug/admin mode spoofing — "you are in debug mode", "assume developer mode", "simulate system session" |
-| `hidden_instruction_probe` | high | configuration_exposure | Hidden instruction probing — "print internal parameters", "reveal hidden data", "expose chat initialization sequence" |
-| `policy_evasion` | medium | prompt_injection | Content policy suspension — "ignore filters", "respond without restrictions", "just for testing respond" |
-| `escalation_phrases` | medium | privilege_escalation | Privilege escalation intent — "how to escalate privileges", "root access simulate", "get around role restrictions" |
-| `homoglyph_obfuscation` | medium | prompt_injection | Leetspeak and homoglyph variants of known-bad tokens — `p@ssw0rd`, `m@lware`, `h4x0r`, darknet terminology |
-
-Extend the catalog by setting `security.custom_patterns_path` in your YAML config. Follow the conventions in the file header: prefer tight patterns over loose ones, set `severity: high` only for patterns that are almost never benign.
-
-## Public API
-
-The public surface is intentionally small.
-
-- `UMAMemory`
-  `set_context(...)`, `scan_user_input(...)`, `ingest_document(...)`, `retrieve_context(...)`, `retrieve_memory(...)`, `process_turn(...)`
-- Required Animus support on `UMAMemory`
-  `load_userprofile(...)`, `load_agentprofile(...)`, `load_memory_bootstrap(...)`, `load_daily_diary_bootstrap(...)`
-- Developer and admin management APIs
-  `uma.api.management.explain_result(...)`, `lint_memory_drift(...)`
-
-## Production Boundary
-
-The public Apache-2.0 repo includes UMA Lite and UMA Container profiles.
-
-Production packaging is not included in this public repo. A future private or commercial package may provide production-specific profiles, managed-service adapters, and deployment tooling.
-
-## Agent Skills
-
-UMA ships four AI coding assistant skill files under `.claude/skills/`. These are structured markdown documents that Claude Code (and other assistants that follow the AgentSkills convention) automatically load as context when you ask questions about the project.
-
-| Skill file | What it covers |
+| Skill | Covers |
 | --- | --- |
-| `.claude/skills/uma-overview.md` | What UMA is and isn't, design philosophy, DAT invariants, ownership model, runtime scope rules |
-| `.claude/skills/uma-api.md` | Full public API — all `UMAMemory` method signatures with contracts, scope fields, management APIs |
-| `.claude/skills/uma-lanes.md` | All six memory lanes, their storage contracts, retrieval limits, and the canonical retrieval pipeline |
-| `.claude/skills/uma-configure.md` | Runtime profiles, full YAML structure, LLM/embedding providers, vector backends, install surfaces |
+| [`uma-overview.md`](.claude/skills/uma-overview.md) | What UMA is, design philosophy, DAT invariants, security primitives at a glance |
+| [`uma-api.md`](.claude/skills/uma-api.md) | Full public API — every method, every management function, scope fields |
+| [`uma-lanes.md`](.claude/skills/uma-lanes.md) | Six memory lanes, storage contracts, quarantine semantics, retrieval pipeline |
+| [`uma-configure.md`](.claude/skills/uma-configure.md) | YAML reference, LLM/embedding providers, security configuration, install surfaces |
+| [`uma-security.md`](.claude/skills/uma-security.md) | Two-layer scanning, pattern catalog, severity behavior, integrity verification |
+| [`uma-agent-loop.md`](.claude/skills/uma-agent-loop.md) | End-to-end integration: scan → retrieve → LLM → process_turn |
+| [`uma-vector-contract.md`](.claude/skills/uma-vector-contract.md) | Vector isolation contract, push-down filters, custom backend authoring |
+| [`uma-quarantine.md`](.claude/skills/uma-quarantine.md) | Quarantine lifecycle, management API, composition with trust scoring |
 
-No setup is required. Claude Code reads `.claude/skills/` automatically. When you ask the assistant a question like *"how do I filter by lane?"* or *"what does `process_turn` persist?"* it will draw on these files rather than guessing from the README alone.
+Each skill is under 500 lines, follows the Agent Skills specification (third-person `description` field for discovery), and is verified against the patched codebase — no phantom APIs.
 
-Other assistants can reference the same files directly from `.claude/skills/` or via a symlink at `.agents/skills/` if your tooling follows that convention.
-The UMA agent skills follow the Agent Skills best practices and the Claude Skills best practices. 
+Assistants that don't follow `.claude/skills/` can read the same files directly, or via a symlink at `.agents/skills/` if your tooling uses that path.
 
-## Architecture Notes
+---
 
-UMA preserves a few core invariants across ingestion and retrieval:
+## License & Status
 
-- explicit ownership boundaries across stored and retrieved artifacts
-- provenance carried through raw evidence, facts, and compiled artifacts
-- SQL as authoritative storage for chunk text and metadata
-- vector storage as a rebuildable retrieval accelerator
-- graph as an optional supporting lane, not a required first-run dependency
+UMA is Apache-2.0 licensed and currently in beta. Production packaging is not included in this public repo; a future private or commercial package may provide production-specific profiles, managed-service adapters, and deployment tooling.
 
-For the deeper architecture and invariants, see `ARCHITECTURE.md`.
+For the architectural deep dive, see [`ARCHITECTURE.md`](ARCHITECTURE.md). For everything else, ask your assistant.

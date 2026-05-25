@@ -80,5 +80,7 @@ memory.md
 session_log.md
 locomo/runs/*
 tmp.py
+tmp.md
 *.zip
 *.tar.gz
+*copy.md

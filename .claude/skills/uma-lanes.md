@@ -1,3 +1,8 @@
+---
+name: uma-lanes
+description: Explains UMA's six memory lanes (working memory, semantic facts, raw chunks, episodic, procedural, wiki) — what each one stores, its retrieval role, its storage contract, session-vs-durable scope, quarantine semantics, and the canonical retrieval pipeline that all production retrieval follows. Use this skill when answering questions about which lane to use, how lanes differ, how to filter by lane, what `lane_filter` accepts, how candidates flow through fusion/rerank/trust-adjustment/selection, or any question about chunk metadata and the SQL-vs-vector storage split.
+---
+
 # UMA — Memory Lanes
 
 ## Overview
@@ -15,6 +20,8 @@ UMA stores and retrieves memory across six typed lanes. Each lane has a distinct
 **Role:** Holds recent messages within a session for immediate context injection.
 
 **Storage:** In-memory buffer managed by `WorkingMemoryCore`. Backed by session-scoped state; not persisted across sessions.
+
+**Security:** Each appended message is injection-scanned before persistence. High-severity messages are kept in the buffer with `quarantined_at` set, but `get_context` filters them out by default (pass `include_quarantined=True` to include).
 
 **Config (in `uma.yaml`):**
 ```yaml
@@ -42,13 +49,20 @@ semantic:
   salience_threshold: 0.45  # facts below this are dropped
 ```
 
+**Trust scoring:**
+- Facts from `user_msg` → `trust_score=0.9` (user said it directly)
+- Facts from `assistant_reply` → `trust_score=0.7` (assistant may synthesize or hallucinate)
+- Reduced by 20% (low) / 50% (medium) injection severity hit at write time
+
+**Conflict resolution:** When upserting a fact that already exists by `(subject, predicate)`, `LatestWinsFactResolver` chooses the canonical row by `latest non-quarantined updated_at`. Quarantined facts are excluded from consideration; the all-quarantined case falls back across the full set with a warning and the chosen row remains quarantined.
+
 **Scope behavior:** Facts extracted from turns are **session-local by default**. Must be explicitly promoted to become durable `user`, `workspace`, or `agent` memory.
 
 **Retrieval:**
 ```python
 retrieve_context(..., lane_filter=["semantic"])
 ```
-Up to `max_facts: 5` per retrieval by default.
+Up to `max_facts: 5` per retrieval by default. Filtered by `quarantined_at IS NULL`.
 
 ---
 
@@ -58,18 +72,24 @@ Up to `max_facts: 5` per retrieval by default.
 
 **Role:** Immutable evidence. The original source from which facts are extracted and wiki pages are compiled. All other artifacts trace back to chunks.
 
-**Storage:** `ChunkStore` (SQLite via `chunk_sql.py`) is **authoritative** for chunk text and metadata. Vector store is a rebuildable accelerator that holds only ids and filterable metadata — not full text.
+**Storage:** `ChunkStore` (SQLite via `chunk_sql.py`) is **authoritative** for chunk text and metadata. Vector store is a rebuildable accelerator that holds only ids, vectors, isolation columns, and filterable metadata — not full text.
 
 **Required chunk metadata:**
 - `id`, `doc_id`, `text`, `position`, `page_range`
-- `owner_type`, `owner_id`
+- `tenant_id`, `owner_type`, `owner_id` (refused if empty)
 - `source_uri` / hash (if available)
+- `trust_score`, `content_hash`, `quarantined_at`
 
 **Chunking rules:**
 - Never cut mid-sentence
 - Prefer paragraph-level chunks
 - Minimum ~80 characters per chunk
 - Overlap must align to sentence boundaries
+
+**Security at ingest:**
+- Every chunk text is injection-scanned at write time
+- High-severity chunks are stored with `quarantined_at` set and excluded from retrieval
+- Quarantined chunks are also dropped before fact extraction so injected content never seeds the semantic lane
 
 **Retrieval:** Candidate discovery via dense vector search + optional lexical search (hybrid fusion). Final ranking via `uma/retrieve/ranking.py` — the single canonical ranking module.
 
@@ -83,7 +103,11 @@ Up to `max_facts: 5` per retrieval by default.
 
 **Storage:** `EpisodicStore` (SQLite via `episodic_sql.py`) + vector index via `EpisodeIndexer`.
 
-**Scope behavior:** Episodic turn memory is **session-local by default**. Promoted episodes become durable.
+**Episode shape:** Built from the current turn only (`user_msg` + `assistant_reply`). Prior working memory is available to the LLM as background context for coherent summarization, but is not re-summarized on every turn.
+
+**Security:** `EpisodicCore.store_episode` scans `assistant_reply` at write time (the assistant_reply trust starts at 0.7). High-severity hits quarantine the episode.
+
+**Scope behavior:** Episodes are retrievable **across sessions** — `session_id` is stored as provenance metadata, not as a retrieval gate.
 
 **Retrieval:**
 ```python
@@ -110,6 +134,8 @@ features:
       provider: "uma.memory.procedural.feature:ProceduralFeature"
 ```
 
+**Validation:** `Skill.owner_type` and `Skill.owner_id` must be non-empty strings (`_validate_skill` refuses missing values). This matches the C1 vector contract; the SQL write and vector upsert cannot disagree.
+
 **Retrieval:**
 ```python
 retrieve_context(..., lane_filter=["procedural"])
@@ -132,7 +158,7 @@ Up to `max_procedural: 2` per context retrieval. Up to `max_skills: 3` in memory
 ```python
 from uma.api.management import lint_memory_drift
 
-# Check for provenance drift
+# Check for provenance drift + integrity
 await lint_memory_drift(memory, artifact, user_id=..., stale_after_seconds=86400)
 ```
 
@@ -140,17 +166,17 @@ await lint_memory_drift(memory, artifact, user_id=..., stale_after_seconds=86400
 
 ## Storage Model Summary
 
-| Lane | Authoritative Store | Accelerator |
-|---|---|---|
-| Working Memory | In-memory buffer (session-scoped) | — |
-| Semantic | SQLite (`semantic_sql.py`) | Vector index |
-| Raw Chunks | SQLite (`chunk_sql.py`) | Vector index |
-| Episodic | SQLite (`episodic_sql.py`) | Vector index |
-| Procedural | SQLite (`procedural_sql.py`) | Vector index |
-| Wiki | SQLite (document store) | Vector index |
-| Graph (optional) | Graph backend (plugin) | — |
+| Lane | Authoritative Store | Accelerator | Write-time scan | Read-time quarantine filter |
+|---|---|---|---|---|
+| Working Memory | In-memory buffer (session-scoped) | — | ✅ | ✅ |
+| Semantic | SQLite (`semantic_sql.py`) | Vector index | ✅ | ✅ |
+| Raw Chunks | SQLite (`chunk_sql.py`) | Vector index | ✅ | ✅ |
+| Episodic | SQLite (`episodic_sql.py`) | Vector index | ✅ | ✅ |
+| Procedural | SQLite (`procedural_sql.py`) | Vector index | ✅ | ✅ |
+| Wiki | SQLite (document store) | Vector index | — | n/a |
+| Graph (optional) | Graph backend (plugin) | — | — | — |
 
-**Security primitives:** Each artifact (fact, episode, skill, chunk) carries `trust_score` (float, default 0.5) and `content_hash` (SHA-256 hex, where applicable) as OWASP ASI06 baseline fields. Ingested files pass MIME consistency checking (`uma/ingest/mime_check.py`) before parsing; HTML and Markdown content is sanitized via `_sanitize_html` in `uma/ingest/parser.py` with per-category counts recorded in `meta["security"]["sanitization"]` on the document manifest.
+**Security primitives:** Each artifact (fact, episode, skill, chunk) carries `trust_score` (float, default 0.5) and `content_hash` (SHA-256 hex, where applicable). Ingested files pass MIME consistency (`mime_check.enforce_mime_consistency`) before parsing; HTML/Markdown is sanitized via `_sanitize_html` with per-category counts recorded in `meta["security"]["sanitization"]`.
 
 **Invariant:** SQL is always authoritative. Vector stores are rebuildable from SQL at any time:
 ```python
@@ -163,14 +189,16 @@ await memory.rebuild_vector_indexes(tenant_id="default", ...)
 
 All production retrieval follows this exact sequence:
 
-1. **Candidate discovery** — dense vector search (`top_k_dense`) + optional lexical search (`top_k_sparse`), both owner-scoped; quarantined records excluded at the store layer (PR4)
+1. **Candidate discovery** — dense vector search (`top_k_dense`) + optional lexical search (`top_k_sparse`), both owner-scoped; quarantined records excluded at the store layer
 2. **Fusion** — merge dense + lexical candidates (RRF or boost-on-overlap) into a single candidate pool
 3. **Optional rerank** — reorder within the candidate pool only; never expands the pool
-4. **Trust adjustment** — `final_score = (1 - trust_weight) * existing + trust_weight * trust_score`; candidates below `min_trust_score` are dropped before truncation (retrieval ranking is trust-aware)
+4. **Trust adjustment** — `final_score = (1 - trust_weight) * existing + trust_weight * trust_score`; candidates below `min_trust_score` (default 0.5) are dropped before truncation
 5. **Selection** — deterministic truncation to `max_chunks` / `max_facts`
-6. **Snippet rendering** — presentation layer: merge adjacency, bound length, preserve traceability
+6. **Snippet rendering** — presentation layer: merge adjacency, bound length, preserve traceability. Skips LLM refinement on chunks with medium/high injection severity.
 
 **Policy:** Ranking logic lives only in `uma/retrieve/ranking.py`. Never in stores, snippet rendering, or controller layers.
+
+**Score normalization (LanceDB):** Vector distances are mapped to scores via `exp(-distance)`, producing values in `(0, 1]` that are coherent with `trust_score` in `[0, 1]` for the weighted blend.
 
 ---
 
@@ -179,14 +207,18 @@ All production retrieval follows this exact sequence:
 Every lane query is owner-scoped. The scope fields required per call:
 
 ```python
-# These must be passed explicitly — never inferred from prior calls
 tenant_id="default"      # required; isolates by tenant
 user_id="user-123"       # required for user-scoped lanes
 agent_id="agent-default" # bound via set_context(); required
 session_id="session-1"   # required for session-local lanes
 ```
 
-Cross-tenant access is impossible by construction. Cross-agent sharing requires explicit scope widening.
+Cross-tenant access is impossible by construction:
+
+- The vector index (LanceDB) promotes `tenant_id` / `owner_type` / `owner_id` to first-class columns and pushes them into every query's `WHERE` clause before the candidate cap is applied.
+- SQL stores filter by `tenant_id AND owner_type AND owner_id` in every read path.
+
+Cross-agent sharing requires explicit scope widening.
 
 ---
 
@@ -208,4 +240,4 @@ context = await memory.retrieve_context(
 )
 ```
 
-Valid lane names: `raw`, `semantic`, `episodic`, `procedural`, `wiki`, `working_memory`
+Valid lane names: `raw`, `semantic`, `episodic`, `procedural`, `wiki`, `working_memory`.
