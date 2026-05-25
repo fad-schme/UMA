@@ -272,7 +272,16 @@ class RetrievalConfig:
     chunk_shortlist_k: int = 12
     chunk_shortlist_max_per_doc: int = 3
     trust_weight: float = 0.15
-    min_trust_score: float = 0.0
+    # H3: filter out quarantine-survivors at retrieval. With the boundary-
+    # scan tier rubric in effect, a medium-severity hit reduces trust to
+    # ~0.45 (=0.9 × 0.5 for a turn_user fact, similar for documents).
+    # min_trust_score=0.5 filters every medium-severity survivor across
+    # every legitimate source kind, while preserving clean tool_output
+    # (trust=0.5 passes the >= comparison) and every higher-trust source.
+    # The single edge case sacrificed is low-severity tool_output
+    # (0.5 × 0.8 = 0.40), which is the system's weakest signal and is
+    # most often false positives anyway.
+    min_trust_score: float = 0.5
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any], *, profile: str = "lite") -> "RetrievalConfig":
@@ -334,7 +343,7 @@ class RetrievalConfig:
             rlm_obj = RLMConfig(enabled=True)
 
         trust_weight = max(0.0, min(1.0, float(d.get("trust_weight", 0.15))))
-        min_trust_score = max(0.0, min(1.0, float(d.get("min_trust_score", 0.0))))
+        min_trust_score = max(0.0, min(1.0, float(d.get("min_trust_score", 0.5))))
         return cls(
             max_episodes=int(d["max_episodes"]),
             max_facts=int(d["max_facts"]),

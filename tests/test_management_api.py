@@ -31,6 +31,7 @@ def test_management_module_exports_supported_operations_only() -> None:
         "purge_quarantined",
         "IntegrityVerificationResult",
         "verify_integrity",
+        "list_retrieval_audit",
     ]
 
 

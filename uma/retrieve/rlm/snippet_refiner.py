@@ -11,9 +11,17 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from uma.common.accessors import get_attr_or_key
 from uma.common.text_bounds import trim_to_sentence_boundary
+from uma.common.injection_scan import severity_from_meta, max_severity
 from uma.adapters.llm.controller import LLMCallContext, generate_text
 
 logger = logging.getLogger(__name__)
+
+
+# HR1-b: severities at which the refiner will skip the LLM call on a
+# per-chunk basis. Mirrors the controller's _LLM_HOP_SKIP_SEVERITIES
+# (medium / high) — the boundary-scan severity tiers that warrant
+# graceful degradation rather than amplification.
+_REFINE_SKIP_SEVERITIES = frozenset({"medium", "high"})
 
 
 class SnippetRefiner:
@@ -155,12 +163,47 @@ class SnippetRefiner:
         group = sorted(group, key=lambda g: int(g.get("position", 0) or 0))
         texts = [g.get("text", "").strip() for g in group if g.get("text")]
         merged_text = " ".join(texts)
+
+        # HR1-b: a merged group inherits the strictest write-time scan
+        # severity of any constituent chunk. Without this, a flagged
+        # chunk could "hide" behind a benign neighbor at refinement
+        # time. The merged dict carries the result on
+        # meta.security.injection_scan.severity so _refine_single (and
+        # any other downstream consumer) can read it via the same shape
+        # that write-time scanning produced.
+        merged_severity = max_severity(
+            *[severity_from_meta(g.get("meta")) for g in group]
+        )
+        merged_meta: Dict[str, Any] = {}
+        if merged_severity != "none":
+            merged_meta = {
+                "security": {
+                    "injection_scan": {
+                        "severity": merged_severity,
+                        # Propagate the constituent rules / scores for
+                        # operator inspection. Best-effort union.
+                        "matched_rules": sorted({
+                            r for g in group
+                            for r in (
+                                (g.get("meta") or {})
+                                .get("security", {})
+                                .get("injection_scan", {})
+                                .get("matched_rules") or []
+                            )
+                            if isinstance(r, str)
+                        }),
+                        "merged_from": [g.get("id") for g in group if g.get("id")],
+                    }
+                }
+            }
+
         return {
             "doc_id": group[0].get("doc_id"),
             "chunk_ids": [g.get("id") for g in group if g.get("id")],
             "page_range": self._merge_page_ranges(group),
             "source_path": group[0].get("source_path"),
             "text": merged_text,
+            "meta": merged_meta,
         }
 
     def _normalize_chunk(self, chunk: Any) -> Dict[str, Any]:
@@ -193,6 +236,26 @@ class SnippetRefiner:
     ) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
         text = trim_to_sentence_boundary(str(candidate.get("text") or ""), max_chars=max_chars)
         if not self.llm:
+            return self._build_snippet(candidate, text), 1.0
+
+        # HR1-b: chunk-level severity gate. If THIS specific candidate
+        # carries a write-time injection-scan record at medium or high
+        # severity, do not feed its text to the LLM. The candidate is
+        # still returned to the caller — graceful degradation — but the
+        # LLM-refinement step is skipped so the boundary-flagged payload
+        # is not amplified through a downstream LLM call.
+        #
+        # Complements the CR3 query-level gate in the controller: that
+        # gate fires when the QUERY is flagged; this one fires when the
+        # CHUNK is flagged. Either condition skips the call.
+        chunk_severity = severity_from_meta(candidate.get("meta"))
+        if chunk_severity in _REFINE_SKIP_SEVERITIES:
+            logger.warning(
+                "SnippetRefiner.refine_single: skipping LLM refinement on chunk "
+                "with severity=%s chunk_ids=%s",
+                chunk_severity,
+                candidate.get("chunk_ids") or candidate.get("id"),
+            )
             return self._build_snippet(candidate, text), 1.0
 
         prompt = self._single_prompt(query_text, text)
@@ -304,4 +367,3 @@ class SnippetRefiner:
                 logger.exception("SnippetRefiner._parse_single_response: salvaged json.loads failed")
         # Fallback: keep original snippet if model returns non-JSON
         return {"score": 1.0}
-    

@@ -117,7 +117,7 @@ class RLMController:
         self.ranker = Ranker(
             debug_scores=debug_scores,
             trust_weight=float(getattr(retrieval_cfg, "trust_weight", 0.15)),
-            min_trust_score=float(getattr(retrieval_cfg, "min_trust_score", 0.0)),
+            min_trust_score=float(getattr(retrieval_cfg, "min_trust_score", 0.5)),
             recency_decay_days=max(1, int(getattr(rlm_cfg, "recency_decay_days", 90))),
         )
 

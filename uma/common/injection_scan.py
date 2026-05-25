@@ -295,6 +295,56 @@ def merge_scan_results(a: InjectionScanResult, b: InjectionScanResult) -> Inject
     )
 
 
+def severity_from_meta(meta: Optional[Dict[str, Any]]) -> str:
+    """Read the boundary-scan severity off an artifact's stored meta dict.
+
+    Returns the severity string from `meta["security"]["injection_scan"]["severity"]`
+    when present and well-formed, otherwise "none". Defensive about malformed
+    or partial metadata — never raises.
+
+    This is the single read-path consumers in retrieval should use to ask
+    "what severity was this artifact marked with at write time?" so chunk-
+    level gates everywhere see the same shape. Counterpart to apply_scan,
+    which writes the field in the first place.
+    """
+    if not isinstance(meta, dict):
+        return "none"
+    sec = meta.get("security")
+    if not isinstance(sec, dict):
+        return "none"
+    scan = sec.get("injection_scan")
+    if not isinstance(scan, dict):
+        return "none"
+    sev = scan.get("severity")
+    if not isinstance(sev, str):
+        return "none"
+    sev_normalized = sev.strip().lower()
+    if sev_normalized not in {"none", "low", "medium", "high"}:
+        return "none"
+    return sev_normalized
+
+
+def max_severity(*severities: str) -> str:
+    """Return the strictest severity among the inputs.
+
+    Severity rank: none < low < medium < high. Unknown values are treated
+    as "none". Used when merging multiple artifacts (e.g. adjacent chunks
+    grouped into a single snippet candidate) — the merged group inherits
+    the strictest severity of any constituent.
+    """
+    best = "none"
+    best_rank = _SEVERITY_RANK.get("none", 0)
+    for s in severities:
+        if not isinstance(s, str):
+            continue
+        s_norm = s.strip().lower()
+        r = _SEVERITY_RANK.get(s_norm, 0)
+        if r > best_rank:
+            best = s_norm
+            best_rank = r
+    return best
+
+
 def apply_scan(
     trust_score: float,
     meta: Dict[str, Any],

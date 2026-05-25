@@ -384,7 +384,7 @@ class Ranker:
         *,
         debug_scores: bool = False,
         trust_weight: float = 0.15,
-        min_trust_score: float = 0.0,
+        min_trust_score: float = 0.5,
         recency_decay_days: int = 90,
     ) -> None:
         self._debug = bool(debug_scores)

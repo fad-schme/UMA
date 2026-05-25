@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import asyncio
@@ -31,7 +30,13 @@ def _get_source_chunk_id(fact: Fact) -> Optional[str]:
 
 
 def _validate_fact_for_graph(fact: Fact) -> None:
-    """Validate minimal invariants required for graph provenance."""
+    """Validate minimal invariants required for graph provenance.
+
+    A graph edge is a durable artifact; the DAT invariants require every
+    durable artifact to carry tenant_id end-to-end. We do not silently
+    default to "default" here — a fact arriving without tenant_id is a
+    pipeline bug and the edge must not be written.
+    """
     missing: List[str] = []
 
     if not getattr(fact, "id", None):
@@ -48,6 +53,12 @@ def _validate_fact_for_graph(fact: Fact) -> None:
         missing.append("owner_type")
     if not getattr(fact, "owner_id", None):
         missing.append("owner_id")
+    # Tenant scope is mandatory for the same reason. Earlier versions of
+    # this function omitted tenant_id from the required-field list, and
+    # _upsert_one silently fell back to "default" — a DAT break.
+    tenant_id = getattr(fact, "tenant_id", None)
+    if not (isinstance(tenant_id, str) and tenant_id.strip()):
+        missing.append("tenant_id")
 
     if missing:
         logger.error("Fact missing required fields for graph update: %s", missing)
@@ -113,6 +124,26 @@ async def update_graph(
         logger.warning("update_graph: graph_core missing; skipping")
         return 0
 
+    # H4 defense: quarantined facts must not produce graph edges. The
+    # underlying fact is invisible to normal retrieval (PR4 SQL gate);
+    # an edge derived from it would be visible to graph queries and break
+    # the storage-layer/graph-layer consistency invariant. Filter up
+    # front so we don't waste a semaphore slot or an awaitable per drop.
+    eligible: List[Fact] = []
+    quarantined = 0
+    for fact in facts:
+        if getattr(fact, "quarantined_at", None) is not None:
+            quarantined += 1
+            continue
+        eligible.append(fact)
+    if quarantined:
+        logger.info(
+            "update_graph: skipped %d quarantined fact(s) before graph upsert",
+            quarantined,
+        )
+    if not eligible:
+        return 0
+
     attempted = 0
     failed = 0
     skipped = 0
@@ -147,12 +178,15 @@ async def update_graph(
                 except Exception:
                     domain = None
 
+                # tenant_id is guaranteed present and non-empty by
+                # _validate_fact_for_graph above; do not silently fall
+                # back to "default" here.
                 res = graph_core.insert_fact_triplet(
                     fact_id=str(fact.id),
                     subject=str(fact.subject),
                     predicate=str(fact.predicate),
                     object=str(fact.object),
-                    tenant_id=str(getattr(fact, "tenant_id", "default") or "default"),
+                    tenant_id=str(fact.tenant_id),
                     owner_type=str(fact.owner_type),
                     owner_id=str(fact.owner_id),
                     source_chunk_id=source_chunk_id,
@@ -176,14 +210,15 @@ async def update_graph(
                     getattr(fact, "id", "<missing>"),
                 )
 
-    await asyncio.gather(*[_upsert_one(f) for f in facts], return_exceptions=False)
+    await asyncio.gather(*[_upsert_one(f) for f in eligible], return_exceptions=False)
 
-    if failed or skipped:
+    if failed or skipped or quarantined:
         logger.warning(
-            "update_graph: completed with issues attempted=%d failed=%d skipped=%d",
+            "update_graph: completed with issues attempted=%d failed=%d skipped=%d quarantined=%d",
             attempted,
             failed,
             skipped,
+            quarantined,
         )
     else:
         logger.info("update_graph: upserted %d fact(s) into graph", attempted)
