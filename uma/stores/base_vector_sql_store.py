@@ -98,7 +98,11 @@ class BaseVectorSQLStore(BaseSQLStore):
         self,
         query_embedding: List[float],
         k: int,
-        filters: Optional[Dict[str, Any]] = None,
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+        extra_filters: Optional[Dict[str, Any]] = None,
         log_context: str = "",
     ) -> List[Tuple[str, float]]:
         """
@@ -110,8 +114,13 @@ class BaseVectorSQLStore(BaseSQLStore):
             Embedding vector used for ANN search.
         k : int
             Number of nearest neighbors to return.
-        filters : Optional[Dict[str, Any]]
-            Metadata-based filtering supported by the Index.
+        tenant_id, owner_type, owner_id : str
+            Required isolation scope. C1: passed through to the vector
+            index, which pushes them into the backend's native predicate
+            before the candidate cap is applied. Cross-tenant rows
+            cannot leak past this boundary.
+        extra_filters : Optional[Dict[str, Any]]
+            Optional non-isolation filters (e.g. `{"doc_id": "..."}`).
         log_context : str
             Used to help contextualize logs.
 
@@ -137,8 +146,11 @@ class BaseVectorSQLStore(BaseSQLStore):
         try:
             id_score_pairs = self.vector_index.query(
                 vector=query_embedding,
+                tenant_id=tenant_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
                 k=k,
-                filters=filters,
+                extra_filters=extra_filters,
             )
         except Exception:
             ctx = f" [{log_context}]" if log_context else ""
@@ -301,7 +313,11 @@ class BaseVectorSQLStore(BaseSQLStore):
         self,
         query_embedding: List[float],
         k: int = 10,
-        filters: Optional[Dict[str, Any]] = None,
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+        extra_filters: Optional[Dict[str, Any]] = None,
         log_context: str = "",
     ) -> List[Any]:
         """
@@ -318,7 +334,10 @@ class BaseVectorSQLStore(BaseSQLStore):
         ----------
         query_embedding : List[float]
         k : int
-        filters : Optional[Dict[str, Any]]
+        tenant_id, owner_type, owner_id : str
+            Required isolation scope (C1).
+        extra_filters : Optional[Dict[str, Any]]
+            Non-isolation predicates.
         log_context : str
 
         Returns
@@ -329,7 +348,10 @@ class BaseVectorSQLStore(BaseSQLStore):
         id_score_pairs = await self._vector_search_ids(
             query_embedding=query_embedding,
             k=k,
-            filters=filters,
+            tenant_id=tenant_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            extra_filters=extra_filters,
             log_context=log_context,
         )
 
@@ -340,9 +362,9 @@ class BaseVectorSQLStore(BaseSQLStore):
         items = await self._fetch_ranked_rows_by_ids(
             ids=ids,
             log_context=log_context,
-            tenant_id=filters.get("tenant_id") if filters else None,
-            owner_type=filters.get("owner_type") if filters else None,
-            owner_id=filters.get("owner_id") if filters else None,
+            tenant_id=tenant_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
         )
         self._attach_vector_scores(items, id_score_pairs)
         return items
@@ -355,33 +377,38 @@ class BaseVectorSQLStore(BaseSQLStore):
         self,
         query_embedding: List[float],
         *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
         k: int = 10,
-        filters: Optional[Dict[str, Any]] = None,
+        extra_filters: Optional[Dict[str, Any]] = None,
         log_context: str = "",
     ) -> List[Tuple[str, float]]:
         """
         Return ranked (id, score) pairs for a vector query (no SQL fetch).
 
         This is an optional optimization to enable "IDs+scores first" retrieval.
+        Isolation scope (tenant_id, owner_type, owner_id) is mandatory.
         """
-        if (
-            not filters
-            or not filters.get("tenant_id")
-            or not filters.get("owner_type")
-            or not filters.get("owner_id")
-        ):
-            logger.error(
-                "%s search_ids requires tenant_id, owner_type and owner_id%s",
-                self.__class__.__name__,
-                f" [{log_context}]" if log_context else "",
-            )
+        if not (isinstance(tenant_id, str) and tenant_id.strip()):
             raise ValueError(
-                f"{self.__class__.__name__} search_ids requires tenant_id, owner_type and owner_id"
+                f"{self.__class__.__name__}.search_ids requires non-empty tenant_id"
+            )
+        if not (isinstance(owner_type, str) and owner_type.strip()):
+            raise ValueError(
+                f"{self.__class__.__name__}.search_ids requires non-empty owner_type"
+            )
+        if not (isinstance(owner_id, str) and owner_id.strip()):
+            raise ValueError(
+                f"{self.__class__.__name__}.search_ids requires non-empty owner_id"
             )
         return await self._vector_search_ids(
             query_embedding=query_embedding,
             k=k,
-            filters=filters,
+            tenant_id=tenant_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            extra_filters=extra_filters,
             log_context=log_context,
         )
 

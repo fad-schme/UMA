@@ -24,8 +24,8 @@ from uma.common.injection_scan import configure_security, quarantine_enabled, sc
 
 
 class _NoopVI(VectorIndex):
-    def upsert(self, ids, vectors, metadata=None): pass
-    def query(self, vector, k=10, filters=None): return []
+    def upsert(self, ids, vectors, *, tenant_ids, owner_types, owner_ids, extra_metadata=None): pass
+    def query(self, vector, *, tenant_id, owner_type, owner_id, k=10, extra_filters=None): return []
     def delete(self, ids): pass
 
 

@@ -220,12 +220,25 @@ class ProceduralSQLStore(BaseVectorSQLStore):
     # ------------------------------------------------------------------ #
 
     def _validate_skill(self, skill: Skill) -> None:
-        """Validate that Skill fields are well-formed. Raise ValueError if not."""
+        """Validate that Skill fields are well-formed. Raise ValueError if not.
+
+        DAT invariant: every durable artifact must carry explicit, non-empty
+        owner_type / owner_id. The vector layer (C1 contract) refuses empty
+        isolation values at upsert time; this earlier validation surfaces
+        the same requirement at the schema boundary so the SQL insert and
+        the vector upsert can never disagree.
+        """
         if not isinstance(skill.id, str) or not skill.id.strip():
             raise ValueError("Skill.id must be a non-empty string.")
 
         if not isinstance(skill.name, str) or not skill.name.strip():
             raise ValueError("Skill.name must be a non-empty string.")
+
+        if not isinstance(skill.owner_type, str) or not skill.owner_type.strip():
+            raise ValueError("Skill.owner_type must be a non-empty string.")
+
+        if not isinstance(skill.owner_id, str) or not skill.owner_id.strip():
+            raise ValueError("Skill.owner_id must be a non-empty string.")
 
         if not isinstance(skill.trigger_phrases, list):
             raise ValueError("Skill.trigger_phrases must be a list.")
@@ -263,8 +276,8 @@ class ProceduralSQLStore(BaseVectorSQLStore):
             normalized_meta = normalize_skill_metadata(
                 skill.meta,
                 skill_id=skill.id,
-                owner_type=skill.owner_type or "user",
-                owner_id=skill.owner_id or "",
+                owner_type=skill.owner_type,
+                owner_id=skill.owner_id,
                 created_at=skill.created_at,
                 updated_at=skill.updated_at,
             )
@@ -280,8 +293,8 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                 "created_at": now,
                 "updated_at": now,
                 "tenant_id": getattr(skill, "tenant_id", None) or DEFAULT_TENANT_ID,
-                "owner_type": skill.owner_type or "user",
-                "owner_id": skill.owner_id or "",
+                "owner_type": skill.owner_type,
+                "owner_id": skill.owner_id,
                 "workspace_id": getattr(skill, "workspace_id", None),
                 "origin_agent_id": getattr(skill, "origin_agent_id", None),
                 "origin_user_id": getattr(skill, "origin_user_id", None),
@@ -338,15 +351,20 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                 log_context="add_skill",
             )
             try:
+                # C1: isolation must be populated by upstream validation
+                # (DAT invariant). We refuse to fall back to empty strings
+                # here — that would silently break isolation at the
+                # vector layer.
+                resolved_tenant = getattr(skill, "tenant_id", None) or DEFAULT_TENANT_ID
                 self.vector_index.upsert(
                     ids=[skill.id],
                     vectors=[embedding],
-                    metadata=[{
+                    tenant_ids=[resolved_tenant],
+                    owner_types=[skill.owner_type],
+                    owner_ids=[skill.owner_id],
+                    extra_metadata=[{
                         "name": skill.name,
                         "kb_lane": normalized_meta.get("kb_lane"),
-                        "tenant_id": getattr(skill, "tenant_id", None) or DEFAULT_TENANT_ID,
-                        "owner_type": skill.owner_type or "user",
-                        "owner_id": skill.owner_id or "",
                         "scope_key": f"{skill.owner_type}:{skill.owner_id}",
                     }],
                 )
@@ -567,7 +585,9 @@ class ProceduralSQLStore(BaseVectorSQLStore):
             return await self._semantic_search(
                 query_embedding=query_embedding,
                 k=k,
-                filters={"tenant_id": tenant_id, "owner_type": owner_type, "owner_id": owner_id},
+                tenant_id=tenant_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
                 log_context="procedural_search",
             )
         except Exception:

@@ -16,10 +16,10 @@ from uma.common.types import Chunk, Episode, Fact, Skill, SCOPE_MODEL_VERSION
 
 
 class _NoopVectorIndex(VectorIndex):
-    def upsert(self, ids, vectors, metadata=None) -> None:
+    def upsert(self, ids, vectors, *, tenant_ids, owner_types, owner_ids, extra_metadata=None) -> None:
         return None
 
-    def query(self, vector, k=10, filters=None):
+    def query(self, vector, *, tenant_id, owner_type, owner_id, k=10, extra_filters=None):
         return []
 
     def delete(self, ids) -> None:

@@ -75,12 +75,16 @@ class ProceduralCore:
         if self.store is None:
             return None
         try:
+            # Pass ownership through from the Skill object. The downstream
+            # validation chain (validate_explicit_owner → SQL store
+            # _validate_skill) will refuse missing/empty values; no need
+            # for `or ""` fallbacks here.
             return await self.add_skill_for_owner(
                 skill,
                 embedding,
                 tenant_id=getattr(skill, "tenant_id", None) or DEFAULT_TENANT_ID,
-                owner_type=getattr(skill, "owner_type", None) or "user",
-                owner_id=getattr(skill, "owner_id", None) or "",
+                owner_type=getattr(skill, "owner_type", None),
+                owner_id=getattr(skill, "owner_id", None),
                 workspace_id=getattr(skill, "workspace_id", None),
             )
         except Exception:

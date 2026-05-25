@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import List, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .base import VectorIndex
 
@@ -52,9 +52,11 @@ class InMemoryVectorIndex(VectorIndex):
         self.dimension = dim   # UMA expects this attribute
         self.index = self      # UMA expects vector_index.index.* API
 
-        # In-memory storage
+        # C1: storage now keeps isolation fields as first-class entries.
+        # extra metadata stays in a parallel dict for non-isolation keys.
         self._vectors: Dict[str, List[float]] = {}
-        self._metadata: Dict[str, Dict] = {}
+        self._scopes: Dict[str, Tuple[str, str, str]] = {}  # id -> (tenant_id, owner_type, owner_id)
+        self._extra: Dict[str, Dict[str, Any]] = {}
 
         logger.info(
             "InMemoryVectorIndex initialized (dim=%d). Intended for development, CI, or fallback only.",
@@ -75,45 +77,127 @@ class InMemoryVectorIndex(VectorIndex):
     # API Methods
     # ---------------------------------------------------------
 
-    def upsert(self, ids: List[str], vectors: List[List[float]], metadata: Optional[List[Dict]] = None):
-        for i, v in zip(ids, vectors):
-            if len(v) != self.dim:
+    def upsert(
+        self,
+        ids: List[str],
+        vectors: List[List[float]],
+        *,
+        tenant_ids: List[str],
+        owner_types: List[str],
+        owner_ids: List[str],
+        extra_metadata: Optional[List[Dict]] = None,
+    ) -> None:
+        n = len(ids)
+        if len(tenant_ids) != n:
+            raise ValueError(
+                f"InMemoryVectorIndex.upsert: tenant_ids length ({len(tenant_ids)}) "
+                f"does not match ids length ({n})."
+            )
+        if len(owner_types) != n:
+            raise ValueError(
+                f"InMemoryVectorIndex.upsert: owner_types length ({len(owner_types)}) "
+                f"does not match ids length ({n})."
+            )
+        if len(owner_ids) != n:
+            raise ValueError(
+                f"InMemoryVectorIndex.upsert: owner_ids length ({len(owner_ids)}) "
+                f"does not match ids length ({n})."
+            )
+        extra_list = extra_metadata or [{} for _ in ids]
+        if len(extra_list) != n:
+            raise ValueError(
+                f"InMemoryVectorIndex.upsert: extra_metadata length ({len(extra_list)}) "
+                f"does not match ids length ({n})."
+            )
+
+        # C1: validate ALL rows before any state mutation. Per-row writes
+        # interleaved with per-row validation would leak partial state on
+        # a bad input — earlier rows in the batch would be visible but
+        # later ones would not, leaving an inconsistent index.
+        prepared: List[tuple] = []  # (sid, vec, (tid, ot, oid), extras_dict)
+        for sid, vec, tid, ot, oid, extra in zip(
+            ids, vectors, tenant_ids, owner_types, owner_ids, extra_list,
+        ):
+            if len(vec) != self.dim:
                 raise ValueError(
-                    f"InMemoryVectorIndex: expected vector dim={self.dim}, got={len(v)}"
+                    f"InMemoryVectorIndex: expected vector dim={self.dim}, got={len(vec)}"
                 )
-            self._vectors[i] = v
-        if metadata:
-            for i, m in zip(ids, metadata):
-                self._metadata[i] = m
+            if not isinstance(tid, str) or not tid.strip():
+                raise ValueError(
+                    f"InMemoryVectorIndex.upsert: tenant_id must be a non-empty string (id={sid!r})."
+                )
+            if not isinstance(ot, str) or not ot.strip():
+                raise ValueError(
+                    f"InMemoryVectorIndex.upsert: owner_type must be a non-empty string (id={sid!r})."
+                )
+            if not isinstance(oid, str) or not oid.strip():
+                raise ValueError(
+                    f"InMemoryVectorIndex.upsert: owner_id must be a non-empty string (id={sid!r})."
+                )
+            extra = extra or {}
+            if not isinstance(extra, dict):
+                raise ValueError("InMemoryVectorIndex.upsert: extra_metadata items must be dicts.")
+            for reserved in ("tenant_id", "owner_type", "owner_id"):
+                if reserved in extra:
+                    raise ValueError(
+                        f"InMemoryVectorIndex.upsert: extra_metadata must not contain "
+                        f"reserved isolation key {reserved!r}; pass via the explicit "
+                        f"parallel-list parameter instead (id={sid!r})."
+                    )
+            prepared.append((sid, vec, (tid.strip(), ot.strip(), oid.strip()), dict(extra)))
+
+        # All validation passed. Commit.
+        for sid, vec, scope, extra in prepared:
+            self._vectors[sid] = vec
+            self._scopes[sid] = scope
+            self._extra[sid] = extra
 
     def delete(self, ids: List[str]) -> None:
         for _id in ids:
             self._vectors.pop(_id, None)
-            self._metadata.pop(_id, None)
+            self._scopes.pop(_id, None)
+            self._extra.pop(_id, None)
 
     def query(
         self,
         vector: List[float],
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
         k: int = 10,
-        filters: Optional[Dict] = None,
+        extra_filters: Optional[Dict[str, Any]] = None,
     ) -> List[Tuple[str, float]]:
         """
         Returns:
-            List of (id, score) pairs sorted by cosine similarity DESC.
+            List of (id, score) pairs sorted by cosine similarity DESC,
+            restricted to the (tenant_id, owner_type, owner_id) scope.
         """
         if len(vector) != self.dim:
             raise ValueError(
                 f"InMemoryVectorIndex.query: expected dim={self.dim}, got={len(vector)}"
             )
+        if not isinstance(tenant_id, str) or not tenant_id.strip():
+            raise ValueError("InMemoryVectorIndex.query: tenant_id must be a non-empty string.")
+        if not isinstance(owner_type, str) or not owner_type.strip():
+            raise ValueError("InMemoryVectorIndex.query: owner_type must be a non-empty string.")
+        if not isinstance(owner_id, str) or not owner_id.strip():
+            raise ValueError("InMemoryVectorIndex.query: owner_id must be a non-empty string.")
 
+        scope_key = (tenant_id.strip(), owner_type.strip(), owner_id.strip())
         results = []
 
         for key, vec in self._vectors.items():
+            # C1: isolation filter is the first thing checked. No
+            # cross-scope row can reach the cosine computation or the
+            # extra_filters check.
+            if self._scopes.get(key) != scope_key:
+                continue
+
             try:
-                # Apply filters (if any)
-                if filters:
-                    meta = self._metadata.get(key, {})
-                    if any(meta.get(fk) != fv for fk, fv in filters.items()):
+                if extra_filters:
+                    meta = self._extra.get(key, {})
+                    if any(meta.get(fk) != fv for fk, fv in extra_filters.items()):
                         continue
 
                 score = self._cosine(vector, vec)

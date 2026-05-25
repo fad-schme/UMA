@@ -56,9 +56,10 @@ Design Philosophy
 
 from __future__ import annotations
 
+import inspect
 import logging
 import threading
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional, Union
 
 from uma.common.config import UMAConfig
 from uma.common.config_types import RuntimeConfig, parse_plugin_spec
@@ -83,6 +84,37 @@ from uma.common.types import RuntimeContext
 from uma.common.injection_scan import scan_content, quarantine_enabled, InjectionDetectedError
 
 logger = logging.getLogger(__name__)
+
+
+# M6 — Rate-limit hook (SDK-level)
+# ---------------------------------------------------------------------------
+# Operators may register a single hook to throttle expensive UMA operations.
+# The hook is invoked at the top of each public async entry point and is
+# expected to RAISE to refuse the call. Returning normally allows the call.
+#
+# Hook signature (sync OR async):
+#     def rate_limit_hook(operation: str, ctx: Optional[RuntimeContext]) -> None
+#     async def rate_limit_hook(operation: str, ctx: Optional[RuntimeContext]) -> None
+#
+# Operation strings (free-form, match the public method name):
+#     "retrieve_context"
+#     "retrieve_memory"
+#     "process_turn"
+#     "ingest_document"
+#
+# `ctx` is the RuntimeContext built from the call's user_id / tenant_id /
+# session_id when available. For `ingest_document`, no RuntimeContext is
+# constructed (the ingest API takes owner_type/owner_id, not a user/session
+# scope), so `ctx` is None — the hook may still throttle by operation name
+# alone or fall back to allowing the call.
+#
+# UMA does NOT provide a default rate limiter. This is intentional: UMA
+# doesn't know your deployment topology, your tenancy model, or your
+# rate-limit storage backend. Plug in whatever you already use.
+RateLimitHook = Union[
+    Callable[[str, Optional["RuntimeContext"]], None],
+    Callable[[str, Optional["RuntimeContext"]], Awaitable[None]],
+]
 
 
 class UMAMemory:
@@ -160,6 +192,11 @@ class UMAMemory:
         self.hooks = UMAHooks()
         self.features: Dict[str, Any] = {}
         self._feature_policy = FeaturePolicy()
+
+        # M6: optional SDK-level rate-limit hook. See module-level
+        # `RateLimitHook` documentation. Default None = no throttling.
+        # Set via `set_rate_limit_hook(...)`.
+        self._rate_limit_hook: Optional[RateLimitHook] = None
 
         # Optional promotion policy (set by features or left None)
         self.promotion_policy: Optional[Any] = None
@@ -248,6 +285,59 @@ class UMAMemory:
         self.initialized = True
 
     # ----------------------------------------------------------------------
+    # M6 — Rate-limit hook
+    # ----------------------------------------------------------------------
+
+    def set_rate_limit_hook(self, hook: Optional[RateLimitHook]) -> "UMAMemory":
+        """Register a single hook for SDK-level throttling of expensive ops.
+
+        See module-level `RateLimitHook` documentation for the full contract.
+
+        Pass `None` to clear an existing hook. Replacing a previously-set
+        hook is allowed.
+
+        Returns self for fluent-style chaining: `mem.set_rate_limit_hook(...)`.
+        """
+        if hook is not None and not callable(hook):
+            raise TypeError(
+                "UMAMemory.set_rate_limit_hook: hook must be callable or None; "
+                f"got {type(hook).__name__}"
+            )
+        self._rate_limit_hook = hook
+        if hook is None:
+            logger.debug("UMAMemory: rate_limit_hook cleared")
+        else:
+            logger.debug(
+                "UMAMemory: rate_limit_hook registered async=%s",
+                inspect.iscoroutinefunction(hook),
+            )
+        return self
+
+    async def _invoke_rate_limit_hook(
+        self,
+        operation: str,
+        ctx: Optional[RuntimeContext],
+    ) -> None:
+        """Invoke the registered rate-limit hook, if any.
+
+        Both sync and async hooks are supported. If the hook raises, the
+        exception propagates to the caller and the operation is refused.
+        If no hook is registered, returns silently.
+
+        Operation strings are free-form; UMA passes the public method name
+        ("retrieve_context", "retrieve_memory", "process_turn",
+        "ingest_document").
+        """
+        hook = self._rate_limit_hook
+        if hook is None:
+            return
+        result = hook(operation, ctx)
+        # Async hook: coroutine returned, await it. Sync hook: result is None
+        # (or whatever the hook returned, which we ignore).
+        if inspect.iscoroutine(result):
+            await result
+
+    # ----------------------------------------------------------------------
     # -------------------- Core Public APIs -------------------------------
     # ----------------------------------------------------------------------
     def set_context(
@@ -294,6 +384,7 @@ class UMAMemory:
             workspace_id=workspace_id,
             session_id=session_id,
         )
+        await self._invoke_rate_limit_hook("retrieve_context", runtime_context)
         return await self.runtime.retrieve_context(
             runtime_context,
             query_text=query_text,
@@ -327,6 +418,7 @@ class UMAMemory:
             workspace_id=workspace_id,
             session_id=session_id
         )
+        await self._invoke_rate_limit_hook("retrieve_memory", runtime_context)
         return await self.runtime.retrieve_memory(
             runtime_context,
             query_text=query_text,
@@ -377,6 +469,18 @@ class UMAMemory:
 
         if not isinstance(session_id, str) or not session_id.strip():
             raise ValueError("UMAMemory.process_turn requires a non-empty session_id.")
+
+        # M6: rate-limit hook fires before the injection scan and before any
+        # work happens. Build a synthetic RuntimeContext from process_turn
+        # args so the hook sees the same shape as it does for retrieval.
+        rl_ctx = self._resolve_runtime_context(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            request_id=None,
+            workspace_id=workspace_id,
+            session_id=session_id,
+        )
+        await self._invoke_rate_limit_hook("process_turn", rl_ctx)
 
         if not skip_scan:
             scan = scan_content(user_msg or "")
@@ -451,6 +555,13 @@ class UMAMemory:
         if not _os.path.isfile(file_path):
             raise ValueError("file_path must point to a regular file")
         self._ensure_ingestion_ready()
+
+        # M6: ingest_document has no user_id / session_id scope (the API
+        # takes owner_type/owner_id, not a user scope), so we cannot
+        # construct a full RuntimeContext. Pass None to the hook; the
+        # hook may still throttle by operation name plus any
+        # owner-derived heuristic in its closure.
+        await self._invoke_rate_limit_hook("ingest_document", None)
 
         from uma.ingest.ingest_service import ingest_document as _ingest
         return await _ingest(

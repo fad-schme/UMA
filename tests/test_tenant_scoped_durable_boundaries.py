@@ -62,8 +62,8 @@ async def test_chunk_retrieval_is_tenant_scoped_for_identical_owner_tuple(uma_me
     )
 
     assert [chunk.id for chunk in found] == ["chunk_tenant_a"]
-    assert memory.chunk_core.store.vector_index._metadata["chunk_tenant_a"]["tenant_id"] == "tenant-a"
-    assert memory.chunk_core.store.vector_index._metadata["chunk_tenant_b"]["tenant_id"] == "tenant-b"
+    assert memory.chunk_core.store.vector_index._scopes["chunk_tenant_a"][0] == "tenant-a"
+    assert memory.chunk_core.store.vector_index._scopes["chunk_tenant_b"][0] == "tenant-b"
 
 
 @pytest.mark.asyncio
@@ -117,8 +117,8 @@ async def test_procedural_retrieval_is_tenant_scoped_for_identical_owner_tuple(u
     found = await memory.procedural_core.search(query_embedding=emb_a, owner=owner, k=5)
 
     assert [skill.id for skill in found] == ["skill_tenant_a"]
-    assert memory.procedural_core.store.vector_index._metadata["skill_tenant_a"]["tenant_id"] == "tenant-a"
-    assert memory.procedural_core.store.vector_index._metadata["skill_tenant_b"]["tenant_id"] == "tenant-b"
+    assert memory.procedural_core.store.vector_index._scopes["skill_tenant_a"][0] == "tenant-a"
+    assert memory.procedural_core.store.vector_index._scopes["skill_tenant_b"][0] == "tenant-b"
 
 
 @pytest.mark.asyncio
@@ -178,8 +178,8 @@ async def test_semantic_store_list_and_fetch_are_tenant_scoped_at_durable_bounda
 
     assert [fact.id for fact in listed] == ["fact_tenant_a"]
     assert [fact.id for fact in fetched] == ["fact_tenant_a"]
-    assert memory.semantic_core.vector_index()._metadata["fact_tenant_a"]["tenant_id"] == "tenant-a"
-    assert memory.semantic_core.vector_index()._metadata["fact_tenant_b"]["tenant_id"] == "tenant-b"
+    assert memory.semantic_core.vector_index()._scopes["fact_tenant_a"][0] == "tenant-a"
+    assert memory.semantic_core.vector_index()._scopes["fact_tenant_b"][0] == "tenant-b"
 
 
 @pytest.mark.asyncio
@@ -286,8 +286,8 @@ async def test_episodic_store_list_and_fetch_are_tenant_scoped_at_durable_bounda
 
     assert [episode.id for episode in listed] == ["episode_tenant_a"]
     assert [episode.id for episode in fetched] == ["episode_tenant_a"]
-    assert memory.episodic_core.vector_index()._metadata["episode_tenant_a"]["tenant_id"] == "tenant-a"
-    assert memory.episodic_core.vector_index()._metadata["episode_tenant_b"]["tenant_id"] == "tenant-b"
+    assert memory.episodic_core.vector_index()._scopes["episode_tenant_a"][0] == "tenant-a"
+    assert memory.episodic_core.vector_index()._scopes["episode_tenant_b"][0] == "tenant-b"
 
 
 @pytest.mark.asyncio
@@ -367,16 +367,20 @@ async def test_search_ids_requires_tenant_scope_filters(uma_memory) -> None:
         embedding,
     )
 
-    with pytest.raises(ValueError, match="tenant_id, owner_type and owner_id"):
+    with pytest.raises(ValueError, match="tenant_id"):
         await memory.semantic_core.store.search_ids(
             embedding,
-            filters={"owner_type": "user", "owner_id": owner_id},
+            tenant_id="",
+            owner_type="user",
+            owner_id=owner_id,
             log_context="missing_tenant_search_ids",
         )
 
     found = await memory.semantic_core.store.search_ids(
         embedding,
-        filters={"tenant_id": "tenant-a", "owner_type": "user", "owner_id": owner_id},
+        tenant_id="tenant-a",
+        owner_type="user",
+        owner_id=owner_id,
         log_context="tenant_search_ids",
     )
 

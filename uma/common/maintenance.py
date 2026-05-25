@@ -66,6 +66,30 @@ def _scope_metadata_from_object(object: Any, *, include_session_id: bool) -> Dic
     return metadata
 
 
+def _split_isolation_from_metas(
+    metas: List[Dict[str, Any]],
+) -> tuple[List[str], List[str], List[str], List[Dict[str, Any]]]:
+    """C1: split a list of legacy-shape metadata dicts into the four
+    parallel lists the new VectorIndex contract requires.
+
+    Pulls `tenant_id` / `owner_type` / `owner_id` out of each dict into
+    their respective parallel lists. The remaining keys become the
+    per-row extra_metadata dict. Used by `rebuild_vector_indexes` which
+    aggregates metadata dicts from per-row helpers.
+    """
+    tenant_ids: List[str] = []
+    owner_types: List[str] = []
+    owner_ids: List[str] = []
+    extras: List[Dict[str, Any]] = []
+    for m in metas:
+        m = dict(m or {})
+        tenant_ids.append(str(m.pop("tenant_id", "") or ""))
+        owner_types.append(str(m.pop("owner_type", "") or ""))
+        owner_ids.append(str(m.pop("owner_id", "") or ""))
+        extras.append(m)
+    return tenant_ids, owner_types, owner_ids, extras
+
+
 def _fact_vector_metadata(fact: Fact) -> Dict[str, Any]:
     meta = _scope_metadata_from_object(fact, include_session_id=True)
     meta.update(
@@ -236,7 +260,15 @@ async def _rebuild_vector_indexes_unlocked(
                     idx = memory.episodic_core.vector_index() if memory.episodic_core else None
                     if idx is None:
                         raise RuntimeError("episodic vector index missing")
-                    idx.upsert(ids=ids, vectors=vectors, metadata=metas)
+                    tids, otypes, oids, extras = _split_isolation_from_metas(metas)
+                    idx.upsert(
+                        ids=ids,
+                        vectors=vectors,
+                        tenant_ids=tids,
+                        owner_types=otypes,
+                        owner_ids=oids,
+                        extra_metadata=extras,
+                    )
                 report["episodic"] = {"status": "ok", "count": len(ids)}
             except Exception:
                 logger.exception("rebuild_vector_indexes: episodic rebuild failed.")
@@ -264,7 +296,15 @@ async def _rebuild_vector_indexes_unlocked(
                     idx = memory.semantic_core.vector_index() if memory.semantic_core else None
                     if idx is None:
                         raise RuntimeError("semantic vector index missing")
-                    idx.upsert(ids=ids, vectors=vectors, metadata=metas)
+                    tids, otypes, oids, extras = _split_isolation_from_metas(metas)
+                    idx.upsert(
+                        ids=ids,
+                        vectors=vectors,
+                        tenant_ids=tids,
+                        owner_types=otypes,
+                        owner_ids=oids,
+                        extra_metadata=extras,
+                    )
                 report["semantic"] = {"status": "ok", "count": len(facts)}
             except Exception:
                 logger.exception("rebuild_vector_indexes: semantic rebuild failed.")
@@ -286,7 +326,15 @@ async def _rebuild_vector_indexes_unlocked(
                     idx = memory.procedural_core.vector_index() if memory.procedural_core else None
                     if idx is None:
                         raise RuntimeError("procedural vector index missing")
-                    idx.upsert(ids=ids, vectors=vectors, metadata=metas)
+                    tids, otypes, oids, extras = _split_isolation_from_metas(metas)
+                    idx.upsert(
+                        ids=ids,
+                        vectors=vectors,
+                        tenant_ids=tids,
+                        owner_types=otypes,
+                        owner_ids=oids,
+                        extra_metadata=extras,
+                    )
                 report["procedural"] = {"status": "ok", "count": len(skills)}
         except Exception:
             logger.exception("rebuild_vector_indexes: procedural rebuild failed.")

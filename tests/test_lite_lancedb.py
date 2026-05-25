@@ -34,30 +34,41 @@ def test_lancedb_index_upsert_query_and_filters(tmp_path) -> None:
     index.upsert(
         ids=["doc-a", "doc-b"],
         vectors=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-        metadata=[
-            {"owner_type": "user", "owner_id": "user:u1", "kb_lane": "raw"},
-            {"owner_type": "workspace", "owner_id": "ws:1", "kb_lane": "raw"},
+        tenant_ids=["default", "default"],
+        owner_types=["user", "workspace"],
+        owner_ids=["user:u1", "ws:1"],
+        extra_metadata=[
+            {"kb_lane": "raw"},
+            {"kb_lane": "raw"},
         ],
     )
 
-    results = index.query([1.0, 0.0, 0.0], k=2)
+    results = index.query([1.0, 0.0, 0.0], tenant_id="default", owner_type="user", owner_id="user:u1", k=2)
     assert results
     assert results[0][0] == "doc-a"
     assert isinstance(results[0][1], float)
 
-    filtered = index.query([1.0, 0.0, 0.0], k=2, filters={"owner_type": "user"})
+    filtered = index.query(
+        [1.0, 0.0, 0.0],
+        tenant_id="default",
+        owner_type="user",
+        owner_id="user:u1",
+        k=2,
+        extra_filters={"kb_lane": "raw"},
+    )
     assert filtered == [results[0]]
 
     table = index._open_table()
     assert table is not None
     rows = table.search([1.0, 0.0, 0.0]).limit(2).to_list()
     stored = LanceDBIndex._parse_metadata(rows[0]["metadata_json"])
-    assert stored["owner_type"] == "user"
-    assert stored["owner_id"] == "user:u1"
+    assert rows[0]["tenant_id"] == "default"
+    assert rows[0]["owner_type"] == "user"
+    assert rows[0]["owner_id"] == "user:u1"
     assert stored["kb_lane"] == "raw"
 
     index.delete(["doc-a"])
-    remaining = index.query([1.0, 0.0, 0.0], k=2)
+    remaining = index.query([1.0, 0.0, 0.0], tenant_id="default", owner_type="user", owner_id="user:u1", k=2)
     assert all(item_id != "doc-a" for item_id, _ in remaining)
 
 

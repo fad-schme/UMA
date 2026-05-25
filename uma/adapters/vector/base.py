@@ -4,17 +4,43 @@ Vector index abstraction for UMA.
 This provides a backend-agnostic interface for vector indices, so UMA
 can support FAISS, Pinecone, Weaviate, etc., via the same contract.
 
+Isolation contract (C1)
+-----------------------
+Every UMA artifact carries explicit ownership: tenant_id, owner_type,
+owner_id. The vector-index contract makes these mandatory at every
+read and write so isolation is enforced **by construction at the
+storage layer** rather than as an application-layer Python filter
+applied after the backend's k-nearest cap.
+
+- `upsert` requires parallel `tenant_ids`, `owner_types`, `owner_ids`
+  lists matching the length of `ids` / `vectors`. Adapters store these
+  as first-class fields the backend can index.
+- `query` requires `tenant_id`, `owner_type`, `owner_id` as keyword
+  arguments. Adapters push these into the backend's native predicate
+  language BEFORE the candidate cap is applied. Cross-tenant rows
+  cannot leak past this boundary regardless of the cap or any client
+  bug.
+- `extra_filters` (on query) and `extra_metadata` (on upsert) carry
+  any non-isolation keys callers still need (e.g. `doc_id`, `kind`,
+  `kb_lane`). Adapters apply `extra_filters` after the native
+  isolation predicate runs.
+
 Coding agent instructions
 -------------------------
-- This interface is used by SemanticSQLStore and EpisodicStore.
-- Implement backend adapters (e.g., FaissIndex) conforming to this interface.
-- Ensure implementations are safe under concurrent access in your context.
+- This interface is used by SemanticSQLStore, EpisodicStore,
+  ProceduralSQLStore, and ChunkSQLStore.
+- Implement backend adapters (e.g., FaissIndex) conforming to this
+  interface. Adapters MAY ignore `extra_filters` and let the caller
+  post-filter, but the isolation keys (`tenant_id`, `owner_type`,
+  `owner_id`) MUST be respected — they are not optional.
+- Ensure implementations are safe under concurrent access in your
+  context.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class VectorIndex(ABC):
@@ -23,8 +49,8 @@ class VectorIndex(ABC):
 
     Implementations must provide:
 
-    - upsert(ids, vectors, metadata)
-    - query(vector, k, filters)
+    - upsert(ids, vectors, tenant_ids, owner_types, owner_ids, extra_metadata)
+    - query(vector, tenant_id, owner_type, owner_id, k, extra_filters)
     - delete(ids)
     """
 
@@ -33,7 +59,11 @@ class VectorIndex(ABC):
         self,
         ids: List[str],
         vectors: List[List[float]],
-        metadata: Optional[List[Dict]] = None,
+        *,
+        tenant_ids: List[str],
+        owner_types: List[str],
+        owner_ids: List[str],
+        extra_metadata: Optional[List[Dict]] = None,
     ) -> None:
         """
         Insert or update vectors in the index.
@@ -44,8 +74,20 @@ class VectorIndex(ABC):
             Unique identifiers for each vector.
         vectors:
             List of dense numeric vectors.
-        metadata:
-            Optional list of metadata dicts per vector.
+        tenant_ids:
+            Tenant identifier for each vector. Length must match `ids`.
+            Stored as a first-class indexable field, NOT inside metadata.
+        owner_types:
+            Owner-type for each vector ("agent" | "user" | "workspace" |
+            "system"). Length must match `ids`.
+        owner_ids:
+            Owner identifier for each vector. Length must match `ids`.
+        extra_metadata:
+            Optional non-isolation metadata per vector. Adapters may
+            persist this verbatim (e.g. as JSON) for lane-specific
+            fields like `kind`, `kb_lane`, `doc_id`. Must NOT contain
+            `tenant_id`, `owner_type`, or `owner_id` — those are the
+            explicit parallel-list parameters.
         """
         raise NotImplementedError
 
@@ -53,20 +95,30 @@ class VectorIndex(ABC):
     def query(
         self,
         vector: List[float],
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
         k: int = 10,
-        filters: Optional[Dict] = None,
+        extra_filters: Optional[Dict[str, Any]] = None,
     ) -> List[Tuple[str, float]]:
         """
-        Perform a nearest-neighbor search.
+        Perform a nearest-neighbor search within the isolation scope.
 
         Parameters
         ----------
         vector:
             Query embedding.
+        tenant_id, owner_type, owner_id:
+            Required isolation scope. Adapters push these into the
+            backend's native filter so the candidate cap (e.g.
+            LanceDB's `limit`) is applied AFTER scoping — no cross-
+            tenant rows can leak past this boundary.
         k:
-            Max number of results.
-        filters:
-            Optional metadata filter: dict of {key: value} to match exactly.
+            Max number of results within the isolation scope.
+        extra_filters:
+            Optional non-isolation predicates (e.g. `{"doc_id": "..."}`).
+            Adapters apply these after the isolation filter.
 
         Returns
         -------
@@ -83,5 +135,10 @@ class VectorIndex(ABC):
         ----------
         ids:
             List of vector IDs to remove.
+
+        Note: scoping deletes by tenant is unnecessary — UMA generates
+        unique ids across all callers via SQL primary keys, so cross-
+        tenant id collision is impossible by construction. The
+        signature remains id-only.
         """
         raise NotImplementedError

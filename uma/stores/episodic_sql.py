@@ -350,11 +350,11 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 self.vector_index.upsert(
                     ids=[ep.id],
                     vectors=[embedding],
-                    metadata=[{
-                        "tenant_id": tenant_id,
+                    tenant_ids=[tenant_id],
+                    owner_types=[owner_type],
+                    owner_ids=[owner_id],
+                    extra_metadata=[{
                         "kb_lane": normalized_meta.get("kb_lane"),
-                        "owner_type": owner_type,
-                        "owner_id": owner_id,
                     }],
                 )
             except Exception:
@@ -649,12 +649,13 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             offset_i = 0
         if k_i <= 0:
             return []
-        filters = {"tenant_id": tenant_id, "owner_type": owner_type, "owner_id": owner_id}
         try:
             id_score_pairs = await self._vector_search_ids(
                 query_embedding=query_embedding,
                 k=k_i + offset_i,
-                filters=filters,
+                tenant_id=tenant_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
                 log_context="episodic_search",
             )
             if not id_score_pairs:

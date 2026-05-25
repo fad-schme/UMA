@@ -462,22 +462,24 @@ class SemanticSQLStore(BaseVectorSQLStore):
 
                 owner_type_out = canonical.owner_type or owner_type_in
                 owner_id_out = canonical.owner_id or owner_id_in
-                vector_meta = {
-                    "tenant_id": tenant_id_in,
+                # C1: isolation fields go as explicit parallel-list params.
+                # extra_metadata carries everything else.
+                extra_meta = {
                     "subject": canonical.subject,
                     "predicate": canonical.predicate,
                     "kb_lane": meta.get("kb_lane"),
-                    "owner_type": owner_type_out,
-                    "owner_id": owner_id_out,
                     "scope_key": f"{owner_type_out}:{owner_id_out}",
                 }
 
                 if topic:
-                    vector_meta["topic"] = topic
+                    extra_meta["topic"] = topic
                 self.vector_index.upsert(
                     ids=[canonical.id],
                     vectors=[embedding],
-                    metadata=[vector_meta],
+                    tenant_ids=[tenant_id_in],
+                    owner_types=[owner_type_out],
+                    owner_ids=[owner_id_out],
+                    extra_metadata=[extra_meta],
                 )
             except Exception:
                 logger.exception(
@@ -543,15 +545,15 @@ class SemanticSQLStore(BaseVectorSQLStore):
         if k_i <= 0:
             return []
 
-        filters: dict[str, Any] = {"tenant_id": tenant_id, "owner_type": owner_type, "owner_id": owner_id}
-
         try:
             # Vector indexes do not (yet) support native offset paging; approximate by retrieving
             # a larger window and slicing. This preserves deterministic ordering.
             id_score_pairs = await self._vector_search_ids(
                 query_embedding=query_embedding,
                 k=k_i + offset_i,
-                filters=filters,
+                tenant_id=tenant_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
                 log_context="semantic_search",
             )
             if not id_score_pairs:

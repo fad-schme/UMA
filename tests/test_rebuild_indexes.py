@@ -73,15 +73,13 @@ async def test_rebuild_vector_indexes(uma_memory):
     assert episode.id in memory.episodic_core.vector_index()._vectors
     assert fact.id in memory.semantic_core.vector_index()._vectors
     assert skill.id in memory.procedural_core.vector_index()._vectors
-    assert memory.episodic_core.vector_index()._metadata[episode.id]["tenant_id"] == "default"
-    assert memory.episodic_core.vector_index()._metadata[episode.id]["session_id"] is None
-    assert memory.episodic_core.vector_index()._metadata[episode.id]["scope_model_version"] == "v2"
-    assert memory.semantic_core.vector_index()._metadata[fact.id]["tenant_id"] == "default"
-    assert memory.semantic_core.vector_index()._metadata[fact.id]["session_id"] is None
-    assert memory.semantic_core.vector_index()._metadata[fact.id]["scope_model_version"] == "v2"
-    assert memory.procedural_core.vector_index()._metadata[skill.id]["tenant_id"] == "default"
-    assert memory.procedural_core.vector_index()._metadata[skill.id]["workspace_id"] is None
-    assert memory.procedural_core.vector_index()._metadata[skill.id]["scope_model_version"] == "v2"
+    assert memory.episodic_core.vector_index()._scopes[episode.id] == ("default", "user", owner_id)
+    assert isinstance(memory.episodic_core.vector_index()._extra.get(episode.id), dict)
+    assert memory.semantic_core.vector_index()._scopes[fact.id] == ("default", "user", owner_id)
+    assert memory.semantic_core.vector_index()._extra[fact.id]["subject"] == owner_id
+    assert memory.semantic_core.vector_index()._extra[fact.id]["predicate"] == "prefers"
+    assert memory.procedural_core.vector_index()._scopes[skill.id] == ("default", "user", owner_id)
+    assert memory.procedural_core.vector_index()._extra[skill.id]["name"] == "Make coffee"
 
 
 @pytest.mark.asyncio
@@ -181,10 +179,8 @@ async def test_rebuild_derived_indexes_replays_graph_from_authoritative_scope(um
     assert result["graph"]["episode_fact_links"] == 2
     assert result["graph"]["temporal_links"] == 1
 
-    assert memory.episodic_core.vector_index()._metadata[episode_1.id]["tenant_id"] == "tenant-a"
-    assert memory.episodic_core.vector_index()._metadata[episode_1.id]["session_id"] == "session-a"
-    assert memory.semantic_core.vector_index()._metadata[fact_1.id]["tenant_id"] == "tenant-a"
-    assert memory.semantic_core.vector_index()._metadata[fact_1.id]["session_id"] == "session-a"
+    assert memory.episodic_core.vector_index()._scopes[episode_1.id] == ("tenant-a", "user", owner_id)
+    assert memory.semantic_core.vector_index()._scopes[fact_1.id] == ("tenant-a", "user", owner_id)
 
     params_list = [params or {} for _cypher, params in adapter.queries]
     assert any(params.get("episode_id") == "ep-graph-1" and params.get("tenant_id") == "tenant-a" for params in params_list)
@@ -192,7 +188,7 @@ async def test_rebuild_derived_indexes_replays_graph_from_authoritative_scope(um
     assert any(params.get("ep_id") == "ep-graph-1" and params.get("fact_id") == "fact_graph_1" for params in params_list)
     assert any(params.get("a") == "ep-graph-1" and params.get("b") == "ep-graph-2" for params in params_list)
 
-    first_semantic_meta = dict(memory.semantic_core.vector_index()._metadata[fact_1.id])
+    first_semantic_meta = dict(memory.semantic_core.vector_index()._extra[fact_1.id])
     first_query_count = len(adapter.queries)
 
     result_again = await memory.rebuild_derived_indexes(
@@ -204,7 +200,7 @@ async def test_rebuild_derived_indexes_replays_graph_from_authoritative_scope(um
 
     assert result_again["status"] in ("ok", "degraded")
     assert result_again["graph"] == result["graph"]
-    assert memory.semantic_core.vector_index()._metadata[fact_1.id] == first_semantic_meta
+    assert memory.semantic_core.vector_index()._extra[fact_1.id] == first_semantic_meta
     assert len(adapter.queries) == first_query_count * 2
 
 
@@ -244,13 +240,10 @@ async def test_rebuild_vector_indexes_preserves_promoted_workspace_fact_scope(um
     )
 
     assert result["status"] in ("ok", "degraded")
-    metadata = memory.semantic_core.vector_index()._metadata[fact.id]
-    assert metadata["tenant_id"] == "tenant-w"
-    assert metadata["owner_type"] == "workspace"
-    assert metadata["owner_id"] == "workspace:alpha"
-    assert metadata["workspace_id"] == "workspace:alpha"
-    assert metadata["session_id"] is None
-    assert metadata["scope_model_version"] == "v2"
+    assert memory.semantic_core.vector_index()._scopes[fact.id] == ("tenant-w", "workspace", "workspace:alpha")
+    metadata = memory.semantic_core.vector_index()._extra[fact.id]
+    assert metadata["subject"] == "workspace:alpha"
+    assert metadata["predicate"] == "contains"
 
 
 @pytest.mark.asyncio

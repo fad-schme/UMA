@@ -16,9 +16,18 @@ def test_vector_index_query_returns_id_and_score() -> None:
     idx.upsert(
         ids=["a", "b"],
         vectors=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-        metadata=[{"owner_type": "user"}, {"owner_type": "user"}],
+        tenant_ids=["default", "default"],
+        owner_types=["user", "user"],
+        owner_ids=["user:u1", "user:u1"],
+        extra_metadata=[{}, {}],
     )
-    res = idx.query(vector=[1.0, 0.0, 0.0], k=2, filters={"owner_type": "user"})
+    res = idx.query(
+        vector=[1.0, 0.0, 0.0],
+        tenant_id="default",
+        owner_type="user",
+        owner_id="user:u1",
+        k=2,
+    )
     assert res, "expected non-empty vector results"
     assert all(isinstance(t, tuple) and len(t) == 2 for t in res)
     assert all(isinstance(t[0], str) and isinstance(t[1], float) for t in res)
@@ -68,4 +77,3 @@ async def test_chunk_core_preserves_vector_score(tmp_path) -> None:
     assert [c.id for c in out][:2] == ["chunk_1", "chunk_2"]
     assert "vector_score" in (out[0].meta or {})
     assert float(out[0].meta["vector_score"]) >= float(out[1].meta.get("vector_score", -1.0))
-

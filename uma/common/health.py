@@ -86,7 +86,17 @@ def _check_vector(name: str, index: Optional[VectorIndex], dim: int) -> HealthCh
             return ("ok", "connectivity ok") if verify() else ("error", "connectivity failed")
 
         try:
-            index.query([0.0] * dim, k=1)
+            # C1: vector index queries require explicit isolation. This
+            # probe uses sentinel values that will not match any real
+            # row — we only care that the query call goes through
+            # without raising, not what it returns.
+            index.query(
+                [0.0] * dim,
+                tenant_id="__health__",
+                owner_type="system",
+                owner_id="__health__",
+                k=1,
+            )
             return "ok", "query ok"
         except Exception as exc:
             return "error", f"query failed: {exc}"

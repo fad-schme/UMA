@@ -281,21 +281,26 @@ class ChunkSQLStore(BaseVectorSQLStore):
 
             # Vector index upsert (projection)
             try:
-                vector_meta = {
-                    "tenant_id": getattr(chunk, "tenant_id", None) or DEFAULT_TENANT_ID,
+                resolved_tenant = getattr(chunk, "tenant_id", None) or DEFAULT_TENANT_ID
+                # C1: isolation fields go as explicit parameters; everything
+                # else lives in extra_metadata. The vector index promotes
+                # tenant_id/owner_type/owner_id into first-class indexable
+                # columns so isolation is enforced by construction.
+                extra_meta = {
                     "doc_id": chunk.doc_id,
                     "kb_lane": normalized_meta.get("kb_lane"),
                     "position": int(chunk.position),
                     "page_start": int(chunk.page_range[0]),
                     "page_end": int(chunk.page_range[1]),
-                    "owner_type": chunk.owner_type,
-                    "owner_id": chunk.owner_id,
                     "scope_key": f"{chunk.owner_type}:{chunk.owner_id}",
                 }
                 self.vector_index.upsert(
                     ids=[chunk.id],
                     vectors=[embedding],
-                    metadata=[vector_meta],
+                    tenant_ids=[resolved_tenant],
+                    owner_types=[chunk.owner_type],
+                    owner_ids=[chunk.owner_id],
+                    extra_metadata=[extra_meta],
                 )
             except Exception:
                 logger.exception("ChunkSQLStore: vector upsert failed for id=%s", chunk.id)
@@ -337,17 +342,20 @@ class ChunkSQLStore(BaseVectorSQLStore):
         if not owner_type or not owner_id:
             logger.error("ChunkSQLStore.search requires owner_type and owner_id")
             raise ValueError("ChunkSQLStore.search requires owner_type and owner_id")
-        filters: Dict[str, Any] = {}
+        # C1: doc_id (when set) is a non-isolation filter — goes through
+        # extra_filters. The three isolation keys go as explicit
+        # parameters so the vector index pushes them into the backend.
+        extra_filters: Dict[str, Any] = {}
         if doc_id:
-            filters["doc_id"] = doc_id
-        filters["tenant_id"] = tenant_id
-        filters["owner_type"] = owner_type
-        filters["owner_id"] = owner_id
+            extra_filters["doc_id"] = doc_id
         try:
             id_score_pairs = await self._vector_search_ids(
                 query_embedding=query_embedding,
                 k=k,
-                filters=filters,
+                tenant_id=tenant_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                extra_filters=extra_filters or None,
                 log_context="chunk_search",
             )
             if not id_score_pairs:

@@ -4,18 +4,30 @@ FAISS-based VectorIndex implementation for UMA.
 This module wraps a simple FAISS inner-product index and keeps Python-side
 mappings for IDs and metadata.
 
+Isolation note (C1)
+-------------------
+FAISS does not support metadata predicates pushed into the search. The
+isolation filter for (tenant_id, owner_type, owner_id) is applied in
+Python AFTER FAISS returns the top-k candidates. This means under heavy
+cross-tenant load FAISS can still suffer recall loss — the LanceDB
+adapter is preferred for multi-tenant deployments because it pushes the
+filter into the database engine.
+
+This adapter compensates partially by oversampling FAISS (searching for
+k * `_oversample_multiplier` candidates internally) so a moderate
+cross-tenant occupancy of the top-k can still surface enough scope-
+local candidates. This is a heuristic, not a guarantee.
+
 Coding agent instructions
 -------------------------
-- For production, consider:
-  - Persisting FAISS index to disk.
-  - Sharding / multi-index support.
-  - Using GPU indices if needed.
+- For production multi-tenant deployments, use the LanceDB adapter.
+- For single-tenant or smaller deployments, FAISS is fine.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -37,8 +49,16 @@ class FaissIndex(VectorIndex):
     Notes
     -----
     - Keeps all vectors in memory.
-    - Stores metadata in an in-memory dict keyed by id.
+    - Isolation (tenant_id, owner_type, owner_id) is stored alongside
+      each id and applied as a Python post-filter; FAISS itself does
+      not support pushed-down predicates.
     """
+
+    # How many extra candidates to fetch internally so the post-filter
+    # has headroom to find scope-local results. 4× the requested k is a
+    # reasonable balance — enough to survive moderate cross-tenant
+    # occupancy without bloating per-query cost.
+    _oversample_multiplier: int = 4
 
     def __init__(self, dim: int) -> None:
         if faiss is None:
@@ -52,7 +72,10 @@ class FaissIndex(VectorIndex):
         self._id_map: Dict[str, int] = {}
         self._rev_map: Dict[int, str] = {}
         self._next_id = 1
-        self._meta: Dict[str, Dict] = {}
+        # C1: isolation kept separate from extras so the filter is
+        # explicit and side-channel-free.
+        self._scopes: Dict[str, Tuple[str, str, str]] = {}
+        self._extra: Dict[str, Dict[str, Any]] = {}
         logger.debug("Initialized FaissIndex with dimension=%d", dim)
 
     def _get_or_create_id(self, sid: str) -> int:
@@ -73,7 +96,11 @@ class FaissIndex(VectorIndex):
         self,
         ids: List[str],
         vectors: List[List[float]],
-        metadata: Optional[List[Dict]] = None,
+        *,
+        tenant_ids: List[str],
+        owner_types: List[str],
+        owner_ids: List[str],
+        extra_metadata: Optional[List[Dict]] = None,
     ) -> None:
         if len(ids) != len(vectors):
             raise ValueError("FaissIndex.upsert: ids and vectors length mismatch")
@@ -82,6 +109,29 @@ class FaissIndex(VectorIndex):
             logger.debug("FaissIndex.upsert called with empty vectors; no-op.")
             return
 
+        n = len(ids)
+        if len(tenant_ids) != n:
+            raise ValueError(
+                f"FaissIndex.upsert: tenant_ids length ({len(tenant_ids)}) "
+                f"does not match ids length ({n})."
+            )
+        if len(owner_types) != n:
+            raise ValueError(
+                f"FaissIndex.upsert: owner_types length ({len(owner_types)}) "
+                f"does not match ids length ({n})."
+            )
+        if len(owner_ids) != n:
+            raise ValueError(
+                f"FaissIndex.upsert: owner_ids length ({len(owner_ids)}) "
+                f"does not match ids length ({n})."
+            )
+        extra_list = extra_metadata or [{} for _ in ids]
+        if len(extra_list) != n:
+            raise ValueError(
+                f"FaissIndex.upsert: extra_metadata length ({len(extra_list)}) "
+                f"does not match ids length ({n})."
+            )
+
         arr = np.asarray(vectors, dtype="float32")
         if arr.ndim != 2 or arr.shape[1] != self.dim:
             raise ValueError(
@@ -89,6 +139,42 @@ class FaissIndex(VectorIndex):
             )
         arr = self._normalize(arr)
 
+        # C1: validate ALL per-row isolation fields and extra_metadata
+        # contents BEFORE we touch the FAISS index. Validating after
+        # `add_with_ids` would leave the index in a corrupted state on a
+        # bad input — vector present, scope dict missing — which would
+        # then surface as cross-scope leaks or silent retrieval misses.
+        prepared_scopes: List[Tuple[str, str, str]] = []
+        prepared_extras: List[Dict[str, Any]] = []
+        for sid, tid, ot, oid, extra in zip(
+            ids, tenant_ids, owner_types, owner_ids, extra_list,
+        ):
+            if not isinstance(tid, str) or not tid.strip():
+                raise ValueError(
+                    f"FaissIndex.upsert: tenant_id must be a non-empty string (id={sid!r})."
+                )
+            if not isinstance(ot, str) or not ot.strip():
+                raise ValueError(
+                    f"FaissIndex.upsert: owner_type must be a non-empty string (id={sid!r})."
+                )
+            if not isinstance(oid, str) or not oid.strip():
+                raise ValueError(
+                    f"FaissIndex.upsert: owner_id must be a non-empty string (id={sid!r})."
+                )
+            extra = extra or {}
+            if not isinstance(extra, dict):
+                raise ValueError("FaissIndex.upsert: extra_metadata items must be dicts.")
+            for reserved in ("tenant_id", "owner_type", "owner_id"):
+                if reserved in extra:
+                    raise ValueError(
+                        f"FaissIndex.upsert: extra_metadata must not contain "
+                        f"reserved isolation key {reserved!r}; pass via the "
+                        f"explicit parallel-list parameter instead (id={sid!r})."
+                    )
+            prepared_scopes.append((tid.strip(), ot.strip(), oid.strip()))
+            prepared_extras.append(dict(extra))
+
+        # All validation passed. Now safe to mutate FAISS + scope/extra dicts.
         int_ids = []
         to_remove = []
         for sid in ids:
@@ -102,9 +188,9 @@ class FaissIndex(VectorIndex):
 
         self.index.add_with_ids(arr, np.asarray(int_ids, dtype="int64"))
 
-        metadata = metadata or [{} for _ in ids]
-        for i, meta in zip(ids, metadata):
-            self._meta[i] = meta or {}
+        for sid, scope, extra in zip(ids, prepared_scopes, prepared_extras):
+            self._scopes[sid] = scope
+            self._extra[sid] = extra
 
         logger.info(
             "FaissIndex.upsert: added %d vectors; total size=%d",
@@ -115,12 +201,23 @@ class FaissIndex(VectorIndex):
     def query(
         self,
         vector: List[float],
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
         k: int = 10,
-        filters: Optional[Dict] = None,
+        extra_filters: Optional[Dict[str, Any]] = None,
     ) -> List[Tuple[str, float]]:
         if self.index.ntotal == 0:
             logger.debug("FaissIndex.query: index empty; returning [].")
             return []
+
+        if not isinstance(tenant_id, str) or not tenant_id.strip():
+            raise ValueError("FaissIndex.query: tenant_id must be a non-empty string.")
+        if not isinstance(owner_type, str) or not owner_type.strip():
+            raise ValueError("FaissIndex.query: owner_type must be a non-empty string.")
+        if not isinstance(owner_id, str) or not owner_id.strip():
+            raise ValueError("FaissIndex.query: owner_id must be a non-empty string.")
 
         arr = np.asarray([vector], dtype="float32")
         if arr.shape[1] != self.dim:
@@ -129,9 +226,17 @@ class FaissIndex(VectorIndex):
             )
         arr = self._normalize(arr)
 
-        scores, idxs = self.index.search(arr, k)
+        # C1: oversample candidates from FAISS so the post-filter has
+        # headroom. FAISS doesn't support pushed-down predicates, so
+        # this is the best we can do without changing the backend.
+        oversample_k = min(
+            int(self.index.ntotal),
+            max(k * self._oversample_multiplier, k),
+        )
+        scores, idxs = self.index.search(arr, oversample_k)
         scores = scores[0]
         idxs = idxs[0]
+        scope_key = (tenant_id.strip(), owner_type.strip(), owner_id.strip())
         results: List[Tuple[str, float]] = []
 
         for idx, score in zip(idxs, scores):
@@ -140,12 +245,17 @@ class FaissIndex(VectorIndex):
             id_ = self._rev_map.get(int(idx))
             if not id_:
                 continue
-            meta = self._meta.get(id_, {})
-            if filters:
-                # Simple AND filter
-                if not all(meta.get(fk) == fv for fk, fv in filters.items()):
+            # C1: isolation filter applied FIRST. Cross-scope rows
+            # cannot reach the extra_filters step.
+            if self._scopes.get(id_) != scope_key:
+                continue
+            if extra_filters:
+                meta = self._extra.get(id_, {})
+                if not all(meta.get(fk) == fv for fk, fv in extra_filters.items()):
                     continue
             results.append((id_, float(score)))
+            if len(results) >= k:
+                break
 
         logger.debug("FaissIndex.query: returning %d results", len(results))
         return results
@@ -159,7 +269,8 @@ class FaissIndex(VectorIndex):
             if int_id is None:
                 continue
             self._rev_map.pop(int_id, None)
-            self._meta.pop(sid, None)
+            self._scopes.pop(sid, None)
+            self._extra.pop(sid, None)
             to_remove.append(int_id)
 
         if to_remove:
