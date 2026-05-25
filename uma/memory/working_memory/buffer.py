@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 import threading
 from typing import Dict, List, Literal, Optional, Tuple
 
@@ -54,12 +55,24 @@ class WorkingMemoryMessage:
         Optional free-form metadata. For example:
         - {"source": "llm", "turn_id": "t123"}
         - {"summary_of": [0, 1, 2]}  # indices of messages summarized
+        - {"security": {"injection_scan": {"severity": ...}}}  # H4
+          stamped at write-time by WorkingMemoryCore.append; used by
+          get_context to filter quarantined messages.
+
+    quarantined_at:
+        H4: timestamp set when WorkingMemoryCore.append detects high-
+        severity injection content at the boundary scan. Quarantined
+        messages remain in the buffer (for inspection via the opt-in
+        include_quarantined flag) but are excluded from get_context()
+        and total_tokens() by default — they do not reach downstream
+        LLM hops and do not count toward eviction thresholds.
     """
 
     role: Role
     content: str
     token_estimate: int
     metadata: Optional[dict] = None
+    quarantined_at: Optional[datetime] = None
 
 
 class WorkingMemoryBuffer:
@@ -132,6 +145,7 @@ class WorkingMemoryBuffer:
         content: str,
         metadata: Optional[dict] = None,
         token_estimate: Optional[int] = None,
+        quarantined_at: Optional[datetime] = None,
     ) -> WorkingMemoryMessage:
         """
         Append a message to a session's working memory.
@@ -149,6 +163,13 @@ class WorkingMemoryBuffer:
         token_estimate:
             Optional explicit token count override. If None, a heuristic
             estimate will be computed.
+        quarantined_at:
+            H4: when set, marks the message as quarantined. Quarantined
+            messages remain in the buffer but are excluded from
+            get_context() and total_tokens() unless include_quarantined
+            is explicitly enabled. The boundary scan in
+            WorkingMemoryCore.append is the only path that sets this
+            in normal operation; direct callers should leave it None.
 
         Returns
         -------
@@ -174,6 +195,7 @@ class WorkingMemoryBuffer:
             content=content,
             token_estimate=token_estimate,
             metadata=metadata,
+            quarantined_at=quarantined_at,
         )
 
         key = self._key_for_scope(scope)
@@ -191,7 +213,12 @@ class WorkingMemoryBuffer:
 
         return msg
 
-    def get_context(self, scope: SessionScope) -> List[WorkingMemoryMessage]:
+    def get_context(
+        self,
+        scope: SessionScope,
+        *,
+        include_quarantined: bool = False,
+    ) -> List[WorkingMemoryMessage]:
         """
         Return the current working memory messages for a session scope.
 
@@ -200,6 +227,10 @@ class WorkingMemoryBuffer:
         - The returned list is a shallow copy; modifying it will not mutate
           the internal buffer.
         - Consumers should not rely on object identity stability.
+        - H4: quarantined messages (those with quarantined_at set) are
+          excluded by default so they do not reach downstream LLM hops.
+          Pass include_quarantined=True to inspect them — only the
+          management / debug paths should do this.
 
         Returns
         -------
@@ -208,22 +239,38 @@ class WorkingMemoryBuffer:
         """
         with self._lock:
             messages = self._store.get(self._key_for_scope(scope), [])
-            # Return a copy to avoid accidental external mutation.
-            return list(messages)
+            if include_quarantined:
+                return list(messages)
+            return [m for m in messages if m.quarantined_at is None]
 
-    def total_tokens(self, scope: SessionScope) -> int:
+    def total_tokens(
+        self,
+        scope: SessionScope,
+        *,
+        include_quarantined: bool = False,
+    ) -> int:
         """
         Compute approximate total token usage for a session's working memory.
+
+        H4: quarantined messages are excluded from the total by default so
+        they do not count toward eviction thresholds. A flagged
+        assistant_reply should not push legitimate prior context out of
+        the WM via the eviction path.
 
         Returns
         -------
         int
-            Sum of token_estimate for all messages for the user.
+            Sum of token_estimate for non-quarantined messages.
         """
         with self._lock:
-            total = sum(
-                msg.token_estimate for msg in self._store.get(self._key_for_scope(scope), [])
-            )
+            messages = self._store.get(self._key_for_scope(scope), [])
+            if include_quarantined:
+                total = sum(msg.token_estimate for msg in messages)
+            else:
+                total = sum(
+                    msg.token_estimate for msg in messages
+                    if msg.quarantined_at is None
+                )
         logger.debug(
             "Total tokens for working memory tenant=%s agent=%s session=%s: %d",
             scope.tenant_id,

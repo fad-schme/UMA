@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional
 
 from uma.common.types import RuntimeContext, SessionScope
 from uma.common.identity import normalize_user_id
+from uma.common.injection_scan import scan_artifact_text
 from .buffer import WorkingMemoryBuffer, WorkingMemoryMessage
 from .queue_manager import QueueManager, QueuePolicy
 from .summarizer import WorkingMemorySummarizer
@@ -150,7 +151,40 @@ class WorkingMemoryCore:
         if content is None:
             raise ValueError("WorkingMemoryCore.append: content must not be None.")
 
-        msg = self._buffer.append(scope, role, content, metadata=metadata)
+        # H4: boundary scan on content. WM messages have no trust column to
+        # persist; we discard the adjusted-trust return and use only the
+        # updated meta + quarantined_at. Medium / low severity hits are
+        # logged (via apply_scan inside the helper) and the message is
+        # appended normally — WM has no trust-aware ranking layer that
+        # would consume a non-quarantine signal. High severity sets
+        # quarantined_at; the buffer keeps the message but get_context /
+        # total_tokens filter it out, so the LLM never sees it on later
+        # turns and it does not count toward eviction.
+        scan_meta = dict(metadata or {})
+        _trust_discarded, scan_meta, quarantined_at = scan_artifact_text(
+            content or "",
+            trust_score=1.0,
+            meta=scan_meta,
+            log_context=(
+                f"working_memory/{scope.tenant_id}:{scope.agent_id}:{scope.session_id}:{role}"
+            ),
+        )
+        if quarantined_at is not None:
+            logger.warning(
+                "WM quarantining high-severity content tenant=%s agent=%s session=%s role=%s",
+                scope.tenant_id,
+                scope.agent_id,
+                scope.session_id,
+                role,
+            )
+
+        msg = self._buffer.append(
+            scope,
+            role,
+            content,
+            metadata=scan_meta,
+            quarantined_at=quarantined_at,
+        )
 
         used = self._buffer.total_tokens(scope)
         max_t = self._buffer.max_tokens
@@ -177,19 +211,40 @@ class WorkingMemoryCore:
 
         return msg
 
-    def get_context(self, scope: SessionScope, last_n: Optional[int] = None) -> List[WorkingMemoryMessage]:
-        """Return the working memory message list (optionally last N)."""
+    def get_context(
+        self,
+        scope: SessionScope,
+        last_n: Optional[int] = None,
+        *,
+        include_quarantined: bool = False,
+    ) -> List[WorkingMemoryMessage]:
+        """Return the working memory message list (optionally last N).
+
+        H4: quarantined messages are excluded by default. Pass
+        include_quarantined=True from management / inspection paths
+        only — they should never reach a downstream LLM.
+        """
         if not isinstance(scope, SessionScope):
             raise TypeError("WorkingMemoryCore.get_context: scope must be a SessionScope.")
 
-        ctx = self._buffer.get_context(scope)
+        ctx = self._buffer.get_context(scope, include_quarantined=include_quarantined)
         return ctx if last_n is None else ctx[-int(last_n) :]
 
-    def total_tokens(self, scope: SessionScope) -> int:
-        """Return approximate token usage for the session-scoped WM."""
+    def total_tokens(
+        self,
+        scope: SessionScope,
+        *,
+        include_quarantined: bool = False,
+    ) -> int:
+        """Return approximate token usage for the session-scoped WM.
+
+        H4: by default, quarantined messages do not count toward the
+        total; otherwise a flagged assistant_reply could push legitimate
+        prior context out of the WM via the eviction path.
+        """
         if not isinstance(scope, SessionScope):
             raise TypeError("WorkingMemoryCore.total_tokens: scope must be a SessionScope.")
-        return self._buffer.total_tokens(scope)
+        return self._buffer.total_tokens(scope, include_quarantined=include_quarantined)
 
     def reset(self, scope: SessionScope) -> None:
         """Hard wipe working memory for a session scope."""

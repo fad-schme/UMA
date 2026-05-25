@@ -61,7 +61,7 @@ def test_trust_formula_at_custom_weights():
 
 def test_trust_weight_zero_preserves_existing_order():
     """With trust_weight=0, trust has no effect: ranking is purely by existing score."""
-    ranker = Ranker(trust_weight=0.0)
+    ranker = Ranker(trust_weight=0.0, min_trust_score=0.0)
 
     # high_trust has low text relevance; low_trust matches the query perfectly.
     low_trust = Fact(
@@ -74,7 +74,7 @@ def test_trust_weight_zero_preserves_existing_order():
     )
 
     ranked = ranker.rank_facts([high_trust, low_trust], query_text="sushi")
-    # With trust_weight=0, only text-rerank matters; low_trust matches "sushi" better.
+    # With trust_weight=0 and filtering disabled, only text-rerank matters.
     assert ranked[0].id == "low_trust"
 
 

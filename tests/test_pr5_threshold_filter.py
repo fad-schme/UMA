@@ -2,7 +2,8 @@
 test_pr5_threshold_filter.py
 ================================
 Verifies the min_trust_score threshold filter:
-- min_trust_score=0.0 (default): all non-quarantined candidates pass.
+- min_trust_score=0.5 (default): candidates below 0.5 are dropped.
+- min_trust_score=0.0: all non-quarantined candidates pass.
 - min_trust_score=0.5: candidates below threshold are dropped.
 - Candidate exactly at the threshold passes (inclusive comparison >=).
 """
@@ -27,18 +28,29 @@ def _fact(fid: str, trust: float) -> Fact:
 
 
 # ---------------------------------------------------------------------------
-# Default threshold (0.0): no filtering
+# Default threshold (0.5): below-floor candidates are filtered
 # ---------------------------------------------------------------------------
 
-def test_default_min_trust_passes_all_candidates():
-    """With min_trust_score=0.0 (default), every non-quarantined candidate passes."""
-    ranker = Ranker()  # min_trust_score=0.0
+def test_default_min_trust_filters_below_half():
+    """With min_trust_score=0.5 (default), only candidates at or above 0.5 pass."""
+    ranker = Ranker()  # min_trust_score=0.5
 
     facts = [_fact("a", 0.9), _fact("b", 0.5), _fact("c", 0.0)]
     result = ranker.rank_facts(facts, query_text="thing")
 
     ids = {f.id for f in result}
-    assert ids == {"a", "b", "c"}, "all candidates must pass the default threshold"
+    assert ids == {"a", "b"}, "default threshold must drop candidates below 0.5"
+
+
+def test_min_trust_zero_passes_all_candidates():
+    """With min_trust_score=0.0, every non-quarantined candidate passes."""
+    ranker = Ranker(min_trust_score=0.0)
+
+    facts = [_fact("a", 0.9), _fact("b", 0.5), _fact("c", 0.0)]
+    result = ranker.rank_facts(facts, query_text="thing")
+
+    ids = {f.id for f in result}
+    assert ids == {"a", "b", "c"}
 
 
 # ---------------------------------------------------------------------------
