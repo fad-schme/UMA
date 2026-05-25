@@ -254,35 +254,6 @@ class ChunkCore:
             logger.exception("ChunkCore._fetch_by_ids failed owner=%s:%s", owner_type, owner_id)
             raise
 
-    async def _fetch_ranked_by_ids(
-        self,
-        ids: Sequence[str],
-        *,
-        tenant_id: str = DEFAULT_TENANT_ID,
-        owner_type: str,
-        owner_id: str,
-        log_context: str = "ChunkCore.fetch_ranked_by_ids",
-    ) -> List[Chunk]:
-        """
-        Internal ranked ID fetch for chunks (store-level ordering).
-        Used by retrieval for cited-evidence expansion.
-        """
-        if self.store is None or not hasattr(self.store, "_fetch_ranked_rows_by_ids"):
-            return []
-        if not ids:
-            return []
-        try:
-            return await self.store._fetch_ranked_rows_by_ids(
-                ids=[str(x) for x in ids if x],
-                log_context=log_context,
-                tenant_id=tenant_id,
-                owner_type=owner_type,
-                owner_id=owner_id,
-            )
-        except Exception:
-            logger.exception("ChunkCore._fetch_ranked_by_ids failed owner=%s:%s", owner_type, owner_id)
-            raise
-
     async def search_chunks(
         self,
         *,

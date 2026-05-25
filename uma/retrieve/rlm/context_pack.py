@@ -38,6 +38,21 @@ class ContextPack:
     active_lanes: List[str] = field(default_factory=list)
     active_domains: List[str] = field(default_factory=list)
     lane_plan: Dict[str, Any] = field(default_factory=dict)
+
+    # CR3: severity result of the boundary scan on the query_text.
+    # Mirrors RetrievalRequest.query_scan_severity. Downstream LLM
+    # hops (snippet refiner, fact pruner) consult this to skip
+    # amplification on "medium" / "high" severity. None means "scan
+    # was not performed" (legacy direct callers, tests).
+    query_scan_severity: Optional[str] = None
+
+    # CR3: observability signals for the audit log. True iff that LLM
+    # hop actually ran in this retrieval. Stays False when the hop was
+    # skipped for ANY reason (severity-gate, no LLM configured, no
+    # facts to prune, refiner not available in config). The audit row
+    # writer reads these directly rather than inferring.
+    refined_via_llm: bool = False
+    pruned_via_llm: bool = False
     
 
     # Memory layers

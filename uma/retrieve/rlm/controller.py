@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .context_pack import ContextPack
 from .decisions import RetrievalAction
@@ -23,6 +24,33 @@ from ..policy import RetrievalPolicy, should_stop
 from uma.memory.chunk.core import merge_chunks_with_precedence, partition_chunks_by_route
 from uma.memory.semantic.query_pruner import prune_facts_for_query
 from .evidence import expand_evidence_chunks_from_facts
+
+
+# CR3: severities that cause the controller and downstream consumers to
+# skip LLM amplification on retrieved content. "low" is allowed through
+# because it's almost always a false positive (homoglyph / leetspeak in
+# benign text); the trust-reduction tier already penalizes it.
+_LLM_HOP_SKIP_SEVERITIES = frozenset({"medium", "high"})
+
+
+def _hash_and_preview(text: str) -> Tuple[str, str]:
+    """Return (stable_hash_16hex, preview_first_80_chars) for logging.
+
+    M1: replace full-payload INFO logs of query text with a hash for
+    correlation plus a short preview for human readability. Hash is
+    deterministic so an operator grepping logs can still correlate the
+    same query across multiple log lines.
+    """
+    raw = text or ""
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    preview = raw[:80]
+    return digest, preview
+
+
+def _llm_hops_disabled(severity: Optional[str]) -> bool:
+    """True when the boundary scan flagged the query strongly enough to skip
+    LLM amplification on retrieved content."""
+    return (severity or "").lower() in _LLM_HOP_SKIP_SEVERITIES
 
 from ..ranking import Ranker
 from .request import RetrievalRequest, RetrievalScope
@@ -130,10 +158,17 @@ class RLMController:
 
         policy = RetrievalPolicy(query_text)
         intent = classify_query_intent(query_text)
+        # CR3/M1: log a stable hash and a short preview of the query rather
+        # than the full payload. Full text in INFO logs is an unnecessary
+        # disclosure surface for queries that may contain PII or injection
+        # payloads. DEBUG callers can still log raw text via their own hooks.
+        query_hash, query_preview = _hash_and_preview(query_text)
         logger.info(
-            "RLMController.retrieve_context: start user_id=%s query=%r",
+            "RLMController.retrieve_context: start user_id=%s query_hash=%s query_preview=%r severity=%s",
             request.normalized_user_id,
-            query_text,
+            query_hash,
+            query_preview,
+            request.query_scan_severity,
         )
         start = time.time()
         normalized_user_id = request.normalized_user_id
@@ -142,10 +177,11 @@ class RLMController:
         trace_root = request.trace_id or request.context.request_id or normalized_user_id
         trace_id = f"rlm:{trace_root}:{int(time.time()*1000)}"
         logger.info(
-            "RLM_START trace_id=%s user=%s recall_query=%s",
+            "RLM_START trace_id=%s user=%s recall_query=%s severity=%s",
             trace_id,
             normalized_user_id,
             any(k in query_text.lower() for k in ["remember", "recall", "previous", "earlier", "last time"]),
+            request.query_scan_severity,
         )
         logger.info("RLM_INTENT trace_id=%s intent=%s", trace_id, intent.value)
 
@@ -164,6 +200,7 @@ class RLMController:
             active_lanes=list(active_lanes),
             active_domains=list(active_domains),
             lane_plan=plan.to_trace(),
+            query_scan_severity=request.query_scan_severity,
         )
         pack.steps.append(
             {
@@ -960,6 +997,19 @@ class RLMController:
             logger.debug("RLMController: prune skipped (llm=%s facts=%d)", bool(self.llm), len(pack.facts))
             return
 
+        # CR3: do not amplify a flagged query through the LLM. The query
+        # is allowed to proceed through retrieval (the boundary scan is
+        # advisory, not a block), but the LLM pruning hop is skipped to
+        # avoid feeding the malicious text plus retrieved facts to the
+        # LLM as an attack vector.
+        if _llm_hops_disabled(pack.query_scan_severity):
+            logger.warning(
+                "RLMController: prune skipped due to scan severity=%s (facts retained without LLM pruning, count=%d)",
+                pack.query_scan_severity,
+                len(pack.facts),
+            )
+            return
+
         logger.info("RLMController: pruning facts with LLM (count=%d)", len(pack.facts))
         pack.facts = await prune_facts_for_query(
             llm=self.llm,
@@ -970,6 +1020,7 @@ class RLMController:
             max_candidates=self.prune_max_candidates,
         )
         pack.facts = self._dedupe_facts_by_signature(pack.facts)
+        pack.pruned_via_llm = True
         logger.info("RLMController: prune kept %d facts", len(pack.facts))
 
     @staticmethod

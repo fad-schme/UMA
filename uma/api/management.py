@@ -560,4 +560,68 @@ __all__ = [
     "purge_quarantined",
     "IntegrityVerificationResult",
     "verify_integrity",
+    "list_retrieval_audit",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Retrieval audit log (CR3)
+# ---------------------------------------------------------------------------
+
+
+def list_retrieval_audit(
+    memory: "UMAMemory",
+    *,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    severity_min: Optional[str] = None,
+    limit: int = 100,
+) -> List[dict]:
+    """Read recent retrieval-audit rows.
+
+    One row per `retrieve_context` / `retrieve_memory` call (the audit
+    log writes from `UMARuntime.retrieve_context`). Rows record the
+    request id, scope (tenant / user / agent), a hash + 80-char preview
+    of the query, the boundary-scan severity, the participating lanes,
+    a result count, and whether the LLM hops actually ran.
+
+    The full query text is never stored. The hash plus preview is
+    enough to correlate log lines and inspect a suspicious pattern
+    without persisting an arbitrary user payload.
+
+    Parameters
+    ----------
+    memory : UMAMemory
+        The UMAMemory whose runtime owns the audit store.
+    tenant_id : Optional[str]
+        Exact-match filter on tenant. If None, returns all tenants.
+    user_id : Optional[str]
+        Exact-match filter on user. If None, returns all users.
+    severity_min : Optional[str]
+        Returns rows at or above this severity tier. Values:
+        "none" / "low" / "medium" / "high". None means no floor.
+    limit : int
+        Max rows returned (capped at 1000 internally).
+
+    Returns
+    -------
+    List[dict]
+        Newest first. Each dict carries request_id, tenant_id, user_id,
+        agent_id, query_hash, query_preview, scan_severity, lanes,
+        result_count, refined_via_llm, pruned_via_llm, created_at.
+        Empty list if audit is disabled or the store can't be read.
+    """
+    runtime = getattr(memory, "runtime", None)
+    if runtime is None:
+        logger.debug("list_retrieval_audit: memory has no runtime attribute")
+        return []
+    store = runtime._get_retrieval_audit_store()
+    if store is None:
+        logger.debug("list_retrieval_audit: audit store unavailable (disabled or failed)")
+        return []
+    return store.list_rows(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        severity_min=severity_min,
+        limit=limit,
+    )

@@ -92,6 +92,12 @@ class ContextPackBuilder:
             "trace": [],
             "confidence": {},
         }
+        # CR3: propagate the boundary scan severity from the public
+        # retrieval dict into the pack so _compute_final_snippets can
+        # skip LLM amplification on flagged queries. Read-only signal;
+        # absent / None when no scan was performed.
+        if isinstance(ctx, dict) and ctx.get("query_scan_severity") is not None:
+            pack["query_scan_severity"] = ctx.get("query_scan_severity")
 
         _pack_working_memory(pack, ctx, owner_type=owner_type, owner_id=owner_id, trace_id=trace_id)
         _pack_episodic(pack, ctx, owner_type=owner_type, owner_id=owner_id, trace_id=trace_id)
@@ -797,7 +803,16 @@ async def _compute_final_snippets(
 ) -> List[Dict[str, Any]]:
     final_snippets: List[Dict[str, Any]] = []
     refiner_failed = False
-    if cfg.snippet_refiner_available:
+
+    # CR3: severity gate. A flagged query (medium / high) skips the LLM
+    # refinement hop entirely and falls back to deterministic / raw
+    # snippets. The query is allowed to proceed through retrieval — the
+    # boundary scan is advisory, not a block — but we refuse to feed the
+    # malicious text plus retrieved chunks to a downstream LLM call.
+    severity = (pack.get("query_scan_severity") or "").lower()
+    skip_llm = severity in {"medium", "high"}
+
+    if cfg.snippet_refiner_available and not skip_llm:
         try:
             refiner = SnippetRefiner(llm=llm, cfg=cfg)
             final_snippets = await refiner.refine(
@@ -814,6 +829,12 @@ async def _compute_final_snippets(
             )
             refiner_failed = True
             final_snippets = []
+    elif skip_llm:
+        logger.warning(
+            "ContextPackBuilder: snippet refinement skipped due to scan severity=%s trace_id=%s",
+            severity,
+            trace_id,
+        )
 
     if final_snippets:
         bounded: List[Dict[str, Any]] = []

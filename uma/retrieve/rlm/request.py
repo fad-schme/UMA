@@ -35,6 +35,9 @@ class RetrievalScope:
         object.__setattr__(self, "owner_id", _validate_owner_id(self.owner_id))
 
 
+VALID_SCAN_SEVERITIES = frozenset({None, "none", "low", "medium", "high"})
+
+
 @dataclass(frozen=True)
 class RetrievalRequest:
     context: RuntimeContext
@@ -43,6 +46,14 @@ class RetrievalRequest:
     trace_id: Optional[str] = None
     include_legacy_turn_data: bool = False
     plan: Optional[RetrievalPlan] = None
+    # CR3: result of scanning the query_text at the runtime boundary.
+    # None means "scan was not performed" (legacy callers; tests).
+    # "none" means "scan ran, nothing matched" — explicit signal, NOT None.
+    # "low" / "medium" / "high" are the boundary-scan severity tiers.
+    # Downstream consumers (controller, refiner) skip LLM hops on
+    # "medium" or "high" to prevent malicious queries from amplifying
+    # through downstream LLM calls.
+    query_scan_severity: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.context, RuntimeContext):
@@ -57,6 +68,12 @@ class RetrievalRequest:
         object.__setattr__(self, "scopes", normalized_scopes)
         if self.trace_id is not None:
             object.__setattr__(self, "trace_id", str(self.trace_id).strip() or None)
+        if self.query_scan_severity not in VALID_SCAN_SEVERITIES:
+            raise ValueError(
+                f"RetrievalRequest.query_scan_severity must be one of "
+                f"{sorted(s for s in VALID_SCAN_SEVERITIES if s is not None)} or None; "
+                f"got {self.query_scan_severity!r}"
+            )
 
     @classmethod
     def from_runtime_context(
@@ -66,6 +83,7 @@ class RetrievalRequest:
         trace_id: Optional[str] = None,
         include_legacy_turn_data: bool = False,
         plan: Optional[RetrievalPlan] = None,
+        query_scan_severity: Optional[str] = None,
     ) -> "RetrievalRequest":
         normalized_user_id = normalize_user_id(context.user_id or "")
         return cls(
@@ -78,6 +96,7 @@ class RetrievalRequest:
             trace_id=trace_id or context.request_id,
             include_legacy_turn_data=bool(include_legacy_turn_data),
             plan=plan,
+            query_scan_severity=query_scan_severity,
         )
 
     def scopes_for_owner_type(self, owner_type: Optional[str] = None) -> Tuple[RetrievalScope, ...]:

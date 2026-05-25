@@ -233,37 +233,50 @@ class BaseVectorSQLStore(BaseSQLStore):
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
     ) -> List[Any]:
+        """
+        Fetch rows by primary key in caller-supplied order, owner- and
+        tenant-scoped, excluding quarantined records.
+
+        Scope contract (CR1, matches typed fetch_by_ids overrides):
+        - tenant_id, owner_type, owner_id are all REQUIRED. None / empty
+          strings raise ValueError. Earlier versions accepted None for
+          tenant_id and silently issued an unscoped SQL fetch — a DAT break
+          identical to the one closed in graph_updater (H4).
+        - Every fetch includes "AND quarantined_at IS NULL". Quarantined
+          rows remain in the table for management API access; they are
+          invisible to every normal retrieval path. The base SQL here was
+          previously missing this clause, allowing ProceduralSQLStore.search
+          (which goes through _semantic_search → _fetch_ranked_rows_by_ids)
+          to surface quarantined skills.
+        """
         if not ids:
             return []
-        if not owner_type or not owner_id:
+        if not tenant_id or not owner_type or not owner_id:
             logger.error(
-                "%s _fetch_ranked_rows_by_ids requires owner_type and owner_id%s",
+                "%s _fetch_ranked_rows_by_ids requires tenant_id, owner_type and owner_id%s",
                 self.__class__.__name__,
                 f" [{log_context}]" if log_context else "",
             )
-            raise ValueError(f"{self.__class__.__name__} fetch_by_ids requires owner_type and owner_id")
+            raise ValueError(
+                f"{self.__class__.__name__}._fetch_ranked_rows_by_ids "
+                f"requires tenant_id, owner_type and owner_id"
+            )
 
         ctx = f" [{log_context}]" if log_context else ""
         conn = self._conn()
 
         try:
-            row_map = {}
             placeholders = ",".join("?" for _ in ids)
-            sql = f"SELECT * FROM {self._table_name} WHERE {self._id_column} IN ({placeholders})"
-            params: List[Any] = list(ids)
-
-            if tenant_id:
-                sql += " AND tenant_id=?"
-                params.append(tenant_id)
-            if owner_type:
-                sql += " AND owner_type=?"
-                params.append(owner_type)
-            if owner_id:
-                sql += " AND owner_id=?"
-                params.append(owner_id)
+            sql = (
+                f"SELECT * FROM {self._table_name} "
+                f"WHERE {self._id_column} IN ({placeholders}) "
+                f"AND tenant_id=? AND owner_type=? AND owner_id=? "
+                f"AND quarantined_at IS NULL"
+            )
+            params: List[Any] = list(ids) + [tenant_id, owner_type, owner_id]
 
             rows = self._query_all(conn, sql, params, log_context)
-            row_map.update({r[self._id_column]: r for r in rows})
+            row_map = {r[self._id_column]: r for r in rows}
 
         except Exception:
             logger.exception("%s SQL fetch failed%s", self.__class__.__name__, ctx)

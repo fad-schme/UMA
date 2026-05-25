@@ -338,6 +338,153 @@ class UMARuntime:
             raise TypeError("UMARuntime.bind requires a RuntimeContext instance.")
         return UMARequestHandle(runtime=self, context=context)
 
+    # ------------------------------------------------------------------
+    # CR3 — Retrieval audit log
+    # ------------------------------------------------------------------
+    #
+    # The audit store is lazy: a single instance per runtime, created on
+    # first use, gated on a config flag (default ON). Failures during
+    # initialization or write are logged at WARNING and swallowed —
+    # retrieval results are returned regardless. This is observability,
+    # not a correctness dependency.
+
+    def _retrieval_audit_enabled(self) -> bool:
+        """Config gate. Default ON.
+
+        Disable by setting `security.retrieval_audit_enabled: false` in
+        the YAML config. Returns False if the config can't be read,
+        which makes the audit log opt-in for any environment where the
+        config surface is exotic.
+        """
+        try:
+            sec = getattr(self.config, "security", None)
+            if sec is None:
+                return True  # default ON when no security section configured
+            # support both dict-style and attribute access
+            if hasattr(sec, "get"):
+                return bool(sec.get("retrieval_audit_enabled", True))
+            return bool(getattr(sec, "retrieval_audit_enabled", True))
+        except Exception:
+            logger.debug("retrieval audit: failed to read config flag; defaulting to enabled")
+            return True
+
+    def _retrieval_audit_db_path(self) -> Optional[str]:
+        """Resolve the audit DB path.
+
+        Order of precedence:
+        1. `security.retrieval_audit_db_path` if set.
+        2. `<storage.db_dir>/retrieval_audit.db` if storage.db_dir is set.
+        3. `.uma/db/retrieval_audit.db` as the embedded-profile default.
+        """
+        try:
+            sec = getattr(self.config, "security", None)
+            if sec is not None:
+                if hasattr(sec, "get"):
+                    explicit = sec.get("retrieval_audit_db_path")
+                else:
+                    explicit = getattr(sec, "retrieval_audit_db_path", None)
+                if isinstance(explicit, str) and explicit.strip():
+                    return explicit.strip()
+        except Exception:
+            pass
+
+        # Fall back to storage.db_dir if available.
+        try:
+            storage = getattr(self.config, "storage", None)
+            if storage is not None:
+                if hasattr(storage, "get"):
+                    db_dir = storage.get("db_dir")
+                else:
+                    db_dir = getattr(storage, "db_dir", None)
+                if isinstance(db_dir, str) and db_dir.strip():
+                    import os as _os
+                    return _os.path.join(db_dir.strip(), "retrieval_audit.db")
+        except Exception:
+            pass
+
+        # Embedded-profile default.
+        return ".uma/db/retrieval_audit.db"
+
+    def _get_retrieval_audit_store(self) -> Optional[Any]:
+        """Lazy accessor. Returns None when audit is disabled or unavailable."""
+        if not self._retrieval_audit_enabled():
+            return None
+        existing = getattr(self, "_retrieval_audit_store_cached", None)
+        if existing is not None:
+            return existing
+        try:
+            from uma.stores.retrieval_audit import RetrievalAuditStore
+            path = self._retrieval_audit_db_path()
+            if not path:
+                return None
+            store = RetrievalAuditStore(db_path=path)
+            self._retrieval_audit_store_cached = store
+            return store
+        except Exception:
+            logger.warning(
+                "retrieval audit: failed to initialize store; subsequent retrievals will not be audited",
+                exc_info=True,
+            )
+            # Cache the None so we don't retry initialization every call.
+            self._retrieval_audit_store_cached = None
+            return None
+
+    def _append_retrieval_audit_row(
+        self,
+        *,
+        runtime_context: RuntimeContext,
+        query_text: str,
+        scan_severity: str,
+        lane_filter: List[str],
+        result: Dict[str, Any],
+    ) -> None:
+        """Append one audit row for this retrieval call.
+
+        Fail-soft: any exception logs at WARNING and is swallowed. The
+        retrieval result has already been built; an audit-log failure
+        does not invalidate it.
+        """
+        try:
+            store = self._get_retrieval_audit_store()
+            if store is None:
+                return
+
+            # Import here to keep startup paths free of audit-only imports.
+            from uma.retrieve.rlm.controller import _hash_and_preview
+            from uma.stores.retrieval_audit import RetrievalAuditRow
+
+            query_hash, query_preview = _hash_and_preview(query_text or "")
+            chunks = result.get("chunks") or []
+            facts = result.get("facts") or []
+            result_count = (len(chunks) if isinstance(chunks, list) else 0) + (
+                len(facts) if isinstance(facts, list) else 0
+            )
+            active_lanes = result.get("active_lanes") or lane_filter or []
+
+            row = RetrievalAuditRow(
+                request_id=str(getattr(runtime_context, "request_id", None) or ""),
+                tenant_id=str(getattr(runtime_context, "tenant_id", None) or ""),
+                user_id=str(normalize_user_id(runtime_context.user_id)),
+                agent_id=getattr(runtime_context, "agent_id", None),
+                query_hash=query_hash,
+                query_preview=query_preview,
+                scan_severity=str(scan_severity or "none"),
+                lanes=list(active_lanes),
+                result_count=int(result_count),
+                # refined_via_llm: refinement happens in render_context, not
+                # retrieve_context — so it's always False at this audit point.
+                # pruned_via_llm: read from the controller's pack via
+                # result["_pruned_via_llm"] if surfaced; defaults to False.
+                refined_via_llm=False,
+                pruned_via_llm=bool(result.get("_pruned_via_llm", False)),
+            )
+            store.append(row)
+        except Exception:
+            logger.warning(
+                "retrieval audit: failed to write row (continuing)",
+                exc_info=True,
+            )
+
     def _available_retrieval_lanes(self) -> List[str]:
         """Advertise the retrieval lanes this runtime can execute today.
 
@@ -373,12 +520,14 @@ class UMARuntime:
         context: RuntimeContext,
         *,
         plan: Optional[Any] = None,
+        query_scan_severity: Optional[str] = None,
     ) -> RetrievalRequest:
         """Convert a RuntimeContext into a RetrievalRequest."""
         return RetrievalRequest.from_runtime_context(
             context,
             trace_id=context.request_id,
             plan=plan,
+            query_scan_severity=query_scan_severity,
         )
 
     @staticmethod
@@ -517,6 +666,11 @@ class UMARuntime:
             "graph": pack.graph,
             "trace": trace,
             "confidence": confidence,
+            # CR3: observability signal surfaced to the audit-row writer.
+            # Underscore prefix marks it as an internal field — not part
+            # of the documented public surface; callers should not rely
+            # on it for production logic.
+            "_pruned_via_llm": bool(getattr(pack, "pruned_via_llm", False)),
             "provenance": build_provenance(
                 source_chunk_ids=[getattr(chunk, "id", None) for chunk in chunks],
                 source_document_ids=[getattr(chunk, "doc_id", None) for chunk in chunks],
@@ -546,8 +700,18 @@ class UMARuntime:
         - chunks/documents remain the primary evidence product
         - wiki/compiled memory state is not required by default
         - `lane_filter` applies only to persisted retrieval lanes, not working memory
+
+        Security:
+        - The query text is scanned for injection patterns at the runtime
+          boundary. The resulting severity is propagated to downstream LLM
+          hops (snippet refiner, fact pruner) which skip amplification on
+          "medium" / "high". High-severity queries are NOT blocked — the
+          scan is advisory; the caller still gets retrieval results, just
+          without LLM-refined snippets. This preserves the developer's
+          right to handle false positives.
         """
         from uma.adapters.observability.metrics import increment, timed
+        from uma.common.injection_scan import scan_content
 
         if not isinstance(runtime_context, RuntimeContext):
             raise TypeError("UMARuntime retrieval requires a RuntimeContext instance.")
@@ -558,6 +722,22 @@ class UMARuntime:
                 "UMARuntime.retrieve_context: query_text must be a non-empty string."
             )
         normalized_query_text = query_text.strip()
+
+        # CR3: boundary scan on query_text. Severity flows through to the
+        # controller via RetrievalRequest.query_scan_severity, and is
+        # stamped on the returned public dict. Non-blocking; the caller
+        # decides what to do with the signal.
+        scan_result = scan_content(normalized_query_text)
+        query_scan_severity = scan_result.severity
+        if query_scan_severity != "none":
+            logger.warning(
+                "UMARuntime.retrieve_context: scan flagged query severity=%s rules=%s tenant=%s user=%s",
+                query_scan_severity,
+                scan_result.matched_rules,
+                runtime_context.tenant_id,
+                normalize_user_id(runtime_context.user_id),
+            )
+
         self.ensure_retrieval_ready()
         normalized_lane_filter = self._normalize_lane_filter(lane_filter)
         plan = build_retrieval_plan(
@@ -576,11 +756,15 @@ class UMARuntime:
                     "UMARuntime.retrieve_context: RLM controller not initialized."
                 )
             pack = await controller.retrieve_context(
-                request=self._build_retrieval_request(runtime_context, plan=plan),
+                request=self._build_retrieval_request(
+                    runtime_context,
+                    plan=plan,
+                    query_scan_severity=query_scan_severity,
+                ),
                 query_text=normalized_query_text,
             )
             increment("uma.get_structured_context.calls", tags={"path": "rlm"})
-            return self._assemble_public_context_result(
+            result = self._assemble_public_context_result(
                 query_text=normalized_query_text,
                 lane_filter=normalized_lane_filter,
                 plan=plan,
@@ -588,6 +772,21 @@ class UMARuntime:
                 pack=pack,
                 requesting_user_id=normalize_user_id(runtime_context.user_id),
             )
+            # Surface the scan severity on the public dict so callers and
+            # downstream consumers (notably ContextPackBuilder) can act on
+            # it. Always present as a string ("none" when nothing matched)
+            # so consumers don't have to disambiguate "scan ran" from
+            # "scan was skipped."
+            result["query_scan_severity"] = query_scan_severity
+            # CR3: write a structured audit log row for this retrieval.
+            self._append_retrieval_audit_row(
+                runtime_context=runtime_context,
+                query_text=normalized_query_text,
+                scan_severity=query_scan_severity,
+                lane_filter=normalized_lane_filter,
+                result=result,
+            )
+            return result
 
     @staticmethod
     def _group_memory_artifacts(chunks: List[Any]) -> List[Dict[str, Any]]:
@@ -1205,4 +1404,3 @@ def _chunk_payload(chunk: Any) -> Dict[str, Any]:
         "meta": dict(getattr(chunk, "meta", None) or {}),
         "provenance": provenance_for_artifact(chunk),
     }
-    
