@@ -56,15 +56,17 @@ Design Philosophy
 
 from __future__ import annotations
 
+import importlib
 import inspect
 import logging
 import threading
 from typing import Any, Awaitable, Callable, Dict, Optional, Union
 
 from uma.common.config import UMAConfig
-from uma.common.config_types import RuntimeConfig, parse_plugin_spec
+from uma.common.config_types import RuntimeConfig, SecretsProviderConfig, parse_plugin_spec
 from uma.common.hooks import UMAHooks
 from uma.common.identity import normalize_user_id
+from uma.adapters.secrets import SecretsProvider
 from uma.memory.working_memory.core import WorkingMemoryCore
 from uma.memory.episodic.core import EpisodicCore
 from uma.memory.episodic.indexer import EpisodeIndexer
@@ -181,6 +183,8 @@ class UMAMemory:
         self.consolidation_cfg = self.cfg.consolidation
         self.pipeline_cfg = self.cfg.pipeline
         self.semantic_salience_threshold = self.cfg.semantic_salience_threshold
+        self._secrets_cfg = self.cfg.secrets
+        self._secrets_provider: Optional[SecretsProvider] = self._build_secrets_provider(self._secrets_cfg)
         self._agent_id: Optional[str] = None
         self._runtime: Optional[UMARuntime] = None
         self.animus_profile_provider = AnimusProfileProvider()
@@ -237,6 +241,49 @@ class UMAMemory:
             normalized = self._agent_id.strip()
             return normalized or None
         return None
+
+    def _build_secrets_provider(
+        self,
+        secrets_cfg: Optional[SecretsProviderConfig],
+    ) -> Optional[SecretsProvider]:
+        if secrets_cfg is None:
+            return None
+
+        provider_path = str(secrets_cfg.provider).strip()
+        module_path, _, attr = provider_path.replace(":", ".").rpartition(".")
+        if not module_path or not attr:
+            raise ValueError(
+                "Invalid config at 'secrets.provider': expected an import path like "
+                "'uma.adapters.secrets.EnvVarProvider'."
+            )
+
+        try:
+            module = importlib.import_module(module_path)
+            provider_cls = getattr(module, attr)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to resolve config at 'secrets.provider': {provider_path!r}"
+            ) from exc
+
+        if not inspect.isclass(provider_cls):
+            raise TypeError(
+                f"Invalid config at 'secrets.provider': {provider_path!r} is not a class."
+            )
+        if not issubclass(provider_cls, SecretsProvider):
+            raise TypeError(
+                "Invalid config at 'secrets.provider': "
+                f"{provider_path!r} must subclass SecretsProvider."
+            )
+
+        try:
+            provider = provider_cls(**dict(secrets_cfg.options))
+        except Exception as exc:
+            raise RuntimeError(
+                "Failed to initialize config at 'secrets.options' for provider "
+                f"{provider_path!r}."
+            ) from exc
+
+        return provider
     
     def _resolve_runtime_context(
         self,

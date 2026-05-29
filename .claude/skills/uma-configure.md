@@ -115,6 +115,12 @@ llms:
     config:
       host: "http://localhost:11434"
       timeout: 20.0
+
+# Optional: used only by storage adapters that need credentials.
+secrets:
+  provider: "uma.adapters.secrets.EnvVarProvider"
+  options:
+    prefix: "UMA"
 ```
 
 For OpenAI:

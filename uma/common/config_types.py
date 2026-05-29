@@ -115,6 +115,25 @@ class EmbeddingConfig:
 
 
 # ---------------------------------------------------------------------------
+# Secrets provider config
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class SecretsProviderConfig:
+    provider: str
+    options: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: Optional[Dict[str, Any]]) -> Optional["SecretsProviderConfig"]:
+        if d is None:
+            return None
+        return cls(
+            provider=d["provider"],
+            options=d.get("options") or {},
+        )
+
+
+# ---------------------------------------------------------------------------
 # Storage config
 # ---------------------------------------------------------------------------
 
@@ -552,6 +571,7 @@ class RuntimeConfig:
     llm: LLMConfig
     agent_llm: LLMConfig
     embedding: EmbeddingConfig
+    secrets: Optional[SecretsProviderConfig]
     working_memory: WorkingMemorySettings
     retrieval: RetrievalConfig
     features: FeaturesConfig
@@ -571,6 +591,7 @@ class RuntimeConfig:
         agent_llm_cfg = llms_cfg.agent if llms_cfg else llm_cfg
 
         embedding_cfg = EmbeddingConfig.from_dict(cfg["embedding"])
+        secrets_cfg = SecretsProviderConfig.from_dict(cfg.get("secrets") if isinstance(cfg, dict) else None)
         working_memory_cfg = WorkingMemorySettings.from_dict(cfg["working_memory"])
         retrieval_cfg = RetrievalConfig.from_dict(cfg["retrieval"], profile=profile)
         features_cfg = FeaturesConfig.from_dict(cfg.get("features") or {})
@@ -590,6 +611,7 @@ class RuntimeConfig:
             llm=llm_cfg,
             agent_llm=agent_llm_cfg,
             embedding=embedding_cfg,
+            secrets=secrets_cfg,
             working_memory=working_memory_cfg,
             retrieval=retrieval_cfg,
             features=features_cfg,

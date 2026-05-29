@@ -174,6 +174,20 @@ class UMAConfig(dict):
             raise ValueError("'embedding.config' must be a mapping")
 
         # -----------------------
+        # SECRETS
+        # -----------------------
+        secrets_cfg = self.get("secrets")
+        if secrets_cfg is not None:
+            if not isinstance(secrets_cfg, dict):
+                raise ValueError("'secrets' must be a mapping")
+            provider = secrets_cfg.get("provider")
+            if not isinstance(provider, str) or not provider.strip():
+                raise ValueError("'secrets.provider' must be a non-empty string")
+            options = secrets_cfg.get("options")
+            if options is not None and not isinstance(options, dict):
+                raise ValueError("'secrets.options' must be a mapping")
+
+        # -----------------------
         # LLM / LLMS
         # -----------------------
         if "llms" in self and isinstance(self.llms, dict):

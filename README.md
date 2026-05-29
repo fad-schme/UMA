@@ -97,6 +97,8 @@ await memory.process_turn(
 
 That's the whole loop. For the full agent integration pattern — pre-LLM injection scanning, error handling, multi-tenant SaaS, rate limiting — **ask your coding assistant** (see below).
 
+If a storage adapter needs credentials, `uma.yaml` also accepts an optional `secrets:` block; the reference shape lives in [`.claude/skills/uma-configure.md`](.claude/skills/uma-configure.md).
+
 ---
 
 ## 🤖 Living Docs for AI Assistants

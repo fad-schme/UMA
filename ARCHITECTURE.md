@@ -59,6 +59,12 @@ Graph is disabled in all public profiles. It is a supporting lane for relationsh
 await memory.rebuild_vector_indexes(tenant_id="default")
 ```
 
+## Adapter Interfaces
+
+Storage-facing extension seams live under `uma.adapters`. The secrets interface is `uma.adapters.secrets.SecretsProvider`, with the Lite reference implementation `EnvVarProvider` beside it; storage adapters that need credentials depend on that stable contract instead of inventing their own lookup shape.
+
+`UMAMemory.from_yaml(path)` accepts an optional top-level `secrets:` block whose `provider` resolves to a `SecretsProvider` class and whose `options` are passed through as constructor kwargs. Lite's embedded SQLite profile does not use a secrets provider, but the interface is part of the architecture so community and Enterprise storage adapters can share one credential boundary.
+
 ---
 
 ## Ownership and Tenancy (DAT Invariants)

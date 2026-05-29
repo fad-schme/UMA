@@ -163,6 +163,7 @@ Before making any change:
 	•	Determine whether the requested behavior already exists in another form.
 
 Mandatory execution stance
+• Do not over engineer
 • Simplify before extending when the topology is confusing.
 • Prefer direct code over indirection.
 • Converge duplicate concepts into one canonical path.

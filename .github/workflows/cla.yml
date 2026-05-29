@@ -41,6 +41,7 @@ jobs:
           # in the same repository. It is provided automatically by GitHub
           # Actions and does not need to be added as a secret.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
         with:
           # Path to the CLA document in this repository.
@@ -58,7 +59,7 @@ jobs:
           # Bots that cannot sign a CLA and should be excluded from the check.
           # Add any additional bot accounts your project uses, separated by commas.
           # Glob patterns are supported (e.g. bot*).
-          allowlist: dependabot[bot],github-actions[bot],renovate[bot]
+          allowlist: fad-schme,dependabot[bot],github-actions[bot],renovate[bot]
 
           # Message posted on the PR when one or more contributors have not signed.
           # Keep it welcoming and link directly to the sign-off instruction.
