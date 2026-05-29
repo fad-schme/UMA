@@ -288,6 +288,34 @@ class SemanticCore:
             logger.exception("SemanticCore.delete_fact failed")
             raise
 
+    async def update_trust(
+        self,
+        fact_id: str,
+        new_score: float,
+        *,
+        reason: str,
+        ctx: RuntimeContext,
+    ) -> None:
+        if not hasattr(self.store, "update_trust"):
+            logger.error("SemanticCore.update_trust: semantic_store missing")
+            raise RuntimeError("SemanticCore.update_trust: semantic_store missing")
+        if not fact_id or not isinstance(fact_id, str):
+            logger.error("SemanticCore.update_trust requires fact_id as a non-empty string")
+            raise ValueError("SemanticCore.update_trust requires fact_id as a non-empty string")
+        if not isinstance(ctx, RuntimeContext):
+            logger.error("SemanticCore.update_trust requires a RuntimeContext")
+            raise TypeError("SemanticCore.update_trust requires a RuntimeContext")
+        try:
+            await self.store.update_trust(
+                fact_id,
+                new_score,
+                reason=reason,
+                ctx=ctx,
+            )
+        except Exception:
+            logger.exception("SemanticCore.update_trust failed")
+            raise
+
     async def search(
         self,
         query_embedding: List[float],

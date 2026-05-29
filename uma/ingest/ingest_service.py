@@ -261,11 +261,95 @@ async def _load_existing_manifest(
         return None
 
 
+async def _load_latest_manifest_for_source(
+    *,
+    document_store: Any,
+    tenant_id: str,
+    owner_type: str,
+    owner_id: str,
+    source_path: str,
+    log_context: str,
+) -> Any | None:
+    if document_store is None or not hasattr(document_store, "get_latest_by_source_path"):
+        return None
+    if not tenant_id:
+        logger.error("%s: _load_latest_manifest_for_source requires tenant_id", log_context)
+        raise ValueError(f"{log_context}: tenant_id is required for manifest lookup")
+    try:
+        return await document_store.get_latest_by_source_path(
+            tenant_id=tenant_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            source_path=source_path,
+        )
+    except Exception:
+        logger.exception("%s: source-identity manifest lookup failed", log_context)
+        return None
+
+
 def _manifest_signature_matches(*, existing_manifest: Any | None, ingest_signature: dict[str, Any]) -> bool:
     if existing_manifest is None:
         return False
     existing_sig = (getattr(existing_manifest, "meta", None) or {}).get("ingest_signature") or {}
     return existing_sig == ingest_signature
+
+
+def _prepare_superseding_manifest_meta(
+    *,
+    existing_meta: dict[str, Any] | None,
+    ingest_signature: dict[str, Any],
+    now: datetime,
+    prior_doc_id: str | None,
+    reingest_reason: str | None = None,
+    sanitization_counts: dict | None = None,
+) -> dict[str, Any]:
+    meta = _merge_manifest_meta(
+        existing=existing_meta,
+        ingest_signature=ingest_signature,
+        now=now,
+        reingest_reason=reingest_reason,
+        sanitization_counts=sanitization_counts,
+    )
+    meta.pop("superseded_by", None)
+    meta.pop("superseded_at", None)
+    if prior_doc_id:
+        meta["supersedes"] = prior_doc_id
+    else:
+        meta.pop("supersedes", None)
+    return meta
+
+
+async def _record_manifest_supersession(
+    *,
+    document_store: Any,
+    prior_manifest: Any | None,
+    new_doc_id: str,
+    now: datetime,
+    log_context: str,
+) -> None:
+    if prior_manifest is None or document_store is None:
+        return
+
+    prior_meta = dict(getattr(prior_manifest, "meta", None) or {})
+    prior_meta["superseded_by"] = new_doc_id
+    prior_meta["superseded_at"] = now.isoformat()
+
+    await _upsert_source_manifest(
+        document_store=document_store,
+        doc_id=prior_manifest.doc_id,
+        source_path=prior_manifest.source_path,
+        source_hash=prior_manifest.source_hash,
+        ingested_at=getattr(prior_manifest, "ingested_at", now),
+        tenant_id=prior_manifest.tenant_id,
+        owner_type=prior_manifest.owner_type,
+        owner_id=prior_manifest.owner_id,
+        workspace_id=getattr(prior_manifest, "workspace_id", None),
+        origin_agent_id=getattr(prior_manifest, "origin_agent_id", None),
+        origin_user_id=getattr(prior_manifest, "origin_user_id", None),
+        origin_session_id=getattr(prior_manifest, "origin_session_id", None),
+        meta=prior_meta,
+        log_context=log_context,
+    )
 
 
 async def _upsert_source_manifest(
@@ -417,9 +501,7 @@ async def _run_manifest_gate(
     warnings: List[str],
 ) -> tuple[dict, Any | None, IngestReport | None]:
     ingest_signature = _build_ingest_signature(config, runtime)
-
-    existing_manifest = None
-    existing_manifest = await _load_existing_manifest(
+    exact_manifest = await _load_existing_manifest(
         document_store=runtime.document_store,
         tenant_id=tenant_id,
         owner_type=owner_type,
@@ -428,14 +510,14 @@ async def _run_manifest_gate(
         log_context="ingest_document",
     )
 
-    if existing_manifest is None:
-        return ingest_signature, None, None
-
-    if _manifest_signature_matches(existing_manifest=existing_manifest, ingest_signature=ingest_signature):
+    if exact_manifest is not None and _manifest_signature_matches(
+        existing_manifest=exact_manifest,
+        ingest_signature=ingest_signature,
+    ):
         now_refresh = datetime.now(timezone.utc)
         await _upsert_source_manifest(
             document_store=runtime.document_store,
-            doc_id=existing_manifest.doc_id,
+            doc_id=exact_manifest.doc_id,
             source_path=parsed.source_path,
             source_hash=parsed.source_hash,
             ingested_at=now_refresh,
@@ -443,11 +525,11 @@ async def _run_manifest_gate(
             owner_type=owner_type,
             owner_id=owner_id,
             workspace_id=workspace_id,
-            origin_agent_id=getattr(existing_manifest, "origin_agent_id", None),
-            origin_user_id=getattr(existing_manifest, "origin_user_id", None),
-            origin_session_id=getattr(existing_manifest, "origin_session_id", None),
+            origin_agent_id=getattr(exact_manifest, "origin_agent_id", None),
+            origin_user_id=getattr(exact_manifest, "origin_user_id", None),
+            origin_session_id=getattr(exact_manifest, "origin_session_id", None),
             meta=_merge_manifest_meta(
-                existing=getattr(existing_manifest, "meta", None) or {},
+                existing=getattr(exact_manifest, "meta", None) or {},
                 ingest_signature=ingest_signature,
                 now=now_refresh,
             ),
@@ -457,9 +539,9 @@ async def _run_manifest_gate(
         warnings.append(f"skipped ingest (idempotent): owner={owner_type}:{owner_id} hash={parsed.source_hash}")
         return (
             ingest_signature,
-            existing_manifest,
+            exact_manifest,
             IngestReport(
-                doc_id=existing_manifest.doc_id,
+                doc_id=exact_manifest.doc_id,
                 chunks_created=0,
                 facts_created=0,
                 graph_edges_created=0,
@@ -467,9 +549,21 @@ async def _run_manifest_gate(
             ),
         )
 
-    # Manifest will be written after embedding succeeds in _persist_chunks.
-    warnings.append(f"re-ingesting existing manifest doc_id={existing_manifest.doc_id} (signature changed)")
-    return ingest_signature, existing_manifest, None
+    prior_manifest = exact_manifest
+    if prior_manifest is None:
+        prior_manifest = await _load_latest_manifest_for_source(
+            document_store=runtime.document_store,
+            tenant_id=tenant_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            source_path=parsed.source_path,
+            log_context="ingest_document",
+        )
+        if prior_manifest is None:
+            return ingest_signature, None, None
+
+    warnings.append(f"re-ingesting existing manifest doc_id={prior_manifest.doc_id} (signature changed)")
+    return ingest_signature, prior_manifest, None
 
 
 def _prepare_document_chunks(
@@ -578,6 +672,7 @@ async def _persist_chunks(
     workspace_id: str | None,
     warnings: List[str],
 ) -> List[Chunk]:
+    is_supersession = existing_manifest is not None and getattr(existing_manifest, "doc_id", None) != parsed.doc_id
     chunk_rows = _build_chunk_rows(
         parsed=parsed,
         final_chunks=final_chunks,
@@ -613,13 +708,21 @@ async def _persist_chunks(
         origin_agent_id=getattr(existing_manifest, "origin_agent_id", None) if existing_manifest is not None else None,
         origin_user_id=getattr(existing_manifest, "origin_user_id", None) if existing_manifest is not None else None,
         origin_session_id=getattr(existing_manifest, "origin_session_id", None) if existing_manifest is not None else None,
-        meta=_merge_manifest_meta(
-            existing=(getattr(existing_manifest, "meta", None) or {}) if existing_manifest is not None else {},
+        meta=_prepare_superseding_manifest_meta(
+            existing_meta=(getattr(existing_manifest, "meta", None) or {}) if existing_manifest is not None else {},
             ingest_signature=ingest_signature,
             now=now_persist,
+            prior_doc_id=getattr(existing_manifest, "doc_id", None) if is_supersession else None,
             reingest_reason=reingest_reason,
             sanitization_counts=getattr(parsed, "sanitization_counts", None) or None,
         ),
+        log_context="ingest_document",
+    )
+    await _record_manifest_supersession(
+        document_store=runtime.document_store,
+        prior_manifest=existing_manifest if is_supersession else None,
+        new_doc_id=parsed.doc_id,
+        now=now_persist,
         log_context="ingest_document",
     )
     return created_chunks

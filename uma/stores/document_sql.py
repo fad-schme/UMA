@@ -188,6 +188,105 @@ class DocumentSQLStore(BaseSQLStore):
         finally:
             conn.close()
 
+    async def get_latest_by_source_path(
+        self,
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+        source_path: str,
+    ) -> DocumentRecord | None:
+        """
+        Return the most recently ingested document record for a tenant + owner + source path.
+
+        Source-path identity is used by the ingest manifest gate to detect a new
+        version of an already-known source without broadening outside the
+        current tenant/owner scope.
+        """
+        if not tenant_id or not owner_type or not owner_id or not source_path:
+            return None
+
+        conn = self._conn()
+        try:
+            row = self._query_one(
+                conn,
+                """
+                SELECT
+                    doc_id,
+                    source_path,
+                    source_hash,
+                    ingested_at,
+                    tenant_id,
+                    owner_type,
+                    owner_id,
+                    workspace_id,
+                    origin_agent_id,
+                    origin_user_id,
+                    origin_session_id,
+                    scope_model_version,
+                    meta
+                FROM documents
+                WHERE tenant_id = ? AND owner_type = ? AND owner_id = ? AND source_path = ?
+                ORDER BY ingested_at DESC
+                LIMIT 1
+                """,
+                params=[tenant_id, owner_type, owner_id, source_path],
+                log_context="documents_get_latest_by_source_path",
+            )
+            if not row:
+                return None
+
+            meta_raw = row.get("meta") if hasattr(row, "get") else row["meta"]
+            try:
+                meta = json.loads(meta_raw) if isinstance(meta_raw, str) and meta_raw else {}
+            except Exception:
+                meta = {}
+
+            ingested_at_raw = row.get("ingested_at") if hasattr(row, "get") else row["ingested_at"]
+            try:
+                ingested_at = (
+                    datetime.fromisoformat(ingested_at_raw)
+                    if isinstance(ingested_at_raw, str) and ingested_at_raw
+                    else datetime.utcnow()
+                )
+            except Exception:
+                ingested_at = datetime.utcnow()
+
+            return DocumentRecord(
+                doc_id=str((row.get("doc_id") if hasattr(row, "get") else row["doc_id"]) or ""),
+                source_path=str((row.get("source_path") if hasattr(row, "get") else row["source_path"]) or ""),
+                source_hash=str((row.get("source_hash") if hasattr(row, "get") else row["source_hash"]) or ""),
+                ingested_at=ingested_at,
+                tenant_id=str((row.get("tenant_id") if hasattr(row, "get") else row["tenant_id"]) or DEFAULT_TENANT_ID),
+                owner_type=str((row.get("owner_type") if hasattr(row, "get") else row["owner_type"]) or ""),
+                owner_id=str((row.get("owner_id") if hasattr(row, "get") else row["owner_id"]) or ""),
+                workspace_id=(row.get("workspace_id") if hasattr(row, "get") else row["workspace_id"]),
+                origin_agent_id=(row.get("origin_agent_id") if hasattr(row, "get") else row["origin_agent_id"]),
+                origin_user_id=(row.get("origin_user_id") if hasattr(row, "get") else row["origin_user_id"]),
+                origin_session_id=(row.get("origin_session_id") if hasattr(row, "get") else row["origin_session_id"]),
+                scope_model_version=(row.get("scope_model_version") if hasattr(row, "get") else row["scope_model_version"]),
+                meta=normalize_document_metadata(
+                    meta,
+                    doc_id=str((row.get("doc_id") if hasattr(row, "get") else row["doc_id"]) or ""),
+                    owner_type=str((row.get("owner_type") if hasattr(row, "get") else row["owner_type"]) or ""),
+                    owner_id=str((row.get("owner_id") if hasattr(row, "get") else row["owner_id"]) or ""),
+                    ingested_at=ingested_at,
+                    source_path=str((row.get("source_path") if hasattr(row, "get") else row["source_path"]) or ""),
+                    source_hash=str((row.get("source_hash") if hasattr(row, "get") else row["source_hash"]) or ""),
+                ),
+            )
+        except Exception:
+            logger.exception(
+                "DocumentSQLStore.get_latest_by_source_path failed tenant=%s owner=%s:%s path=%s",
+                tenant_id,
+                owner_type,
+                owner_id,
+                source_path,
+            )
+            raise
+        finally:
+            conn.close()
+
     async def upsert_document(self, record: DocumentRecord) -> None:
         conn = self._conn()
         try:

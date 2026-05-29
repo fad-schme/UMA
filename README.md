@@ -99,6 +99,13 @@ That's the whole loop. For the full agent integration pattern — pre-LLM inject
 
 If a storage adapter needs credentials, `uma.yaml` also accepts an optional `secrets:` block; the reference shape lives in [`.claude/skills/uma-configure.md`](.claude/skills/uma-configure.md).
 
+## Maintenance Primitives
+
+Lite keeps maintenance writes inside the same canonical storage boundaries as normal ingest:
+
+- Re-ingesting the same tenant/owner/source path with changed content creates a new manifest version and links it to the immediately prior manifest via `supersedes` / `superseded_by`.
+- Semantic facts can have `trust_score` adjusted after write through `memory.semantic_core.update_trust(...)`, which preserves an in-record audit trail under `meta["trust_updates"]`.
+
 ---
 
 ## 🤖 Living Docs for AI Assistants

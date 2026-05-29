@@ -153,6 +153,11 @@ candidates with trust_score < min_trust_score are dropped before truncation
 
 Default `min_trust_score: 0.5` is calibrated to filter every medium-severity injection survivor (trust × 0.5 → 0.25) at retrieval, even when quarantine is disabled. Default `trust_weight: 0.15`.
 
+For maintenance operations, Lite also allows post-write trust adjustment on a
+single fact via `semantic_core.update_trust(fact_id, new_score, reason=..., ctx=RuntimeContext(...))`.
+The update remains tenant- and owner-scoped, changes only `trust_score`, and
+appends a per-update audit entry to `meta["trust_updates"]`.
+
 ### Retrieval Audit Log
 
 Every retrieval call (`retrieve_context`, `retrieve_memory`) is recorded by default in `.uma/db/retrieval_audit.db`:
@@ -285,6 +290,9 @@ UMAMemory.ingest_document(file_path, owner_type, owner_id, tenant_id, ...)
   → parse + PDF page count cap (raises if > pdf_max_pages; default 5000)
   → ingest_service.capture_source
     → manifest gate (source_hash + owner; skip if unchanged)
+      · same tenant/owner/source_path with a different content hash creates a new manifest version
+      · the new manifest records `supersedes=<prior_doc_id>`
+      · the prior manifest records `superseded_by=<new_doc_id>` and `superseded_at=<utc timestamp>`
     → chunk document; HTML/Markdown sanitization at chunk boundary
     → per-chunk injection scan; high-severity chunks marked quarantined
     → embed chunks (strict=True; raises on any batch failure)

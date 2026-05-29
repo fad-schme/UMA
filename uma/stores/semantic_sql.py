@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Any, Dict
 
 from .base_vector_sql_store import BaseVectorSQLStore
@@ -46,6 +46,8 @@ from uma.common.conflict import FactResolver, LatestWinsFactResolver
 from uma.stores.metadata import ensure_store_metadata
 from uma.common.types import Fact, SCOPE_MODEL_VERSION
 from uma.common.storage_metadata import normalize_fact_metadata
+from uma.common.identity import normalize_user_id
+from uma.common.types import RuntimeContext
 
 logger = logging.getLogger(__name__)
 
@@ -901,6 +903,111 @@ class SemanticSQLStore(BaseVectorSQLStore):
             return self._row_to_object(row) if row else None
         except Exception:
             logger.exception("SemanticSQLStore.get_fact failed id=%s", fact_id)
+            raise
+        finally:
+            conn.close()
+
+    async def update_trust(
+        self,
+        fact_id: str,
+        new_score: float,
+        *,
+        reason: str,
+        ctx: RuntimeContext,
+    ) -> None:
+        if not isinstance(ctx, RuntimeContext):
+            raise TypeError("SemanticSQLStore.update_trust requires a RuntimeContext")
+        if not fact_id or not isinstance(fact_id, str):
+            raise ValueError("SemanticSQLStore.update_trust requires fact_id as a non-empty string")
+
+        try:
+            normalized_score = float(new_score)
+        except Exception as exc:
+            raise ValueError("SemanticSQLStore.update_trust: new_score must be a float in [0.0, 1.0]") from exc
+        if not (0.0 <= normalized_score <= 1.0):
+            raise ValueError("SemanticSQLStore.update_trust: new_score must be a float in [0.0, 1.0]")
+
+        normalized_reason = str(reason or "").strip()
+        if not normalized_reason:
+            raise ValueError("SemanticSQLStore.update_trust: reason must be a non-empty string")
+
+        owner_refs: list[tuple[str, str]] = [("agent", ctx.agent_id)]
+        if ctx.user_id:
+            owner_refs.append(("user", normalize_user_id(ctx.user_id)))
+        if ctx.workspace_id:
+            owner_refs.append(("workspace", ctx.workspace_id))
+
+        conn = self._conn()
+        try:
+            row = None
+            matched_owner: tuple[str, str] | None = None
+            for owner_type, owner_id in owner_refs:
+                candidate = self._query_one(
+                    conn,
+                    "SELECT * FROM facts WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
+                    params=[fact_id, ctx.tenant_id, owner_type, owner_id],
+                    log_context="update_trust_fetch",
+                )
+                if candidate is not None:
+                    row = candidate
+                    matched_owner = (owner_type, owner_id)
+                    break
+
+            if row is None or matched_owner is None:
+                raise ValueError(f"SemanticSQLStore.update_trust: fact {fact_id!r} not found")
+
+            fact = self._row_to_object(row)
+            meta = dict(getattr(fact, "meta", None) or {})
+            trust_updates = list(meta.get("trust_updates") or [])
+            trust_updates.append(
+                {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "prior_score": float(getattr(fact, "trust_score", 0.5) or 0.5),
+                    "new_score": normalized_score,
+                    "reason": normalized_reason,
+                }
+            )
+            meta["trust_updates"] = trust_updates
+            normalized_meta = normalize_fact_metadata(
+                meta,
+                fact_id=fact.id,
+                owner_type=fact.owner_type,
+                owner_id=fact.owner_id,
+                created_at=fact.created_at,
+                updated_at=fact.updated_at,
+                source_ids=list(fact.source_ids or []),
+                session_id=getattr(fact, "session_id", None),
+            )
+            self._execute(
+                conn,
+                """
+                UPDATE facts
+                SET trust_score=?, meta=?
+                WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?
+                """,
+                params=[
+                    normalized_score,
+                    json.dumps(normalized_meta),
+                    fact.id,
+                    ctx.tenant_id,
+                    matched_owner[0],
+                    matched_owner[1],
+                ],
+                log_context="update_trust",
+            )
+            conn.commit()
+            logger.info(
+                "SemanticSQLStore.update_trust: fact=%s tenant=%s owner=%s:%s prior=%0.4f new=%0.4f",
+                fact.id,
+                ctx.tenant_id,
+                matched_owner[0],
+                matched_owner[1],
+                float(getattr(fact, "trust_score", 0.5) or 0.5),
+                normalized_score,
+            )
+        except Exception:
+            self._safe_rollback(conn, "update_trust")
+            logger.exception("SemanticSQLStore.update_trust failed fact_id=%s tenant=%s", fact_id, getattr(ctx, "tenant_id", None))
             raise
         finally:
             conn.close()
