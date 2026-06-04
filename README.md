@@ -6,7 +6,7 @@ UMA is a memory and context runtime SDK for developers building AI agents. It in
 
 > **Status:** beta.
 
-🌐 Website: uma.ai-mem-engineering.com · 📄 Documentation: uma.ai-mem-engineering.com/docs.html
+🌐 Website: [uma.ai-mem-engineering.com](https://uma.ai-mem-engineering.com) · 📄 Documentation: [uma.ai-mem-engineering.com/docs.html](https://uma.ai-mem-engineering.com/docs.html)
 
 ---
 
@@ -22,7 +22,7 @@ UMA is a memory and context runtime SDK for developers building AI agents. It in
 
 ## 🏛️ Architecture
 
-![UMA architecture diagram](https://github.com/aimemlabs/UMAassets/uma_architecture.png)
+![UMA architecture diagram](https://github.com/aimemlabs/UMA/assets/uma_architecture.png)
 
 UMA is a thin SDK around three concerns: **ingest** (data flows in, gets scanned, chunked, embedded), **storage** (SQLite is authoritative, LanceDB is a rebuildable accelerator), and **retrieval** (a canonical pipeline through candidate discovery, fusion, trust-aware ranking, and snippet rendering). Every write boundary scans for prompt injection; every read boundary enforces tenant/owner isolation and filters quarantined records.
 
