@@ -19,7 +19,7 @@ dependencies = [
   "aiohttp",
   "charset-normalizer",
   "pydantic>=2",
-  "openai>=1.0.0",
+  "openai>=1.0.1",
   "lancedb>=0.25.3,<0.26",
 ]
 
