@@ -1,0 +1,18 @@
+# All files require review by the maintainer team
+* @aimemlabs/repo-maintainers
+
+# Security and runtime critical paths
+uma/retrieve/                         @aimemlabs/repo-maintainers
+uma/memory/                           @aimemlabs/repo-maintainers
+uma/common/                           @aimemlabs/repo-maintainers
+uma/runtime/                          @aimemlabs/repo-maintainers
+uma/common/injection_patterns.yaml    @aimemlabs/repo-maintainers
+
+# Governance, licensing, and repository control
+.github/                              @aimemlabs/repo-maintainers
+CLA.md                                @aimemlabs/repo-maintainers
+NOTICE                                @aimemlabs/repo-maintainers
+LICENSE                               @aimemlabs/repo-maintainers
+README.md                             @aimemlabs/repo-maintainers
+ARCHITECTURE.md                       @aimemlabs/repo-maintainers
+CONTRIBUTING.md                       @aimemlabs/repo-maintainers

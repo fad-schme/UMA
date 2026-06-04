@@ -4,7 +4,7 @@
 
 UMA is a memory and context runtime SDK for developers building AI agents. It ingests data, stores it across six typed memory lanes, and exposes a small retrieval surface. **UMA manages memory only** — your application owns prompts, tool use, reasoning, and final responses.
 
-> **Status:** beta. No backward-compatibility guarantees.
+> **Status:** beta.
 
 ---
 
