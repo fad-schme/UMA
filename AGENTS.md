@@ -1,10 +1,10 @@
-codex.AGENT.md — UMA-RLM (Codex Coding Agent Guide)
+codex.AGENT.md — UMA (Codex Coding Agent Guide)
 
-You are a senior engineer. Understand the codebase deeply: its intent, component relationships, and how operations behave across the system. Before changing anything, inspect existing code and patterns, reuse what already exists, and add only the smallest clean change needed. Never duplicate functionality, over-engineer, or add code unless it is truly necessary.
+You are a senior software engineer. Understand the codebase deeply: its intent, component relationships, and how operations behave across the system. Before changing anything, inspect existing code and patterns, reuse what already exists, and add only the smallest clean change needed. Never duplicate functionality, over-engineer, or add code unless it is truly necessary.
 
 Purpose of this file
 
-This file exists to make an AI coding agent productive in UMA-RLM quickly, safely, and consistently. It is the single source of truth for:
+This file exists to make an AI coding agent productive in UMA quickly, safely, and consistently. It is the single source of truth for:
 	•	project goals and non-goals
 	•	invariants (DAT + ownership scoping)
 	•	how to run tests and validate changes
@@ -16,11 +16,11 @@ This file exists to make an AI coding agent productive in UMA-RLM quickly, safel
 
 0) Project identity (read this first)
 
-What UMA-RLM is
+What UMA is
 
-UMA-RLM is a memory and context manager SDK for developers building AI agents. It ingests data (documents, conversations), stores it in multiple lanes (SQL, vectors, graph), and exposes two thin, sharp retrieval products: curated context retrieval for RAG and evidence-backed memory retrieval over compiled knowledge.
+UMA is a memory and context manager SDK for developers building AI agents. It ingests data (documents, conversations), stores it in multiple lanes (SQL, vectors, graph), and exposes two thin, sharp retrieval products: curated context retrieval for RAG and evidence-backed memory retrieval over compiled knowledge.
 
-What UMA-RLM is NOT
+What UMA is NOT
 	•	Not a chat app.
 	•	Not a “big prompt builder”.
 	•	Not a knowledge-graph-first system (graph is a supporting lane, not the only lane).
@@ -33,7 +33,7 @@ RLM is always enabled. Retrieval is LLM-controlled search for context, not answe
 
 One-sentence product test
 
-A user must be able to understand what UMA-RLM is in one sentence and install it in one path.
+A user must be able to understand what UMA is in one sentence and install it in one path.
 
 
 Design implication
@@ -103,7 +103,7 @@ Cross-scope behavior.
 
 2) Retrieval lanes (what exists, what they mean)
 
-UMA-RLM retrieval uses multiple “lanes”:
+UMA retrieval uses multiple “lanes”:
 	1.	Working Memory (WM) — short conversational continuity.
 	2.	Semantic facts — structured statements extracted from chunks/episodes.
 	3.	Raw evidence chunks — authoritative source text discovered via vector + lexical retrieval.
@@ -314,7 +314,7 @@ All production callers must follow this sequence:
 
 Policy: do not implement ranking inside stores, snippet rendering, or controller layers.
 
-The same discipline applies to product paths: UMA-RLM must expose a small number of thin, sharp canonical paths, not a growing set of overlapping flows. “Context retrieval” and “memory retrieval” may share lower-level primitives, but they must remain distinct contracts with distinct outputs.
+The same discipline applies to product paths: UMA must expose a small number of thin, sharp canonical paths, not a growing set of overlapping flows. “Context retrieval” and “memory retrieval” may share lower-level primitives, but they must remain distinct contracts with distinct outputs.
 
 Both:
 	•	gold runner

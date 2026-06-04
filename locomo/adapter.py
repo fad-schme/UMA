@@ -1,4 +1,4 @@
-"""LoCoMo adapter for UMA-RLM.
+"""LoCoMo adapter for UMA.
 
 Design
 ------

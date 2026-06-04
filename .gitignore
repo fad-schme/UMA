@@ -84,3 +84,5 @@ tmp.md
 *.zip
 *.tar.gz
 *copy.md
+runs/
+locomo/*
