@@ -18,7 +18,7 @@ dependencies = [
   "numpy",
   "aiohttp",
   "charset-normalizer",
-  "pydantic>=2",
+  "pydantic>=2.13.4",
   "openai>=1.0.0",
   "lancedb>=0.25.3,<0.26",
 ]
