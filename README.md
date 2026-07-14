@@ -67,19 +67,20 @@ The [OWASP Top 10 for LLM Applications 2025](https://genai.owasp.org/llm-top-10/
 
 | OWASP 2025 Category | Scope | UMA's contribution |
 | --- | --- | --- |
+| 🟢 **ASI03: Identity & Privilege Abuse** (Agentic AI) | Partial — memory-layer | Explicit `tenant_id` / `owner_type` / `owner_id` on every artifact, enforced at the storage layer. Agent identity itself is the caller's concern. |
+| 🟢 **ASI05: Unexpected Code Execution** (Agentic AI) | Partial — ingest-only | User input and file injection scanning. MIME consistency check rejects executables; HTML/Markdown sanitized before storage. |
+| 🟢 **ASI06: Memory Poisoning** (Agentic AI) | In scope | User input and file injection scanning + quarantine at every storage boundary. Quarantined artifacts never enter retrieval and never seed fact extraction. |
 | 🟢 **LLM01: Prompt Injection** | In scope | Two-layer scanning: advisory pre-LLM gate (`scan_user_input`) + write-time per-artifact scan. High severity → quarantine; medium/low → trust reduction. |
 | 🟢 **LLM02: Sensitive Information Disclosure** | Partial | Audit log stores SHA-256-hashed query previews only. HTML sanitization strips scripts and active URLs at ingest. |
 | 🟢 **LLM04: Data and Model Poisoning** | In scope (RAG path) | Quarantined chunks dropped before fact extraction. SHA-256 `content_hash` + `verify_integrity` detect post-hoc tampering. |
 | 🟢 **LLM08: Vector and Embedding Weaknesses** | In scope — primary | The C1 isolation contract: LanceDB pushes `tenant_id` / `owner_type` / `owner_id` as a SQL `WHERE` clause into the engine *before* the k-nearest cap — without this, heavy users in one tenant would occupy top-k globally and starve others. SQL stores add the same filter on every read path. Cross-tenant leakage is impossible by construction. User input and file injection scanning also addresses the RAG poisoning problem. |
 | 🟢 **LLM09: Misinformation** | Partial | Every fact carries provenance back to source chunks. `LatestWinsFactResolver` picks the canonical row by most-recent `updated_at`; quarantined facts are excluded from retrieval at the SQL layer (`AND quarantined_at IS NULL`) so they never surface to callers even if chosen as canonical. |
 | 🟢 **LLM10: Unbounded Consumption** | In scope | Optional `set_rate_limit_hook` on every public method. `max_file_bytes` and `pdf_max_pages` cap ingest resource use. |
-| 🟢 **ASI03: Identity & Privilege Abuse** (Agentic AI) | Partial — memory-layer | Explicit `tenant_id` / `owner_type` / `owner_id` on every artifact, enforced at the storage layer. Agent identity itself is the caller's concern. |
-| 🟢 **ASI05: Unexpected Code Execution** (Agentic AI) | Partial — ingest-only | User input and file injection scanning. MIME consistency check rejects executables; HTML/Markdown sanitized before storage. |
-| 🟢 **ASI06: Memory Poisoning** (Agentic AI) | In scope | User input and file injection scanning + quarantine at every storage boundary. Quarantined artifacts never enter retrieval and never seed fact extraction. |
-
-**Six of ten LLM categories apply** (LLM01, LLM02 partial, LLM04, LLM08, LLM09 partial, LLM10). There is no security theater — the four categories marked out of scope genuinely require capabilities UMA does not have: output rendering (LLM05), autonomous tool use (LLM06), system prompt management (LLM07), and model supply-chain procurement (LLM03). UMA makes an adjacent contribution to LLM03 at the document ingest boundary, but the core supply-chain threat — model provenance and dependency integrity — belongs to the layer above UMA.
 
 **Three of ten ASI categories apply.** UMA is a memory SDK, not an agent. The remaining seven belong to the agent layer above UMA — they require tool use, autonomy, or inter-agent communication that UMA doesn't have.
+
+
+**Six of ten LLM categories apply** (LLM01, LLM02 partial, LLM04, LLM08, LLM09 partial, LLM10). There is no security theater — the four categories marked out of scope genuinely require capabilities UMA does not have: output rendering (LLM05), autonomous tool use (LLM06), system prompt management (LLM07), and model supply-chain procurement (LLM03). UMA makes an adjacent contribution to LLM03 at the document ingest boundary, but the core supply-chain threat — model provenance and dependency integrity — belongs to the layer above UMA.
 
 For the full security model — including the injection pattern catalog, severity behavior, quarantine lifecycle, and integrity verification — see [`.claude/skills/uma-security.md`](.claude/skills/uma-security.md) for the deep dive, or [`ARCHITECTURE.md`](ARCHITECTURE.md) for the architectural model.
 
