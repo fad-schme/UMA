@@ -64,23 +64,38 @@ Cross-tenant access is impossible **by construction**:
 - Working memory and episodic turn memory are **session-local by default**
 - Semantic facts extracted from turns are session-local by default and must be explicitly promoted to become durable
 
-## Security Primitives — Defense-in-Depth for Memory Poisoning
+## Security Primitives (ASI06 / ASI03 / ASI05 + LLM baseline)
 
-Memory poisoning (ASI06) is UMA's primary security concern. Because it is a stateful attack, single-layer defenses are not enough. UMA implements the four-layer defense-in-depth model on every write boundary and every read boundary:
+UMA is a memory SDK — the OWASP Agentic Security Initiative (ASI) is the most relevant framework because memory is where ASI threats materialise. The three ASI controls below are first-class architectural properties; the LLM Top 10 coverage follows from building the memory layer correctly.
 
-- **Pre-Write Sanitization (Layer 1)** — every user/assistant message and every ingested document chunk is scanned against a 15-rule YAML catalog aligned with [OWASP Agent Memory Guard](https://owasp.org/www-project-agent-memory-guard/). High-severity hits trip `quarantined_at`; the artifact stays in the database but is excluded from retrieval. Implements the pre-LLM gate (`scan_user_input`) + write-time boundary scan (`scan_artifact_text`).
-- **Provenance Tracking (Layer 2)** — every Fact, Episode, Skill, and Chunk carries `source_chunk_ids`, a SHA-256 `content_hash`, a classifier-derived `trust_score ∈ [0, 1]`, and an append-only `meta.security.audit_log`. `verify_integrity` re-derives hashes on demand; mismatch → quarantine. `lint_memory_drift` detects compiled artifacts whose raw evidence has drifted. Retrieval ranks by `(1 - trust_weight) * similarity + trust_weight * trust_score` and drops anything below `min_trust_score` (default 0.5).
-- **Temporal Decay (Layer 3)** — not implemented in UMA. Trust scores are set at write time and do not decay automatically. Time-weighted ranking or TTL policies are caller responsibility.
-- **Memory Isolation (Layer 4)** — `tenant_id` / `owner_type` / `owner_id` enforced at every SQL read and pushed into the LanceDB `WHERE` clause before the k-nearest cap. Cross-tenant leakage is impossible by construction, not by application convention.
+**Seven primitives enforce security on every write and read boundary:**
 
-Additional primitives:
+- **Provenance** — every artifact carries its lineage: origin, owner, derivation chain, and timestamps. A runtime invariant, not a debugging convenience. Enables every other primitive.
+- **Write-time trust scoring** — `uma.common.trust.score_source` assigns `trust_score ∈ [0, 1]` at the moment of write. The score travels with the artifact permanently and is blended into retrieval ranking: `final = (1 - trust_weight) * similarity + trust_weight * trust_score`. Anything below `min_trust_score` (default 0.5) is dropped before results are returned.
+- **Cryptographic integrity** — every Fact, Episode, Skill, and Chunk carries a SHA-256 `content_hash` computed at write time. `verify_integrity` re-derives and compares; a mismatch quarantines the record and appends an audit log entry.
+- **Injection pattern detection** — every artifact is scanned at its write boundary against a 15-rule YAML catalog covering 8 attack categories (jailbreak prompts, role impersonation, context switching, data exfiltration probes, encoded payloads, alignment breaking, debug spoofing, config leakage). High-severity hits set `trust_score` to 0.0 and quarantine the artifact. The catalog is YAML-configurable via `security.custom_patterns_path`.
+- **Two-layer injection gate** — `scan_user_input` is the pre-LLM advisory gate: synchronous, never raises, caller decides. `process_turn` rescans `user_msg` at the storage boundary (defense-in-depth); on high severity it raises `InjectionDetectedError` and nothing is stored — no working memory, no episode, no chunks, no facts.
+- **Quarantine** — suspicious artifacts are stored with `quarantined_at` set and excluded from every retrieval query (`AND quarantined_at IS NULL`). The record stays in the database for review. `list_quarantined`, `reinstate_quarantined`, and `purge_quarantined` manage the lifecycle.
+- **Ingest boundary hardening** — MIME consistency check rejects executables and extension/content mismatches before any parser runs. File size (`max_file_bytes`, default 50 MB) and PDF page count (`pdf_max_pages`, default 5000) caps prevent resource abuse. HTML and Markdown are sanitized of scripts, iframes, inline event handlers, `javascript:` and `data:` URLs before chunking. Per-category removal counts are recorded in `meta["security"]["sanitization"]`.
 
-- **MIME consistency + size limits** — ingest rejects executable types, extension/content mismatches, files over `max_file_bytes` (default 50MB), and PDFs over `pdf_max_pages` (default 5000).
-- **Vector isolation push-down** — LanceDB filters by tenant/owner before the k-nearest cap is applied. No cross-tenant leakage under load.
-- **Retrieval audit log** — every retrieval call records a hashed query preview, scope, severity, and result counts (default on; toggle via `security.retrieval_audit_enabled`).
-- **Rate-limit hook** — operators register a single callable that runs at the top of `retrieve_context`, `retrieve_memory`, `process_turn`, and `ingest_document`. The hook raises to refuse.
+**OWASP ASI coverage (primary):** ASI06 Memory Poisoning — primitives 2–6 compose directly. ASI03 Identity & Privilege Abuse — mandatory `tenant_id` / `owner_type` / `owner_id` on every artifact, pushed into SQL and vector queries before the candidate cap (C1 contract). ASI05 Unexpected Code Execution (ingest path) — `PickleParser` removed, MIME checks, HTML sanitization.
 
-See `uma-security.md` for the full security model and OWASP Top 10 mapping.
+**OWASP LLM Top 10 coverage (as a consequence — 6 of 10):**
+
+| Control | Scope | How |
+|---|---|---|
+| **LLM01** Prompt Injection | In scope | Two-layer gate: `scan_user_input` (pre-LLM, advisory) + `process_turn` write-time rescan (raises `InjectionDetectedError` on high severity, drops turn entirely) |
+| **LLM02** Sensitive Information Disclosure | Partial | Retrieval audit log stores SHA-256-hashed query preview only, never raw text. HTML sanitization strips active URLs from ingested documents. |
+| **LLM03** Supply Chain | Out of scope (adjacent) | No model training or plugin registry. `PickleParser` removed; MIME checks reject executables at the document ingest boundary. |
+| **LLM04** Data and Model Poisoning | In scope | Quarantined chunks excluded from fact extraction. SHA-256 `content_hash` + `verify_integrity` detect post-hoc tampering across all lanes. |
+| **LLM05** Improper Output Handling | Out of scope | UMA returns context, not generated output. Caller owns rendering and escaping. |
+| **LLM06** Excessive Agency | Out of scope | No tool use, no function calling, no autonomous action. Pure memory SDK. |
+| **LLM07** System Prompt Leakage | Out of scope | System prompts live in the calling application, not UMA. |
+| **LLM08** Vector and Embedding Weaknesses | In scope — primary | C1 contract: isolation (`tenant_id` / `owner_type` / `owner_id`) pushed into every vector query *before* the k-nearest cap — a heavy tenant cannot starve others. All three adapters refuse empty isolation at upsert. SQL layer adds the same filter. Write-time scanning addresses the RAG poisoning sub-problem. |
+| **LLM09** Misinformation | Partial | Every fact carries provenance back to source chunks. Quarantined facts excluded at SQL retrieval layer (`AND quarantined_at IS NULL`). `provenance_valid` is a top-level field on every `retrieve_memory` result. |
+| **LLM10** Unbounded Consumption | In scope | `set_rate_limit_hook` fires at the top of every public method. `max_file_bytes` and `pdf_max_pages` cap ingest resource use. |
+
+The vector isolation contract (C1) and the rate-limit hook are documented separately; see `uma-security.md` for the full model.
 
 ## One-Sentence Product Test
 

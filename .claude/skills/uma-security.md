@@ -1,6 +1,6 @@
 ---
 name: uma-security
-description: Complete security model for UMA — the four-layer defense-in-depth framework for ASI06 memory poisoning (pre-write sanitization, provenance tracking, temporal decay, memory isolation), the two-layer injection-scan architecture (pre-LLM gate + write-time boundary scan), severity behavior and trust-score adjustment, the YAML pattern catalog with all built-in rules, custom pattern extension, MIME consistency and file-size limits at ingest, HTML/Markdown sanitization, the OWASP LLM Top 10 2025 and Agentic AI baseline UMA enforces, and how UMA's defenses compose against prompt injection, vector poisoning, and integrity tampering. Use this skill when answering questions about how UMA defends against prompt injection or memory poisoning, how to extend the pattern catalog, what `severity` levels mean, how `trust_score` is adjusted, what happens to a flagged user message, what `InjectionDetectedError` indicates, how to disable scanning, or any question about the security primitives across the ingest and retrieval paths.
+description: Complete security model for UMA — the seven security primitives (provenance, write-time trust scoring, cryptographic integrity, injection pattern detection, two-layer injection gate, quarantine, ingest boundary hardening), the full OWASP LLM Top 10 2025 mapping (LLM01/LLM02/LLM04/LLM08/LLM09/LLM10 in scope; LLM03/LLM05/LLM06/LLM07 out of scope with explicit reasoning), the OWASP ASI06/ASI03/ASI05 coverage, the two-layer injection-scan architecture (pre-LLM gate + write-time boundary scan), severity behavior and trust-score adjustment, the 15-rule YAML pattern catalog with all built-in rules, custom pattern extension, MIME consistency and file-size limits at ingest, HTML/Markdown sanitization, and how UMA's defenses compose against prompt injection, vector poisoning, and integrity tampering. Use this skill when answering questions about how UMA defends against any OWASP LLM or ASI control, how to extend the pattern catalog, what `severity` levels mean, how `trust_score` is adjusted, what happens to a flagged user message, what `InjectionDetectedError` indicates, which OWASP controls are out of scope and why, or any question about the security primitives across ingest and retrieval.
 ---
 
 # UMA — Security Model
@@ -14,21 +14,6 @@ The security model has five primitives. They compose:
 3. **Content hashing + integrity verification** — every typed artifact carries `content_hash`
 4. **Ingest gating** — MIME consistency, file size limits, HTML sanitization
 5. **Retrieval audit** — every retrieve call is logged with a hashed query preview
-
----
-
-## Defense-in-Depth Against Memory Poisoning (ASI06)
-
-Memory poisoning is a stateful attack: a single injected fact can silently corrupt an agent's behaviour across all future sessions. [Single-layer defenses are rarely enough](https://vectorize.io/articles/how-to-prevent-ai-memory-poisoning) — UMA implements all four layers of the recommended defense-in-depth model:
-
-| Layer | What it means | UMA's implementation |
-|---|---|---|
-| **1. Pre-Write Sanitization** | Block malicious content before it enters memory stores | Two-layer scanning aligned with [OWASP Agent Memory Guard](https://owasp.org/www-project-agent-memory-guard/): `scan_user_input` (pre-LLM gate) + `scan_artifact_text` at every write boundary. 15-rule catalog. High severity → quarantine + `trust=0.0`. |
-| **2. Provenance Tracking** | Tag and trace the origin of every stored artifact; require approval for untrusted inputs | `source_chunk_ids`, `content_hash`, classifier-derived `trust_score`, and `meta.security.audit_log` on every artifact. `verify_integrity` re-derives SHA-256 hashes; mismatch → quarantine. `lint_memory_drift` detects stale or drifted provenance. |
-| **3. Temporal Decay** | Reduce influence of older memories so corrupted data doesn't anchor permanently | **Not implemented.** Trust scores are set at write time and do not decay automatically. Time-weighted ranking or TTL is caller responsibility. |
-| **4. Memory Isolation** | Strict per-user isolation so one poisoned interaction can't infect others | `tenant_id` / `owner_type` / `owner_id` enforced at every SQL read; LanceDB pushes isolation into the `WHERE` clause before the k-nearest cap — cross-tenant leakage is impossible by construction. |
-
-The primitives in sections below implement layers 1, 2, and 4 end-to-end. Layer 3 (temporal decay) is explicitly out of scope and noted where relevant.
 
 ---
 
@@ -315,11 +300,29 @@ See `uma-api.md` for the full hook signature.
 
 ---
 
+## OWASP LLM Top 10 Coverage
+
+UMA addresses 6 of the 10 OWASP Top 10 for LLM Applications 2025 categories. The mapping below is the honest accounting — out-of-scope categories are listed because stating them explicitly is more useful than silence.
+
+| Control | Scope | Mechanism |
+|---|---|---|
+| **LLM01 Prompt Injection** | In scope | Two-layer gate: `scan_user_input` (pre-LLM, advisory, never raises) + `process_turn` write-time rescan. High severity drops the turn entirely (`InjectionDetectedError`); lower severities reduce trust score. Every document chunk and episode also scanned at write boundary via `scan_artifact_text`. |
+| **LLM02 Sensitive Information Disclosure** | Partial | Retrieval audit log stores SHA-256-hashed `query_text` preview, never raw text. HTML/Markdown sanitization strips scripts and active URLs at ingest. UMA does not control what the calling application puts into prompts or what the LLM returns. |
+| **LLM03 Supply Chain** | Out of scope (document boundary adjacent) | UMA has no model training, fine-tuning, or plugin registry — core supply chain is out of scope. Adjacent: `PickleParser` removed (arbitrary code execution risk); MIME consistency checks reject executables before parsing. |
+| **LLM04 Data and Model Poisoning** | In scope | Quarantined chunks excluded from fact extraction — injected text cannot seed the semantic lane. SHA-256 `content_hash` on every artifact; `verify_integrity` quarantines on mismatch. `AND quarantined_at IS NULL` in every retrieval query across all four SQL stores. |
+| **LLM05 Improper Output Handling** | Out of scope | UMA returns context packs, not generated outputs. The calling application owns rendering, escaping, and output validation. |
+| **LLM06 Excessive Agency** | Out of scope | UMA has no tool use, function calling, or autonomous action capability. Pure memory SDK. |
+| **LLM07 System Prompt Leakage** | Out of scope | System prompts live entirely in the calling application. UMA never sees them. |
+| **LLM08 Vector and Embedding Weaknesses** | In scope — primary | C1 isolation contract: `tenant_id` / `owner_type` / `owner_id` pushed as a SQL `WHERE` clause into the vector engine *before* the k-nearest cap is applied — a heavy tenant cannot occupy top-k and starve others. All three adapters (LanceDB, FAISS, InMemory) refuse empty isolation values at upsert. SQL stores apply the same filter on every read path. Cross-tenant leakage is impossible by construction. Write-time injection scanning directly addresses the RAG poisoning sub-problem. |
+| **LLM09 Misinformation** | Partial | Every fact carries `source_chunk_ids` (provenance back to source). Quarantined facts excluded at SQL retrieval layer. `provenance_valid` is a top-level field on every `retrieve_memory` result. UMA cannot prevent the LLM from hallucinating — it provides the provenance infrastructure to detect and verify. |
+| **LLM10 Unbounded Consumption** | In scope | `set_rate_limit_hook` fires at the top of `retrieve_context`, `retrieve_memory`, `process_turn`, and `ingest_document`. `max_file_bytes` (default 50 MB) and `pdf_max_pages` (default 5000) cap ingest resource use. |
+
+---
+
 ## What UMA Does NOT Defend Against
 
 Stating this explicitly so expectations are right:
 
-- **Temporal decay / trust decay over time.** Trust scores are set at write time and do not automatically decrease as memories age. If your threat model includes agents being permanently anchored to older or corrupted data, implement time-weighted ranking or TTL expiry at the caller layer.
 - **Malicious local operators.** UMA defends artifacts in motion through the pipeline. It does not sandbox the developer running it.
 - **Network-level attacks against your LLM/embedding provider.** Use TLS, scope API keys, etc. — UMA does not.
 - **Side-channel attacks against the SQLite database file.** Filesystem permissions are the operator's responsibility.
