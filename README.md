@@ -30,11 +30,9 @@ management.
 
 ## 🏛️ Architecture
 
-<<<<<<< HEAD
 ![UMA architecture diagram]([https://github.com/aimemlabs/UMA/blob/main/assets/uma_architecture.png])
 =======
 ![UMA architecture diagram](assets/uma_architecture.png)
->>>>>>> a1a7150 (latest fixes: docs, clean up - ATP)
 
 UMA is a thin SDK around three concerns: **ingest** (data flows in, gets scanned, chunked, embedded), **storage** (SQLite is authoritative, LanceDB is a rebuildable accelerator), and **retrieval** (a canonical pipeline through candidate discovery, fusion, trust-aware ranking, and snippet rendering). Every write boundary scans for prompt injection; every read boundary enforces tenant/owner isolation and filters quarantined records.
 
