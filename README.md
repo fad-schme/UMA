@@ -4,7 +4,7 @@
                                 | |_| | |\/| |/ _ \
                                  \___/|_|  |___/ \_\
 ```
-**Universal Memory Architecture** — long-lived, evidence-backed memory for AI agents, with security built into every write and every read.
+**Universal Memory Architecture** 
 
 UMA is a memory and context runtime SDK for developers building AI agents. It ingests data, stores it across six typed memory lanes, and exposes a small retrieval surface. **UMA manages memory only** — your application owns prompts, tool use, reasoning, and final responses.
 
@@ -14,7 +14,9 @@ management.
 
 > **Status:** beta.
 
-🌐 Website: [uma.ai-mem-engineering.com](https://uma.ai-mem-engineering.com) · 📄 Documentation: [uma.ai-mem-engineering.com/docs.html](https://uma.ai-mem-engineering.com/docs.html)
+🌐 Website: [uma.ai-mem-engineering.com](https://uma.ai-mem-engineering.com) ·
+📄 Documentation: [uma.ai-mem-engineering.com/docs.html](https://uma.ai-mem-engineering.com/docs.html)
+
 
 ---
 
@@ -30,8 +32,6 @@ management.
 
 ## 🏛️ Architecture
 
-![UMA architecture diagram]([https://github.com/aimemlabs/UMA/blob/main/assets/uma_architecture.png])
-=======
 ![UMA architecture diagram](assets/uma_architecture.png)
 
 UMA is a thin SDK around three concerns: **ingest** (data flows in, gets scanned, chunked, embedded), **storage** (SQLite is authoritative, LanceDB is a rebuildable accelerator), and **retrieval** (a canonical pipeline through candidate discovery, fusion, trust-aware ranking, and snippet rendering). Every write boundary scans for prompt injection; every read boundary enforces tenant/owner isolation and filters quarantined records.
