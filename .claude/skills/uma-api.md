@@ -123,7 +123,7 @@ except InjectionDetectedError as e:
 **Contract:**
 
 - `session_id` is required — raises `ValueError` if missing or empty
-- Re-scans `user_msg` at the storage boundary (defense in depth)
+- Re-scans `user_msg` at the storage boundary (Layer 2 of UMA's defense-in-depth model for memory poisoning)
 - On `severity == "high"`, raises `InjectionDetectedError` and **nothing is stored** — no working memory, no episode, no chunks, no facts
 - On `low` / `medium`, logged + trust-reduced (by 20% / 50%) and storage proceeds
 - Persists working memory, extracts an episode from the current turn, extracts semantic facts (session-local by default until promoted)

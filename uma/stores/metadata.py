@@ -16,6 +16,13 @@ logger = logging.getLogger(__name__)
 
 META_TABLE = "uma_store_meta"
 FORMAT_NAME = "uma-rlm"
+# B608: META_TABLE is a module-level constant, never derived from input.
+# The assert below is the machine-checkable proof: it fires immediately at
+# import time if the value is ever changed to something outside the known set.
+assert META_TABLE in {"uma_store_meta"}, (
+    f"META_TABLE {META_TABLE!r} is not a known UMA schema table; "
+    "update this assertion if adding a new metadata table."
+)
 
 
 def ensure_store_metadata(store: object, conn: object, store_name: str) -> Dict[str, str]:
@@ -44,7 +51,7 @@ def ensure_store_metadata(store: object, conn: object, store_name: str) -> Dict[
 
     rows = store._query_all(
         conn,
-        f"SELECT meta_key, meta_value FROM {META_TABLE}",
+        f"SELECT meta_key, meta_value FROM {META_TABLE}",  # nosec B608 — META_TABLE is a module constant asserted at import time
         log_context="meta_read",
     )
     meta = {r["meta_key"]: r["meta_value"] for r in rows}

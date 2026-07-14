@@ -289,7 +289,7 @@ class SnippetRefiner:
     # ------------------------------------------------------------------
 
     def _build_snippet(self, candidate: Dict[str, Any], text: str) -> Dict[str, Any]:
-        sid = hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+        sid = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
         source_path = candidate.get("source_path")
         file_name = ""
         if isinstance(source_path, str) and source_path.strip():

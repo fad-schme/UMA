@@ -171,7 +171,7 @@ def _fact_salience(fact: Any) -> float:
             return float(val)
         meta = get_attr_or_key(fact, "meta") or {}
         return float(meta.get("salience", 0.0)) if isinstance(meta, dict) else 0.0
-    except Exception:
+    except (TypeError, ValueError):
         return 0.0
 
 
@@ -201,6 +201,7 @@ def _fact_entities(facts: List[Any], limit: int = 12) -> List[str]:
                 if len(entities) >= limit:
                     break
         except Exception:
+            logger.debug("coverage: skipped malformed item", exc_info=True)
             continue
     return entities
 
@@ -222,6 +223,7 @@ def _graph_entity_support(facts: List[Any], graph: List[Any]) -> Tuple[int, int]
                 if node_id:
                     graph_ids.add(str(node_id).strip().lower())
         except Exception:
+            logger.debug("coverage: skipped malformed item", exc_info=True)
             continue
     support = sum(1 for e in entities if e in graph_ids)
     return support, len(entities)
@@ -239,6 +241,7 @@ def _graph_predicate_support(facts: List[Any], graph: List[Any]) -> Tuple[int, i
                     seen.add(p)
                     predicates.append(p)
         except Exception:
+            logger.debug("coverage: skipped malformed item", exc_info=True)
             continue
     if not predicates:
         return 0, 0
@@ -251,6 +254,7 @@ def _graph_predicate_support(facts: List[Any], graph: List[Any]) -> Tuple[int, i
                     if val:
                         graph_preds.add(str(val).strip().upper())
         except Exception:
+            logger.debug("coverage: skipped malformed item", exc_info=True)
             continue
     support = sum(1 for p in predicates if p in graph_preds)
     return support, len(predicates)

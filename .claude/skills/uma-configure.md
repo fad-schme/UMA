@@ -192,6 +192,8 @@ Lower = more facts stored; higher = stricter filtering. Default `0.45` is a reas
 
 ### Security
 
+These settings govern UMA's defense-in-depth model for memory poisoning (ASI06). Layers 1 (pre-write sanitization) and 4 (memory isolation) are always on. The settings below tune layer 1 behavior and the provenance audit trail (layer 2).
+
 ```yaml
 security:
   # Path to a YAML file with additional injection patterns. UMA loads

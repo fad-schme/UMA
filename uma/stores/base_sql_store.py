@@ -38,6 +38,39 @@ from ..adapters.db.base import DBAdapter, DBConnection
 logger = logging.getLogger(__name__)
 DEFAULT_TENANT_ID = "default"
 
+# ---------------------------------------------------------------------------
+# SQL identifier whitelists — Pattern A fix (Bandit B608)
+# ---------------------------------------------------------------------------
+# SQL identifiers (table names, column names, column type definitions) cannot
+# be bound as DB-API 2.0 parameters; the parser requires them at parse time.
+# The defence is a whitelist: _ensure_column and _table_columns only accept
+# identifiers from these frozen sets, so no external value can reach the DDL
+# f-strings even via an errant future caller.
+# ---------------------------------------------------------------------------
+_ALLOWED_SCHEMA_TABLES: frozenset = frozenset({
+    "facts", "episodes", "episode_clusters", "skills", "chunks",
+    "documents", "uma_store_meta",
+})
+_ALLOWED_SCHEMA_COLUMNS: frozenset = frozenset({
+    "id", "tenant_id", "workspace_id", "owner_type", "owner_id",
+    "session_id", "origin_agent_id", "origin_user_id", "origin_session_id",
+    "scope_model_version", "trust_score", "content_hash", "quarantined_at",
+    "doc_id", "source_path", "source_hash", "ingested_at", "meta",
+    "user_id", "agent_id", "request_id", "subject", "predicate", "object",
+    "salience", "confidence", "source_ids", "source", "created_at",
+    "updated_at", "summary", "raw", "tags", "embedding", "name",
+    "description", "trigger_phrases", "trigger_patterns", "plan", "tools",
+    "example", "text", "position", "page_start", "page_end",
+    "supersedes", "superseded_by", "superseded_at",
+})
+# Column type definitions used in ALTER TABLE ADD COLUMN statements.
+_ALLOWED_COLUMN_DEFS: frozenset = frozenset({
+    "TEXT",
+    "TEXT NOT NULL DEFAULT 'default'",
+    "DATETIME",
+    "REAL NOT NULL DEFAULT 0.5",
+})
+
 
 class BaseSQLStore:
     """
@@ -179,52 +212,6 @@ class BaseSQLStore:
             # Re-raise so tests (and callers) can handle the failure
             raise e
 
-    def _executemany(
-        self,
-        conn: DBConnection,
-        sql: str,
-        seq_of_params: Iterable[Sequence[Any]],
-        log_context: str = "",
-    ) -> None:
-        """
-        Execute a parameterized SQL statement for a sequence of parameter sets.
-
-        Useful for bulk INSERT/UPDATE/DELETE operations.
-
-        Parameters
-        ----------
-        conn : DBConnection
-            Open DB connection.
-        sql : str
-            SQL statement to execute.
-        seq_of_params : Iterable[Sequence[Any]]
-            Iterable of parameter tuples/lists.
-        log_context : str
-            Short label for log messages.
-
-        Raises
-        ------
-        Exception
-            Any DB-API exception raised by the driver will be logged and
-            re-raised.
-        """
-        ctx = f" [{log_context}]" if log_context else ""
-        try:
-            cursor = conn.cursor()
-            try:
-                adapted_sql = self._adapt_sql(sql)
-                cursor.executemany(adapted_sql, list(seq_of_params))
-            finally:
-                cursor.close()
-        except Exception:
-            logger.exception(
-                "BaseSQLStore._executemany%s: SQL failed: %s ; params=%s",
-                ctx,
-                sql,
-                seq_of_params,
-            )
-            raise
-
     def _query_all(
         self,
         conn: DBConnection,
@@ -283,9 +270,13 @@ class BaseSQLStore:
     # ------------------------------------------------------------------ #
 
     def _table_columns(self, conn: DBConnection, table_name: str) -> set[str]:
+        if table_name not in _ALLOWED_SCHEMA_TABLES:
+            raise ValueError(
+                f"_table_columns: table {table_name!r} is not in the allowed schema table set."
+            )
         rows = self._query_all(
             conn,
-            f"PRAGMA table_info({table_name})",
+            f"PRAGMA table_info({table_name})",  # nosec B608 — table_name validated against _ALLOWED_SCHEMA_TABLES
             log_context=f"schema_info_{table_name}",
         )
         columns: set[str] = set()
@@ -305,11 +296,23 @@ class BaseSQLStore:
         column_name: str,
         column_sql: str,
     ) -> None:
+        if table_name not in _ALLOWED_SCHEMA_TABLES:
+            raise ValueError(
+                f"_ensure_column: table {table_name!r} is not in the allowed schema table set."
+            )
+        if column_name not in _ALLOWED_SCHEMA_COLUMNS:
+            raise ValueError(
+                f"_ensure_column: column {column_name!r} is not in the allowed schema column set."
+            )
+        if column_sql not in _ALLOWED_COLUMN_DEFS:
+            raise ValueError(
+                f"_ensure_column: column definition {column_sql!r} is not in the allowed column def set."
+            )
         if column_name in self._table_columns(conn, table_name):
             return
         self._execute(
             conn,
-            f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}",
+            f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}",  # nosec B608 — all three identifiers validated against frozenset whitelists above
             log_context=f"schema_add_column_{table_name}_{column_name}",
         )
 

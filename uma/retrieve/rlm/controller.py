@@ -21,8 +21,9 @@ from .domain import (
 )
 from .coverage import assess_coverage, compute_confidence
 from ..policy import RetrievalPolicy, should_stop
+from uma.common.dedupe import dedupe_by_id
 from uma.memory.chunk.core import merge_chunks_with_precedence, partition_chunks_by_route
-from uma.memory.semantic.query_pruner import prune_facts_for_query
+from uma.memory.semantic.query_pruner import prune_facts_for_query, describe_fact
 from .evidence import expand_evidence_chunks_from_facts
 
 
@@ -61,18 +62,24 @@ logger = logging.getLogger(__name__)
 
 class RLMController:
     """
-    RLMController — Recursive, bounded *memory navigation* controller.
+    RLMController — Recursive, bounded memory navigation controller.
+
+    Drives retrieval through a bounded multi-step loop. Each step inspects
+    what has already been collected (facts, chunks, episodes, graph items),
+    evaluates coverage, and deterministically decides which store operations
+    to execute next until coverage is satisfied or a hard budget is reached.
 
     IMPORTANT:
     - This controller NEVER answers questions.
     - It ONLY decides what memory to retrieve next.
-    - All reasoning is deterministic unless LLM mode is enabled.
+    - Navigation decisions are fully deterministic (coverage heuristics).
+    - The LLM is used only for fact pruning after retrieval, not for navigation.
 
     Guarantees
     ----------
-    - Store-native actions only (no 'retrieve again')
+    - Store-native actions only (no arbitrary queries)
     - Bounded recursion (steps, env calls, timeout)
-    - Deterministic stopping (coverage + novelty)
+    - Deterministic stopping (coverage + novelty + hard budgets)
     """
 
     def __init__(
@@ -91,6 +98,7 @@ class RLMController:
             rlm_cfg = getattr(retrieval_cfg, "rlm", None) if retrieval_cfg else None
             debug_scores = bool(getattr(retrieval_cfg, "debug_scores", False)) if retrieval_cfg else False
         except Exception:
+            logger.debug("RLMController: failed reading rlm_cfg from env; using defaults", exc_info=True)
             rlm_cfg = None
             debug_scores = False
             retrieval_cfg = None
@@ -145,10 +153,30 @@ class RLMController:
         self.graph_expansion_available = getattr(memory, "graph_core", None) is not None
 
     # ------------------------------------------------------------------
-    # PUBLIC API
+    # Entry point
     # ------------------------------------------------------------------
 
     async def retrieve_context(self, request: RetrievalRequest, query_text: str) -> ContextPack:
+        """Drive the full RLM retrieval loop for one request.
+
+        Sequence
+        --------
+        1. Validate inputs and build the ContextPack.
+        2. Populate working memory and embed the query.
+        3. Run per-scope baseline retrieval, then dedupe and domain-default.
+        4. Prune facts and expand evidence chunks (post-baseline).
+        5. Evaluate coverage; return early if already satisfied.
+        6. Navigate: for each step, re-evaluate coverage, call the
+           deterministic decision engine, execute the chosen actions, and
+           merge results into the pack until a hard budget or stop condition
+           is reached.
+        7. Final prune + evidence expansion; return the completed ContextPack.
+
+        Raises
+        ------
+        TypeError  – request is not a RetrievalRequest.
+        ValueError – query_text is empty, or request.plan is missing.
+        """
         if not isinstance(request, RetrievalRequest):
             logger.error("RLMController.retrieve_context: request must be a RetrievalRequest")
             raise TypeError("request must be a RetrievalRequest")
@@ -258,58 +286,23 @@ class RLMController:
                 pack.owner_type, pack.owner_id = scope.owner_type, scope.owner_id
 
         # Deterministic merge cleanup after multi-scope baseline.
-        try:
-            from uma.common.dedupe import dedupe_by_id as _dedupe_by_id
-        except Exception:
-            _dedupe_by_id = None
-
-        if _dedupe_by_id:
-            try:
-                pack.facts = _dedupe_by_id(getattr(pack, "facts", []) or [])
-            except Exception:
-                pass
-            try:
-                pack.chunks = _dedupe_by_id(getattr(pack, "chunks", []) or [])
-            except Exception:
-                pass
-            try:
-                pack.episodes = _dedupe_by_id(getattr(pack, "episodes", []) or [])
-            except Exception:
-                pass
-            try:
-                pack.graph = _dedupe_by_id(getattr(pack, "graph", []) or [])
-            except Exception:
-                pass
+        pack.facts = dedupe_by_id(getattr(pack, "facts", []) or [])
+        pack.chunks = dedupe_by_id(getattr(pack, "chunks", []) or [])
+        pack.episodes = dedupe_by_id(getattr(pack, "episodes", []) or [])
+        pack.graph = dedupe_by_id(getattr(pack, "graph", []) or [])
 
         # Phase 0: default domain when missing (metadata-only; no migrations).
-        try:
-            ensure_domains_for_facts(getattr(pack, "facts", []) or [])
-        except Exception:
-            pass
-        try:
-            ensure_domains_for_chunks(getattr(pack, "chunks", []) or [])
-        except Exception:
-            pass
-        try:
-            ensure_domains_for_skills(getattr(pack, "skills", []) or [])
-        except Exception:
-            pass
+        ensure_domains_for_facts(getattr(pack, "facts", []) or [])
+        ensure_domains_for_chunks(getattr(pack, "chunks", []) or [])
+        ensure_domains_for_skills(getattr(pack, "skills", []) or [])
 
         # Apply domain routing: filter out disallowed fact domains for this query intent.
         allowed_fact_domains = set(pack.active_domains or [])
-        try:
-            pack.facts = filter_facts_by_domains(getattr(pack, "facts", []) or [], allowed_fact_domains)
-        except Exception:
-            pass
+        pack.facts = filter_facts_by_domains(getattr(pack, "facts", []) or [], allowed_fact_domains)
 
 
-        # Tighten evidence expansion: prune facts before expanding cited chunks.
-        await self._prune_facts_with_llm(pack)
-        await self._expand_evidence_chunks_from_facts(
-            request=request,
-            pack=pack,
-        )
-        self._rebuild_chunk_buckets(pack)
+        # Finalize evidence: prune, expand cited chunks, rebuild buckets.
+        await self._post_retrieval_finalize(pack, request)
         pack.record_seen()
         logger.debug(
             "RLMController: baseline counts facts=%d chunks=%d episodes=%d graph=%d",
@@ -318,15 +311,10 @@ class RLMController:
             len(pack.episodes),
             len(pack.graph),
         )
-        try:
-            from uma.memory.semantic.query_pruner import describe_fact as _describe_fact
-        except Exception:
-            _describe_fact = None
-        if _describe_fact:
-            logger.debug(
-                "RLMController: step=0 facts preview=%s",
-                [_describe_fact(f)[:180] for f in pack.facts[:5]],
-            )
+        logger.debug(
+            "RLMController: step=0 facts preview=%s",
+            [describe_fact(f)[:180] for f in pack.facts[:5]],
+        )
 
         coverage = self._assess_coverage(pack)
         pack.coverage = coverage
@@ -344,33 +332,17 @@ class RLMController:
             }
         )
 
-        cov = coverage.to_dict()
-        try:
-            cov["confidence"] = float(compute_confidence(coverage).get("score", 0.0))
-        except Exception:
-            cov["confidence"] = 0.0
-        stop, reason = should_stop(
-            recall_score=policy.recall_score,
-            coverage=cov,
+        stop, reason = self._evaluate_coverage_and_stop(
+            pack=pack,
+            policy=policy,
+            trace_id=trace_id,
+            step=0,
             calls_made=0,
-            max_calls=self.max_env_calls,
-            tokens_used=0,  # baseline
-            token_budget=self.max_state_chars,
-            user_results_count=sum(1 for f in pack.facts if _is_user_owned(f)),
-        )
-        # --- COVERAGE + STOP DECISION TELEMETRY (baseline) ---
-        logger.info(
-            "RLM_COVERAGE trace_id=%s step=%d stop=%s reason=%s coverage=%s",
-            trace_id,
-            0,
-            stop,
-            reason,
-            cov,
+            tokens_used=0,
         )
         if stop:
             pack.warnings.append(f"stop:{reason}")
             logger.info("RLMController: stop after baseline reason=%s", reason)
-            # --- TERMINATION TELEMETRY ---
             logger.info(
                 "RLM_END trace_id=%s total_steps=%d total_calls=%d facts=%d episodes=%d graph=%d warnings=%s",
                 trace_id,
@@ -414,28 +386,13 @@ class RLMController:
                 coverage.to_dict(),
             )
 
-            cov = coverage.to_dict()
-            try:
-                cov["confidence"] = float(compute_confidence(coverage).get("score", 0.0))
-            except Exception:
-                cov["confidence"] = 0.0
-            stop, reason = should_stop(
-                recall_score=policy.recall_score,
-                coverage=cov,
+            stop, reason = self._evaluate_coverage_and_stop(
+                pack=pack,
+                policy=policy,
+                trace_id=trace_id,
+                step=step,
                 calls_made=total_env_calls,
-                max_calls=self.max_env_calls,
                 tokens_used=len(json.dumps(pack.snapshot())),
-                token_budget=self.max_state_chars,
-                user_results_count=sum(1 for f in pack.facts if _is_user_owned(f)),
-            )
-            # --- COVERAGE + STOP DECISION TELEMETRY (loop) ---
-            logger.info(
-                "RLM_COVERAGE trace_id=%s step=%d stop=%s reason=%s coverage=%s",
-                trace_id,
-                step,
-                stop,
-                reason,
-                cov,
             )
             if stop:
                 pack.warnings.append(f"stop:{reason}")
@@ -495,164 +452,18 @@ class RLMController:
             step_new_chunks = 0
             step_graph_expansions = 0
             for action in decision.actions[: self.max_actions_per_step]:
-                # Lane plan is authoritative; domain routing remains subordinate.
-                active = set(getattr(pack, "active_domains", []) or [])
-                if action.action in {"search_chunks", "fetch_chunks"} and not self._lane_active(pack, "raw"):
-                    logger.debug("RLMController: skipping %s (raw lane not active)", action.action)
-                    continue
-                if action.action in {"search_semantic", "fetch_more_facts", "fetch_facts"} and not self._semantic_lanes_active(pack):
-                    logger.debug("RLMController: skipping %s (semantic/profile lanes not active)", action.action)
-                    continue
-                if action.action in {"episodic_clusters", "search_episodic", "fetch_episode_clusters"} and not self._lane_active(pack, "episodic"):
-                    logger.debug("RLMController: skipping %s (episodic lane not active)", action.action)
-                    continue
-                if action.action in {"search_procedural"} and not self._lane_active(pack, "procedural"):
-                    logger.debug("RLMController: skipping %s (procedural lane not active)", action.action)
-                    continue
-                logger.debug(
-                    "RLMController: executing action=%s k=%s",
-                    action.action,
-                    action.k,
+                new_facts, new_chunks, new_graph = await self._execute_action(
+                    action=action,
+                    request=request,
+                    pack=pack,
+                    query_embedding=query_embedding,
+                    scopes=scopes,
+                    trace_id=trace_id,
+                    step=step,
                 )
-                # --- ACTION EXECUTION TELEMETRY ---
-                logger.info(
-                    "RLM_ACTION trace_id=%s step=%d action=%s k=%s",
-                    trace_id,
-                    step,
-                    action.action,
-                    action.k,
-                )
-                action_start = time.time()
-                if action.action == "search_chunks":
-                    logger.debug(
-                        "RLMController: dispatching search_chunks step=%d scopes=%s k=%s",
-                        step,
-                        [(scope.owner_type, scope.owner_id) for scope in self._scopes_for_action(scopes, action)],
-                        action.k,
-                    )
-                scope_results: List[Any] = []
-                action_scopes = self._scopes_for_action(scopes, action)
-                for scope in action_scopes:
-                    scope_items = await self.env.execute_action(
-                        request=request,
-                        action=action,
-                        query_embedding=list(query_embedding),
-                        query_text=pack.query_text,
-                        owner_type=scope.owner_type,
-                        owner_id=scope.owner_id,
-                        default_k=self.max_items_per_type,
-                    )
-                    scope_results.extend(list(scope_items or []))
-                items = scope_results
-                a = str(getattr(action, "action", "") or "")
-                if a in {"search_semantic", "fetch_more_facts", "fetch_facts"}:
-                    items = self.ranker.rank_facts(items or [], query_text=pack.query_text)
-                elif a in {"fetch_chunks", "search_chunks"}:
-                    items = self.ranker.rank_chunks(items or [], query_text=pack.query_text)
-                elif a in {"episodic_clusters", "search_episodic", "fetch_episode_clusters"}:
-                    items = self.ranker.rank_episodes(items or [], query_text=pack.query_text)
-                elif a in {"search_procedural"}:
-                    items = self.ranker.rank_skills(items or [], query_text=pack.query_text)
-                elapsed_ms = int((time.time() - action_start) * 1000)
-                items = self._truncate_items(items)
-                if action.action in {"search_semantic", "fetch_more_facts", "fetch_facts"}:
-                    try:
-                        items = filter_facts_by_domains(list(items or []), set(getattr(pack, "active_domains", []) or []))
-                        items = self._filter_items_by_active_lanes(list(items or []), pack)
-                    except Exception:
-                        pass
-                if action.action in {"search_chunks", "fetch_chunks"}:
-                    try:
-                        ensure_domains_for_chunks(list(items or []))
-                        items = self._filter_items_by_active_lanes(list(items or []), pack)
-                    except Exception:
-                        pass
-                if action.action in {"search_procedural"}:
-                    try:
-                        ensure_domains_for_skills(list(items or []))
-                        items = self._filter_items_by_active_lanes(list(items or []), pack)
-                    except Exception:
-                        pass
-                store = _store_for_action(action.action)
-                returned = len(items or [])
-                novelty = 0
-                if store:
-                    try:
-                        novelty = pack.compute_novelty(items, store)
-                    except Exception:
-                        novelty = 0
-                # --- ACTION RESULT TELEMETRY ---
-                logger.info(
-                    "RLM_ACTION_RESULT trace_id=%s step=%d action=%s k=%s predicate=%s offset=%s owner=%s:%s action_owner_type=%s result_count=%d novelty=%d elapsed_ms=%d",
-                    trace_id,
-                    step,
-                    action.action,
-                    action.k,
-                    getattr(action, "predicate", None),
-                    (action.filters or {}).get("offset") if getattr(action, "filters", None) else None,
-                    str(getattr(pack, "owner_type", None) or scopes[0].owner_type),
-                    getattr(pack, "owner_id", None) or scopes[0].owner_id,
-                    getattr(action, "owner_type", None),
-                    returned,
-                    novelty,
-                    elapsed_ms,
-                )
-
-                if action.action in {
-                    "search_semantic",
-                    "fetch_more_facts",
-                    "fetch_facts",
-                }:
-                    pack.facts = _merge_unique(pack.facts, items, self.max_items_per_type)
-                    pack.facts = self._dedupe_facts_by_signature(pack.facts)
-                    pack.apply_novelty(items, "facts")
-                    step_new_facts += novelty
-
-                elif action.action in {
-                    "episodic_clusters",
-                    "search_episodic",
-                    "fetch_episode_clusters",
-                }:
-                    pack.episodes = _merge_unique(pack.episodes, items, self.max_items_per_type)
-                    pack.apply_novelty(items, "episodes")
-
-                elif action.action in {"graph_neighbors", "expand_graph"}:
-                    pack.graph = _merge_unique(pack.graph, items, self.max_items_per_type)
-                    pack.apply_novelty(items, "graph")
-                    step_graph_expansions += 1
-
-                elif action.action in {"search_chunks", "fetch_chunks"}:
-                    pack.chunks = _merge_unique(getattr(pack, "chunks", []), items, self.max_items_per_type)
-                    pack.apply_novelty(items, "chunks")
-                    step_new_chunks += novelty
-                    self._rebuild_chunk_buckets(pack)
-
-                elif action.action in {"search_procedural"}:
-                    pack.skills = _merge_unique(getattr(pack, "skills", []), items, self.max_items_per_type)
-                    pack.apply_novelty(items, "skills")
-
-                if store:
-                    pack.steps.append(
-                        {
-                            "step": step,
-                            "phase": "loop",
-                            "event": "action_result",
-                            "action": action.action,
-                            "store": store,
-                            "returned": returned,
-                            "novelty": novelty,
-                            "predicate": getattr(action, "predicate", None),
-                            "subject": getattr(action, "subject", None),
-                            "node_id": getattr(action, "node_id", None),
-                            "filters": getattr(action, "filters", None),
-                            "intent": getattr(pack, "intent", None),
-                            "active_domains": list(getattr(pack, "active_domains", []) or []),
-                            "lane_scopes": [(scope.owner_type, scope.owner_id) for scope in action_scopes],
-                            "lane_owner_type": str(getattr(pack, "owner_type", None) or scopes[0].owner_type),
-                            "lane_owner_id": getattr(pack, "owner_id", None) or scopes[0].owner_id,
-                            "action_owner_type": getattr(action, "owner_type", None),
-                        }
-                    )
+                step_new_facts += new_facts
+                step_new_chunks += new_chunks
+                step_graph_expansions += new_graph
 
                 total_env_calls += 1
                 if total_env_calls >= self.max_env_calls:
@@ -690,25 +501,14 @@ class RLMController:
 
             if hard_budget_hit:
                 break
-            try:
-                from uma.memory.semantic.query_pruner import describe_fact as _describe_fact
-            except Exception:
-                _describe_fact = None
-            if _describe_fact:
-                logger.debug(
-                    "RLMController: step=%d facts preview=%s",
-                    step,
-                    [_describe_fact(f)[:180] for f in pack.facts[:5]],
-                )
+            logger.debug(
+                "RLMController: step=%d facts preview=%s",
+                step,
+                [describe_fact(f)[:180] for f in pack.facts[:5]],
+            )
 
-        # Facts are already pruned post-baseline; prune again to account for any
-        # new facts added during the loop, then expand evidence based on the final set.
-        await self._prune_facts_with_llm(pack)
-        await self._expand_evidence_chunks_from_facts(
-            request=request,
-            pack=pack,
-        )
-        self._rebuild_chunk_buckets(pack)
+        # Final prune + evidence expansion after the navigation loop.
+        await self._post_retrieval_finalize(pack, request)
         logger.info(
             "RLMController.retrieve_context: done facts=%d episodes=%d graph=%d warnings=%s",
             len(pack.facts),
@@ -764,7 +564,7 @@ class RLMController:
                     results = filter_facts_by_domains(list(results or []), set(getattr(pack, "active_domains", []) or []))
                     results = self._filter_items_by_active_lanes(list(results or []), pack)
                 except Exception:
-                    pass
+                    logger.debug("RLMController: domain/lane filter failed on fact results; using unfiltered", exc_info=True)
                 pack.facts = _merge_unique(
                     pack.facts,
                     results,
@@ -796,7 +596,7 @@ class RLMController:
                     ensure_domains_for_chunks(list(chunks or []))
                     chunks = self._filter_items_by_active_lanes(list(chunks or []), pack)
                 except Exception:
-                    pass
+                    logger.debug("RLMController: domain/lane filter failed on chunk results; using unfiltered", exc_info=True)
                 pack.chunks = _merge_unique(
                     getattr(pack, "chunks", []),
                     chunks,
@@ -829,7 +629,7 @@ class RLMController:
             ensure_domains_for_skills(list(skills or []))
             skills = self._filter_items_by_active_lanes(list(skills or []), pack)
         except Exception:
-            pass
+            logger.debug("RLMController: domain/lane filter failed on skill results; using unfiltered", exc_info=True)
         pack.skills = _merge_unique(pack.skills, skills, self.max_items_per_type)
 
         episodes = []
@@ -925,6 +725,240 @@ class RLMController:
         return preds
 
     # Retrieval execution is centralized in UMAMemoryEnvironment.execute_action.
+
+    def _evaluate_coverage_and_stop(
+        self,
+        pack: ContextPack,
+        policy: RetrievalPolicy,
+        trace_id: str,
+        step: int,
+        calls_made: int,
+        tokens_used: int,
+    ) -> Tuple[bool, str]:
+        """Compute coverage confidence and decide whether to stop.
+
+        Called once after the baseline (step=0, calls_made=0, tokens_used=0)
+        and once at the start of every navigation step. Reads the coverage
+        already attached to ``pack`` by the caller.
+
+        Returns
+        -------
+        (stop, reason)
+            ``stop`` is True when the navigation loop should terminate.
+            ``reason`` is the stop-condition label recorded in pack.warnings.
+        """
+        cov = pack.coverage.to_dict()
+        try:
+            cov["confidence"] = float(compute_confidence(pack.coverage).get("score", 0.0))
+        except (TypeError, ValueError):
+            cov["confidence"] = 0.0
+
+        stop, reason = should_stop(
+            recall_score=policy.recall_score,
+            coverage=cov,
+            calls_made=calls_made,
+            max_calls=self.max_env_calls,
+            tokens_used=tokens_used,
+            token_budget=self.max_state_chars,
+            user_results_count=sum(1 for f in pack.facts if _is_user_owned(f)),
+        )
+        logger.info(
+            "RLM_COVERAGE trace_id=%s step=%d stop=%s reason=%s coverage=%s",
+            trace_id,
+            step,
+            stop,
+            reason,
+            cov,
+        )
+        return stop, reason
+
+    async def _post_retrieval_finalize(
+        self,
+        pack: ContextPack,
+        request: RetrievalRequest,
+    ) -> None:
+        """Prune facts, expand evidence chunks, and rebuild chunk buckets.
+
+        Called identically after the baseline pass and after the navigation
+        loop. Keeping both call sites in sync is the main reason for this
+        extraction.
+        """
+        await self._prune_facts_with_llm(pack)
+        await self._expand_evidence_chunks_from_facts(request=request, pack=pack)
+        self._rebuild_chunk_buckets(pack)
+
+    async def _execute_action(
+        self,
+        action: RetrievalAction,
+        request: RetrievalRequest,
+        pack: ContextPack,
+        query_embedding: List[float],
+        scopes: List[RetrievalScope],
+        trace_id: str,
+        step: int,
+    ) -> Tuple[int, int, int]:
+        """Execute one retrieval action, merge results into pack, emit telemetry.
+
+        Lane-gates the action, executes it across all relevant scopes, ranks
+        the results, applies domain and lane filters, merges into the pack,
+        and appends a step trace entry.
+
+        Returns
+        -------
+        (new_facts, new_chunks, new_graph_expansions)
+            Per-action counter deltas used by the caller to enforce step budgets.
+            All values are 0 for skipped or non-contributing actions.
+        """
+        a = action.action
+
+        # Lane plan is authoritative; skip the action if its lane is not active.
+        if a in {"search_chunks", "fetch_chunks"} and not self._lane_active(pack, "raw"):
+            logger.debug("RLMController: skipping %s (raw lane not active)", a)
+            return 0, 0, 0
+        if a in {"search_semantic", "fetch_more_facts", "fetch_facts"} and not self._semantic_lanes_active(pack):
+            logger.debug("RLMController: skipping %s (semantic/profile lanes not active)", a)
+            return 0, 0, 0
+        if a in {"episodic_clusters", "search_episodic", "fetch_episode_clusters"} and not self._lane_active(pack, "episodic"):
+            logger.debug("RLMController: skipping %s (episodic lane not active)", a)
+            return 0, 0, 0
+        if a in {"search_procedural"} and not self._lane_active(pack, "procedural"):
+            logger.debug("RLMController: skipping %s (procedural lane not active)", a)
+            return 0, 0, 0
+
+        logger.debug("RLMController: executing action=%s k=%s", a, action.k)
+        logger.info("RLM_ACTION trace_id=%s step=%d action=%s k=%s", trace_id, step, a, action.k)
+        action_start = time.time()
+
+        if a == "search_chunks":
+            logger.debug(
+                "RLMController: dispatching search_chunks step=%d scopes=%s k=%s",
+                step,
+                [(s.owner_type, s.owner_id) for s in self._scopes_for_action(scopes, action)],
+                action.k,
+            )
+
+        # Execute across all relevant scopes, collect raw results.
+        action_scopes = self._scopes_for_action(scopes, action)
+        scope_results: List[Any] = []
+        for scope in action_scopes:
+            scope_items = await self.env.execute_action(
+                request=request,
+                action=action,
+                query_embedding=list(query_embedding),
+                query_text=pack.query_text,
+                owner_type=scope.owner_type,
+                owner_id=scope.owner_id,
+                default_k=self.max_items_per_type,
+            )
+            scope_results.extend(list(scope_items or []))
+
+        # Rank by action type.
+        items: List[Any] = scope_results
+        if a in {"search_semantic", "fetch_more_facts", "fetch_facts"}:
+            items = self.ranker.rank_facts(items or [], query_text=pack.query_text)
+        elif a in {"fetch_chunks", "search_chunks"}:
+            items = self.ranker.rank_chunks(items or [], query_text=pack.query_text)
+        elif a in {"episodic_clusters", "search_episodic", "fetch_episode_clusters"}:
+            items = self.ranker.rank_episodes(items or [], query_text=pack.query_text)
+        elif a in {"search_procedural"}:
+            items = self.ranker.rank_skills(items or [], query_text=pack.query_text)
+
+        elapsed_ms = int((time.time() - action_start) * 1000)
+        items = self._truncate_items(items)
+
+        # Domain and lane filtering (best-effort; items pass through on error).
+        if a in {"search_semantic", "fetch_more_facts", "fetch_facts"}:
+            try:
+                items = filter_facts_by_domains(list(items or []), set(getattr(pack, "active_domains", []) or []))
+                items = self._filter_items_by_active_lanes(list(items or []), pack)
+            except Exception:
+                logger.debug("RLMController: domain/lane filter failed for action=%s; using unfiltered items", a, exc_info=True)
+        elif a in {"search_chunks", "fetch_chunks"}:
+            try:
+                ensure_domains_for_chunks(list(items or []))
+                items = self._filter_items_by_active_lanes(list(items or []), pack)
+            except Exception:
+                logger.debug("RLMController: domain/lane filter failed for action=%s; using unfiltered items", a, exc_info=True)
+        elif a in {"search_procedural"}:
+            try:
+                ensure_domains_for_skills(list(items or []))
+                items = self._filter_items_by_active_lanes(list(items or []), pack)
+            except Exception:
+                logger.debug("RLMController: domain/lane filter failed for action=%s; using unfiltered items", a, exc_info=True)
+
+        store = _store_for_action(a)
+        returned = len(items or [])
+        novelty = 0
+        if store:
+            try:
+                novelty = pack.compute_novelty(items, store)
+            except Exception:
+                logger.debug("RLMController: compute_novelty failed for store=%s", store, exc_info=True)
+
+        logger.info(
+            "RLM_ACTION_RESULT trace_id=%s step=%d action=%s k=%s predicate=%s offset=%s"
+            " owner=%s:%s action_owner_type=%s result_count=%d novelty=%d elapsed_ms=%d",
+            trace_id,
+            step,
+            a,
+            action.k,
+            getattr(action, "predicate", None),
+            (action.filters or {}).get("offset") if getattr(action, "filters", None) else None,
+            str(getattr(pack, "owner_type", None) or scopes[0].owner_type),
+            getattr(pack, "owner_id", None) or scopes[0].owner_id,
+            getattr(action, "owner_type", None),
+            returned,
+            novelty,
+            elapsed_ms,
+        )
+
+        # Merge results into the pack and track per-step counters.
+        new_facts = new_chunks = new_graph = 0
+        if a in {"search_semantic", "fetch_more_facts", "fetch_facts"}:
+            pack.facts = _merge_unique(pack.facts, items, self.max_items_per_type)
+            pack.facts = self._dedupe_facts_by_signature(pack.facts)
+            pack.apply_novelty(items, "facts")
+            new_facts = novelty
+        elif a in {"episodic_clusters", "search_episodic", "fetch_episode_clusters"}:
+            pack.episodes = _merge_unique(pack.episodes, items, self.max_items_per_type)
+            pack.apply_novelty(items, "episodes")
+        elif a in {"graph_neighbors", "expand_graph"}:
+            pack.graph = _merge_unique(pack.graph, items, self.max_items_per_type)
+            pack.apply_novelty(items, "graph")
+            new_graph = 1
+        elif a in {"search_chunks", "fetch_chunks"}:
+            pack.chunks = _merge_unique(getattr(pack, "chunks", []), items, self.max_items_per_type)
+            pack.apply_novelty(items, "chunks")
+            new_chunks = novelty
+            self._rebuild_chunk_buckets(pack)
+        elif a in {"search_procedural"}:
+            pack.skills = _merge_unique(getattr(pack, "skills", []), items, self.max_items_per_type)
+            pack.apply_novelty(items, "skills")
+
+        if store:
+            pack.steps.append({
+                "step": step,
+                "phase": "loop",
+                "event": "action_result",
+                "action": a,
+                "store": store,
+                "returned": returned,
+                "novelty": novelty,
+                "predicate": getattr(action, "predicate", None),
+                "subject": getattr(action, "subject", None),
+                "node_id": getattr(action, "node_id", None),
+                "filters": getattr(action, "filters", None),
+                "intent": getattr(pack, "intent", None),
+                "active_domains": list(getattr(pack, "active_domains", []) or []),
+                "lane_scopes": [(s.owner_type, s.owner_id) for s in action_scopes],
+                "lane_owner_type": str(getattr(pack, "owner_type", None) or scopes[0].owner_type),
+                "lane_owner_id": getattr(pack, "owner_id", None) or scopes[0].owner_id,
+                "action_owner_type": getattr(action, "owner_type", None),
+            })
+
+        return new_facts, new_chunks, new_graph
+
+    # ------------------------------------------------------------------
 
     def _assess_coverage(self, pack: ContextPack):
         return assess_coverage(
@@ -1057,9 +1091,8 @@ class RLMController:
                         return v
                 try:
                     import json
-
                     return json.dumps(obj, sort_keys=True, ensure_ascii=False)
-                except Exception:
+                except (TypeError, ValueError):
                     return str(obj)
             return str(obj or "")
 
@@ -1076,7 +1109,7 @@ class RLMController:
                 try:
                     setattr(f, "source_ids", ids)
                 except Exception:
-                    pass
+                    logger.debug("_prune_facts_with_llm: could not set source_ids on fact=%r", getattr(f, "id", None), exc_info=True)
 
         def _get_num(f: Any, field: str) -> Optional[float]:
             v = get_attr_or_key(f, field, None)
@@ -1084,7 +1117,7 @@ class RLMController:
                 return None
             try:
                 return float(v)
-            except Exception:
+            except (TypeError, ValueError):
                 return None
 
         def _set_num_max(dst: Any, src: Any, field: str) -> None:
@@ -1099,7 +1132,7 @@ class RLMController:
                 try:
                     setattr(dst, field, val)
                 except Exception:
-                    pass
+                    logger.debug("_set_num_max: could not set field=%s on dst=%r", field, type(dst).__name__, exc_info=True)
 
         if not facts:
             return []
@@ -1231,7 +1264,7 @@ def _two_distinct_zero_yield_lanes(steps: List[Dict[str, Any]]) -> bool:
             continue
         try:
             novelty = int(s.get("novelty") or 0)
-        except Exception:
+        except (TypeError, ValueError):
             novelty = 0
         last.append((store, novelty))
         if len(last) >= 2:

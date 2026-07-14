@@ -64,19 +64,23 @@ Cross-tenant access is impossible **by construction**:
 - Working memory and episodic turn memory are **session-local by default**
 - Semantic facts extracted from turns are session-local by default and must be explicitly promoted to become durable
 
-## Security Primitives (OWASP LLM01–LLM08 Baseline)
+## Security Primitives — Defense-in-Depth for Memory Poisoning
 
-UMA enforces these on every write boundary:
+Memory poisoning (ASI06) is UMA's primary security concern. Because it is a stateful attack, single-layer defenses are not enough. UMA implements the four-layer defense-in-depth model on every write boundary and every read boundary:
 
-- **Prompt-injection scanning** — every user/assistant message and every ingested document chunk is scanned against a YAML pattern catalog. High-severity hits trip `quarantined_at`; the artifact stays in the database but is excluded from retrieval.
-- **Trust scoring** — every artifact carries a `trust_score` in `[0, 1]`. Retrieval ranks by `(1 - trust_weight) * similarity + trust_weight * trust_score` and drops anything below `min_trust_score` (default 0.5).
-- **Content hashing** — every Fact, Episode, Skill, and Chunk carries a SHA-256 `content_hash`. `verify_integrity` re-derives and compares; mismatch → quarantine.
+- **Pre-Write Sanitization (Layer 1)** — every user/assistant message and every ingested document chunk is scanned against a 15-rule YAML catalog aligned with [OWASP Agent Memory Guard](https://owasp.org/www-project-agent-memory-guard/). High-severity hits trip `quarantined_at`; the artifact stays in the database but is excluded from retrieval. Implements the pre-LLM gate (`scan_user_input`) + write-time boundary scan (`scan_artifact_text`).
+- **Provenance Tracking (Layer 2)** — every Fact, Episode, Skill, and Chunk carries `source_chunk_ids`, a SHA-256 `content_hash`, a classifier-derived `trust_score ∈ [0, 1]`, and an append-only `meta.security.audit_log`. `verify_integrity` re-derives hashes on demand; mismatch → quarantine. `lint_memory_drift` detects compiled artifacts whose raw evidence has drifted. Retrieval ranks by `(1 - trust_weight) * similarity + trust_weight * trust_score` and drops anything below `min_trust_score` (default 0.5).
+- **Temporal Decay (Layer 3)** — not implemented in UMA. Trust scores are set at write time and do not decay automatically. Time-weighted ranking or TTL policies are caller responsibility.
+- **Memory Isolation (Layer 4)** — `tenant_id` / `owner_type` / `owner_id` enforced at every SQL read and pushed into the LanceDB `WHERE` clause before the k-nearest cap. Cross-tenant leakage is impossible by construction, not by application convention.
+
+Additional primitives:
+
 - **MIME consistency + size limits** — ingest rejects executable types, extension/content mismatches, files over `max_file_bytes` (default 50MB), and PDFs over `pdf_max_pages` (default 5000).
 - **Vector isolation push-down** — LanceDB filters by tenant/owner before the k-nearest cap is applied. No cross-tenant leakage under load.
 - **Retrieval audit log** — every retrieval call records a hashed query preview, scope, severity, and result counts (default on; toggle via `security.retrieval_audit_enabled`).
 - **Rate-limit hook** — operators register a single callable that runs at the top of `retrieve_context`, `retrieve_memory`, `process_turn`, and `ingest_document`. The hook raises to refuse.
 
-See `uma-security.md` for the full security model.
+See `uma-security.md` for the full security model and OWASP Top 10 mapping.
 
 ## One-Sentence Product Test
 

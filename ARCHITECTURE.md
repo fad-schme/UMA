@@ -19,17 +19,22 @@ Both products are owned by `UMAMemory`, initialized from a config file, and oper
 
 ## Memory Lanes
 
-UMA stores and retrieves across six typed lanes. Lane selection is explicit — ownership scope alone does not determine which lane to query.
+UMA stores and retrieves across eight typed lanes. Lane selection is explicit — ownership scope alone does not determine which lane to query.
 
 | Lane | Store | Role | Scope default |
 |------|-------|------|---------------|
 | Working Memory | In-memory buffer | Recent message continuity within a session | Session-local |
 | Raw Chunks (`raw`) | SQLite + vector index | Immutable source evidence from ingested documents | Durable |
 | Semantic Facts (`semantic`) | SQLite + vector index | Structured statements extracted from chunks/turns | Session-local; promotable |
+| Profile Facts (`profile`) | SQLite + vector index (shared with `semantic`) | User-profile facts; `kind=profile_fact` rows in the semantic store surfaced as a distinct retrieval lane | Durable |
 | Episodic (`episodic`) | SQLite + vector index | Time-ordered interaction history | Cross-session; session_id is provenance metadata only |
 | Procedural / Skills (`procedural`) | SQLite + vector index | Named skills and how-to knowledge | Durable |
 | Compiled Wiki (`wiki`) | SQLite (document store) | Mutable, evidence-backed synthesis artifacts | Durable |
 | Graph (optional) | Plugin backend | Relationship routing and entity expansion | — |
+
+`profile` and `semantic` share the same SQLite store and vector index. `profile` is a distinct retrieval lane at query time — the planner selects it independently of `semantic` — but physically both read from `semantic_sql`. There is no double-count risk because each query targets one lane and the store filters by `kind`.
+
+`trace` (`decision_trace`) exists as a kind in `KB_LANES` but is debug metadata only. The planner unconditionally excludes it with reason `trace_is_debug_metadata_not_a_retrieval_lane`; it never participates in retrieval.
 
 Graph is disabled in all public profiles. It is a supporting lane for relationship traversal, not the primary truth.
 
@@ -106,7 +111,16 @@ Security in UMA is not an overlay — it is the shape of every code path that to
 4. **Ingest gating** — MIME consistency, file size limits, PDF page caps, HTML/Markdown sanitization
 5. **Retrieval audit log** — every retrieval call records a hashed query preview, scope, severity, and result counts
 
-OWASP mapping (Top 10 for LLM Applications 2025): primitives 1, 2, and 4 address **LLM01 (Prompt Injection)**. Primitives 2, 3, and ingest scanning address **LLM04 (Data and Model Poisoning)**. The C1 vector isolation contract (next section) addresses **LLM08 (Vector and Embedding Weaknesses)**. The rate-limit hook and ingest size caps address **LLM10 (Unbounded Consumption)**. The hashed-preview audit log addresses parts of **LLM02 (Sensitive Information Disclosure)**.
+**Defense-in-depth against ASI06 (Memory Poisoning):** Memory poisoning is a stateful attack — a single injection can corrupt an agent's knowledge base across all future sessions. UMA implements the [four-layer defense-in-depth model](https://vectorize.io/articles/how-to-prevent-ai-memory-poisoning) recommended for production agent memory:
+
+| Layer | UMA implementation | Status |
+|---|---|---|
+| **Pre-Write Sanitization** | Two-layer injection scanning aligned with [OWASP Agent Memory Guard](https://owasp.org/www-project-agent-memory-guard/): advisory pre-LLM gate + write-time `scan_artifact_text` at every storage boundary | ✅ Implemented |
+| **Provenance Tracking** | Every artifact carries `source_chunk_ids`, `content_hash`, classifier-derived `trust_score`, and an append-only `meta.security.audit_log`. `verify_integrity` + `lint_memory_drift` detect post-write tampering and provenance drift | ✅ Implemented |
+| **Temporal Decay** | Automatic time-based trust decay | ⚪ Not implemented — caller responsibility |
+| **Memory Isolation** | `tenant_id` / `owner_type` / `owner_id` enforced at every SQL read and pushed into the vector `WHERE` clause before the k-nearest cap | ✅ Implemented |
+
+**OWASP LLM Top 10 2025 mapping:** primitives 1, 2, and 4 address **LLM01 (Prompt Injection)**. MIME gating, HTML sanitization, and quarantine-before-extraction address **LLM04 (Data and Model Poisoning)**. The C1 vector isolation contract (next section) addresses **LLM08 (Vector and Embedding Weaknesses)**. The rate-limit hook, ingest size caps, and RLM hard budgets address **LLM10 (Unbounded Consumption)**. The hashed-preview audit log and ownership isolation address parts of **LLM02 (Sensitive Information Disclosure)**. The full table with scope annotations appears in `README.md` and `.claude/skills/uma-security.md`.
 
 ### Injection Scanning
 
@@ -379,11 +393,11 @@ The retrieval planner classifies the query and selects lanes:
 | Intent | Lanes activated |
 |--------|----------------|
 | `TOPICAL` | `raw` + `semantic` |
-| `PERSONAL` | `profile` + `procedural` |
-| `MIXED` | All four lanes |
+| `PERSONAL` | `profile` + `procedural` + `semantic` + `episodic` |
+| `MIXED` | `raw` + `semantic` + `profile` + `procedural` + `episodic` |
 | History markers | `raw` + `episodic` + `semantic` |
 
-PERSONAL intent requires both a first-person marker (`I`/`me`/`my`) and a personal-state cue (`prefer`, `like`, `own`, etc.). Instructional queries ("how do I...") are TOPICAL.
+PERSONAL intent requires both a first-person marker (`I`/`me`/`my`) and a personal-state cue (`prefer`, `like`, `own`, etc.). Instructional queries ("how do I...") are TOPICAL. History markers (e.g. "last time", "yesterday", "what happened") activate the episodic lane regardless of intent class.
 
 ---
 

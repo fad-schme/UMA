@@ -472,21 +472,6 @@ class SecurityConfig:
 
 
 # ---------------------------------------------------------------------------
-# Pipeline Config
-# ---------------------------------------------------------------------------
-@dataclass(frozen=True)
-class PipelineConfig:
-    defer_post_turn: bool
-    post_turn_queue_max: int
-
-    @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "PipelineConfig":
-        return cls(
-            defer_post_turn=bool(d.get("defer_post_turn", False)),
-            post_turn_queue_max=int(d.get("post_turn_queue_max", 100)),
-        )
-
-# ---------------------------------------------------------------------------
 # Feature flags
 # ---------------------------------------------------------------------------
 
@@ -576,7 +561,6 @@ class RuntimeConfig:
     retrieval: RetrievalConfig
     features: FeaturesConfig
     consolidation: ConsolidationConfig
-    pipeline: PipelineConfig
     security: SecurityConfig
     semantic_salience_threshold: float
     semantic_salience_decay_days: float = 180.0
@@ -597,7 +581,6 @@ class RuntimeConfig:
         features_cfg = FeaturesConfig.from_dict(cfg.get("features") or {})
         consolidation_cfg = ConsolidationConfig.from_dict(cfg.get("consolidation"))
         storage_cfg = StorageConfig.from_dict(cfg["storage"])
-        pipeline_cfg = PipelineConfig.from_dict(cfg.get("pipeline") or {})
         security_cfg = SecurityConfig.from_dict(cfg.get("security") if isinstance(cfg, dict) else None)
 
         semantic_section = cfg.get("semantic", {}) if isinstance(cfg, dict) else {}
@@ -616,7 +599,6 @@ class RuntimeConfig:
             retrieval=retrieval_cfg,
             features=features_cfg,
             consolidation=consolidation_cfg,
-            pipeline=pipeline_cfg,
             security=security_cfg,
             semantic_salience_threshold=float(semantic_salience),
             semantic_salience_decay_days=semantic_decay_days,

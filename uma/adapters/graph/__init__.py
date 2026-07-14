@@ -3,7 +3,7 @@ UMA Temporal Graph Subsystem
 ==============================
 
 Exports:
-- TemporalGraphCore : The unified graph engine
+- GraphCore : The unified graph engine
 - GraphAdapter      : Abstract interface for concrete backends
 """
 

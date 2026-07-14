@@ -7,6 +7,8 @@ description: The C1 vector-index contract — how UMA's three vector backends (L
 
 UMA's vector adapters (LanceDB, FAISS, InMemory) implement a single contract defined in `uma/adapters/vector/base.py`. The contract enforces tenant/owner isolation at the storage layer — not as an application-layer post-filter that runs after a possibly-truncated retrieval.
 
+This contract is the **Memory Isolation** layer of UMA's defense-in-depth model for ASI06 memory poisoning: strict per-user isolation enforced at the storage layer so a malicious interaction with one user cannot poison the knowledge base for others.
+
 This skill covers the contract itself, the three bundled implementations, and what a custom backend must provide.
 
 ---

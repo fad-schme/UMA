@@ -53,27 +53,6 @@ def describe_fact(fact: Any) -> str:
         return ""
 
 
-def parse_scores_list(response: str, *, n: int) -> List[float]:
-    response = (response or "").strip()
-    try:
-        parsed = json.loads(response)
-    except Exception:
-        return []
-    if not isinstance(parsed, dict):
-        return []
-    raw_scores = parsed.get("scores")
-    if not isinstance(raw_scores, list):
-        return []
-    scores: List[float] = []
-    for x in raw_scores[:n]:
-        try:
-            v = float(x)
-        except Exception:
-            v = 0.0
-        scores.append(min(1.0, max(0.0, v)))
-    return scores if len(scores) == n else []
-
-
 def fallback_keep_by_query(query: str, facts: Sequence[Any]) -> List[int]:
     stop = set()
     if get_stopwords:

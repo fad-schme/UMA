@@ -23,6 +23,13 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .base_vector_sql_store import BaseVectorSQLStore
+
+# B608: _QUARANTINE_FILTER and _NO_FILTER are the only two values ever
+# interpolated into the quarantine toggle position. Both are static SQL
+# fragments containing no user data.
+_QUARANTINE_FILTER = " AND quarantined_at IS NULL"
+_NO_FILTER = ""
+
 from .base_sql_store import DEFAULT_TENANT_ID
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
@@ -452,6 +459,7 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         try:
             placeholders = ",".join("?" for _ in ids)
             params: List[Any] = list(ids) + [tenant_id, owner_type, owner_id]
+            # nosec B608 — placeholders is "?,?,?" only; all values bound as ?
             sql = f"""
                 SELECT * FROM skills
                 WHERE id IN ({placeholders})
@@ -492,14 +500,16 @@ class ProceduralSQLStore(BaseVectorSQLStore):
             raise ValueError("ProceduralSQLStore.list_skills requires tenant_id, owner_type and owner_id")
         conn = self._conn()
         try:
-            quarantine_clause = "" if include_quarantined else " AND quarantined_at IS NULL"
-            sql = f"SELECT * FROM skills WHERE tenant_id=? AND owner_type=? AND owner_id=?{quarantine_clause} ORDER BY updated_at DESC"
+            quarantine_clause = _NO_FILTER if include_quarantined else _QUARANTINE_FILTER
+            sql = f"SELECT * FROM skills WHERE tenant_id=? AND owner_type=? AND owner_id=?{quarantine_clause} ORDER BY updated_at DESC"  # nosec B608 — quarantine_clause is _QUARANTINE_FILTER or _NO_FILTER (module constants)
+            params_list: list = [tenant_id, owner_type, owner_id]
             if limit:
-                sql += f" LIMIT {int(limit)}"
+                sql += " LIMIT ?"
+                params_list.append(int(limit))
             rows = self._query_all(
                 conn,
                 sql,
-                params=[tenant_id, owner_type, owner_id],
+                params=params_list,
                 log_context="list_skills",
             )
             return [self._row_to_object(r) for r in rows]
@@ -593,100 +603,3 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         except Exception:
             logger.exception("ProceduralSQLStore.search failed.")
             raise
-
-    # ------------------------------------------------------------------ #
-    # Quarantine Management
-    # ------------------------------------------------------------------ #
-
-    async def reinstate_quarantined_record(
-        self,
-        record_id: str,
-        *,
-        tenant_id: Optional[str],
-        owner_type: str,
-        owner_id: str,
-        audit_entry: Dict[str, Any],
-    ) -> bool:
-        """
-        Clear quarantined_at and append an audit log entry to meta.security.audit_log.
-        Returns True if a row was updated.
-        """
-        if not tenant_id or not owner_type or not owner_id:
-            raise ValueError("ProceduralSQLStore.reinstate_quarantined_record requires scope")
-        conn = self._conn()
-        try:
-            row = self._query_one(
-                conn,
-                "SELECT meta FROM skills WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
-                params=[record_id, tenant_id, owner_type, owner_id],
-                log_context="reinstate_skill_fetch",
-            )
-            if row is None:
-                return False
-            try:
-                meta = json.loads(row["meta"]) if row["meta"] else {}
-            except Exception:
-                meta = {}
-            security = meta.setdefault("security", {})
-            audit_log = security.setdefault("audit_log", [])
-            audit_log.append(audit_entry)
-            self._execute(
-                conn,
-                "UPDATE skills SET quarantined_at=NULL, meta=? WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
-                params=[json.dumps(meta), record_id, tenant_id, owner_type, owner_id],
-                log_context="reinstate_skill",
-            )
-            conn.commit()
-            logger.info("ProceduralSQLStore: reinstated skill id=%s owner=%s:%s", record_id, owner_type, owner_id)
-            return True
-        except Exception:
-            self._safe_rollback(conn, "reinstate_skill")
-            logger.exception("ProceduralSQLStore.reinstate_quarantined_record failed id=%s", record_id)
-            raise
-        finally:
-            conn.close()
-
-    async def quarantine_record(
-        self,
-        record_id: str,
-        *,
-        tenant_id: Optional[str],
-        owner_type: str,
-        owner_id: str,
-        quarantined_at: str,
-        audit_entry: Dict[str, Any],
-    ) -> bool:
-        """Set quarantined_at and append an audit log entry. Returns True if updated."""
-        if not tenant_id or not owner_type or not owner_id:
-            raise ValueError("ProceduralSQLStore.quarantine_record requires scope")
-        conn = self._conn()
-        try:
-            row = self._query_one(
-                conn,
-                "SELECT meta FROM skills WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
-                params=[record_id, tenant_id, owner_type, owner_id],
-                log_context="quarantine_skill_fetch",
-            )
-            if row is None:
-                return False
-            try:
-                meta = json.loads(row["meta"]) if row["meta"] else {}
-            except Exception:
-                meta = {}
-            security = meta.setdefault("security", {})
-            security.setdefault("audit_log", []).append(audit_entry)
-            self._execute(
-                conn,
-                "UPDATE skills SET quarantined_at=?, meta=? WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
-                params=[quarantined_at, json.dumps(meta), record_id, tenant_id, owner_type, owner_id],
-                log_context="quarantine_skill",
-            )
-            conn.commit()
-            logger.info("ProceduralSQLStore: quarantined skill id=%s owner=%s:%s", record_id, owner_type, owner_id)
-            return True
-        except Exception:
-            self._safe_rollback(conn, "quarantine_skill")
-            logger.exception("ProceduralSQLStore.quarantine_record failed id=%s", record_id)
-            raise
-        finally:
-            conn.close()

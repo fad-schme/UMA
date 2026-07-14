@@ -44,10 +44,9 @@ class RetrievalRequest:
     normalized_user_id: str
     scopes: Tuple[RetrievalScope, ...]
     trace_id: Optional[str] = None
-    include_legacy_turn_data: bool = False
     plan: Optional[RetrievalPlan] = None
     # CR3: result of scanning the query_text at the runtime boundary.
-    # None means "scan was not performed" (legacy callers; tests).
+    # None means "scan was not performed" (callers that do not supply severity).
     # "none" means "scan ran, nothing matched" — explicit signal, NOT None.
     # "low" / "medium" / "high" are the boundary-scan severity tiers.
     # Downstream consumers (controller, refiner) skip LLM hops on
@@ -81,7 +80,6 @@ class RetrievalRequest:
         context: RuntimeContext,
         *,
         trace_id: Optional[str] = None,
-        include_legacy_turn_data: bool = False,
         plan: Optional[RetrievalPlan] = None,
         query_scan_severity: Optional[str] = None,
     ) -> "RetrievalRequest":
@@ -94,7 +92,6 @@ class RetrievalRequest:
                 RetrievalScope(owner_type="user", owner_id=normalized_user_id),
             ),
             trace_id=trace_id or context.request_id,
-            include_legacy_turn_data=bool(include_legacy_turn_data),
             plan=plan,
             query_scan_severity=query_scan_severity,
         )

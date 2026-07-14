@@ -387,21 +387,5 @@ class UMAConfig(dict):
             ):
                 raise ValueError("'features.policy.allow_method_override' must be boolean")
 
-        # -----------------------
-        # PIPELINE (optional)
-        # -----------------------
-        pipeline_cfg = self.get("pipeline")
-        if pipeline_cfg is not None:
-            if not isinstance(pipeline_cfg, dict):
-                raise ValueError("'pipeline' must be a mapping")
-            if "defer_post_turn" in pipeline_cfg and not isinstance(
-                pipeline_cfg["defer_post_turn"], bool
-            ):
-                raise ValueError("'pipeline.defer_post_turn' must be boolean")
-            if "post_turn_queue_max" in pipeline_cfg:
-                val = pipeline_cfg["post_turn_queue_max"]
-                if not isinstance(val, int) or val <= 0:
-                    raise ValueError("'pipeline.post_turn_queue_max' must be a positive integer")
-
         self._warn_on_secrets()
         logger.info("UMA configuration validated successfully.")

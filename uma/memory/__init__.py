@@ -1,6 +1,6 @@
 from .chunk import ChunkCore
 from .episodic import EpisodicCore
-from .graph import GraphUpdater, TemporalGraphCore
+from .graph import GraphUpdater, GraphCore
 from .procedural import ProceduralCore
 from .semantic import SemanticCore
 from .working_memory import WorkingMemoryCore
@@ -11,6 +11,6 @@ __all__ = [
     "GraphUpdater",
     "ProceduralCore",
     "SemanticCore",
-    "TemporalGraphCore",
+    "GraphCore",
     "WorkingMemoryCore",
 ]

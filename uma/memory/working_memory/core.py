@@ -40,24 +40,6 @@ from uma.adapters.llm.base import LLMInterface
 
 logger = logging.getLogger(__name__)
 
-_LEGACY_WM_SESSION_PREFIX = "legacy-user:"
-
-
-def legacy_session_scope_for_user(
-    *,
-    tenant_id: str,
-    agent_id: str,
-    user_id: str,
-) -> SessionScope:
-    normalized_user_id = normalize_user_id(user_id)
-    return SessionScope(
-        tenant_id=tenant_id,
-        agent_id=agent_id,
-        session_id=f"{_LEGACY_WM_SESSION_PREFIX}{normalized_user_id}",
-        user_id=normalized_user_id,
-    )
-
-
 def session_scope_from_runtime_context(context: RuntimeContext) -> Optional[SessionScope]:
     if not isinstance(context, RuntimeContext):
         raise TypeError("context must be a RuntimeContext")

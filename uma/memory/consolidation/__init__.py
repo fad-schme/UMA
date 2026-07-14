@@ -12,7 +12,6 @@ Modules:
     - clusterer.py     → Episode similarity clustering
     - summarizer.py    → LLM-based cluster summarization
     - pruner.py        → Forgetting logic
-    - utils.py         → Simple helpers
 
 This subsystem is OPTIONAL. UMA runs without it, but consolidation 
 improves long-term quality and reduces data bloat.

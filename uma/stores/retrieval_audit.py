@@ -192,20 +192,29 @@ class RetrievalAuditStore:
         severity_order = {"none": 0, "low": 1, "medium": 2, "high": 3}
         severity_floor = severity_order.get((severity_min or "").lower(), 0)
 
+        # B608: _AUDIT_FILTER_COLS maps filter names to their exact SQL fragment.
+        # Only these two column names are ever appended to where_clause; both are
+        # hardcoded string constants, not derived from request parameters.
+        _AUDIT_FILTER_COLS = {
+            "tenant_id": "tenant_id = ?",
+            "user_id": "user_id = ?",
+        }
         where: List[str] = []
         params: List[Any] = []
         if tenant_id:
-            where.append("tenant_id = ?")
+            where.append(_AUDIT_FILTER_COLS["tenant_id"])
             params.append(tenant_id)
         if user_id:
-            where.append("user_id = ?")
+            where.append(_AUDIT_FILTER_COLS["user_id"])
             params.append(user_id)
-        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+        where_clause = (" WHERE " + " AND ".join(where)) if where else ""
+        # B608: the only variable part of the SELECT is where_clause, which
+        # is built exclusively from the two whitelisted fragments above.
         sql = (
-            f"SELECT request_id, tenant_id, user_id, agent_id, query_hash, "
-            f"query_preview, scan_severity, lanes, result_count, "
-            f"refined_via_llm, pruned_via_llm, created_at "
-            f"FROM retrieval_audit{where_sql} ORDER BY created_at DESC LIMIT ?"
+            "SELECT request_id, tenant_id, user_id, agent_id, query_hash, "
+            "query_preview, scan_severity, lanes, result_count, "
+            "refined_via_llm, pruned_via_llm, created_at "
+            f"FROM retrieval_audit{where_clause} ORDER BY created_at DESC LIMIT ?"
         )
         params.append(limit)
 

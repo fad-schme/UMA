@@ -80,7 +80,7 @@ That's the whole loop. The patterns below extend it.
 
 ## Why scan at Layer 1 even though Layer 2 also scans
 
-The two layers protect different things:
+UMA defends against memory poisoning (ASI06) using a defense-in-depth model. The two injection-scanning layers are the Pre-Write Sanitization layer of that model:
 
 - **Layer 1 (`scan_user_input`)** protects the **LLM** — payload never reaches the model if you act on the result. Cheap, synchronous, never raises.
 - **Layer 2 (`process_turn`)** protects **storage** — even if Layer 1 was skipped or a payload slipped through, nothing flagged reaches the durable layer untagged.

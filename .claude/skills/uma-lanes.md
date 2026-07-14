@@ -7,7 +7,9 @@ description: Explains UMA's six memory lanes (working memory, semantic facts, ra
 
 ## Overview
 
-UMA stores and retrieves memory across six typed lanes. Each lane has a distinct responsibility, storage contract, and retrieval role. Lane selection is explicit — ownership scope alone does not distinguish which lane to query.
+UMA stores and retrieves memory across eight typed lanes. Each lane has a distinct responsibility, storage contract, and retrieval role. Lane selection is explicit — ownership scope alone does not distinguish which lane to query.
+
+`profile` and `semantic` share the same SQLite store and vector index. `profile` is a distinct retrieval lane at query time (the planner selects it independently) but physically both read from `semantic_sql` filtered by `kind`. `trace` (`decision_trace`) exists as a kind in `KB_LANES` but is debug metadata only — the planner unconditionally excludes it from retrieval.
 
 ---
 
@@ -170,13 +172,15 @@ await lint_memory_drift(memory, artifact, user_id=..., stale_after_seconds=86400
 |---|---|---|---|---|
 | Working Memory | In-memory buffer (session-scoped) | — | ✅ | ✅ |
 | Semantic | SQLite (`semantic_sql.py`) | Vector index | ✅ | ✅ |
+| Profile | SQLite (`semantic_sql.py`, `kind=profile_fact`) | Vector index (shared with semantic) | ✅ | ✅ |
 | Raw Chunks | SQLite (`chunk_sql.py`) | Vector index | ✅ | ✅ |
 | Episodic | SQLite (`episodic_sql.py`) | Vector index | ✅ | ✅ |
 | Procedural | SQLite (`procedural_sql.py`) | Vector index | ✅ | ✅ |
 | Wiki | SQLite (document store) | Vector index | — | n/a |
 | Graph (optional) | Graph backend (plugin) | — | — | — |
+| Trace | SQLite (debug metadata only) | — | — | — (never retrieved) |
 
-**Security primitives:** Each artifact (fact, episode, skill, chunk) carries `trust_score` (float, default 0.5) and `content_hash` (SHA-256 hex, where applicable). Ingested files pass MIME consistency (`mime_check.enforce_mime_consistency`) before parsing; HTML/Markdown is sanitized via `_sanitize_html` with per-category counts recorded in `meta["security"]["sanitization"]`.
+**Security primitives:** Each artifact (fact, episode, skill, chunk) carries `trust_score` (float, default 0.5) and `content_hash` (SHA-256 hex, where applicable). Write-time scanning implements the **Pre-Write Sanitization** layer of UMA's defense-in-depth model for memory poisoning (ASI06): every storage boundary scans content via `scan_artifact_text` before persisting. Ingested files pass MIME consistency (`mime_check.enforce_mime_consistency`) before parsing; HTML/Markdown is sanitized via `_sanitize_html` with per-category counts recorded in `meta["security"]["sanitization"]`. The `trust_score` and `source_chunk_ids` fields implement the **Provenance Tracking** layer. The `tenant_id`/`owner_type`/`owner_id` enforcement implements the **Memory Isolation** layer.
 
 **Invariant:** SQL is always authoritative. Vector stores are rebuildable from SQL at any time:
 ```python

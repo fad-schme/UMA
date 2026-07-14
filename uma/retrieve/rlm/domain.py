@@ -19,7 +19,10 @@ as specified in the Phase 0 plan.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Iterable, List, Optional, Set
+
+logger = logging.getLogger(__name__)
 
 
 DOMAIN_VALUES: Set[str] = {"kb_doc", "user_profile", "procedural", "system"}
@@ -51,7 +54,7 @@ def _get_meta(item: Any) -> Dict[str, Any]:
     try:
         setattr(item, "meta", meta)
     except Exception:
-        pass
+        logger.debug("domain: could not set meta on item=%r", type(item).__name__, exc_info=True)
     return meta
 
 
@@ -62,7 +65,7 @@ def get_domain(item: Any) -> Optional[str]:
         return None
     try:
         d = str(raw).strip().lower()
-    except Exception:
+    except (TypeError, ValueError):
         return None
     return d if d in DOMAIN_VALUES else None
 
@@ -81,7 +84,7 @@ def _preference_like_object(obj: Any) -> bool:
         return False
     try:
         s = str(obj).strip()
-    except Exception:
+    except (TypeError, ValueError):
         return False
     if not s:
         return False
@@ -168,6 +171,7 @@ def ensure_domains_for_facts(facts: Iterable[Any]) -> None:
         try:
             ensure_fact_domain(f)
         except Exception:
+            logger.debug("domain: skipped malformed item in ensure_domains", exc_info=True)
             continue
 
 
@@ -176,6 +180,7 @@ def ensure_domains_for_chunks(chunks: Iterable[Any]) -> None:
         try:
             ensure_chunk_domain(ch)
         except Exception:
+            logger.debug("domain: skipped malformed item in ensure_domains", exc_info=True)
             continue
 
 
@@ -184,6 +189,7 @@ def ensure_domains_for_skills(skills: Iterable[Any]) -> None:
         try:
             ensure_skill_domain(s)
         except Exception:
+            logger.debug("domain: skipped malformed item in ensure_domains", exc_info=True)
             continue
 
 

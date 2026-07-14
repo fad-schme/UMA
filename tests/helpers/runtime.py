@@ -125,7 +125,6 @@ def build_test_config(
             "prune_min_fact_salience": 0.2,
         },
         "features": {"load": [], "policy": {"on_attach_error": "log_and_skip", "allow_method_override": False}},
-        "pipeline": {"defer_post_turn": False, "post_turn_queue_max": 50},
     }
 
     if graph_backend != "disabled":

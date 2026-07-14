@@ -55,7 +55,7 @@ class GraphUpdater:
     Responsibilities
     ----------------
     - Insert Episode nodes and link them to User (HAS_EPISODE)
-    - Insert Fact triplets with full provenance (via TemporalGraphCore.insert_fact_triplet)
+    - Insert Fact triplets with full provenance (via GraphCore.insert_fact_triplet)
     - Link Episodes ↔ Facts (MENTIONS) WITH ownership
     - Link Episode → Entity (predicate edges) WITH ownership
     - Add temporal PRECEDES/FOLLOWS edges WITH ownership
@@ -63,7 +63,7 @@ class GraphUpdater:
     Notes
     -----
     - This class is write-only.
-    - Reads are handled by TemporalGraphCore.neighbors/get_paths with strict ownership.
+    - Reads are handled by GraphCore.neighbors/get_paths with strict ownership.
     """
 
     def __init__(self, graph_core: Any):
@@ -71,7 +71,7 @@ class GraphUpdater:
         Parameters
         ----------
         graph_core :
-            Instance of TemporalGraphCore.
+            Instance of GraphCore.
 
         Notes
         -----
@@ -80,6 +80,56 @@ class GraphUpdater:
         """
         self.graph_core = graph_core
         logger.debug("GraphUpdater initialized (strict DAT-safe mode).")
+
+    # ------------------------------------------------------------------
+    # BATCH FACTS (document ingest path)
+    # ------------------------------------------------------------------
+
+    async def add_facts_batch(self, facts: List[Any]) -> int:
+        """Persist a list of facts into the graph, skipping quarantined ones.
+
+        Used by the document ingest path. Processes facts sequentially —
+        graph writes are serialized by the backend anyway, so concurrency
+        adds overhead without throughput gain.
+
+        Returns the number of facts attempted (excluding quarantined/invalid).
+        """
+        if not facts:
+            return 0
+
+        quarantined = 0
+        attempted = 0
+        for fact in facts:
+            if getattr(fact, "quarantined_at", None) is not None:
+                quarantined += 1
+                continue
+            if not getattr(fact, "id", None) or not getattr(fact, "subject", None) \
+                    or not getattr(fact, "predicate", None) \
+                    or getattr(fact, "object", None) is None \
+                    or not getattr(fact, "owner_type", None) \
+                    or not getattr(fact, "owner_id", None) \
+                    or not (isinstance(getattr(fact, "tenant_id", None), str)
+                            and (fact.tenant_id or "").strip()):
+                logger.error(
+                    "GraphUpdater.add_facts_batch: skipping fact missing required fields id=%s",
+                    getattr(fact, "id", "<missing>"),
+                )
+                continue
+            try:
+                self.add_fact(fact)
+                attempted += 1
+            except Exception:
+                logger.exception(
+                    "GraphUpdater.add_facts_batch: failed to upsert fact id=%s",
+                    getattr(fact, "id", "<missing>"),
+                )
+
+        if quarantined:
+            logger.info(
+                "GraphUpdater.add_facts_batch: skipped %d quarantined fact(s)", quarantined
+            )
+        logger.info("GraphUpdater.add_facts_batch: attempted %d fact(s)", attempted)
+        return attempted
 
     # ------------------------------------------------------------------
     # EPISODES
@@ -182,7 +232,7 @@ class GraphUpdater:
             except Exception:
                 source_chunk_id = ""
 
-            # Timestamps must be strings (TemporalGraphCore.insert_fact_triplet expects str).
+            # Timestamps must be strings (GraphCore.insert_fact_triplet expects str).
             def _to_iso(x: Any) -> str:
                 if x is None:
                     return ""

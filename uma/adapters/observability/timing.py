@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import time
 import asyncio
-from contextlib import contextmanager, asynccontextmanager
+from contextlib import contextmanager
 from functools import wraps
 from typing import Callable
 
@@ -42,18 +42,6 @@ def time_block(name: str, logger: logging.Logger | None = None, level: int = log
     finally:
         dt = time.time() - t0
         _logger.log(level, "time_block[%s]: %.3fs", name, dt)
-
-
-@asynccontextmanager
-async def async_time_block(name: str, logger: logging.Logger | None = None, level: int = logging.DEBUG):
-    """Async timing context manager for `async with` usage."""
-    _logger = logger or globals()["logger"]
-    t0 = time.time()
-    try:
-        yield
-    finally:
-        dt = time.time() - t0
-        _logger.log(level, "async_time_block[%s]: %.3fs", name, dt)
 
 
 def timed(fn: Callable):

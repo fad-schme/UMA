@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 def _safe_float(val: Any, *, default: float = 0.0) -> float:
     try:
         return float(val)
-    except Exception:
+    except (TypeError, ValueError):
         return float(default)
 
 
@@ -88,7 +88,7 @@ def _update_meta(obj: Any, updates: Dict[str, Any]) -> None:
             obj.meta = merged  # type: ignore[attr-defined]
     except Exception:
         # Scoring metadata is optional; never fail ranking because of meta assignment.
-        pass
+        logger.debug("_update_meta: failed to attach score metadata to object=%r", obj, exc_info=True)
 
 
 def _candidate_text_for_rerank(obj: Any) -> str:
@@ -249,7 +249,7 @@ def fuse_candidates(
         raise ValueError("strategy must be one of: rrf, overlap_boost")
     try:
         k0 = max(1, int(rrf_k))
-    except Exception:
+    except (TypeError, ValueError):
         k0 = 60
 
     dense_list = list(dense or [])
@@ -353,7 +353,7 @@ def fuse_candidates(
                     it.meta = merged  # type: ignore[attr-defined]
             except Exception:
                 # Optional metadata. Never fail fusion because an object doesn't support meta assignment.
-                pass
+                logger.debug("fuse_candidates: skipped meta attachment for id=%s", sid, exc_info=True)
         out.append(it)
     return out
 
@@ -398,7 +398,7 @@ class Ranker:
     def truncate(self, items: Sequence[Any], k: int) -> List[Any]:
         try:
             k_i = max(0, int(k))
-        except Exception:
+        except (TypeError, ValueError):
             k_i = 0
         return list(items or [])[:k_i] if k_i else []
 
@@ -470,7 +470,7 @@ class Ranker:
                         ts = ts.replace(tzinfo=timezone.utc)
                     age_days = (now - ts).total_seconds() / 86400.0
                     recency = max(0.0, 1.0 - age_days / self._recency_decay_days)
-            except Exception:
+            except (TypeError, ValueError, AttributeError):
                 recency = 0.0
 
             final = float(rerank) + (0.3 * float(recency))

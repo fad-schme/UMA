@@ -107,17 +107,6 @@ class Secret:
             f"expires_at={self.expires_at!r}, version={self.version!r})"
         )
 
-    def is_expired(self, *, now: Optional[datetime] = None) -> bool:
-        """
-        Return True if the secret's advertised TTL has passed. A secret
-        with no `expires_at` is treated as never expiring from the value
-        object's perspective — the caller's cache decides its own ceiling.
-        """
-        if self.expires_at is None:
-            return False
-        current = now if now is not None else datetime.now(timezone.utc)
-        return current >= self.expires_at
-
 
 # ---------------------------------------------------------------------------
 # Interface

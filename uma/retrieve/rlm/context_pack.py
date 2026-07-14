@@ -43,7 +43,7 @@ class ContextPack:
     # Mirrors RetrievalRequest.query_scan_severity. Downstream LLM
     # hops (snippet refiner, fact pruner) consult this to skip
     # amplification on "medium" / "high" severity. None means "scan
-    # was not performed" (legacy direct callers, tests).
+    # was not performed" (callers that do not pass scan severity, tests).
     query_scan_severity: Optional[str] = None
 
     # CR3: observability signals for the audit log. True iff that LLM

@@ -7,6 +7,8 @@ description: Complete quarantine lifecycle in UMA — when a record gets quarant
 
 Quarantine is UMA's primary mechanism for tolerating untrusted content without losing it. A quarantined record stays in the database but is excluded from every retrieval query. The record can be inspected, reinstated, or purged through the management API.
 
+Quarantine is part of UMA's **Pre-Write Sanitization** layer (layer 1 of the defense-in-depth model for ASI06 memory poisoning): high-severity injection hits are retained as forensic evidence rather than silently dropped, so operators can review what was attempted. The **Provenance Tracking** layer (layer 2) extends this with SHA-256 integrity verification — `verify_integrity` can quarantine records post-write if their content hash drifts.
+
 This skill covers the full lifecycle: how a record gets quarantined, what happens at retrieval, and how to manage quarantined records.
 
 ---

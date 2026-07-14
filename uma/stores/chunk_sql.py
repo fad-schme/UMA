@@ -11,6 +11,13 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from .base_vector_sql_store import BaseVectorSQLStore
+
+# B608: _QUARANTINE_FILTER and _NO_FILTER are the only two values ever
+# interpolated into the quarantine toggle position. Both are static SQL
+# fragments containing no user data.
+_QUARANTINE_FILTER = " AND quarantined_at IS NULL"
+_NO_FILTER = ""
+
 from .base_sql_store import DEFAULT_TENANT_ID
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
@@ -493,6 +500,11 @@ class ChunkSQLStore(BaseVectorSQLStore):
         # Pre-primacy scoring: always add phrase + keyword scores.
         # Never allow lexical fallback to devolve to an unscoped full-table scan.
         where_sql = " AND ".join(where) if where else "0=1"
+        # nosec B608 — three dynamic parts, all safe:
+        # phrase_expr/keyword_expr: "CASE WHEN LOWER(text) LIKE :p0 THEN :phrase_weight ELSE 0.0 END + ..."
+        #   structure is hardcoded; all LIKE values bound as :p0/:t0 named params.
+        # where_sql: " AND ".join(where) where every item in `where` is a hardcoded
+        #   literal string ("tenant_id = ?", "owner_type = ?", etc.); no user data.
         sql = f"""
             WITH scored AS (
                 SELECT *,
@@ -624,9 +636,12 @@ class ChunkSQLStore(BaseVectorSQLStore):
         )
         conn = self._conn()
         try:
+            # B608: placeholders is "?,?,?" — safe parameterized, no user data interpolated.
             placeholders = ",".join("?" for _ in ids)
             params: List[Any] = list(ids)
             scope_clause = self._scope_where(tenant_id, owner_type, owner_id, params)
+            # nosec B608 — placeholders is "?,?,?" only; scope_clause is the fixed
+            # string "tenant_id=? AND owner_type=? AND owner_id=?" from _scope_where().
             sql = f"SELECT * FROM chunks WHERE id IN ({placeholders}) AND {scope_clause} AND quarantined_at IS NULL"
             rows = self._query_all(conn, sql, params=params, log_context="fetch_by_ids")
             row_map = {r["id"]: r for r in rows}
@@ -665,11 +680,13 @@ class ChunkSQLStore(BaseVectorSQLStore):
             raise ValueError("ChunkSQLStore.list_chunks_for_owner requires scope")
         conn = self._conn()
         try:
-            quarantine_clause = "" if include_quarantined else " AND quarantined_at IS NULL"
-            sql = f"SELECT * FROM chunks WHERE tenant_id=? AND owner_type=? AND owner_id=?{quarantine_clause} ORDER BY updated_at DESC"
+            quarantine_clause = _NO_FILTER if include_quarantined else _QUARANTINE_FILTER
+            sql = f"SELECT * FROM chunks WHERE tenant_id=? AND owner_type=? AND owner_id=?{quarantine_clause} ORDER BY updated_at DESC"  # nosec B608 — quarantine_clause is _QUARANTINE_FILTER or _NO_FILTER (module constants)
+            chunk_params: list = [tenant_id, owner_type, owner_id]
             if limit:
-                sql += f" LIMIT {int(limit)}"
-            rows = self._query_all(conn, sql, params=[tenant_id, owner_type, owner_id], log_context="list_chunks_owner")
+                sql += " LIMIT ?"
+                chunk_params.append(int(limit))
+            rows = self._query_all(conn, sql, params=chunk_params, log_context="list_chunks_owner")
             return [self._row_to_object(r) for r in rows]
         except Exception:
             logger.exception("ChunkSQLStore.list_chunks_for_owner failed.")
@@ -709,125 +726,3 @@ class ChunkSQLStore(BaseVectorSQLStore):
         finally:
             conn.close()
 
-    # ------------------------------------------------------------------ #
-    # Quarantine Management
-    # ------------------------------------------------------------------ #
-
-    async def reinstate_quarantined_record(
-        self,
-        record_id: str,
-        *,
-        tenant_id: Optional[str],
-        owner_type: str,
-        owner_id: str,
-        audit_entry: Dict[str, Any],
-    ) -> bool:
-        """
-        Clear quarantined_at and append an audit log entry to meta.security.audit_log.
-        Returns True if a row was updated.
-        """
-        if not tenant_id or not owner_type or not owner_id:
-            raise ValueError("ChunkSQLStore.reinstate_quarantined_record requires scope")
-        conn = self._conn()
-        try:
-            row = self._query_one(
-                conn,
-                "SELECT meta FROM chunks WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
-                params=[record_id, tenant_id, owner_type, owner_id],
-                log_context="reinstate_chunk_fetch",
-            )
-            if row is None:
-                return False
-            try:
-                meta = json.loads(row["meta"]) if row["meta"] else {}
-            except Exception:
-                meta = {}
-            security = meta.setdefault("security", {})
-            audit_log = security.setdefault("audit_log", [])
-            audit_log.append(audit_entry)
-            self._execute(
-                conn,
-                "UPDATE chunks SET quarantined_at=NULL, meta=? WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
-                params=[json.dumps(meta), record_id, tenant_id, owner_type, owner_id],
-                log_context="reinstate_chunk",
-            )
-            conn.commit()
-            logger.info("ChunkSQLStore: reinstated chunk id=%s owner=%s:%s", record_id, owner_type, owner_id)
-            return True
-        except Exception:
-            self._safe_rollback(conn, "reinstate_chunk")
-            logger.exception("ChunkSQLStore.reinstate_quarantined_record failed id=%s", record_id)
-            raise
-        finally:
-            conn.close()
-
-    async def get_chunk(
-        self,
-        chunk_id: str,
-        *,
-        tenant_id: Optional[str] = None,
-        owner_type: str,
-        owner_id: str,
-    ) -> Optional["Chunk"]:
-        """Fetch a single chunk by ID (quarantined records included)."""
-        if not tenant_id or not owner_type or not owner_id:
-            raise ValueError("ChunkSQLStore.get_chunk requires tenant_id, owner_type and owner_id")
-        conn = self._conn()
-        try:
-            row = self._query_one(
-                conn,
-                "SELECT * FROM chunks WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
-                params=[chunk_id, tenant_id, owner_type, owner_id],
-                log_context="get_chunk",
-            )
-            return self._row_to_object(row) if row else None
-        except Exception:
-            logger.exception("ChunkSQLStore.get_chunk failed id=%s", chunk_id)
-            raise
-        finally:
-            conn.close()
-
-    async def quarantine_record(
-        self,
-        record_id: str,
-        *,
-        tenant_id: Optional[str],
-        owner_type: str,
-        owner_id: str,
-        quarantined_at: str,
-        audit_entry: Dict[str, Any],
-    ) -> bool:
-        """Set quarantined_at and append an audit log entry. Returns True if updated."""
-        if not tenant_id or not owner_type or not owner_id:
-            raise ValueError("ChunkSQLStore.quarantine_record requires scope")
-        conn = self._conn()
-        try:
-            row = self._query_one(
-                conn,
-                "SELECT meta FROM chunks WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
-                params=[record_id, tenant_id, owner_type, owner_id],
-                log_context="quarantine_chunk_fetch",
-            )
-            if row is None:
-                return False
-            try:
-                meta = json.loads(row["meta"]) if row["meta"] else {}
-            except Exception:
-                meta = {}
-            security = meta.setdefault("security", {})
-            security.setdefault("audit_log", []).append(audit_entry)
-            self._execute(
-                conn,
-                "UPDATE chunks SET quarantined_at=?, meta=? WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
-                params=[quarantined_at, json.dumps(meta), record_id, tenant_id, owner_type, owner_id],
-                log_context="quarantine_chunk",
-            )
-            conn.commit()
-            logger.info("ChunkSQLStore: quarantined chunk id=%s owner=%s:%s", record_id, owner_type, owner_id)
-            return True
-        except Exception:
-            self._safe_rollback(conn, "quarantine_chunk")
-            logger.exception("ChunkSQLStore.quarantine_record failed id=%s", record_id)
-            raise
-        finally:
-            conn.close()

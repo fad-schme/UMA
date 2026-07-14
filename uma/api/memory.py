@@ -74,7 +74,7 @@ from uma.memory.episodic.policies import EpisodicRetentionPolicy
 from uma.memory.semantic.core import SemanticCore
 from uma.memory.procedural.core import ProceduralCore
 from uma.memory.chunk.core import ChunkCore
-from uma.memory.graph import TemporalGraphCore
+from uma.memory.graph import GraphCore
 from uma.common.initializers.runtime import (
     init_retrieval_ready,
     init_ingestion_ready,
@@ -181,7 +181,6 @@ class UMAMemory:
         self.retrieval_cfg = self.cfg.retrieval
         self.features_cfg = self.cfg.features
         self.consolidation_cfg = self.cfg.consolidation
-        self.pipeline_cfg = self.cfg.pipeline
         self.semantic_salience_threshold = self.cfg.semantic_salience_threshold
         self._secrets_cfg = self.cfg.secrets
         self._secrets_provider: Optional[SecretsProvider] = self._build_secrets_provider(self._secrets_cfg)
@@ -215,7 +214,7 @@ class UMAMemory:
         self.working_memory: Optional[WorkingMemoryCore] = None
         self.semantic_core: Optional[SemanticCore] = None
         self.episodic_core: Optional[EpisodicCore] = None
-        self.graph_core: Optional[TemporalGraphCore] = None
+        self.graph_core: Optional[GraphCore] = None
         self.procedural_core: Optional[ProceduralCore] = None
         self.chunk_core: Optional[ChunkCore] = None
 
@@ -298,9 +297,11 @@ class UMAMemory:
         if not isinstance(user_id, str) or not user_id.strip():
             raise ValueError("UMAMemory requires an explicit user_id.")
 
-        resolved_agent_id = (self.agent_id or "agent-default").strip()
-        if not resolved_agent_id:
-            raise ValueError("UMAMemory retrieval requires a non-empty agent_id.")
+        if not self.agent_id:
+            raise ValueError(
+                "UMAMemory requires an agent_id. Call set_context(agent_id=...) before use."
+            )
+        resolved_agent_id = self.agent_id
 
         resolved_tenant_id = (tenant_id or "default").strip()
         if not resolved_tenant_id:
@@ -944,17 +945,17 @@ class UMAMemory:
             ) from exc
 
         # --------------------------------------------------------------
-        # 4) Connect adapter to TemporalGraphCore
+        # 4) Connect adapter to GraphCore
         # --------------------------------------------------------------
         try:
-            self.graph_core = TemporalGraphCore(adapter)
+            self.graph_core = GraphCore(adapter)
             logger.info(
-                "TemporalGraphCore initialized (backend=%s, uri=%s).",
+                "GraphCore initialized (backend=%s, uri=%s).",
                 backend,
                 graph_cfg.get("uri"),
             )
         except Exception as exc:
-            logger.exception("Failed to initialize TemporalGraphCore.")
+            logger.exception("Failed to initialize GraphCore.")
             raise RuntimeError(
                 "Graph core initialization failed. "
                 "Verify graph adapter dependencies and configuration."

@@ -30,7 +30,7 @@ async def write_document_episode(
     Persist a document ingestion episode.
 
     tenant_id is required (DAT invariant). The Episode dataclass defaults
-    tenant_id to "default" for backward compatibility, but every ingestion
+    tenant_id to "default", but every ingestion
     path MUST stamp the correct value before storage.
 
     Returns episode_id if written.

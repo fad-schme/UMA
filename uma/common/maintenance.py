@@ -69,7 +69,7 @@ def _scope_metadata_from_object(object: Any, *, include_session_id: bool) -> Dic
 def _split_isolation_from_metas(
     metas: List[Dict[str, Any]],
 ) -> tuple[List[str], List[str], List[str], List[Dict[str, Any]]]:
-    """C1: split a list of legacy-shape metadata dicts into the four
+    """C1: split a list of pre-contract metadata dicts into the four
     parallel lists the new VectorIndex contract requires.
 
     Pulls `tenant_id` / `owner_type` / `owner_id` out of each dict into
