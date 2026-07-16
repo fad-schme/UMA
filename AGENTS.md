@@ -10,8 +10,6 @@ This file exists to make an AI coding agent productive in UMA quickly, safely, a
 	•	how to run tests and validate changes
 	•	how to implement patches in a lean way (no code clutter)
 
-(AGENTS.md concept: a dedicated, predictable “README for agents”.)
-
 ⸻
 
 0) Project identity (read this first)

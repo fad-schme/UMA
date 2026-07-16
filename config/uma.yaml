@@ -64,18 +64,3 @@ retrieval:
 
 semantic:
   salience_threshold: 0.45
-
-features:
-  load:
-    - name: procedural
-      enabled: true
-      provider: "uma.memory.procedural.feature:ProceduralFeature"
-      config:
-        max_k: 50
-  policy:
-    on_attach_error: "log_and_skip"
-    allow_method_override: false
-
-pipeline:
-  defer_post_turn: false
-  post_turn_queue_max: 200
