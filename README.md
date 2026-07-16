@@ -4,19 +4,22 @@
                                 | |_| | |\/| |/ _ \
                                  \___/|_|  |___/ \_\
 ```
-**Universal Memory Architecture** 
+
+> ## Live documentation
+>
+> To help you get up to speed quickly, UMA ships interactive documentation as a set of skills that can answer your questions directly in your workflow.
+>
+> 🌐 Website: [uma.ai-mem-engineering.com](https://uma.ai-mem-engineering.com)  
+> 📄 Full docs: [uma.ai-mem-engineering.com/docs.html](https://uma.ai-mem-engineering.com/docs.html)
+
+
+## Universal Memory Architecture
 
 UMA is a memory and context runtime SDK for developers building AI agents. It ingests data, stores it across six typed memory lanes, and exposes a small retrieval surface. **UMA manages memory only** — your application owns prompts, tool use, reasoning, and final responses.
 
 UMA does not generate assistant replies and does not perform agent reasoning.
 Developers bring their own LLM or agent loop and use UMA strictly for memory
 management.
-
-> **Status:** beta.
-
-🌐 Website: [uma.ai-mem-engineering.com](https://uma.ai-mem-engineering.com) ·
-📄 Documentation: [uma.ai-mem-engineering.com/docs.html](https://uma.ai-mem-engineering.com/docs.html)
-
 
 ---
 
