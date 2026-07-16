@@ -350,7 +350,9 @@ class UMAConfig(dict):
         # FEATURES
         # -----------------------
         features = self.get("features")
-        if not isinstance(features, dict):
+        if features is None:
+            features = {}
+        elif not isinstance(features, dict):
             raise ValueError("'features' must be a mapping")
 
         if "load" in features:
@@ -370,8 +372,9 @@ class UMAConfig(dict):
                 if "config" in item and not isinstance(item["config"], dict):
                     raise ValueError("'features.load[].config' must be a mapping")
         else:
-            self._require("features", "procedural_enabled")
-            self._require("features", "consolidation_enabled")
+            for key in ("procedural_enabled", "consolidation_enabled"):
+                if key in features and not isinstance(features[key], bool):
+                    raise ValueError(f"'features.{key}' must be boolean")
 
         policy = features.get("policy")
         if policy is not None:

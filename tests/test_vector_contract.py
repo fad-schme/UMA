@@ -9,11 +9,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from uma.adapters.db.sqlite_adapter import SQLiteAdapter
-from uma.adapters.llm import openai_compatible as shared_module
 from uma.adapters.vector.base import VectorIndex
 from uma.adapters.vector.inmemory import InMemoryVectorIndex
 from uma.adapters.vector.lancedb import LanceDBIndex
 from uma.api.memory import UMAMemory
+from uma.common.initializers import providers as provider_initializers
 from uma.common.dedupe import dedupe_by_id
 from uma.common.types import Chunk
 from uma.ingest.chunker import chunk_sections
@@ -203,24 +203,6 @@ def test_inmemory_delete_removes_vectors():
 
 
 
-class _FakeAsyncOpenAI:
-    def __init__(self, **kwargs):
-        self.init_kwargs = kwargs
-        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._chat_create))
-        self.embeddings = SimpleNamespace(create=self._embedding_create)
-
-    async def _chat_create(self, **kwargs):
-        return SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))]
-        )
-
-    async def _embedding_create(self, **kwargs):
-        input_items = list(kwargs.get("input") or [])
-        return SimpleNamespace(
-            data=[SimpleNamespace(embedding=[0.0] * 64) for _ in input_items]
-        )
-
-
 def test_lancedb_index_upsert_query_and_filters(tmp_path) -> None:
     index = LanceDBIndex(dim=3, path=str(tmp_path / "vectors"), table_name="test_vectors")
     index.upsert(
@@ -266,25 +248,30 @@ def test_lancedb_index_upsert_query_and_filters(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_lite_config_initializes_sqlite_and_lancedb_without_graph_services(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(shared_module, "AsyncOpenAI", _FakeAsyncOpenAI)
-
     config_data = yaml.safe_load(Path("config/uma.yaml").read_text(encoding="utf-8"))
     config_data["storage"]["db_root"] = str(tmp_path / "db")
     config_data["storage"]["vector_config"]["path"] = str(tmp_path / "vectors")
-    config_data["embedding"] = {
-        "provider": "ollama",
-        "model": "nomic-embed-text",
-        "dimension": 64,
-        "config": {"host": "http://localhost:11434"},
-    }
-    config_data["llms"] = {
-        "uma": {
-            "provider": "ollama",
-            "model": "llama3",
-            "config": {"host": "http://localhost:11434"},
-        },
-    }
-    config_data["features"]["load"] = []
+    config_data["embedding"]["dimension"] = 64
+    config_data.setdefault("features", {})["load"] = []
+
+    expected_llm_provider = config_data["llms"]["uma"]["provider"]
+    expected_embedding_provider = config_data["embedding"]["provider"]
+    resolved_providers = {"llm": [], "embedding": []}
+
+    def get_test_llm_factory(provider):
+        resolved_providers["llm"].append(provider)
+        return lambda cfg: SimpleNamespace(provider_name=cfg.provider, model=cfg.model)
+
+    def get_test_embedder_factory(provider):
+        resolved_providers["embedding"].append(provider)
+        return lambda cfg: SimpleNamespace(
+            provider_name=cfg.provider,
+            model=cfg.model,
+            dimension=cfg.dimension,
+        )
+
+    monkeypatch.setattr(provider_initializers, "get_llm_factory", get_test_llm_factory)
+    monkeypatch.setattr(provider_initializers, "get_embedder_factory", get_test_embedder_factory)
 
     config_path = tmp_path / "uma_test.yaml"
     config_path.write_text(yaml.safe_dump(config_data), encoding="utf-8")
@@ -297,6 +284,10 @@ async def test_lite_config_initializes_sqlite_and_lancedb_without_graph_services
         assert isinstance(memory._stores["procedural"].vector_index, LanceDBIndex)
         assert isinstance(memory._stores["chunk"].vector_index, LanceDBIndex)
         assert memory.graph_core is None
+        assert memory.llm.provider_name == expected_llm_provider
+        assert memory.embedder.provider_name == expected_embedding_provider
+        assert expected_llm_provider in resolved_providers["llm"]
+        assert expected_embedding_provider in resolved_providers["embedding"]
 
         # Prove the real runtime path can write to the embedded vector backend.
         vectors_root = tmp_path / "vectors"

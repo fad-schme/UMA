@@ -317,3 +317,38 @@ patterns:
       reveal_hidden_data:         '(?i)\breveal\b.{0,30}\b(hidden|preloaded|secret)\b.{0,10}\bdata\b'
       expose_chat_init:           '(?i)\bexpose\b.{0,20}\bchat\s+initialization\s+sequence\b'
       print_preloaded_context:    '(?i)\bprint\b.{0,30}\bpreloaded\s+context\b'
+
+  # ----------------------------------------------------------------------
+  # Delimiter smuggling — repeated invisible/control characters
+  # ----------------------------------------------------------------------
+  # ZWJ (U+200D), ZWNJ (U+200C), and soft hyphen (U+00AD) are deliberately
+  # excluded because they are valid in multilingual prose, emoji, and text
+  # extracted from documents. Repetition in a short window is required so an
+  # isolated formatting character does not reduce trust.
+  - name: delimiter_smuggling
+    meta:
+      description: "Repeated invisible or ASCII control characters used to hide instruction payloads"
+      threat_level: 4
+      severity: medium
+      category: obfuscation
+    strings:
+      repeated_zero_width_non_joiners: '(?:[\u200b\u2060\ufeff].{0,8}){3,}'
+      repeated_ascii_controls:         '(?:[\x00-\x08\x0e-\x1b].{0,8}){2,}'
+
+  # ----------------------------------------------------------------------
+  # Embedded LLM protocol artifacts
+  # ----------------------------------------------------------------------
+  # Exact privileged-role delimiters are uncommon in ordinary prose but can
+  # legitimately appear in model documentation and training data. Keep these
+  # medium severity: record and reduce trust without automatic quarantine.
+  # Generic headings and @admin/@prompt-style tags are intentionally excluded.
+  - name: prompt_artifact_smuggling
+    meta:
+      description: "Exact LLM protocol markers embedded in untrusted content"
+      threat_level: 4
+      severity: medium
+      category: prompt_injection
+    strings:
+      privileged_role_token: '(?i)<\|(?:system|developer)\|>'
+      chatml_role_block:      '(?i)<\|im_start\|>\s*(?:system|developer)\b'
+      llama_system_block:     '(?i)<<\s*SYS\s*>>'

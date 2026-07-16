@@ -1,6 +1,6 @@
 ---
 name: uma-security
-description: Complete security model for UMA — the seven security primitives (provenance, write-time trust scoring, cryptographic integrity, injection pattern detection, two-layer injection gate, quarantine, ingest boundary hardening), the full OWASP LLM Top 10 2025 mapping (LLM01/LLM02/LLM04/LLM08/LLM09/LLM10 in scope; LLM03/LLM05/LLM06/LLM07 out of scope with explicit reasoning), the OWASP ASI06/ASI03/ASI05 coverage, the two-layer injection-scan architecture (pre-LLM gate + write-time boundary scan), severity behavior and trust-score adjustment, the 15-rule YAML pattern catalog with all built-in rules, custom pattern extension, MIME consistency and file-size limits at ingest, HTML/Markdown sanitization, and how UMA's defenses compose against prompt injection, vector poisoning, and integrity tampering. Use this skill when answering questions about how UMA defends against any OWASP LLM or ASI control, how to extend the pattern catalog, what `severity` levels mean, how `trust_score` is adjusted, what happens to a flagged user message, what `InjectionDetectedError` indicates, which OWASP controls are out of scope and why, or any question about the security primitives across ingest and retrieval.
+description: Complete security model for UMA — the seven security primitives (provenance, write-time trust scoring, cryptographic integrity, injection pattern detection, two-layer injection gate, quarantine, ingest boundary hardening), the full OWASP LLM Top 10 2025 mapping (LLM01/LLM02/LLM04/LLM08/LLM09/LLM10 in scope; LLM03/LLM05/LLM06/LLM07 out of scope with explicit reasoning), the OWASP ASI06/ASI03/ASI05 coverage, the two-layer injection-scan architecture (pre-LLM gate + write-time boundary scan), severity behavior and trust-score adjustment, the bundled English and multilingual YAML pattern catalogs, custom pattern extension, MIME consistency and file-size limits at ingest, HTML/Markdown sanitization, and how UMA's defenses compose against prompt injection, vector poisoning, and integrity tampering. Use this skill when answering questions about how UMA defends against any OWASP LLM or ASI control, how to extend the pattern catalog, what `severity` levels mean, how `trust_score` is adjusted, what happens to a flagged user message, what `InjectionDetectedError` indicates, which OWASP controls are out of scope and why, or any question about the security primitives across ingest and retrieval.
 ---
 
 # UMA — Security Model
@@ -91,7 +91,7 @@ await memory.process_turn(..., skip_scan=True)
 
 ## Pattern Catalog
 
-The scanner runs against a compiled YAML catalog: `uma/common/injection_patterns.yaml`. Bundled rules:
+The scanner compiles both `uma/common/injection_patterns.yaml` and `uma/common/injection_patterns.l10n.yaml`. The localized catalog covers French, Spanish, German, and Simplified Chinese. Bundled English rule families:
 
 | Rule | Severity | Category | What it detects |
 |---|---|---|---|
@@ -110,6 +110,8 @@ The scanner runs against a compiled YAML catalog: `uma/common/injection_patterns
 | `policy_evasion` | medium | prompt_injection | "ignore filters", "respond without restrictions" |
 | `escalation_phrases` | medium | privilege_escalation | "how to escalate privileges", "root access simulate" |
 | `homoglyph_obfuscation` | medium | prompt_injection | Leetspeak / homoglyph variants of known-bad tokens |
+| `delimiter_smuggling` | medium | obfuscation | Repeated zero-width formatting markers or ASCII controls used to hide payloads |
+| `prompt_artifact_smuggling` | medium | prompt_injection | Exact privileged-role protocol tokens such as `<|system|>` and ChatML/Llama system delimiters |
 
 ### Extending the catalog
 

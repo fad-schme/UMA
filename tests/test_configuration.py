@@ -16,7 +16,7 @@ from uma.adapters.llm import openai_compatible as shared_module
 from uma.adapters.llm.provider_registry import get_embedder_factory, get_llm_factory
 from uma.api.memory import UMAMemory
 from uma.common.config import UMAConfig
-from uma.common.config_types import EmbeddingConfig, LLMConfig
+from uma.common.config_types import EmbeddingConfig, LLMConfig, RuntimeConfig
 from uma.common.config_types import RetrievalConfig
 from uma.common.initializers.providers import initialize_embedder, initialize_llm
 from uma.stores.base_sql_store import BaseSQLStore
@@ -314,11 +314,26 @@ async def test_anthropic_adapter_formats_messages_from_uma_interface(monkeypatch
     assert llm._client.last_create_kwargs["temperature"] == 0.2
 
 
-def test_public_configs_remain_ollama_based() -> None:
+def test_public_configs_declare_registered_providers() -> None:
     for path in ("config/uma.yaml",):
         cfg = UMAConfig.load_yaml(path)
-        assert cfg.embedding.provider == "ollama"
-        assert cfg.llms.uma.provider == "ollama"
+        assert get_embedder_factory(cfg.embedding.provider) is not None
+        assert get_llm_factory(cfg.llms.uma.provider) is not None
+
+
+def test_features_section_is_optional_and_uses_runtime_defaults(tmp_path) -> None:
+    config_data = build_test_config(db_root=tmp_path / "db")
+    config_data.pop("features")
+    cfg = UMAConfig.load_yaml(str(_write_config(tmp_path, config_data)))
+
+    runtime = RuntimeConfig.from_uma_config(cfg)
+
+    assert runtime.features.procedural_enabled is True
+    assert runtime.features.consolidation_enabled is True
+    assert {item["name"] for item in runtime.features.load} == {
+        "procedural",
+        "consolidation",
+    }
 
 
 def test_initializer_rejects_unsupported_public_provider() -> None:

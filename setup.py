@@ -35,6 +35,7 @@ setup(
     python_requires=">=3.9",
     packages=find_namespace_packages(include=["uma", "uma.*"]),
     include_package_data=True,
+    package_data={"uma.common": ["injection_patterns*.yaml"]},
     install_requires=[
         "pyyaml",
         "numpy",

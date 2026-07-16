@@ -1,7 +1,7 @@
 """
 injection_scan.py — injection-pattern scanner for UMA memory-write boundaries.
 
-Scans text against the injection_patterns.yaml catalog at write time.
+Scans text against the bundled English and localized YAML catalogs at write time.
 High-severity hits set trust_score to 0.0. Lower-severity hits reduce it.
 No quarantine logic (that is PR4). This module produces a signal only.
 
@@ -27,7 +27,10 @@ logger = logging.getLogger(__name__)
 # Catalog loading — compiled once at module import
 # ---------------------------------------------------------------------------
 
-_CATALOG_PATH = Path(__file__).parent / "injection_patterns.yaml"
+_CATALOG_PATHS = (
+    Path(__file__).parent / "injection_patterns.yaml",
+    Path(__file__).parent / "injection_patterns.l10n.yaml",
+)
 
 
 @dataclass(frozen=True)
@@ -48,9 +51,11 @@ class _CompiledRule:
 
 
 def _compile_catalog(extra_path: Optional[str] = None) -> List[_CompiledRule]:
-    with open(_CATALOG_PATH, encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    raw_rules: List[Dict] = list(data.get("patterns", []))
+    raw_rules: List[Dict] = []
+    for catalog_path in _CATALOG_PATHS:
+        with open(catalog_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        raw_rules.extend(data.get("patterns", []))
 
     if extra_path:
         try:
@@ -206,6 +211,7 @@ def scan_content(text: str) -> InjectionScanResult:
 
     normalized = normalize_text(text)
     text_bytes_hex = text.encode("utf-8", errors="ignore").hex()
+    has_cjk = any("\u3400" <= char <= "\u9fff" for char in normalized)
 
     matched_rules: List[str] = []
     matched_categories: List[str] = []
@@ -214,6 +220,10 @@ def scan_content(text: str) -> InjectionScanResult:
     has_high_rule = False
 
     for rule in _CATALOG:
+        # Every bundled zh.* expression requires CJK text. Avoid evaluating
+        # that catalog for Latin-script content on this write-time hot path.
+        if rule.name.startswith("zh.") and not has_cjk:
+            continue
         # Count how many patterns in this rule match
         n_matched = 0
         for cp in rule.patterns:

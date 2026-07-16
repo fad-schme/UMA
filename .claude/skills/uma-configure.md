@@ -197,7 +197,7 @@ These settings govern UMA's defense-in-depth model for memory poisoning (ASI06).
 ```yaml
 security:
   # Path to a YAML file with additional injection patterns. UMA loads
-  # `uma/common/injection_patterns.yaml` by default; `custom_patterns_path`
+  # Bundled English and localized catalogs by default; `custom_patterns_path`
   # extends it. Set this to add organization-specific rules without
   # modifying the bundled catalog.
   custom_patterns_path: null
