@@ -171,7 +171,7 @@ Assistants that don't follow `.claude/skills/` can read the same files directly,
 ### Other docs:
 
 - [**UMA Documentation**](https://uma.ai-mem-engineering.com/docs.html)
-- [**Contributing**](CONTRIBUTIONS.md)
+- [**Contributing**](CONTRIBUTING.md)
 
 
 For the architectural deep dive, see [`ARCHITECTURE.md`](ARCHITECTURE.md). For everything else, ask your assistant.
