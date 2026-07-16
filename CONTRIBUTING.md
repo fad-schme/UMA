@@ -1,4 +1,7 @@
-## Contributing
+# Contributing to UMA
+
+Thank you for your interest in contributing to UMA! This guide outlines the process for contributing to the project and our development conventions.
+
 
 **External contributions are by invitation only**
 
@@ -16,17 +19,17 @@ The UMA team may invite an external contributor to submit a pull request when:
 
 Pull requests that have not been explicitly invited by a member of the UMA team will be closed without review.
 
-**Why we do not generally accept external code contributions**
+### Why we do not generally accept external code contributions
 
 While we appreciated the effort and engagement from the community, is difficult to ensure consistency and security.
 
-As per our experience, many contributions are made without full visibility into the architectural context, system-level constraints, or near-term roadmap considerations that guide UMA development. Reviewing and iterating on these PRs often take more time than implementing the fix directly, and diverted attention from higher-priority work.
+As per our experience, many contributions are made without full understanding on the overall architectural context, system-level constraints, or near-term roadmap considerations that guide UMA development. Reviewing and iterating on these PRs often take more time than implementing the fix directly, and diverted attention from higher-priority work.
 
-The most valuable contributions consistently came developers who demonstrated deep understanding of a problem domain. That expertise is most helpful when shared early -- through detailed bug reports, analysis, and design discussion in issues. Identifying the right solution is typically the hard part; implementing it is comparatively straightforward with the help of UMA shipped skills.
+The most valuable contributions consistently came through detailed bug reports, analysis, and design discussion in issues. Identifying the right solution is typically the hard part; implementing it is comparatively straightforward with the help of UMA shipped skills.
 
 For these reasons, we focus external contributions on discussion, analysis, and feedback, and reserve code changes for cases where a targeted invitation makes sense.
 
-### Development workflow
+## Development workflow
 
 If you are invited by a UMA team member to contribute a PR, here is the recommended development workflow.
 
@@ -34,7 +37,7 @@ If you are invited by a UMA team member to contribute a PR, here is the recommen
 - Keep your changes focused. Multiple unrelated fixes should be opened as separate PRs.
 - Ensure your change is free of lint warnings and test failures.
 
-### Guidance for invited code contributions
+## Guidance for invited code contributions
 
 1. **Start with an issue.** Open a new one or comment on an existing discussion so we can agree on the solution before code is written.
 2. **Add or update tests.** A bug fix should generally come with test coverage that fails before your change and passes afterwards. 100% coverage is not required, but aim for meaningful assertions.
@@ -68,7 +71,7 @@ If you run into problems setting up the project, would like feedback on an idea,
 
 Together we can make UMA CLI an incredible tool. **Happy hacking!** :rocket:
 
-### Contributor license agreement (CLA)
+## Contributor license agreement (CLA)
 
 All contributors **must** accept the CLA. The process is lightweight:
 
@@ -83,6 +86,8 @@ All contributors **must** accept the CLA. The process is lightweight:
 
 No special Git commands, email attachments, or commit footers required.
 
-### Security & responsible AI
+## Security & responsible AI
 
 Have you discovered a vulnerability or have concerns about model output? Please e-mail **security@ai-mem-engineering.com** and we will respond promptly.
+
+Thank you for helping make UMA better!
