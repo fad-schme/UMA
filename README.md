@@ -168,8 +168,12 @@ Assistants that don't follow `.claude/skills/` can read the same files directly,
 
 ---
 
-## License & Status
+### Other docs:
 
-UMA is Apache-2.0 licensed and currently in beta. Production packaging is not included in this public repo; a future private or commercial package may provide production-specific profiles, managed-service adapters, and deployment tooling.
+- [**UMA Documentation**](https://uma.ai-mem-engineering.com/docs.html)
+- [**Contributing**](CONTRIBUTIONS.md)
+
 
 For the architectural deep dive, see [`ARCHITECTURE.md`](ARCHITECTURE.md). For everything else, ask your assistant.
+
+This repository is licensed under the [Apache-2.0 License](LICENSE).
