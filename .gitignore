@@ -9,18 +9,17 @@ venv/
 .venv/
 .venv*
 ENV/
-.agents/
+AGENTS.md
 .codex/
 .gold_runs/
 .ruff_cache/
 # Pytest
 .pytest_cache/
-.codex/
 # Byte-compiled / optimized / DLL files
 *.pyc
 *.pyo
 *.pyd
-
+resources/*
 # Distribution / packaging
 build/
 dist/
