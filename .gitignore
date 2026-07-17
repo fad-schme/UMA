@@ -28,12 +28,9 @@ dist/
 # VSCode
 .vscode/
 .uma/
-# macOS
 .DS_Store
+/.claude/settings.local.json
 
-# OneDrive
-*.onetoc2
-AGENTS.md
 
 
 # Logs
