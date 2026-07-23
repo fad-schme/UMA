@@ -388,6 +388,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
     ) -> Optional[Episode]:
+        """Fetch a single episode by ID within the ownership scope, or ``None`` if not found."""
         self._require_scope(tenant_id, owner_type, owner_id)
         conn = self._conn()
         try:
@@ -412,6 +413,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
     ) -> None:
+        """Permanently delete an episode record and its vector-index entry."""
         self._require_scope(tenant_id, owner_type, owner_id)
         conn = self._conn()
         try:
@@ -457,6 +459,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         owner_id: str = "",
         include_quarantined: bool = False,
     ) -> List[Episode]:
+        """Return episodes for the given scope, newest first. Excludes quarantined records."""
         self._require_scope(tenant_id, owner_type, owner_id)
         conn = self._conn()
         try:
@@ -485,6 +488,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             conn.close()
 
     async def list_recent(self, tenant_id: Optional[str] = None, owner_type: str = "", owner_id: str = "", n: int = 5) -> List[Episode]:
+        """Return the ``k`` most recent episodes for the scope. Convenience wrapper over ``list_episodes``."""
         self._require_scope(tenant_id, owner_type, owner_id)
         conn = self._conn()
         try:
@@ -703,6 +707,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         owner_type: str,
         owner_id: str,
     ) -> List[Episode]:
+        """Bulk-fetch episodes by ID list within the ownership scope. Returns only non-quarantined records."""
         if not ids:
             return []
         self._require_scope(tenant_id, owner_type, owner_id)
@@ -756,6 +761,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         summary: str,
         latest_timestamp: str,
     ) -> None:
+        """Insert or update an episode-cluster summary record."""
         self._require_scope(tenant_id, owner_type, owner_id)
         if not user_id:
             raise ValueError("EpisodicSQLStore.upsert_cluster_summary requires user_id")
@@ -835,6 +841,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         max_episodes: Optional[int] = None,
         time_range: Optional[dict] = None,
     ) -> List[dict]:
+        """Return cluster summaries for the scope ordered by ``latest_timestamp`` descending."""
         self._require_scope(tenant_id, owner_type, owner_id)
         conn = self._conn()
         try:

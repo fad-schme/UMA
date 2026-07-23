@@ -86,6 +86,7 @@ _LEGACY_KIND_ALIASES = {
 
 
 def lane_for_kind(kind: str) -> str:
+    """Return the memory lane name for a given artifact kind constant."""
     normalized_kind = canonical_kind_name(kind)
     lane = _KIND_TO_LANE.get(normalized_kind)
     if lane is None:
@@ -94,6 +95,7 @@ def lane_for_kind(kind: str) -> str:
 
 
 def canonical_kind_name(kind: Any) -> str:
+    """Return the canonical string name for an artifact kind."""
     normalized_kind = _clean_string(kind)
     if not normalized_kind:
         return ""
@@ -101,6 +103,7 @@ def canonical_kind_name(kind: Any) -> str:
 
 
 def canonical_scope(*, owner_type: str, session_id: str | None = None) -> str:
+    """Return a ``(owner_type, owner_id)`` tuple normalised from an artifact."""
     if _clean_string(session_id):
         return "session"
     normalized_owner_type = _clean_string(owner_type)
@@ -200,6 +203,7 @@ def normalize_document_metadata(
     source_path: str,
     source_hash: str,
 ) -> dict[str, Any]:
+    """Normalise raw document metadata to the canonical UMA metadata shape."""
     existing = dict(meta or {})
     explicit_kind = canonical_kind_name(existing.get("kind"))
     explicit_source_kind = _clean_string(existing.get("source_kind"))
@@ -258,6 +262,7 @@ def normalize_chunk_metadata(
     source_path: str,
     source_hash: str,
 ) -> dict[str, Any]:
+    """Normalise raw chunk metadata to the canonical UMA metadata shape."""
     normalized = normalize_metadata(
         meta=meta,
         kind=RAW_SOURCE_KIND,
@@ -304,6 +309,7 @@ def normalize_fact_metadata(
     source_ids: list[str] | None,
     session_id: str | None,
 ) -> dict[str, Any]:
+    """Normalise raw fact metadata to the canonical UMA metadata shape."""
     existing = dict(meta or {})
     explicit_kind = canonical_kind_name(existing.get("kind"))
     explicit_lane = _clean_string(existing.get("kb_lane"))
@@ -367,6 +373,7 @@ def normalize_episode_metadata(
     timestamp: datetime | str | None,
     session_id: str | None,
 ) -> dict[str, Any]:
+    """Normalise raw episode metadata to the canonical UMA metadata shape."""
     existing = dict(meta or {})
     normalized = normalize_metadata(
         meta=existing,

@@ -37,6 +37,7 @@ class CoverageReport:
     diminishing_returns: bool
 
     def to_dict(self) -> Dict[str, Any]:
+        """Serialise the coverage report to a plain dict for logging and debugging."""
         return self.__dict__
 
 
@@ -55,6 +56,13 @@ def assess_coverage(
     novelty_window: int = 2,
     min_recent_novelty: int = 1,
 ) -> CoverageReport:
+    """
+    Evaluate how well the current ``ContextPack`` covers the query.
+
+    Returns a ``CoverageReport`` with ``enough=True`` when semantic fact counts
+    and salience thresholds are satisfied. Also tracks novelty across steps to
+    detect diminishing returns and signal the controller to stop iterating.
+    """
     logger.debug(
         "assess_coverage: facts=%d episodes=%d graph=%d",
         len(facts),
@@ -116,12 +124,14 @@ def compute_novelty_signals(
     window: int,
     min_recent_sum: int,
 ) -> Tuple[int, int, bool]:
+    """Compute last-step and windowed novelty totals, and a diminishing-returns flag."""
     if not novelty_history:
         return 0, 0, False
 
     recent = novelty_history[-window:]
 
     def step_total(d):
+        """Sum all novelty counts for a single step dict."""
         return sum(d.values())
 
     last = step_total(novelty_history[-1])

@@ -279,6 +279,12 @@ class UMAMemoryEnvironment:
         owner_type: str = "agent",
         owner_id: Optional[str] = None,
     ) -> List[Any]:
+        """
+        Fetch additional semantic facts for a specific predicate, paginating from ``offset``.
+
+        Called by the RLM controller when coverage assessment determines the current
+        fact set is insufficient and a relevant predicate has been identified.
+        """
         semantic_core = getattr(self._memory, "semantic_core", None)
         if semantic_core is None:
             logger.error("Environment.fetch_more_facts: semantic_core is None")
@@ -535,6 +541,12 @@ class UMAMemoryEnvironment:
         owner_type: str = "agent",
         owner_id: Optional[str] = None,
     ) -> List[Any]:
+        """
+        Expand the graph from seed entities extracted from current facts.
+
+        Called by the RLM controller when graph lane is enabled and graph coverage
+        is insufficient. Returns the number of new graph items added to the pack.
+        """
         graph_core = getattr(self._memory, "graph_core", None)
         if graph_core is None:
             logger.error("Environment.expand_graph: graph_core is None")

@@ -201,6 +201,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
         return "tenant_id=? AND owner_type=? AND owner_id=?"
 
     async def upsert_chunk(self, chunk: Chunk, embedding: List[float]) -> None:
+        """Insert or update a document chunk. Embeds the chunk and persists to SQL then vector store."""
         conn = self._conn()
         try:
             normalized_meta = normalize_chunk_metadata(
@@ -343,6 +344,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
         owner_id: Optional[str] = None,
         k: int = 10,
     ) -> List[Chunk]:
+        """Vector-search chunks within the ownership scope. Returns ranked ``Chunk`` objects."""
         if not tenant_id:
             logger.error("ChunkSQLStore.search requires tenant_id")
             raise ValueError("ChunkSQLStore.search requires tenant_id")
@@ -567,6 +569,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
         pos_end: int,
         log_context: str = "chunk_fetch_by_doc_pos_range",
     ) -> List[Chunk]:
+        """Fetch chunks belonging to a document within a position range, for neighbour-expansion."""
         if not doc_id or not isinstance(doc_id, str):
             return []
         try:

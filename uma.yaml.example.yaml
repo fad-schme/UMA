@@ -1,0 +1,166 @@
+# UMA configuration example
+# -------------------------
+# Copy this file to the location used by your application, then adjust the
+# storage paths and model providers. Keep only one active `embedding` block and
+# one active `llms.uma` block; the commented blocks below are alternatives.
+#
+# Never put real API keys in this file. Set OPENAI_API_KEY or ANTHROPIC_API_KEY
+# in the process environment and use `api_key_env` as shown in the examples.
+#
+# The lite profile uses local SQLite and LanceDB storage. No external database
+# service is required.
+profile: lite
+
+# Persistent storage for long-term memories and document chunks.
+storage:
+  # Relative paths are resolved from the process working directory because
+  # db_root_base is "cwd". Use "config" to resolve from this file's directory.
+  db_root: ".uma/db"
+  db_root_base: "cwd"
+  # SQLite is the built-in SQL backend.
+  sql_backend: "sqlite"
+  # LanceDB is the default local vector index. A custom backend must use a
+  # Python import path in the form "module.path:callable".
+  vector_backend: "uma.adapters.vector.lancedb:LanceDBIndex"
+  vector_config:
+    path: ".uma/vectors"
+  # Graph memory is optional. Keep both values disabled unless a graph backend
+  # plugin is configured.
+  graph_backend: "disabled"
+  graph_config:
+    enabled: false
+
+# Short-term conversation memory and automatic compaction thresholds.
+working_memory:
+  # Approximate token budget retained before older messages are compacted.
+  max_tokens: 4096
+  # Start summarizing at 70% usage and force compaction at 95%.
+  # Both ratios must be between 0 and 1; warning_ratio must not exceed
+  # hard_limit_ratio.
+  warning_ratio: 0.7
+  hard_limit_ratio: 0.95
+  # Maximum number of messages processed in one compaction chunk.
+  chunk_size: 20
+  # Always retain at least this many recent messages when compacting.
+  keep_recent_messages: 4
+  # Retain enough recent messages to cover at least this fraction of the token
+  # budget, even when that means keeping more than keep_recent_messages.
+  keep_recent_token_fraction: 0.1
+
+# Embeddings power semantic and vector search.
+#
+# IMPORTANT: `dimension` must exactly match the selected model's output size.
+# Changing the model or dimension after data has been indexed requires a fresh
+# vector store (or a full re-index into a separate storage path).
+#
+# Active example: local Ollama. Start Ollama and pull the model first:
+#   ollama pull nomic-embed-text
+embedding:
+  provider: "ollama"
+  model: "nomic-embed-text"
+  dimension: 768
+  config:
+    host: "http://localhost:11434"
+    # Compatibility hint only; document ingestion sets its effective embedding
+    # batch size through IngestConfig.embed_batch_size.
+    batch_size: 32
+    # Provider request timeout in seconds.
+    timeout: 20.0
+    # Truncate each input before sending it to the embedding provider.
+    # Set to 0 to disable character-based truncation.
+    max_input_chars: 512
+
+# OpenAI embedding alternative (Anthropic does not provide an embedding adapter
+# in UMA). Replace the active `embedding` block above with this block:
+#
+# embedding:
+#   provider: "openai"
+#   model: "text-embedding-3-small"
+#   dimension: 1536
+#   config:
+#     api_key_env: "OPENAI_API_KEY"
+#     timeout: 30.0
+#     max_input_chars: 0
+
+# Models used by UMA. `uma` is required and handles memory extraction,
+# summarization, and other internal memory operations. If an `agent` block is
+# omitted, UMA also uses this configuration wherever an agent LLM is requested.
+llms:
+  # Active example: local Ollama. Pull the model before starting UMA:
+  #   ollama pull qwen2.5:3b
+  uma:
+    provider: "ollama"
+    model: "qwen2.5:3b"
+    config:
+      host: "http://localhost:11434"
+      timeout: 60.0
+
+# OpenAI LLM alternative. Replace the active `llms` block above:
+#
+# llms:
+#   uma:
+#     provider: "openai"
+#     model: "gpt-4o-mini"
+#     config:
+#       api_key_env: "OPENAI_API_KEY"
+#       timeout: 60.0
+#
+# Anthropic LLM alternative. Anthropic can be used for the LLM while Ollama or
+# OpenAI supplies embeddings:
+#
+# llms:
+#   uma:
+#     provider: "anthropic"
+#     model: "claude-3-5-haiku-latest"
+#     config:
+#       api_key_env: "ANTHROPIC_API_KEY"
+#       timeout: 60.0
+#
+# Optional: use a separate model for the host agent while keeping `uma` for
+# lower-cost internal memory work. Add this next to `uma` under `llms`:
+#
+#   agent:
+#     provider: "openai"
+#     model: "gpt-4o-mini"
+#     config:
+#       api_key_env: "OPENAI_API_KEY"
+#       timeout: 60.0
+
+# Retrieval candidate and prompt-context budgets. Higher values may improve
+# recall, but increase latency and the amount of context sent to the LLM.
+retrieval:
+  # Maximum candidates retrieved from each long-term memory lane.
+  max_episodes: 3
+  max_facts: 5
+  max_skills: 3
+  # This can remain nonzero while graph storage/context is disabled.
+  max_graph_items: 3
+  # Maximum supporting document chunks exposed as retrieval evidence.
+  max_evidence_chunks: 10
+  # Preserve strict behavior in retrieval components that support this switch.
+  strict: true
+  # Enable only while tuning retrieval; score details can make logs verbose.
+  debug_scores: false
+  # Final limits used when assembling context for the model.
+  context:
+    max_working_messages: 6
+    max_episodic: 2
+    max_semantic: 4
+    max_chunks: 2
+    # Maximum characters retained for each document snippet.
+    snippet_max_chars: 600
+    # Candidate snippets considered by the enterprise snippet refiner. The lite
+    # profile accepts this setting but does not enable that refiner.
+    snippet_refiner_top_k: 6
+    max_procedural: 2
+    # Toggle memory lanes included in the assembled context.
+    include_working_memory: true
+    include_episodic: true
+    # Keep false while storage.graph_backend is disabled.
+    include_graph: false
+    include_procedural: true
+
+# Minimum 0..1 importance/relevance score required when accepting extracted
+# semantic facts. Raise it to store fewer facts; lower it to retain more.
+semantic:
+  salience_threshold: 0.45

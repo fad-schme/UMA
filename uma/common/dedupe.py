@@ -12,6 +12,7 @@ from typing import Any, List
 
 
 def dedupe_by_id(items: List[Any]) -> List[Any]:
+    """Return a deduplicated list of artifacts, keeping the first occurrence of each ID."""
     if not items:
         return []
     seen = set()

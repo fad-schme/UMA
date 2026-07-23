@@ -21,6 +21,7 @@ def validate_explicit_owner(
     owner_id: str,
     workspace_id: Optional[str] = None,
 ) -> dict[str, str | None]:
+    """Raise ``ValueError`` if ``owner_type`` or ``owner_id`` is empty or invalid."""
     normalized_owner_type = validate_owner_type(owner_type)
     normalized_owner_id = _normalize_owner_id(normalized_owner_type, owner_id)
     normalized_workspace_id = validate_workspace_id(workspace_id)

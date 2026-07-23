@@ -288,6 +288,7 @@ class DocumentSQLStore(BaseSQLStore):
             conn.close()
 
     async def upsert_document(self, record: DocumentRecord) -> None:
+        """Insert or update a document manifest record."""
         conn = self._conn()
         try:
             normalized_meta = normalize_document_metadata(

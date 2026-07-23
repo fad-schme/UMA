@@ -83,6 +83,7 @@ class RetrievalRequest:
         plan: Optional[RetrievalPlan] = None,
         query_scan_severity: Optional[str] = None,
     ) -> "RetrievalRequest":
+        """Build a ``RetrievalRequest`` from a ``RuntimeContext`` and a retrieval plan."""
         normalized_user_id = normalize_user_id(context.user_id or "")
         return cls(
             context=context,
@@ -97,6 +98,7 @@ class RetrievalRequest:
         )
 
     def scopes_for_owner_type(self, owner_type: Optional[str] = None) -> Tuple[RetrievalScope, ...]:
+        """Return the list of ownership scopes visible to the given owner type."""
         if owner_type is None:
             return self.scopes
         normalized = _validate_owner_type(owner_type)

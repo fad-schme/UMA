@@ -115,6 +115,7 @@ class ContextPack:
     # ------------------------------------------------------------------
 
     def record_seen(self) -> None:
+        """Mark a set of IDs as seen in this retrieval session to track novelty."""
         try:
             self.seen_fact_ids.update(_collect_ids(self.facts))
             self.seen_chunk_ids.update(_collect_ids(self.chunks))
@@ -133,6 +134,7 @@ class ContextPack:
             logger.exception("ContextPack.record_seen failed")
 
     def compute_novelty(self, items: List[Any], store: str) -> int:
+        """Return the number of IDs in ``ids`` not yet seen in this session."""
         if not items:
             return 0
         store = self._normalize_store(store)
@@ -143,6 +145,7 @@ class ContextPack:
         return sum(1 for i in new_ids if i not in seen)
 
     def apply_novelty(self, items: List[Any], store: str) -> Dict[str, int]:
+        """Record ``ids`` as seen and return the novelty count."""
         store = self._normalize_store(store)
         novelty = self.compute_novelty(items, store)
         ids = _collect_ids(items)
@@ -154,9 +157,11 @@ class ContextPack:
         return payload
 
     def get_predicate_offset(self, predicate: str) -> int:
+        """Return the current pagination offset for a predicate (for ``fetch_more_facts``)."""
         return int(self.predicate_offsets.get(predicate.upper(), 0))
 
     def bump_predicate_offset(self, predicate: str, delta: int) -> int:
+        """Advance the pagination offset for a predicate by ``amount``."""
         key = predicate.upper()
         self.predicate_offsets[key] = self.get_predicate_offset(key) + int(delta)
         return self.predicate_offsets[key]

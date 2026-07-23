@@ -732,6 +732,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
     ) -> List[Fact]:
+        """Bulk-fetch facts by ID list within the ownership scope. Returns only non-quarantined records."""
         return await self._fetch_facts_by_ids_sql(
             ids=ids,
             tenant_id=tenant_id,
@@ -878,6 +879,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
         reason: str,
         ctx: RuntimeContext,
     ) -> None:
+        """Update the ``trust_score`` of a single fact and append an audit entry to its metadata."""
         if not isinstance(ctx, RuntimeContext):
             raise TypeError("SemanticSQLStore.update_trust requires a RuntimeContext")
         if not fact_id or not isinstance(fact_id, str):

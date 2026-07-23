@@ -48,6 +48,7 @@ class ProceduralCore:
         tenant_id: str | None = None,
         workspace_id: str | None = None,
     ) -> Optional[Skill]:
+        """Add a skill for a specific owner, using the provided embedding."""
         if self.store is None:
             return None
         try:
@@ -72,6 +73,7 @@ class ProceduralCore:
             return None
 
     async def add_skill(self, skill: Skill, embedding: List[float]) -> Optional[Skill]:
+        """Add a skill to the procedural store, generating an embedding from its content."""
         if self.store is None:
             return None
         try:
@@ -100,6 +102,7 @@ class ProceduralCore:
         owner_type: str | None = None,
         owner_id: str | None = None,
     ) -> Optional[Skill]:
+        """Fetch a single skill by ID within the ownership scope."""
         if self.store is None or not skill_id:
             return None
         try:
@@ -135,6 +138,7 @@ class ProceduralCore:
         owner_type: str | None = None,
         owner_id: str | None = None,
     ) -> List[Skill]:
+        """Bulk-fetch skills by ID list within the ownership scope."""
         if self.store is None or not ids:
             return []
         try:
@@ -173,6 +177,7 @@ class ProceduralCore:
         owner_id: str | None = None,
         limit: Optional[int] = None,
     ) -> List[Skill]:
+        """List all skills for the ownership scope, optionally including quarantined records."""
         if self.store is None:
             return []
         try:
@@ -208,6 +213,7 @@ class ProceduralCore:
         owner_type: str | None = None,
         owner_id: str | None = None,
     ) -> bool:
+        """Permanently delete a skill and its vector-index entry."""
         if self.store is None or not skill_id:
             return False
         try:
@@ -249,6 +255,7 @@ class ProceduralCore:
         owner_id: str | None = None,
         k: int = 5,
     ) -> List[Skill]:
+        """Vector-search skills for the given query embedding within the ownership scope."""
         if self.store is None:
             return []
         skills: List[Skill] = []
@@ -288,4 +295,5 @@ class ProceduralCore:
         return dedupe_by_id(skills)
 
     def vector_index(self) -> Any:
+        """Return the underlying ``VectorIndex`` instance for this store."""
         return getattr(self.store, "vector_index", None) if self.store is not None else None

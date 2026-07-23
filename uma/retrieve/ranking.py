@@ -62,6 +62,7 @@ def _position(obj: Any) -> int:
 
 
 def extract_terms(query_text: str) -> List[str]:
+    """Extract normalised keyword terms from a query string for lexical scoring."""
     extracted = extract_keywords_and_phrases(query_text or "")
     terms = (extracted.get("keywords") or []) + (extracted.get("keyphrases") or [])
     out = []
@@ -396,6 +397,7 @@ class Ranker:
     # ----------------------------- Public -----------------------------
 
     def truncate(self, items: Sequence[Any], k: int) -> List[Any]:
+        """Truncate a ranked candidate list to ``max_items``, preserving order."""
         try:
             k_i = max(0, int(k))
         except (TypeError, ValueError):
@@ -403,6 +405,7 @@ class Ranker:
         return list(items or [])[:k_i] if k_i else []
 
     def rank_facts(self, items: Sequence[Any], *, query_text: str = "") -> List[Any]:
+        """Rank semantic facts by the trust-weighted blend of similarity and trust score."""
         items = list(items or [])
         if not items:
             return []
@@ -426,6 +429,7 @@ class Ranker:
         return self._filter_by_trust([f for _s, _sid, f in scored])
 
     def rank_chunks(self, items: Sequence[Any], *, query_text: str = "") -> List[Any]:
+        """Rank document chunks by the trust-weighted blend of similarity and trust score."""
         items = list(items or [])
         if not items:
             return []
@@ -452,6 +456,7 @@ class Ranker:
         return self._filter_by_trust([ch for _rp, _s, _d, _p, _sid, ch in scored])
 
     def rank_episodes(self, items: Sequence[Any], *, query_text: str = "") -> List[Any]:
+        """Rank episodic memories by the trust-weighted blend of similarity and trust score."""
         items = list(items or [])
         if not items:
             return []
@@ -482,6 +487,7 @@ class Ranker:
         return self._filter_by_trust([ep for _s, _sid, ep in scored])
 
     def rank_skills(self, items: Sequence[Any], *, query_text: str = "") -> List[Any]:
+        """Rank procedural skills by the trust-weighted blend of similarity and trust score."""
         items = list(items or [])
         if not items:
             return []

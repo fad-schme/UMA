@@ -23,6 +23,7 @@ class UMAConfig(dict):
 
     @classmethod
     def load_yaml(cls, path: str) -> "UMAConfig":
+        """Load and validate a UMA config from a YAML file path. Returns a ``RuntimeConfig``."""
         try:
             with open(path, "r") as f:
                 data = yaml.safe_load(f)

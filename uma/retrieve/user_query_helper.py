@@ -144,15 +144,18 @@ class QueryTermSet:
 
 def get_stopwords() -> Set[str]:
     # Return a copy to prevent accidental mutation of module-level constants.
+    """Return the set of English stopwords used for lexical query processing."""
     return set(_STOPWORDS)
 
 
 def get_generic_terms() -> Set[str]:
     # Return a copy to prevent accidental mutation of module-level constants.
+    """Return generic terms that are excluded from predicate and entity matching."""
     return set(_GENERIC_TERMS)
 
 
 def normalize_query_text(text: str) -> str:
+    """Lowercase, strip punctuation, and remove stopwords from a query string."""
     if not text:
         return ""
     lowered = text.lower()
@@ -276,6 +279,7 @@ def _score_term(term: str, first_occurrence_index: int, total_tokens: int) -> fl
 
 
 def extract_keywords_and_phrases(text: str) -> Dict[str, List[str]]:
+    """Extract significant keywords and noun phrases from a query for term matching."""
     normalized = _normalize_for_keywords(text)
     if not normalized:
         return {"keyphrases": [], "keywords": []}
@@ -354,6 +358,7 @@ def build_query_term_set(
     max_phrases: int = 4,
     min_term_len: int = 3,
 ) -> QueryTermSet:
+    """Build the full normalised term set for a query, including phrase variants."""
     if not text or not isinstance(text, str):
         return QueryTermSet(terms=[], phrases=[], entities=[])
 
@@ -378,6 +383,7 @@ def text_matches_query_terms(
     min_term_matches: int = 2,
     max_terms_for_match: int = 6,
 ) -> bool:
+    """Return ``True`` if ``text`` contains at least one term from ``query_terms``."""
     if not text:
         return False
     hay = normalize_query_text(text)

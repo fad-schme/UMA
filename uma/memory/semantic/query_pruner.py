@@ -29,6 +29,7 @@ class _ScoresPayload(BaseModel):
 
 
 def describe_fact(fact: Any) -> str:
+    """Return a short human-readable string for a fact, for use in prompts and logs."""
     try:
         meta = (fact.get("meta") if isinstance(fact, dict) else getattr(fact, "meta", None)) or {}
         if isinstance(meta, dict):
@@ -54,6 +55,7 @@ def describe_fact(fact: Any) -> str:
 
 
 def fallback_keep_by_query(query: str, facts: Sequence[Any]) -> List[int]:
+    """Keep facts whose text overlaps with query terms when the LLM pruner is unavailable."""
     stop = set()
     if get_stopwords:
         try:
@@ -97,6 +99,13 @@ async def prune_facts_for_query(
     max_keep: int = 12,
     max_candidates: int = 20,
 ) -> List[Any]:
+    """
+    Use the LLM to remove facts not relevant to the query.
+
+    Called once after the RLM navigation loop completes. Respects
+    ``threshold`` and ``max_keep`` caps. Skipped when the query scan
+    severity is medium or high to avoid LLM amplification of flagged input.
+    """
     if not llm or not facts:
         return facts or []
 

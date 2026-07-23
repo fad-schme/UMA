@@ -87,6 +87,7 @@ class InMemoryVectorIndex(VectorIndex):
         owner_ids: List[str],
         extra_metadata: Optional[List[Dict]] = None,
     ) -> None:
+        """Insert or update vectors in the in-memory store. Intended for testing and CI only."""
         n = len(ids)
         if len(tenant_ids) != n:
             raise ValueError(
@@ -153,6 +154,7 @@ class InMemoryVectorIndex(VectorIndex):
             self._extra[sid] = extra
 
     def delete(self, ids: List[str]) -> None:
+        """Remove vectors from the in-memory store."""
         for _id in ids:
             self._vectors.pop(_id, None)
             self._scopes.pop(_id, None)

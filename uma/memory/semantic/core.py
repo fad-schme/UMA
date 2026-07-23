@@ -118,6 +118,7 @@ class SemanticCore:
             raise
 
     def vector_index(self):
+        """Return the underlying ``VectorIndex`` instance for this store."""
         return getattr(self.store, "vector_index", None)
 
     async def extract(
@@ -296,6 +297,7 @@ class SemanticCore:
         reason: str,
         ctx: RuntimeContext,
     ) -> None:
+        """Update the trust score of a fact and append an audit entry to its metadata."""
         if not hasattr(self.store, "update_trust"):
             logger.error("SemanticCore.update_trust: semantic_store missing")
             raise RuntimeError("SemanticCore.update_trust: semantic_store missing")

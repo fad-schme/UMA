@@ -102,6 +102,14 @@ class FaissIndex(VectorIndex):
         owner_ids: List[str],
         extra_metadata: Optional[List[Dict]] = None,
     ) -> None:
+        """
+        Insert or update vectors in the FAISS index.
+
+        All rows are validated before any state mutation (C1 atomicity contract).
+        Isolation fields are stored in a parallel ``_scopes`` dict and applied as a
+        Python post-filter after FAISS returns candidates. For multi-tenant deployments
+        prefer the LanceDB adapter, which pushes the filter before the k-cap.
+        """
         if len(ids) != len(vectors):
             raise ValueError("FaissIndex.upsert: ids and vectors length mismatch")
 
@@ -208,6 +216,14 @@ class FaissIndex(VectorIndex):
         k: int = 10,
         extra_filters: Optional[Dict[str, Any]] = None,
     ) -> List[Tuple[str, float]]:
+        """
+        Nearest-neighbour search scoped to ``(tenant_id, owner_type, owner_id)``.
+
+        FAISS does not support pushed-down predicates, so this adapter oversamples by
+        ``_oversample_multiplier`` (default 4×) and post-filters in Python. Under heavy
+        cross-tenant load recall may degrade — this is a documented heuristic, not a
+        guarantee. Use LanceDB for production multi-tenant deployments.
+        """
         if self.index.ntotal == 0:
             logger.debug("FaissIndex.query: index empty; returning [].")
             return []
@@ -261,6 +277,7 @@ class FaissIndex(VectorIndex):
         return results
 
     def delete(self, ids: List[str]) -> None:
+        """Remove vectors from the FAISS index and clear their scope and metadata entries."""
         if not ids:
             return
         to_remove = []

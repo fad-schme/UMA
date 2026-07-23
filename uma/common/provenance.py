@@ -20,6 +20,7 @@ def build_provenance(
     manual: bool | None = None,
     require_source_chunks: bool = False,
 ) -> dict[str, Any]:
+    """Build a provenance dict for a newly created artifact from its source chunks."""
     payload = dict(existing or {})
 
     normalized_source_chunk_ids = _string_list(
@@ -68,6 +69,7 @@ def build_provenance(
 
 
 def provenance_for_artifact(artifact: Any) -> dict[str, Any]:
+    """Extract the provenance dict from an artifact object or dict."""
     if isinstance(artifact, dict):
         direct = artifact.get("provenance")
         meta = artifact.get("meta")
@@ -84,6 +86,7 @@ def provenance_for_artifact(artifact: Any) -> dict[str, Any]:
 
 
 def collect_source_chunk_ids(artifact: Any) -> list[str]:
+    """Return the list of source chunk IDs from an artifact's provenance."""
     provenance = provenance_for_artifact(artifact)
     ids = provenance.get("source_chunk_ids") or provenance.get("source_ids") or []
     if not ids:
@@ -95,6 +98,7 @@ def collect_source_chunk_ids(artifact: Any) -> list[str]:
 
 
 def collect_direct_source_chunk_ids(artifact: Any) -> list[str]:
+    """Return direct (non-transitive) source chunk IDs from an artifact."""
     if isinstance(artifact, dict):
         ids = artifact.get("direct_source_chunk_ids")
     else:
@@ -105,6 +109,7 @@ def collect_direct_source_chunk_ids(artifact: Any) -> list[str]:
 
 
 def collect_source_document_ids(artifact: Any) -> list[str]:
+    """Return source document IDs from an artifact's provenance."""
     provenance = provenance_for_artifact(artifact)
     ids = provenance.get("source_document_ids") or []
     if not ids:
@@ -117,6 +122,7 @@ def collect_source_document_ids(artifact: Any) -> list[str]:
 
 
 def collect_parent_artifact_ids(artifact: Any) -> list[str]:
+    """Return parent artifact IDs from an artifact's provenance."""
     provenance = provenance_for_artifact(artifact)
     ids = provenance.get("parent_artifact_ids") or []
     if not ids and isinstance(artifact, dict):
@@ -127,6 +133,7 @@ def collect_parent_artifact_ids(artifact: Any) -> list[str]:
 
 
 def collect_parent_artifacts(artifact: Any) -> list[Any]:
+    """Return parent artifact dicts from an artifact's provenance."""
     if isinstance(artifact, dict):
         parents = artifact.get("parent_artifacts") or artifact.get("supporting_artifacts") or []
     else:
@@ -141,6 +148,7 @@ def collect_parent_artifacts(artifact: Any) -> list[Any]:
 
 
 def collect_transitive_source_chunk_ids(artifact: Any) -> list[str]:
+    """Return all transitive source chunk IDs, following the provenance chain."""
     collected: list[str] = []
     seen: set[str] = set()
 
@@ -160,6 +168,7 @@ def collect_transitive_source_chunk_ids(artifact: Any) -> list[str]:
 
 
 def collect_transitive_source_document_ids(artifact: Any) -> list[str]:
+    """Return all transitive source document IDs, following the provenance chain."""
     collected: list[str] = []
     seen: set[str] = set()
 

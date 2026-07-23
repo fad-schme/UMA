@@ -82,6 +82,14 @@ class LanceDBIndex(VectorIndex):
         owner_ids: List[str],
         extra_metadata: Optional[List[Dict]] = None,
     ) -> None:
+        """
+        Insert or update vectors in the LanceDB table.
+
+        ``tenant_ids``, ``owner_types``, and ``owner_ids`` are stored as first-class
+        columns and pushed into every query's ``WHERE`` clause before the k-nearest cap
+        (C1 isolation contract). Raises ``ValueError`` if any isolation field is empty
+        or if ``extra_metadata`` contains reserved isolation keys.
+        """
         self._validate_upsert_inputs(ids, vectors)
         if not vectors:
             logger.debug("LanceDBIndex.upsert called with empty vectors; no-op.")
@@ -173,6 +181,14 @@ class LanceDBIndex(VectorIndex):
         k: int = 10,
         extra_filters: Optional[Dict[str, Any]] = None,
     ) -> List[Tuple[str, float]]:
+        """
+        Nearest-neighbour search scoped to ``(tenant_id, owner_type, owner_id)``.
+
+        The isolation filter is pushed into LanceDB's DuckDB engine *before* the
+        ``limit`` cap, so cross-tenant rows cannot appear in results regardless of
+        index distribution. Returns ``(id, score)`` pairs; scores are normalised via
+        ``exp(-distance)`` to ``(0, 1]``.
+        """
         if len(vector) != self.dim:
             raise ValueError(
                 f"LanceDBIndex.query: expected query vector dim={self.dim}, got={len(vector)}"
@@ -258,6 +274,7 @@ class LanceDBIndex(VectorIndex):
         return results
 
     def delete(self, ids: List[str]) -> None:
+        """Delete vectors by ID. Scoped deletes are unnecessary because UMA generates globally unique IDs."""
         if not ids:
             return
         table = self._open_table()
