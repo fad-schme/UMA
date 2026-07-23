@@ -8,7 +8,8 @@ description = "UMA: Unified Memory Architecture for AI agents"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "Apache-2.0"}
-urls = {Homepage = "https://github.com/your-org/uma-rlm"}
+urls = {Homepage = "https://uma.memory-engineering.com", 
+        Repository = "https://github.com/fad-schme/UMA"}
 authors = [
   { name = "a.Diaz-Schmeier", email = "ad-schme@memory-engineering.com" },
 ]
@@ -25,8 +26,7 @@ dependencies = [
 [project.optional-dependencies]
 llm = ["anthropic"]
 openai = ["openai>=1.0.0"]
-dev = ["pytest", "matplotlib", "PyPDF2", "pytest-asyncio", "bandit",
-    "pip-audit", "beautifulsoup4", "markdown", "pandas"]
+dev = ["pytest", "matplotlib", "PyPDF2", "pytest-asyncio", "bandit","ruff", "pip-audit", "beautifulsoup4", "markdown", "pandas"]
 ollama = ["ollama"]
 
 [tool.setuptools.dynamic]

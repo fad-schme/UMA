@@ -50,7 +50,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 - `CONTRIBUTING.md` added — previously missing from the repo root.
-- Placeholder GitHub URL (`your-org/uma-rlm`) replaced with the real
+- Placeholder GitHub URL (`fad-schme/UMA`) replaced with the real
   repository URL in `pyproject.toml` and `setup.py`.
 
 ---

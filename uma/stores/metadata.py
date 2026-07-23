@@ -15,7 +15,7 @@ from uma.version import __version__ as UMA_RLM_VERSION
 logger = logging.getLogger(__name__)
 
 META_TABLE = "uma_store_meta"
-FORMAT_NAME = "uma-rlm"
+FORMAT_NAME = "uma"
 # B608: META_TABLE is a module-level constant, never derived from input.
 # The assert below is the machine-checkable proof: it fires immediately at
 # import time if the value is ever changed to something outside the known set.
@@ -30,7 +30,7 @@ def ensure_store_metadata(store: object, conn: object, store_name: str) -> Dict[
     Ensure UMA metadata exists in the store and validate format.
 
     This writes a lightweight key/value table into each SQL DB to record:
-    - format_name: "uma-rlm"
+    - format_name: UMA store format name"
     - uma_rlm_version: package version that created the store
     - store_name: semantic | episodic | procedural
     """
