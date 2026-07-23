@@ -98,7 +98,8 @@ pip install -e .
 ```python
 from uma import UMAMemory
 
-memory = UMAMemory.from_yaml("config/uma.yaml").set_context(agent_id="my-agent")
+# Pass the path to your uma.yaml — any accessible location works.
+memory = UMAMemory.from_yaml("/path/to/your/uma.yaml").set_context(agent_id="my-agent")
 
 context = await memory.retrieve_context(
     query_text=user_message,

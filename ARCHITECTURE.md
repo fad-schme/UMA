@@ -410,7 +410,8 @@ from uma.api.management import (
 )
 
 # Initialize
-memory = UMAMemory.from_yaml("config/uma.yaml").set_context(agent_id="agent-default")
+# Replace with the path to your uma.yaml
+memory = UMAMemory.from_yaml("/path/to/your/uma.yaml").set_context(agent_id="agent-default")
 
 # Optional: pre-LLM injection gate (never raises)
 scan = memory.scan_user_input(user_msg)
@@ -460,9 +461,9 @@ UMA Lite uses a single embedded profile: SQLite (authoritative) + LanceDB (vecto
 
 | Config | Use |
 |--------|-----|
-| `config/uma.yaml` | Default runnable config |
+| `config/uma.yaml` | Convention — any accessible path works |
 
-LLM and embedding values in `config/uma.yaml` are user-customizable baselines — set provider, model, and host to match your environment. All initialization goes through the same path: `UMAMemory.from_yaml(path)`.
+LLM and embedding values in `uma.yaml` are user-customizable baselines — set provider, model, and host to match your environment. All initialization goes through the same path: `UMAMemory.from_yaml(path)`.
 
 ---
 
