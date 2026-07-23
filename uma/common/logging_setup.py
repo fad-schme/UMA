@@ -81,7 +81,11 @@ def _configure_uma_logger() -> logging.Logger:
             file_handler = logging.FileHandler(LOG_PATH, mode="a", encoding="utf-8")
             file_handler.setLevel(logging.DEBUG)
             file_handler.setFormatter(formatter)
-        except Exception:
+        except Exception as exc:
+            # Cannot use logger here (it's not set up yet). Print to stderr so the
+            # failure is visible without silently swallowing a misconfigured log path.
+            import sys
+            print(f"[UMA] WARNING: could not create log file handler: {exc}", file=sys.stderr)
             file_handler = None
 
     # Console handler

@@ -287,6 +287,9 @@ class LanceDBIndex(VectorIndex):
         try:
             return self._db.open_table(self.table_name)
         except Exception:
+            # Table does not exist yet (normal on first use) or connection error.
+            # Callers check for None and create the table as needed.
+            logger.debug("LanceDBIndex._open_table: table=%s not found or unavailable", self.table_name, exc_info=True)
             return None
 
     def _get_or_create_table(self, seed_rows: List[Dict[str, Any]]):
