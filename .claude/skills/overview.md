@@ -24,7 +24,7 @@ UMA manages memory only. The calling application owns prompts, tool use, reasoni
 
 ## Core Product Principle
 
-**RLM is always enabled.** Retrieval is LLM-controlled search for context, not for answering. The "long context" lives in the environment (memory), not in the prompt.
+**RLM is always enabled.** UMA uses an iterative retrieval loop (RLM) that repeatedly evaluates coverage of what has been found and continues searching — targeting different predicates, lanes, or broader searches — until coverage thresholds are satisfied or hard budgets are reached. After the loop completes, the LLM prunes the collected facts for relevance to the query. Navigation decisions are deterministic and coverage-driven; the LLM participates in post-retrieval quality filtering, not in deciding what to search for next. The "long context" lives in the environment (memory), not in the prompt.
 
 ## Design Philosophy
 

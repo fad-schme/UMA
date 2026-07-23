@@ -10,10 +10,12 @@ description: Full public API reference for UMA — every UMAMemory method, every
 ```python
 from uma import UMAMemory
 
-memory = UMAMemory.from_yaml("config/uma.yaml")
+# Pass any path — absolute or relative to where your application runs.
+# "config/uma.yaml" is a convention, not a requirement.
+memory = UMAMemory.from_yaml("/path/to/your/uma.yaml")
 ```
 
-`from_yaml` initializes retrieval synchronously (retrieval is instant after return) and schedules ingestion subsystems for background warmup. There is one initialization path — no `init_lite()` or `init_cont()` variants.
+`from_yaml` accepts any path — absolute or relative to the working directory of the running process. `"config/uma.yaml"` is the convention used throughout the examples, but the file can live anywhere accessible to your application at runtime (e.g. `"./uma.yaml"`, `"/etc/myapp/uma.yaml"`, or any other location you choose). There is one initialization path — no `init_lite()` or `init_cont()` variants.
 
 ### Bind agent identity (optional, once per instance)
 

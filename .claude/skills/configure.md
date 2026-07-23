@@ -11,7 +11,9 @@ UMA Lite uses a single embedded profile: SQLite (authoritative) + LanceDB (vecto
 
 | Config file | Use |
 |---|---|
-| `config/uma.yaml` | Default runnable config |
+| `config/uma.yaml` | Convention used in the examples — the file can live anywhere |
+
+`UMAMemory.from_yaml(path)` resolves `path` relative to the working directory of the running process. Pass any path that is accessible at runtime — absolute paths are the most reliable in production.
 
 LLM and embedding values are user-customizable baselines — set provider, model, and host to match your environment.
 
@@ -25,7 +27,9 @@ No external services required. SQLite and LanceDB run in-process.
 pip install -e .
 python -c "
 from uma import UMAMemory
-memory = UMAMemory.from_yaml('config/uma.yaml')
+# Pass any path — absolute or relative to where your application runs.
+# "config/uma.yaml" is a convention, not a requirement.
+memory = UMAMemory.from_yaml('/path/to/your/uma.yaml')
 print(memory.health_check())
 "
 ```
@@ -298,13 +302,17 @@ await memory.rebuild_vector_indexes(tenant_id="default")
 
 ```bash
 # Minimal (Lite profile — no external services)
+# Uses Ollama for LLM and embeddings by default
 pip install -e .
 
-# With FAISS support
-pip install -e '.[vector]'
+# With OpenAI LLM / embedding support
+pip install -e '.[openai]'
 
 # With Anthropic LLM support
 pip install -e '.[llm]'
+
+# With FAISS vector backend
+pip install -e '.[vector]'
 
 # Development + tests
 pip install -r requirements.txt

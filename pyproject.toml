@@ -19,12 +19,12 @@ dependencies = [
   "aiohttp",
   "charset-normalizer",
   "pydantic>=2",
-  "openai>=1.0.0",
-  "lancedb>=0.25.3,<0.26",
+  "lancedb>=0.25.3",
 ]
 
 [project.optional-dependencies]
 llm = ["anthropic"]
+openai = ["openai>=1.0.0"]
 dev = ["pytest", "matplotlib", "PyPDF2", "pytest-asyncio", "bandit",
     "pip-audit", "beautifulsoup4", "markdown", "pandas"]
 ollama = ["ollama"]

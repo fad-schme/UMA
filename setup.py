@@ -42,11 +42,11 @@ setup(
         "aiohttp",
         "charset-normalizer",
         "pydantic>=2",
-        "openai>=1.0.0",
-        "lancedb>=0.25.3,<0.26",
+        "lancedb>=0.25.3",
     ],
     extras_require={
         "llm": ["anthropic"],
+        "openai": ["openai>=1.0.0"],
         "vector": ["faiss-cpu", "weaviate-client", "pinecone-client", "fastembed"],
         "graph": ["neo4j"],
         "postgres": ["psycopg2-binary>=2.9"],

@@ -251,7 +251,49 @@ See `.claude/skills/uma-vector-contract.md` for the full contract reference and 
 
 ## Canonical Retrieval Pipeline
 
-All production retrieval follows this exact sequence:
+Production retrieval runs in two phases: an **iterative coverage loop** (RLM) that determines what to retrieve, followed by a **single-pass ranking and rendering pipeline** that shapes the result.
+
+### Phase 1 — RLM iterative retrieval loop
+
+The RLM controller (`uma/retrieve/rlm/controller.py`) drives a bounded multi-step loop. Each step evaluates coverage of what has already been collected, then deterministically decides what to retrieve next, until coverage thresholds are met or hard budgets are reached.
+
+```
+1. Baseline retrieval
+   Initial vector + lexical search across all active lanes for the query.
+   All results are owner-scoped via the C1 isolation contract.
+
+2. Coverage assessment  [repeats each step]
+   Evaluate what has been found: semantic fact count, salience distribution,
+   cluster summaries, graph nodes, novelty trend across recent steps.
+   Produces a CoverageReport with an `enough` flag and novelty signals.
+
+3. Stop / continue decision  [deterministic]
+   should_stop() checks coverage confidence against thresholds,
+   hard limits (max_steps, max_env_calls, token_budget), and recall intent.
+   If satisfied → exit loop. If not → continue.
+
+4. Navigation decision  [deterministic]
+   deterministic_decision() inspects the current pack state and produces
+   the next action: expand a specific predicate (fetch_more_facts),
+   broaden semantic search, fetch episodic clusters, expand the graph,
+   or fall back to raw chunks if fact retrieval yields nothing.
+   No LLM is involved in this decision.
+
+5. Execute action
+   The chosen action runs against the appropriate store. New results
+   are merged into the ContextPack. Go to step 2.
+
+6. Post-loop LLM fact pruning
+   After the loop exits, _prune_facts_with_llm() uses the LLM to discard
+   facts not relevant to the query. This is the only step where the LLM
+   participates in retrieval. Skipped when query scan severity is medium/high.
+```
+
+Hard limits: `max_steps` (default 4), `max_env_calls` (default 12), `timeout_s` (default 20s). All are configurable via `retrieval.rlm` in `uma.yaml`.
+
+### Phase 2 — single-pass ranking and rendering pipeline
+
+Once the RLM loop has collected the candidate set, all production retrieval follows this exact sequence:
 
 ```
 1. Boundary scan on query_text
@@ -463,7 +505,7 @@ UMA Lite uses a single embedded profile: SQLite (authoritative) + LanceDB (vecto
 |--------|-----|
 | `config/uma.yaml` | Convention — any accessible path works |
 
-LLM and embedding values in `uma.yaml` are user-customizable baselines — set provider, model, and host to match your environment. All initialization goes through the same path: `UMAMemory.from_yaml(path)`.
+LLM and embedding values in `uma.yaml` are user-customizable baselines — set provider, model, and host to match your environment. All initialization goes through the same path: `UMAMemory.from_yaml(path)`. The OpenAI and Anthropic provider packages are optional extras (`pip install -e '.[openai]'` or `pip install -e '.[llm]'`); the base install only requires `lancedb>=0.25.3`.
 
 ---
 
