@@ -44,5 +44,13 @@ addopts = "--basetemp=.pytest_tmp"
 [tool.bandit]
 skips = ["B608","B105"]
 
-[tool.ruff.lint]
+[
+tool.ruff.lint
+]
+select = ["E", "F", "W"]
 ignore = ["E402"]
+
+[
+tool.ruff.lint.per-file-ignores
+]
+"__init__.py" = ["F401"]
