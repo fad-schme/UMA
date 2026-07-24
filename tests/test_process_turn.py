@@ -128,7 +128,7 @@ async def test_retrieve_context_working_memory_populated_after_turn(tmp_path):
             session_id="session-a",
         )
 
-        wm = result.get("working_memory", [])
+        wm = result.working_memory
         assert isinstance(wm, list), "working_memory must be a list"
         assert len(wm) > 0, "working_memory should have entries after process_turn"
 

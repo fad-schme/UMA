@@ -60,7 +60,10 @@ import importlib
 import inspect
 import logging
 import threading
-from typing import Any, Awaitable, Callable, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional, Union
+
+if TYPE_CHECKING:
+    from uma.common.results import ContextBundle
 
 from uma.common.config import UMAConfig
 from uma.common.config_types import RuntimeConfig, SecretsProviderConfig, parse_plugin_spec
@@ -437,16 +440,15 @@ class UMAMemory:
         workspace_id: Optional[str] = None,
         session_id: Optional[str] = None,
         lane_filter: Optional[list[str]] = None,
-    ) -> Dict[str, Any]:
-        """Return curated LLM context for the explicit request scope.
+    ) -> "ContextBundle":
+        """Return the curated LLM context bundle for the explicit request scope.
 
         Contract:
         - intended for LLM context assembly, not durable memory projection
-        - returns the canonical evidence-oriented context bundle
+        - returns a `ContextBundle` — attribute access, not dict access
         - chunks/documents remain the primary retrieval product
         - optional `lane_filter` narrows persisted retrieval lanes without requiring wiki state
-        - persisted artifacts expose canonical UMA metadata through `meta`
-        - lane contents remain source-traceable through facts, chunks, skills, and graph items
+        - observability lives on `bundle.debug` (lane plan, trace, pruned_via_llm)
         """
         runtime_context = self._resolve_runtime_context(
             user_id=user_id,

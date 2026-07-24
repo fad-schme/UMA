@@ -7,11 +7,13 @@ fallback ladder, and stop confidence wiring.
 from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from tests.helpers.context_bundle import make_context_bundle
 from tests.helpers.graph_adapter import RecordingGraphAdapter
 from tests.helpers.runtime import init_uma_for_tests
 from typing import Any, Dict, List
 from uma.api.memory import UMAMemory
 from uma.api.runtime import UMARuntime
+from uma.common.results import Confidence, Provenance
 from uma.common.types import Fact
 from uma.common.types import RuntimeContext
 from uma.common.types.types_fact import Fact
@@ -56,20 +58,12 @@ async def test_runtime_retrieval_delegates_directly(uma_memory) -> None:
         *,
         query_text: str,
         lane_filter=None,
-    ) -> Dict[str, list]:
+    ):
         seen.append(("context", bound_context, query_text))
-        return {
-            "product": "context",
-            "query": query_text,
-            "lane_filter": list(lane_filter or []),
-            "facts": [],
-            "chunks": [],
-            "documents": [],
-            "working_memory": [],
-            "episodic": [],
-            "skills": [],
-            "graph": [],
-        }
+        return make_context_bundle(
+            query=query_text,
+            lane_filter=lane_filter or [],
+        )
 
     async def fake_memory(
         bound_context: RuntimeContext,
@@ -104,9 +98,9 @@ async def test_runtime_retrieval_delegates_directly(uma_memory) -> None:
     memory_payload = await runtime.retrieve_memory(context, query_text="hello world")
     messages = await runtime.get_context_messages(context, query_text="hello world", render_mode="raw_rendered")
 
-    assert structured["product"] == "context"
-    assert structured["lane_filter"] == ["semantic"]
-    assert structured["documents"] == []
+    assert structured.product == "context"
+    assert structured.debug.lane_filter == ["semantic"]
+    assert structured.documents == []
     assert memory_payload["provenance_valid"] is True
     assert memory_payload["facts"][0]["source_chunk_ids"] == ["chunk-1"]
     assert messages["meta"]["render_mode"] == "raw_rendered"
@@ -140,20 +134,12 @@ async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory
         *,
         query_text: str,
         lane_filter=None,
-    ) -> Dict[str, list]:
+    ):
         seen.append(("context", bound_context, query_text))
-        return {
-            "product": "context",
-            "query": query_text,
-            "lane_filter": list(lane_filter or []),
-            "facts": [],
-            "chunks": [],
-            "documents": [],
-            "working_memory": [],
-            "episodic": [],
-            "skills": [],
-            "graph": [],
-        }
+        return make_context_bundle(
+            query=query_text,
+            lane_filter=lane_filter or [],
+        )
 
     async def fake_memory(
         bound_context: RuntimeContext,
@@ -191,8 +177,8 @@ async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory
         session_id="session-1",
     )
 
-    assert context["product"] == "context"
-    assert context["documents"] == []
+    assert context.product == "context"
+    assert context.documents == []
     assert memory_result["provenance_valid"] is True
     assert memory_result["facts"][0]["text"] == "fact"
     assert seen == [
@@ -238,23 +224,25 @@ async def test_runtime_memory_retrieval_surfaces_explicit_evidence_only_fallback
         *,
         query_text: str,
         lane_filter=None,
-    ) -> Dict[str, list]:
+    ):
         assert lane_filter == ["wiki", "raw", "semantic", "episodic"]
-        return {
-            "product": "context",
-            "query": query_text,
-            "lane_filter": [],
-            "working_memory": [],
-            "episodic": [],
-            "facts": [],
-            "chunks": [],
-            "documents": [],
-            "skills": [],
-            "graph": [],
-            "trace": [],
-            "confidence": {},
-            "provenance": {"valid": False, "source_chunk_ids": [], "invalid_reasons": ["missing_source_chunk_ids"]},
-        }
+        return make_context_bundle(
+            query=query_text,
+            provenance=Provenance(
+                source_chunk_ids=[],
+                source_document_ids=[],
+                derivation_type="context_retrieval",
+                retrieval_path=[],
+                parent_artifact_ids=[],
+                support_density=None,
+                confidence=None,
+                conflicts=[],
+                evidence_scopes=[],
+                manual=False,
+                valid=False,
+                invalid_reasons=["missing_source_chunk_ids"],
+            ),
+        )
 
     runtime.retrieve_context = fake_context  # type: ignore[method-assign]
 
@@ -289,22 +277,35 @@ async def test_runtime_memory_retrieval_can_expose_debug_payload(uma_memory) -> 
         *,
         query_text: str,
         lane_filter=None,
-    ) -> Dict[str, list]:
-        return {
-            "product": "context",
-            "query": query_text,
-            "lane_filter": [],
-            "working_memory": [],
-            "episodic": [],
-            "facts": [],
-            "chunks": [],
-            "documents": [],
-            "skills": [],
-            "graph": [],
-            "trace": [{"event": "lane_plan"}],
-            "confidence": {"score": 0.2},
-            "provenance": {"valid": False, "source_chunk_ids": [], "invalid_reasons": ["missing_source_chunk_ids"]},
-        }
+    ):
+        return make_context_bundle(
+            query=query_text,
+            trace=[{"event": "lane_plan"}],
+            confidence=Confidence(
+                score=0.2,
+                semantic_enough=0.0,
+                clusters_present=0.0,
+                graph_present=0.0,
+                graph_entity_support=0.0,
+                graph_predicate_support=0.0,
+                novelty_recent=0.0,
+                contradictions=0.0,
+            ),
+            provenance=Provenance(
+                source_chunk_ids=[],
+                source_document_ids=[],
+                derivation_type="context_retrieval",
+                retrieval_path=[],
+                parent_artifact_ids=[],
+                support_density=None,
+                confidence=None,
+                conflicts=[],
+                evidence_scopes=[],
+                manual=False,
+                valid=False,
+                invalid_reasons=["missing_source_chunk_ids"],
+            ),
+        )
 
     runtime.retrieve_context = fake_context  # type: ignore[method-assign]
 
@@ -337,30 +338,47 @@ async def test_runtime_memory_zero_evidence_returns_honest_fallback_debug_shape(
         *,
         query_text: str,
         lane_filter=None,
-    ) -> Dict[str, list]:
-        return {
-            "product": "context",
-            "query": query_text,
-            "lane_filter": [],
-            "working_memory": [],
-            "episodic": [],
-            "facts": [
-                {
-                    "id": "fact-missing-evidence",
-                    "subject": "user",
-                    "predicate": "current research topic",
-                    "object": "adoption agencies",
-                    "source_ids": [],
-                }
+    ):
+        _now = datetime.now(timezone.utc)
+        return make_context_bundle(
+            query=query_text,
+            facts=[
+                Fact(
+                    id="fact-missing-evidence",
+                    subject="user",
+                    predicate="current research topic",
+                    object="adoption agencies",
+                    created_at=_now,
+                    updated_at=_now,
+                    source_ids=[],
+                )
             ],
-            "chunks": [],
-            "documents": [],
-            "skills": [],
-            "graph": [],
-            "trace": [{"event": "lane_plan"}],
-            "confidence": {"score": 0.2},
-            "provenance": {"valid": False, "source_chunk_ids": [], "invalid_reasons": ["missing_source_chunk_ids"]},
-        }
+            trace=[{"event": "lane_plan"}],
+            confidence=Confidence(
+                score=0.2,
+                semantic_enough=0.0,
+                clusters_present=0.0,
+                graph_present=0.0,
+                graph_entity_support=0.0,
+                graph_predicate_support=0.0,
+                novelty_recent=0.0,
+                contradictions=0.0,
+            ),
+            provenance=Provenance(
+                source_chunk_ids=[],
+                source_document_ids=[],
+                derivation_type="context_retrieval",
+                retrieval_path=[],
+                parent_artifact_ids=[],
+                support_density=None,
+                confidence=None,
+                conflicts=[],
+                evidence_scopes=[],
+                manual=False,
+                valid=False,
+                invalid_reasons=["missing_source_chunk_ids"],
+            ),
+        )
 
     runtime.retrieve_context = fake_context  # type: ignore[method-assign]
 
@@ -412,9 +430,9 @@ async def test_runtime_context_trace_surfaces_lane_plan(uma_memory) -> None:
         query_text="What do I like?",
     )
 
-    assert result["product"] == "context"
-    assert result["active_lanes"] == ["profile", "procedural", "semantic", "episodic"]
-    lane_plan = next(step for step in result["trace"] if step.get("event") == "lane_plan")
+    assert result.product == "context"
+    assert result.debug.active_lanes == ["profile", "procedural", "semantic", "episodic"]
+    lane_plan = next(step for step in result.debug.trace if step.get("event") == "lane_plan")
     assert lane_plan["product"] == "context"
     assert lane_plan["participating_lanes"] == ["profile", "procedural", "semantic", "episodic"]
     assert lane_plan["active_domains"] == ["user_profile", "procedural", "kb_doc"]
@@ -468,10 +486,10 @@ async def test_bound_context_workspace_id_does_not_broaden_retrieval_owner_suppo
     )
 
     ctx = await runtime.retrieve_context(context, query_text="hello world")
-    owner_types = {getattr(chunk, "owner_type", None) for chunk in list(ctx.get("chunks") or [])}
+    owner_types = {getattr(chunk, "owner_type", None) for chunk in ctx.chunks}
     chunk_lanes = {
         (getattr(chunk, "meta", {}) or {}).get("kb_lane")
-        for chunk in list(ctx.get("chunks") or [])
+        for chunk in ctx.chunks
     }
 
     assert owner_types
@@ -770,10 +788,10 @@ async def test_bound_context_retrieval_is_isolated_across_agents_on_shared_runti
         runtime.retrieve_context(ctx_b_context, query_text="shared keyword"),
     )
 
-    owner_pairs_a = {(getattr(chunk, "owner_type", None), getattr(chunk, "owner_id", None)) for chunk in ctx_a.get("chunks") or []}
-    owner_pairs_b = {(getattr(chunk, "owner_type", None), getattr(chunk, "owner_id", None)) for chunk in ctx_b.get("chunks") or []}
-    tenant_ids_a = {getattr(chunk, "tenant_id", None) for chunk in ctx_a.get("chunks") or []}
-    tenant_ids_b = {getattr(chunk, "tenant_id", None) for chunk in ctx_b.get("chunks") or []}
+    owner_pairs_a = {(getattr(chunk, "owner_type", None), getattr(chunk, "owner_id", None)) for chunk in ctx_a.chunks}
+    owner_pairs_b = {(getattr(chunk, "owner_type", None), getattr(chunk, "owner_id", None)) for chunk in ctx_b.chunks}
+    tenant_ids_a = {getattr(chunk, "tenant_id", None) for chunk in ctx_a.chunks}
+    tenant_ids_b = {getattr(chunk, "tenant_id", None) for chunk in ctx_b.chunks}
 
     assert ("agent", "agent:alpha") in owner_pairs_a
     assert ("agent", "agent:beta") not in owner_pairs_a

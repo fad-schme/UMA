@@ -444,8 +444,8 @@ async def test_rlm_lane_recall_scopes_user_only(uma_memory, tmp_path):
         session_id="session:user:u1",
         query_text="remember last time hello world",
     )
-    facts = ctx.get("facts") or []
-    chunks = ctx.get("chunks") or []
+    facts = ctx.facts
+    chunks = ctx.chunks
     assert all(getattr(f, "owner_type", None) == "user" for f in facts)
     assert all(getattr(f, "owner_id", None) == "user:u1" for f in facts)
     assert all(getattr(c, "owner_type", None) == "user" for c in chunks)
@@ -485,7 +485,7 @@ async def test_rlm_lane_kb_scopes_agent_and_user(uma_memory, tmp_path):
         session_id="session:user:u1",
         query_text="hello world",
     )
-    chunks = list(ctx.get("chunks") or [])
+    chunks = list(ctx.chunks)
     assert any(getattr(c, "owner_type", None) == "agent" for c in chunks)
     assert any(getattr(c, "owner_type", None) == "user" for c in chunks)
 

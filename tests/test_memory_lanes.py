@@ -1222,7 +1222,7 @@ async def test_bound_retrieval_uses_only_current_session_working_memory(uma_memo
         query_text="hello world",
     )
 
-    wm_contents = [msg.content for msg in ctx["working_memory"]]
+    wm_contents = [msg.content for msg in ctx.working_memory]
     assert wm_contents == ["alpha memory"]
 
 
@@ -1247,7 +1247,7 @@ async def test_bound_retrieval_without_session_does_not_fallback_to_broad_workin
         query_text="hello world",
     )
 
-    assert ctx["working_memory"] == []
+    assert ctx.working_memory == []
 
 
 @pytest.mark.asyncio

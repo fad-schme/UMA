@@ -8,6 +8,7 @@ from datetime import datetime
 from datetime import datetime, timezone
 from tests.helpers.graph_adapter import RecordingGraphAdapter
 from tests.helpers.runtime import init_uma_for_tests
+from uma.common.results import ContextBundle
 from uma.common.types import Episode
 from uma.common.types.types_fact import Fact
 from uma.memory.graph.core import GraphCore
@@ -217,7 +218,7 @@ async def test_ingest_writes_graph_edges(uma_graph, tmp_path):
 
 @pytest.mark.asyncio
 async def test_retrieve_context_with_graph_enabled(uma_graph, tmp_path):
-    """retrieve_context must return a dict with a 'graph' key when graph is enabled."""
+    """retrieve_context must return a ContextBundle with a `graph` attribute when graph is enabled."""
     doc = tmp_path / "doc.txt"
     doc.write_text(
         "UMA supports structured graph memory via the GraphCore subsystem. "
@@ -229,13 +230,13 @@ async def test_retrieve_context_with_graph_enabled(uma_graph, tmp_path):
 
     result = await uma_graph.retrieve_context(query_text="How does UMA graph memory work?", user_id="user-test")
 
-    assert isinstance(result, dict), "retrieve_context must return a dict"
-    assert "graph" in result, "Result must include a 'graph' key when graph is enabled"
+    assert isinstance(result, ContextBundle), "retrieve_context must return a ContextBundle"
+    assert hasattr(result, "graph"), "ContextBundle must include a `graph` attribute when graph is enabled"
 
 
 @pytest.mark.asyncio
 async def test_retrieve_context_with_graph_disabled(uma_no_graph, tmp_path):
-    """retrieve_context must not crash and return expected keys when graph is disabled."""
+    """retrieve_context must not crash and must expose the standard attributes when graph is disabled."""
     doc = tmp_path / "doc.txt"
     doc.write_text(
         "UMA is a modular memory runtime. It runs with or without a graph backend. "
@@ -245,9 +246,9 @@ async def test_retrieve_context_with_graph_disabled(uma_no_graph, tmp_path):
 
     result = await uma_no_graph.retrieve_context(query_text="What is UMA?", user_id="user-test")
 
-    assert isinstance(result, dict), "retrieve_context must return a dict even without graph"
-    for key in ("chunks", "facts", "episodic"):
-        assert key in result, f"Expected key '{key}' in context result"
+    assert isinstance(result, ContextBundle), "retrieve_context must return a ContextBundle even without graph"
+    for attr in ("chunks", "facts", "episodic"):
+        assert hasattr(result, attr), f"Expected attribute '{attr}' on ContextBundle"
 
 
 @pytest.mark.asyncio

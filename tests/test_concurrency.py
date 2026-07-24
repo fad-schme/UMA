@@ -7,6 +7,7 @@ overlap, vector and graph index rebuild correctness.
 from __future__ import annotations
 from datetime import datetime, timedelta
 from pathlib import Path
+from tests.helpers.context_bundle import make_context_bundle
 from tests.helpers.runtime import build_test_config
 from uma.api.memory import UMAMemory
 from uma.api.runtime import AnimusProfileProvider, _AnimusProfileCacheEntry
@@ -489,20 +490,8 @@ def test_working_memory_buffer_thread_safe_for_append_read_replace() -> None:
 
 
 
-def _empty_context(*, query: str) -> dict[str, object]:
-    return {
-        "product": "context",
-        "query": query,
-        "working_memory": [],
-        "episodic": [],
-        "facts": [],
-        "chunks": [],
-        "documents": [],
-        "skills": [],
-        "graph": [],
-        "trace": [],
-        "confidence": {},
-    }
+def _empty_context(*, query: str):
+    return make_context_bundle(query=query)
 
 
 @pytest.mark.asyncio
@@ -532,7 +521,7 @@ async def test_retrieve_context_passes_explicit_request_scope_through(uma_memory
         session_id="session-a",
     )
 
-    assert result["product"] == "context"
+    assert result.product == "context"
     assert seen == [("user:u1", "tenant-a", "req-a", "session-a")]
 
 
@@ -577,8 +566,8 @@ async def test_concurrent_retrieve_context_calls_keep_request_scope_isolated(
         ),
     )
 
-    assert first["product"] == "context"
-    assert second["product"] == "context"
+    assert first.product == "context"
+    assert second.product == "context"
     assert sorted(seen) == [
         ("query-a", "user:u1", "req-a", "session-a"),
         ("query-b", "user:u2", "req-b", "session-b"),
@@ -718,7 +707,7 @@ async def test_bootstrap_overlap_with_retrieval_keeps_explicit_request_scope(
     )
 
     assert bootstrap_result["status"] == "ingested"
-    assert retrieval_result["product"] == "context"
+    assert retrieval_result.product == "context"
     assert seen_bootstrap == [("user:bootstrap", "req-bootstrap", "session-bootstrap")]
     assert seen_contexts == [("user:retrieve", "req-retrieve", "session-retrieve")]
 

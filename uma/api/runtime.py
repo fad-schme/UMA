@@ -13,7 +13,10 @@ import logging
 import time
 import threading
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
+
+if TYPE_CHECKING:
+    from uma.common.results import ContextBundle
 
 from uma.common.compiled_memory import (
     build_compiled_memory_artifact,
@@ -306,7 +309,7 @@ class UMARuntime:
         query_text: str,
         scan_severity: str,
         lane_filter: List[str],
-        result: Dict[str, Any],
+        result: "ContextBundle",
     ) -> None:
         """Append one audit row for this retrieval call.
 
@@ -327,12 +330,8 @@ class UMARuntime:
             from uma.stores.retrieval_audit import RetrievalAuditRow
 
             query_hash, query_preview = _hash_and_preview(query_text or "")
-            chunks = result.get("chunks") or []
-            facts = result.get("facts") or []
-            result_count = (len(chunks) if isinstance(chunks, list) else 0) + (
-                len(facts) if isinstance(facts, list) else 0
-            )
-            active_lanes = result.get("active_lanes") or lane_filter or []
+            result_count = len(result.chunks) + len(result.facts)
+            active_lanes = result.debug.active_lanes or lane_filter or []
 
             row = RetrievalAuditRow(
                 request_id=str(getattr(runtime_context, "request_id", None) or ""),
@@ -344,12 +343,10 @@ class UMARuntime:
                 scan_severity=str(scan_severity or "none"),
                 lanes=list(active_lanes),
                 result_count=int(result_count),
-                # refined_via_llm: refinement happens in render_context, not
-                # retrieve_context — so it's always False at this audit point.
-                # pruned_via_llm: read from the controller's pack via
-                # result["_pruned_via_llm"] if surfaced; defaults to False.
+                # refined_via_llm: refinement happens in render_context,
+                # not retrieve_context — always False at this audit point.
                 refined_via_llm=False,
-                pruned_via_llm=bool(result.get("_pruned_via_llm", False)),
+                pruned_via_llm=result.debug.pruned_via_llm,
             )
             await asyncio.to_thread(store.append, row)
         except Exception:
@@ -507,7 +504,8 @@ class UMARuntime:
         working_memory: List[Any],
         pack: Any,
         requesting_user_id: str,
-    ) -> Dict[str, Any]:
+    ) -> "ContextBundle":
+        from uma.common.results import ContextBundle, Confidence, DebugInfo, Provenance
         from uma.retrieve.rlm.coverage import compute_confidence
 
         coverage = getattr(pack, "coverage", None)
@@ -523,39 +521,39 @@ class UMARuntime:
         )
         skills = self._filter_items_by_lanes(pack.skills, active_lanes)
         trace = list(getattr(pack, "steps", []) or [])
-        confidence = compute_confidence(coverage) if coverage is not None else {}
+        confidence_data = compute_confidence(coverage) if coverage is not None else None
 
-        return {
-            "product": "context",
-            "query": query_text,
-            "lane_filter": list(lane_filter),
-            "active_lanes": active_lanes,
-            "working_memory": working_memory,
-            "episodic": episodic,
-            "facts": facts,
-            "chunks": chunks,
-            "documents": self._group_memory_artifacts(chunks),
-            "skills": skills,
-            "graph": pack.graph,
-            "trace": trace,
-            "confidence": confidence,
-            # CR3: observability signal surfaced to the audit-row writer.
-            # Underscore prefix marks it as an internal field — not part
-            # of the documented public surface; callers should not rely
-            # on it for production logic.
-            "_pruned_via_llm": bool(getattr(pack, "pruned_via_llm", False)),
-            "provenance": build_provenance(
-                source_chunk_ids=[getattr(chunk, "id", None) for chunk in chunks],
-                source_document_ids=[getattr(chunk, "doc_id", None) for chunk in chunks],
-                derived_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                derivation_type="context_retrieval",
-                retrieval_path=trace,
-                support_density=(1.0 if chunks else 0.0),
-                confidence=confidence.get("score"),
-                conflicts=[],
-                require_source_chunks=True,
+        provenance_dict = build_provenance(
+            source_chunk_ids=[getattr(chunk, "id", None) for chunk in chunks],
+            source_document_ids=[getattr(chunk, "doc_id", None) for chunk in chunks],
+            derived_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            derivation_type="context_retrieval",
+            retrieval_path=trace,
+            support_density=(1.0 if chunks else 0.0),
+            confidence=(confidence_data.get("score") if confidence_data else None),
+            conflicts=[],
+            require_source_chunks=True,
+        )
+
+        return ContextBundle(
+            query=query_text,
+            working_memory=working_memory,
+            episodic=episodic,
+            facts=facts,
+            chunks=chunks,
+            documents=self._group_memory_artifacts(chunks),
+            skills=skills,
+            graph=list(pack.graph or []),
+            confidence=Confidence(**confidence_data) if confidence_data else None,
+            provenance=Provenance(**provenance_dict),
+            query_scan_severity="none",  # overwritten by the caller before return
+            debug=DebugInfo(
+                lane_filter=list(lane_filter),
+                active_lanes=active_lanes,
+                trace=trace,
+                pruned_via_llm=bool(getattr(pack, "pruned_via_llm", False)),
             ),
-        }
+        )
 
     
     async def retrieve_context(
@@ -564,7 +562,7 @@ class UMARuntime:
         *,
         query_text: str,
         lane_filter: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
+    ) -> "ContextBundle":
         """Retrieve curated evidence-oriented UMA context for one explicit request scope.
 
         Contract:
@@ -645,12 +643,12 @@ class UMARuntime:
                 pack=pack,
                 requesting_user_id=normalize_user_id(runtime_context.user_id),
             )
-            # Surface the scan severity on the public dict so callers and
+            # Surface the scan severity on the bundle so callers and
             # downstream consumers (notably ContextPackBuilder) can act on
             # it. Always present as a string ("none" when nothing matched)
             # so consumers don't have to disambiguate "scan ran" from
             # "scan was skipped."
-            result["query_scan_severity"] = query_scan_severity
+            result.query_scan_severity = query_scan_severity
             # CR3: write a structured audit log row for this retrieval.
             await self._append_retrieval_audit_row(
                 runtime_context=runtime_context,
@@ -944,11 +942,12 @@ class UMARuntime:
             query_text=query_text,
             lane_filter=list(plan.participating_lanes),
         )
-        chunks = list(context.get("chunks") or [])
+        chunks = list(context.chunks)
         memory_sources = self._group_memory_artifacts(chunks)
         support_density = 1.0 if chunks else 0.0
-        confidence = dict(context.get("confidence") or {})
-        trace = list(context.get("trace") or [])
+        confidence_score = context.confidence.score if context.confidence is not None else None
+        confidence_dict = context.confidence.model_dump() if context.confidence is not None else {}
+        trace = list(context.debug.trace)
         compiled_conflicts = [
             dict(conflict)
             for artifact in memory_sources
@@ -979,7 +978,7 @@ class UMARuntime:
                 retrieval_tags=[memory_intent.strip()],
                 retrieval_path=trace,
                 support_density=support_density,
-                confidence=confidence.get("score"),
+                confidence=confidence_score,
                 conflicts=compiled_conflicts,
                 manual=False,
                 metadata={"memory_intent": memory_intent.strip()},
@@ -1019,8 +1018,8 @@ class UMARuntime:
             "compiled_answer": compiled_answer,
             "evidence": chunks,
             "supporting_evidence": supporting_evidence,
-            "supporting_facts": list(context.get("facts") or []),
-            "supporting_skills": list(context.get("skills") or []),
+            "supporting_facts": list(context.facts),
+            "supporting_skills": list(context.skills),
             "conflicts": [],
             "support_density": support_density,
             "fallback": {
@@ -1036,11 +1035,11 @@ class UMARuntime:
             "memory_sources": memory_sources,
             "compiled_memory_index": compiled_memory_index,
             "compiled_memory_log": compiled_memory_log,
-            "confidence": confidence,
+            "confidence": confidence_dict,
             "provenance": (
                 compiled_answer["provenance"]
                 if compiled_answer is not None
-                else dict(context.get("provenance") or {})
+                else context.provenance.model_dump()
             ),
             "trace": trace
             + [
@@ -1179,7 +1178,23 @@ class UMARuntime:
             runtime_context,
             query_text=query_text,
         )
-        pack = ContextPackBuilder.build(query_text, structured)
+        # ContextPackBuilder is dict-shaped internally and expects
+        # `trace` at top level. Unwrap it from the bundle's `debug`
+        # sub-model. Domain-typed items (facts, chunks, …) are passed
+        # through as-is so downstream `_pack_*` helpers can read their
+        # attributes.
+        pack_input = {
+            "working_memory": structured.working_memory,
+            "episodic": structured.episodic,
+            "facts": structured.facts,
+            "chunks": structured.chunks,
+            "skills": structured.skills,
+            "graph": structured.graph,
+            "trace": structured.debug.trace,
+            "confidence": structured.confidence.model_dump() if structured.confidence else {},
+            "query_scan_severity": structured.query_scan_severity,
+        }
+        pack = ContextPackBuilder.build(query_text, pack_input)
         ctx_cfg = getattr(getattr(self.config, "retrieval", None), "context", None)
 
         if getattr(ctx_cfg, "snippet_refiner_available", False):

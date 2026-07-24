@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timezone
 from pathlib import Path
+from tests.helpers.context_bundle import make_context_bundle
 from tests.helpers.runtime import build_test_config
 from tests.helpers.runtime import init_uma_for_tests
 from types import SimpleNamespace
@@ -173,8 +174,8 @@ async def test_multi_tenant_isolation_holds_with_matching_scope_tokens(tmp_path:
         facts_a = await memory.memory_env.fetch_facts_by_ids(req_a, [fact_a.id, fact_b.id], owner_type="user", owner_id="user:u1")
         facts_b = await memory.memory_env.fetch_facts_by_ids(req_b, [fact_a.id, fact_b.id], owner_type="user", owner_id="user:u1")
 
-        assert [msg.content for msg in ctx_a["working_memory"]] == ["tenant a wm"]
-        assert [msg.content for msg in ctx_b["working_memory"]] == ["tenant b wm"]
+        assert [msg.content for msg in ctx_a.working_memory] == ["tenant a wm"]
+        assert [msg.content for msg in ctx_b.working_memory] == ["tenant b wm"]
         assert {fact.id for fact in facts_a} == {"fact_tenant_a"}
         assert {fact.id for fact in facts_b} == {"fact_tenant_b"}
     finally:
@@ -225,8 +226,8 @@ async def test_multi_user_retrieval_isolates_user_owned_data_but_keeps_agent_kb_
         runtime.retrieve_context(ctx_b_context, query_text="overlap token"),
     )
 
-    owner_pairs_a = {(getattr(chunk, "owner_type", None), getattr(chunk, "owner_id", None)) for chunk in ctx_a.get("chunks") or []}
-    owner_pairs_b = {(getattr(chunk, "owner_type", None), getattr(chunk, "owner_id", None)) for chunk in ctx_b.get("chunks") or []}
+    owner_pairs_a = {(getattr(chunk, "owner_type", None), getattr(chunk, "owner_id", None)) for chunk in ctx_a.chunks}
+    owner_pairs_b = {(getattr(chunk, "owner_type", None), getattr(chunk, "owner_id", None)) for chunk in ctx_b.chunks}
 
     assert ("agent", memory.agent_id) in owner_pairs_a
     assert ("agent", memory.agent_id) in owner_pairs_b
@@ -307,7 +308,7 @@ async def test_retrieval_and_process_turn_overlap_preserve_session_isolation(tmp
         facts_a = await memory.memory_env.fetch_facts_by_ids(req_a, fact_ids, owner_type="user", owner_id="user:u1")
         facts_b = await memory.memory_env.fetch_facts_by_ids(req_b, fact_ids, owner_type="user", owner_id="user:u1")
 
-        during_wm = [msg.content for msg in during_ctx["working_memory"]]
+        during_wm = [msg.content for msg in during_ctx.working_memory]
         objects_a = {str(getattr(fact, "object", "")) for fact in facts_a}
         objects_b = {str(getattr(fact, "object", "")) for fact in facts_b}
 
@@ -390,7 +391,7 @@ async def test_retrieval_remains_isolated_under_concurrent_requests(uma_memory, 
     ):
         await asyncio.to_thread(barrier.wait)
         seen_contexts.append((query_text, runtime_context.user_id or "", runtime_context.session_id or ""))
-        return {"working_memory": [], "episodic": [], "facts": [], "chunks": [], "skills": [], "graph": [], "trace": [], "confidence": {}}
+        return make_context_bundle(query=query_text)
 
     monkeypatch.setattr(UMARuntime, "retrieve_context", fake_structured)
     runtime = UMARuntime.from_memory(memory)
