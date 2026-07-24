@@ -6,25 +6,19 @@ scanning, and the management API surface (list/reinstate/purge).
 """
 from __future__ import annotations
 from datetime import datetime, timezone
-from pathlib import Path
 from tests.helpers.runtime import init_uma_for_tests
 from uma.adapters.db.sqlite_adapter import SQLiteAdapter
 from uma.adapters.vector.base import VectorIndex
-from uma.api.management import list_quarantined, reinstate_quarantined, purge_quarantined, QuarantinedRecord
+from uma.api.management import list_quarantined, reinstate_quarantined, purge_quarantined
 from uma.common.config_types import SecurityConfig
-from uma.common.injection_scan import configure_security
 from uma.common.injection_scan import configure_security, quarantine_enabled, scan_content, apply_scan
-from uma.common.types import Fact
 from uma.common.types import Fact, Episode, Skill, Chunk
 from uma.stores.chunk_sql import ChunkSQLStore
 from uma.stores.episodic_sql import EpisodicSQLStore
 from uma.stores.procedural_sql import ProceduralSQLStore
 from uma.stores.semantic_sql import SemanticSQLStore
 from unittest.mock import MagicMock
-import asyncio
 import pytest
-import sqlite3
-import tempfile
 
 class _NoopVI(VectorIndex):
     def upsert(self, ids, vectors, *, tenant_ids, owner_types, owner_ids, extra_metadata=None): pass

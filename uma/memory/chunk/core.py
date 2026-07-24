@@ -19,7 +19,7 @@ Note for maintainers:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID

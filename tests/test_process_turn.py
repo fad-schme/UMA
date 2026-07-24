@@ -205,9 +205,9 @@ async def test_process_turn_persists_raw_chunks_and_fact_provenance(tmp_path):
             request_id="req-turn-provenance",
             session_id="session-turn-provenance",
         )
-        assert recalled["facts"], "expected retrieve_memory to return semantic facts"
-        assert recalled["evidence"], "expected retrieve_memory to expand source_ids into evidence chunks"
-        assert recalled["provenance_valid"] is True
+        assert recalled.facts, "expected retrieve_memory to return semantic facts"
+        assert recalled.evidence, "expected retrieve_memory to expand source_ids into evidence chunks"
+        assert recalled.provenance_valid is True
     finally:
         mem.shutdown()
 
@@ -488,10 +488,10 @@ async def test_process_turn_is_idempotent_by_turn_id(uma_memory):
 
 
 
-def _fact_objects(payload: dict) -> set[str]:
+def _fact_objects(payload) -> set[str]:
     return {
         str(item.get("object") or item.get("text") or "").lower()
-        for item in list(payload.get("facts") or [])
+        for item in list(payload.facts)
         if isinstance(item, dict)
     }
 

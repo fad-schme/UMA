@@ -6,8 +6,6 @@ from typing import Any, Mapping, Sequence
 from uma.common.provenance import (
     build_provenance,
     collect_parent_artifact_ids,
-    collect_source_chunk_ids,
-    collect_source_document_ids,
     collect_transitive_source_chunk_ids,
     collect_transitive_source_document_ids,
     provenance_for_artifact,

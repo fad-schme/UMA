@@ -17,7 +17,9 @@ from uma.adapters.db.base import DBAdapter
 from uma.adapters.vector.base import VectorIndex
 from uma.adapters.graph.base import GraphAdapter
 from uma.adapters.llm.base import LLMInterface, EmbeddingInterface
-
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from uma.common.results import HealthStatus
 logger = logging.getLogger(__name__)
 
 
@@ -141,12 +143,15 @@ def _check_embedder(embedder: Optional[EmbeddingInterface], dim: int) -> HealthC
     return HealthCheck(name="embedding", status="ok", detail=embedder.__class__.__name__)
 
 
-def run_health_checks(memory: Any) -> Dict[str, Any]:
+def run_health_checks(memory: Any) -> "HealthStatus":
     """
     Run basic readiness checks for UMA dependencies.
 
-    Returns a dict with overall status and per-check details.
+    Returns a `HealthStatus` with an overall status literal and a per-check
+    map keyed by check name.
     """
+    from uma.common.results import HealthStatus
+
     checks: Dict[str, HealthCheck] = {}
 
     epi_store = getattr(getattr(memory, "episodic_core", None), "store", None)
@@ -213,7 +218,4 @@ def run_health_checks(memory: Any) -> Dict[str, Any]:
     else:
         overall = "ok"
 
-    return {
-        "status": overall,
-        "checks": {name: check.to_dict() for name, check in checks.items()},
-    }
+    return HealthStatus(status=overall, checks=checks)

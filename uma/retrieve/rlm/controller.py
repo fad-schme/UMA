@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .context_pack import ContextPack
 from .decisions import RetrievalAction
 from . import decisions
-from .intent import QueryIntent, classify_query_intent
+from .intent import classify_query_intent
 from .domain import (
     PREFERENCE_PREDICATES,
     ensure_domains_for_chunks,
@@ -59,6 +59,16 @@ from uma.memory.working_memory.core import session_scope_from_runtime_context
 
 logger = logging.getLogger(__name__)
 
+def _filter_predicates_for_domains(predicates: List[str], *, active_domains: set[str]) -> List[str]:
+    """
+    Deterministically filter predicate candidates based on active domains.
+
+    Phase 0/1 scope: prevent user_profile predicates from entering topical scope.
+    """
+    preds = [str(p).upper() for p in (predicates or []) if p]
+    if "user_profile" not in (active_domains or set()):
+        preds = [p for p in preds if p not in PREFERENCE_PREDICATES]
+    return preds
 
 class RLMController:
     """
@@ -713,16 +723,7 @@ class RLMController:
             )
 
 
-    def _filter_predicates_for_domains(predicates: List[str], *, active_domains: set[str]) -> List[str]:
-        """
-        Deterministically filter predicate candidates based on active domains.
 
-        Phase 0/1 scope: prevent user_profile predicates from entering topical scope.
-        """
-        preds = [str(p).upper() for p in (predicates or []) if p]
-        if "user_profile" not in (active_domains or set()):
-            preds = [p for p in preds if p not in PREFERENCE_PREDICATES]
-        return preds
 
     # Retrieval execution is centralized in UMAMemoryEnvironment.execute_action.
 

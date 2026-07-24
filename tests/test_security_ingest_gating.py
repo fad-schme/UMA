@@ -450,8 +450,7 @@ async def test_ingest_document_rejects_exe(tmp_path):
 @pytest.mark.asyncio
 async def test_sanitization_counts_in_manifest_meta(tmp_path):
     """Manifest meta.security.sanitization records counts for sanitized HTML."""
-    from tests.helpers.runtime import init_uma_for_tests
-    from uma.ingest.ingest_service import capture_source, _merge_manifest_meta
+    from uma.ingest.ingest_service import _merge_manifest_meta
     from datetime import datetime, timezone
 
     now = datetime.now(timezone.utc)

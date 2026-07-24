@@ -22,7 +22,6 @@ import logging
 from uma.common.dedupe import dedupe_by_id
 from uma.common.accessors import get_attr_or_key
 from uma.common.serialization import chunk_to_dict
-from uma.common.identity import normalize_user_id
 from uma.common.storage_metadata import (
     shared_metadata_view,
 )

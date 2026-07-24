@@ -5,29 +5,19 @@ operations (upsert, search, paging, extraction), episodic scoping, working
 memory isolation, chunker structural metadata, and chunk retrieval contracts.
 """
 from __future__ import annotations
-from datetime import datetime
 from datetime import datetime, timedelta, timezone
-from datetime import datetime, timezone
 from pathlib import Path
 from tests.helpers.providers import fake_embed, fake_llm
-from tests.helpers.providers import fake_llm
 from uma.adapters.db.sqlite_adapter import SQLiteAdapter
 from uma.adapters.vector.base import VectorIndex
 from uma.adapters.vector.inmemory import InMemoryVectorIndex
 from uma.common.config_types import WorkingMemorySettings
 from uma.common.identity import normalize_user_id
 from uma.common.integrity import hash_episode_content, hash_fact_content, hash_skill_content
-from uma.common.types import Chunk
-from uma.common.types import Chunk, Episode, Fact, Skill
-from uma.common.types import Chunk, Fact
-from uma.common.types import Episode
-from uma.common.types import Fact
-from uma.common.types import OwnershipRef, Skill
-from uma.common.types import SessionScope
-from uma.ingest.chunker import chunk_sections
-from uma.ingest.chunker import finalize_chunks
-from uma.ingest.types import DocumentChunk
-from uma.ingest.types import NormalizedSection
+
+from uma.common.types import Chunk, Episode, Fact, OwnershipRef, Skill, SessionScope
+from uma.ingest.chunker import chunk_sections, finalize_chunks
+from uma.ingest.types import DocumentChunk, NormalizedSection
 from uma.memory.chunk.core import ChunkSearchOptions
 from uma.memory.episodic.indexer import EpisodeIndexer
 from uma.memory.semantic.extractor import FactExtractor
@@ -926,21 +916,6 @@ async def test_episodic_fetch_summaries_owner_scoped():
 
 
 # ── test_episode_indexer ──────────────────────────────────────────
-
-
-
-
-
-
-class FakeLLM:
-    async def generate(self, messages, max_tokens=256, temperature=0.0, **kwargs):
-        return await fake_llm(
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            **kwargs,
-        )
-
 
 class FakeEmbedder:
     def __init__(self, dimension: int) -> None:

@@ -13,16 +13,13 @@ from tests.helpers.runtime import init_uma_for_tests
 from typing import Any, Dict, List
 from uma.api.memory import UMAMemory
 from uma.api.runtime import UMARuntime
-from uma.common.results import Confidence, Provenance
-from uma.common.types import Fact
+from uma.common.results import Confidence, MemoryResult, Provenance
 from uma.common.types import RuntimeContext
 from uma.common.types.types_fact import Fact
 from uma.retrieve.policy import should_stop
 from uma.retrieve.rlm.context_pack import ContextPack
 from uma.retrieve.rlm.controller import RLMController
-from uma.retrieve.rlm.decisions import ControllerDecision
-from uma.retrieve.rlm.decisions import RetrievalAction
-from uma.retrieve.rlm.decisions import deterministic_decision
+from uma.retrieve.rlm.decisions import ControllerDecision, RetrievalAction, deterministic_decision
 from uma.retrieve.rlm.domain import ensure_fact_domain, filter_facts_by_domains
 from uma.retrieve.rlm.environment import UMAMemoryEnvironment
 from uma.retrieve.rlm.evidence import expand_evidence_chunks_from_facts
@@ -71,15 +68,16 @@ async def test_runtime_retrieval_delegates_directly(uma_memory) -> None:
         query_text: str,
         memory_intent: str = "continuity",
         include_debug: bool = False,
-    ) -> Dict[str, Any]:
+    ):
         seen.append(("memory", bound_context, query_text))
-        return {
-            "query": query_text,
-            "facts": [{"text": "fact", "confidence": 1.0, "salience": 1.0, "source_chunk_ids": ["chunk-1"]}],
-            "evidence": [],
-            "provenance_valid": True,
-            "debug": {"memory_intent": memory_intent} if include_debug else None,
-        }
+        return MemoryResult(
+            query=query_text,
+            compiled_memory=None,
+            facts=[{"text": "fact", "confidence": 1.0, "salience": 1.0, "source_chunk_ids": ["chunk-1"]}],
+            evidence=[],
+            provenance_valid=True,
+            debug={"memory_intent": memory_intent} if include_debug else None,
+        )
 
     async def fake_messages(
         bound_context: RuntimeContext,
@@ -101,8 +99,8 @@ async def test_runtime_retrieval_delegates_directly(uma_memory) -> None:
     assert structured.product == "context"
     assert structured.debug.lane_filter == ["semantic"]
     assert structured.documents == []
-    assert memory_payload["provenance_valid"] is True
-    assert memory_payload["facts"][0]["source_chunk_ids"] == ["chunk-1"]
+    assert memory_payload.provenance_valid is True
+    assert memory_payload.facts[0]["source_chunk_ids"] == ["chunk-1"]
     assert messages["meta"]["render_mode"] == "raw_rendered"
     assert seen == [
         ("context", context, "hello world"),
@@ -147,15 +145,16 @@ async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory
         query_text: str,
         memory_intent: str = "continuity",
         include_debug: bool = False,
-    ) -> Dict[str, Any]:
+    ):
         seen.append(("memory", bound_context, query_text))
-        return {
-            "query": query_text,
-            "facts": [{"text": "fact", "confidence": 1.0, "salience": 1.0, "source_chunk_ids": ["chunk-1"]}],
-            "evidence": [],
-            "provenance_valid": True,
-            "debug": {"memory_intent": memory_intent} if include_debug else None,
-        }
+        return MemoryResult(
+            query=query_text,
+            compiled_memory=None,
+            facts=[{"text": "fact", "confidence": 1.0, "salience": 1.0, "source_chunk_ids": ["chunk-1"]}],
+            evidence=[],
+            provenance_valid=True,
+            debug={"memory_intent": memory_intent} if include_debug else None,
+        )
 
     memory.runtime.retrieve_context = fake_context  # type: ignore[method-assign]
     memory.runtime.retrieve_memory = fake_memory  # type: ignore[method-assign]
@@ -179,8 +178,8 @@ async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory
 
     assert context.product == "context"
     assert context.documents == []
-    assert memory_result["provenance_valid"] is True
-    assert memory_result["facts"][0]["text"] == "fact"
+    assert memory_result.provenance_valid is True
+    assert memory_result.facts[0]["text"] == "fact"
     assert seen == [
         (
             "context",
@@ -252,10 +251,10 @@ async def test_runtime_memory_retrieval_surfaces_explicit_evidence_only_fallback
         memory_intent="continuity",
     )
 
-    assert result["facts"] == []
-    assert result["evidence"] == []
-    assert result["provenance_valid"] is False
-    assert result["provenance_error"] == "missing_source_chunk_ids"
+    assert result.facts == []
+    assert result.evidence == []
+    assert result.provenance_valid is False
+    assert result.provenance_error == "missing_source_chunk_ids"
     assert "product" not in result
     assert "memory_intent" not in result
     assert "compiled_memory_log" not in result
@@ -316,11 +315,11 @@ async def test_runtime_memory_retrieval_can_expose_debug_payload(uma_memory) -> 
         include_debug=True,
     )
 
-    assert result["provenance_valid"] is False
-    assert "debug" in result
-    assert result["debug"]["product"] == "memory"
-    assert result["debug"]["memory_intent"] == "continuity"
-    assert "compiled_memory_log" in result["debug"]
+    assert result.provenance_valid is False
+    assert result.debug is not None
+    assert result.debug["product"] == "memory"
+    assert result.debug["memory_intent"] == "continuity"
+    assert "compiled_memory_log" in result.debug
 
 
 @pytest.mark.asyncio
@@ -389,12 +388,12 @@ async def test_runtime_memory_zero_evidence_returns_honest_fallback_debug_shape(
         include_debug=True,
     )
 
-    assert result["facts"]
-    assert result["provenance_valid"] is False
-    assert result["provenance_error"] == "missing_source_chunk_ids"
-    assert result["debug"]["compiled_answer"] is None
-    assert result["debug"]["supporting_facts"]
-    assert result["debug"]["trace"]
+    assert result.facts
+    assert result.provenance_valid is False
+    assert result.provenance_error == "missing_source_chunk_ids"
+    assert result.debug["compiled_answer"] is None
+    assert result.debug["supporting_facts"]
+    assert result.debug["trace"]
 
 
 @pytest.mark.asyncio
@@ -516,13 +515,14 @@ async def test_retrieve_memory_empty_result_shape(uma_memory) -> None:
         session_id="session-mem-empty",
     )
 
-    assert "compiled_memory" in result
-    assert "facts" in result
-    assert "evidence" in result
-    assert "provenance_valid" in result
-    assert isinstance(result["facts"], list)
-    assert isinstance(result["evidence"], list)
-    assert "product" not in result
+    assert isinstance(result, MemoryResult)
+    # `compiled_memory`, `facts`, `evidence`, `provenance_valid`, `product`
+    # are all required fields on the MemoryResult model — their presence
+    # is guaranteed by model validation, so we assert the shape/value
+    # rather than key presence.
+    assert result.product == "memory"
+    assert isinstance(result.facts, list)
+    assert isinstance(result.evidence, list)
 
 
 @pytest.mark.asyncio
@@ -552,9 +552,10 @@ async def test_retrieve_memory_returns_facts_after_ingest(tmp_path) -> None:
         session_id="session-recall",
     )
 
-    assert "facts" in recalled
-    assert "evidence" in recalled
-    assert "provenance_valid" in recalled
+    assert isinstance(recalled, MemoryResult)
+    assert isinstance(recalled.facts, list)
+    assert isinstance(recalled.evidence, list)
+    assert isinstance(recalled.provenance_valid, bool)
 
 
 @pytest.mark.asyncio
@@ -582,7 +583,7 @@ async def test_retrieve_memory_user_scope_isolation(tmp_path) -> None:
         session_id="session-bob",
     )
 
-    assert bob_result["facts"] == []
+    assert bob_result.facts == []
 
 
 @pytest.mark.asyncio
@@ -632,7 +633,7 @@ async def test_retrieve_memory_third_person_fact_stays_within_same_user_scope(tm
         request_id="req-bob-before-own-maria-fact",
         session_id="session-bob",
     )
-    assert bob_before["facts"] == []
+    assert bob_before.facts == []
 
     await memory.semantic_core.upsert_fact(fact_bob, emb_bob)
     bob_after = await memory.retrieve_memory(
@@ -645,7 +646,7 @@ async def test_retrieve_memory_third_person_fact_stays_within_same_user_scope(tm
 
     fact_texts = {
         str(item.get("text") or "").lower()
-        for item in list(bob_after.get("facts") or [])
+        for item in list(bob_after.facts)
         if isinstance(item, dict)
     }
     assert any("red hair" in t for t in fact_texts)
@@ -662,9 +663,9 @@ async def test_retrieve_memory_include_debug_flag(uma_memory) -> None:
         include_debug=True,
     )
 
-    assert "facts" in result
-    assert "debug" in result
-    assert result["debug"] is not None
+    assert isinstance(result, MemoryResult)
+    assert isinstance(result.facts, list)
+    assert result.debug is not None
 
 
 # ── test_retrieval_scoped_requests ──────────────────────────────────────────

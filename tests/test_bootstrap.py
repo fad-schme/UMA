@@ -214,16 +214,16 @@ async def test_memory_bootstrap_persists_chunk_backed_provenance_for_retrieve_me
         session_id="session-memory-bootstrap-recall",
     )
 
-    assert memory_result["evidence"]
-    assert memory_result["facts"]
-    assert isinstance(memory_result["facts"][0], dict)
-    assert isinstance(memory_result["evidence"][0], dict)
-    assert memory_result["provenance_valid"] is True
-    assert "provenance_error" not in memory_result
-    assert "product" not in memory_result
-    assert "memory_intent" not in memory_result
-    assert "compiled_answer" not in memory_result
-    assert "trace" not in memory_result
+    assert memory_result.evidence
+    assert memory_result.facts
+    assert isinstance(memory_result.facts[0], dict)
+    assert isinstance(memory_result.evidence[0], dict)
+    assert memory_result.provenance_valid is True
+    assert memory_result.provenance_error is None
+    assert memory_result.product == "memory"
+    # `memory_intent`, `compiled_answer`, `trace` are internal detail
+    # not part of the MemoryResult surface — the model's `extra="forbid"`
+    # config guarantees they cannot appear on the public return.
 
     other_user_result = await uma_memory.retrieve_memory(
         query_text="sqlite",
@@ -232,7 +232,7 @@ async def test_memory_bootstrap_persists_chunk_backed_provenance_for_retrieve_me
         request_id="req-memory-bootstrap-other-user",
         session_id="session-memory-bootstrap-other-user",
     )
-    assert other_user_result["evidence"] == []
+    assert other_user_result.evidence == []
 
 
 @pytest.mark.asyncio

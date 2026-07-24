@@ -11,28 +11,21 @@ from pathlib import Path
 from tests.helpers.context_bundle import make_context_bundle
 from tests.helpers.runtime import build_test_config
 from tests.helpers.runtime import init_uma_for_tests
-from types import SimpleNamespace
 from typing import get_args
-from uma import UMAMemory
 from uma.api.memory import UMAMemory
 from uma.api.runtime import UMARuntime
 from uma.common.identity import normalize_user_id
 from uma.common.ownership import validate_explicit_owner
-from uma.common.types import OwnerType, OwnershipRef, RuntimeContext, SCOPE_MODEL_VERSION, SessionScope
-from uma.common.types import Chunk, Episode, Fact, OwnershipRef, Skill
-from uma.common.types import Fact, OwnershipRef, Skill, SCOPE_MODEL_VERSION
-from uma.common.types import Fact, RuntimeContext, SCOPE_MODEL_VERSION
-from uma.common.types import RuntimeContext, Skill
+from uma.common.types import Chunk, Episode, RuntimeContext, Skill, Fact, OwnershipRef,  SessionScope, SCOPE_MODEL_VERSION
+from uma.common.types.types_owner import OwnerType
 from uma.common.types.types_scope import validate_agent_id, validate_owner_id, validate_owner_type, validate_request_id, validate_session_id, validate_tenant_id, validate_user_id, validate_workspace_id
 from uma.memory.promotion import PromotionPolicy
-from uma.memory.working_memory.core import SessionScope
 from uma.retrieve.rlm.context_pack import ContextPack
 from uma.retrieve.rlm.request import RetrievalRequest
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
 import asyncio
 import pytest
 import threading
-import warnings
 import yaml
 
 # ── test_isolation_matrix ──────────────────────────────────────────
@@ -1020,72 +1013,6 @@ def test_new_types_are_exported_from_uma_types() -> None:
 
 
 # ---------------------------------------------------------------------------
-# validate_explicit_owner
-# ---------------------------------------------------------------------------
-
-def test_explicit_write_owner_accepts_agent_user_and_workspace() -> None:
-    agent_owner = validate_explicit_owner(owner_type="agent", owner_id="agent:alpha")
-    assert agent_owner == {"tenant_id": "default", "owner_type": "agent", "owner_id": "agent:alpha", "workspace_id": None}
-
-    user_owner = validate_explicit_owner(owner_type="user", owner_id="u1")
-    assert user_owner == {"tenant_id": "default", "owner_type": "user", "owner_id": "user:u1", "workspace_id": None}
-
-    workspace_owner = validate_explicit_owner(owner_type="workspace", owner_id="workspace:alpha")
-    assert workspace_owner == {"tenant_id": "default", "owner_type": "workspace", "owner_id": "workspace:alpha", "workspace_id": "workspace:alpha"}
-
-
-def test_explicit_write_owner_accepts_system_scope_when_requested() -> None:
-    owner = validate_explicit_owner(owner_type="system", owner_id="system:alpha")
-    assert owner == {"tenant_id": "default", "owner_type": "system", "owner_id": "system:alpha", "workspace_id": None}
-
-
-def test_explicit_write_owner_preserves_tenant_and_workspace() -> None:
-    owner = validate_explicit_owner(
-        tenant_id="tenant-1",
-        owner_type="workspace",
-        owner_id="workspace:alpha",
-        workspace_id="workspace:alpha",
-    )
-    assert owner == {"tenant_id": "tenant-1", "owner_type": "workspace", "owner_id": "workspace:alpha", "workspace_id": "workspace:alpha"}
-
-
-# ---------------------------------------------------------------------------
-# Promotion policy — missing field rejections
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_promotion_rejects_missing_owner_type(uma_memory) -> None:
-    policy = PromotionPolicy(agent_id=uma_memory.agent_id)
-    now = datetime.now(timezone.utc)
-    fact = Fact(
-        id="fact_missing_owner_type", subject="team", predicate="USES",
-        object="kubernetes cluster orchestration for production workloads",
-        created_at=now, updated_at=now, source_ids=["chunk-source-1"],
-        confidence=0.95, salience=0.92, meta={"source_type": "text"},
-        owner_type="user", owner_id="user:u1", tenant_id="default",
-        scope_model_version=SCOPE_MODEL_VERSION,
-    )
-    with pytest.raises(ValueError, match="owner_type and owner_id are required"):
-        policy.promote(fact, owner_id="user:u1")
-
-
-@pytest.mark.asyncio
-async def test_promotion_rejects_missing_owner_id(uma_memory) -> None:
-    policy = PromotionPolicy(agent_id=uma_memory.agent_id)
-    now = datetime.now(timezone.utc)
-    fact = Fact(
-        id="fact_missing_owner_id", subject="team", predicate="USES",
-        object="kubernetes cluster orchestration for production workloads",
-        created_at=now, updated_at=now, source_ids=["chunk-source-1"],
-        confidence=0.95, salience=0.92, meta={"source_type": "text"},
-        owner_type="user", owner_id="user:u1", tenant_id="default",
-        scope_model_version=SCOPE_MODEL_VERSION,
-    )
-    with pytest.raises(ValueError, match="owner_type and owner_id are required"):
-        policy.promote(fact, owner_type="user")
-
-
-# ---------------------------------------------------------------------------
 # No duplicate or forbidden ownership resolvers remain in the codebase
 # ---------------------------------------------------------------------------
 
@@ -1106,35 +1033,7 @@ def test_no_duplicate_ownership_resolvers() -> None:
     assert "def validate_explicit_owner(" in ownership_text
 
 
-# ---------------------------------------------------------------------------
-# agent_id must be set before retrieval (no silent fallback)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_retrieve_context_raises_if_set_context_not_called(tmp_path) -> None:
-    from tests.helpers.runtime import init_uma_for_tests
-    memory = await init_uma_for_tests(tmp_path, agent_id="agent-test")
-    memory._agent_id = None  # simulate missing set_context
-    with pytest.raises(ValueError, match="agent_id"):
-        await memory.retrieve_context(query_text="hello", user_id="user:u1")
-    memory.shutdown()
-
-
-# ---------------------------------------------------------------------------
-# agent_id setter is removed from the public surface
-# ---------------------------------------------------------------------------
-
-def test_agent_id_setter_is_removed_from_public_surface(uma_memory) -> None:
-    with pytest.raises(AttributeError):
-        uma_memory.agent_id = "agent-deprecated-test"
-
-
 # ── test_write_owner_contracts ──────────────────────────────────────────
-
-
-
-
-
 
 def test_explicit_write_owner_accepts_agent_user_and_workspace() -> None:
     agent_owner = validate_explicit_owner(

@@ -14,9 +14,6 @@ from uma.adapters.vector.base import VectorIndex
 from uma.common.integrity import hash_episode_content, hash_fact_content, hash_skill_content
 from uma.common.trust import SourceDescriptor, score_source
 from uma.common.types import Chunk, Episode, Fact, Skill
-from uma.common.types import Fact
-from uma.common.types import Fact, Episode, Chunk, Skill
-from uma.common.types import Fact, Episode, Skill, Chunk
 from uma.retrieve.ranking import Ranker
 from uma.stores.chunk_sql import ChunkSQLStore
 from uma.stores.episodic_sql import EpisodicSQLStore
@@ -24,7 +21,6 @@ from uma.stores.procedural_sql import ProceduralSQLStore
 from uma.stores.semantic_sql import SemanticSQLStore
 import hashlib
 import pytest
-import sqlite3
 
 # ── test_pr1_dataclass_fields ──────────────────────────────────────────
 

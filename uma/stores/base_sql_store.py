@@ -32,7 +32,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import Any, Awaitable, Callable, Iterable, List, Optional, Sequence, TypeVar
+from typing import Any, Callable, List, Optional, Sequence, TypeVar
 
 from ..adapters.db.base import DBAdapter, DBConnection
 

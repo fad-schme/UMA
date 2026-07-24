@@ -6,7 +6,6 @@ integration at each boundary and manifest idempotency.
 """
 from __future__ import annotations
 from datetime import datetime, timezone
-from pathlib import Path
 from tests.helpers.runtime import init_uma_for_tests
 from uma.common.integrity import hash_episode_content
 from uma.ingest.ingest_service import capture_source, curate_compiled_memory, derive_memory_artifacts
@@ -91,8 +90,6 @@ async def test_ingest_chunks_text_hash_still_in_meta(tmp_path, fixture_doc):
     """text_hash in chunk meta must be preserved after PR1 (not promoted, not removed)."""
     mem = await init_uma_for_tests(tmp_path)
     try:
-        import json
-
         report = await mem.ingest_document(
             fixture_doc,
             owner_type="user",

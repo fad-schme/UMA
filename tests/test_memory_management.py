@@ -7,17 +7,11 @@ and manifest version supersession.
 from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
-from uma.api.management import explain_result
 from uma.api.management import explain_result, lint_memory_drift
-from uma.api.management import lint_memory_drift
 from uma.api.memory import UMAMemory
 from uma.api.runtime import UMARuntime
-from uma.common.storage_metadata import normalize_chunk_metadata
-from uma.common.storage_metadata import normalize_fact_metadata
+from uma.common.storage_metadata import normalize_chunk_metadata, normalize_fact_metadata
 from uma.common.types import Chunk, Fact, RuntimeContext, SCOPE_MODEL_VERSION
-from uma.common.types import Fact, RuntimeContext
-from uma.common.types import RuntimeContext
-from uma.ingest.ingest_service import capture_source
 from uma.ingest.ingest_service import capture_source, curate_compiled_memory, derive_memory_artifacts
 from uma.ingest.types import IngestConfig
 from uma.memory import wiki as wiki_module
@@ -90,7 +84,7 @@ async def test_management_explain_uses_canonical_provenance(uma_memory, tmp_path
         include_debug=True,
     )
 
-    artifact = memory_result["debug"]["compiled_answer"]
+    artifact = memory_result.debug["compiled_answer"]
     explanation = await explain_result(memory, artifact, user_id="user:u1")
 
     assert explanation["evidence"]
@@ -454,16 +448,16 @@ async def test_provenance_chain_supports_fact_memory_and_wiki_artifact_expansion
         memory_intent="continuity",
         include_debug=True,
     )
-    assert memory_result["provenance_valid"] is True
-    assert memory_result["debug"]["compiled_answer"]["provenance"]["source_chunk_ids"]
-    assert memory_result["debug"]["compiled_memory_index"]
-    assert memory_result["debug"]["compiled_memory_log"]
+    assert memory_result.provenance_valid is True
+    assert memory_result.debug["compiled_answer"]["provenance"]["source_chunk_ids"]
+    assert memory_result.debug["compiled_memory_index"]
+    assert memory_result.debug["compiled_memory_log"]
 
     fact_evidence = await explain_result(memory, fact, user_id="user:u1")
     assert fact_evidence["evidence"]
     assert fact_evidence["chunk_ids"]
 
-    answer_evidence = await explain_result(memory, memory_result["debug"]["compiled_answer"], user_id="user:u1")
+    answer_evidence = await explain_result(memory, memory_result.debug["compiled_answer"], user_id="user:u1")
     assert answer_evidence["evidence"]
     assert answer_evidence["chunk_ids"]
 
@@ -544,8 +538,8 @@ async def test_compiled_memory_artifact_builds_index_log_and_transitive_raw_evid
         owner_type="user",
         owner_id="user:u1",
         summary="Monitoring platform used in operations.",
-        parent_artifacts=[memory_result["debug"]["compiled_answer"]],
-        related_artifact_ids=[memory_result["debug"]["compiled_answer"]["id"]],
+        parent_artifacts=[memory_result.debug["compiled_answer"]],
+        related_artifact_ids=[memory_result.debug["compiled_answer"]["id"]],
         retrieval_tags=["ops", "monitoring"],
     )
     artifact = page["compiled_artifact"]
@@ -555,12 +549,12 @@ async def test_compiled_memory_artifact_builds_index_log_and_transitive_raw_evid
     assert artifact["compiled_memory_index"]["artifact_id"] == "wiki:operations/monitoring"
     assert artifact["compiled_memory_index"]["source_chunk_ids"] == artifact["provenance"]["source_chunk_ids"]
     assert artifact["compiled_memory_log"][0]["event_type"] == "wiki_artifact_created"
-    assert artifact["compiled_memory_log"][0]["parent_artifact_ids"] == [memory_result["debug"]["compiled_answer"]["id"]]
+    assert artifact["compiled_memory_log"][0]["parent_artifact_ids"] == [memory_result.debug["compiled_answer"]["id"]]
 
     expanded = await explain_result(memory, artifact, user_id="user:u1")
     assert expanded["chunk_ids"] == artifact["provenance"]["source_chunk_ids"]
     assert expanded["direct_chunk_ids"] == []
-    assert expanded["lineage"][0]["parent_artifact_ids"] == [memory_result["debug"]["compiled_answer"]["id"]]
+    assert expanded["lineage"][0]["parent_artifact_ids"] == [memory_result.debug["compiled_answer"]["id"]]
     assert expanded["compiled_memory_log"][0]["event_type"] == "evidence_expanded"
 
 
@@ -797,7 +791,7 @@ async def test_regenerated_wiki_page_is_canonical_record_with_evidence_links(uma
         title="Ops Metrics",
         owner_type="user",
         owner_id="user:u1",
-        parent_artifacts=[memory_result["debug"]["compiled_answer"]],
+        parent_artifacts=[memory_result.debug["compiled_answer"]],
         category="operations",
     )
 

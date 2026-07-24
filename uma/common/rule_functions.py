@@ -9,7 +9,6 @@ Function weights live in injection_scan.py, not here.
 """
 import re
 import unicodedata
-from collections import Counter
 
 import logging
 

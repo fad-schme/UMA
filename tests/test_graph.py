@@ -4,7 +4,6 @@ Covers GraphCore node/edge operations, graph lane retrieval through the
 retrieval pipeline, graph updates from process_turn, and RLM entity seeding.
 """
 from __future__ import annotations
-from datetime import datetime
 from datetime import datetime, timezone
 from tests.helpers.graph_adapter import RecordingGraphAdapter
 from tests.helpers.runtime import init_uma_for_tests

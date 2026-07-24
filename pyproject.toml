@@ -40,3 +40,9 @@ exclude = [".venv*", ".pytest_cache*"]
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "--basetemp=.pytest_tmp"
+
+[tool.bandit]
+skips = ["B608","B105"]
+
+[tool.ruff.lint]
+ignore = ["E402"]

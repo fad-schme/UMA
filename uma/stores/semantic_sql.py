@@ -35,7 +35,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from typing import List, Optional, Any, Dict
+from typing import List, Optional, Any
 
 from .base_vector_sql_store import BaseVectorSQLStore
 

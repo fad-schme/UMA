@@ -31,7 +31,6 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from uma.common.types import RuntimeContext, SessionScope
-from uma.common.identity import normalize_user_id
 from uma.common.injection_scan import scan_artifact_text
 from .buffer import WorkingMemoryBuffer, WorkingMemoryMessage
 from .queue_manager import QueueManager, QueuePolicy

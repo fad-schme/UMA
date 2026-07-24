@@ -9,6 +9,7 @@ Catalog is compiled once at module import — never per call.
 """
 from __future__ import annotations
 
+import datetime
 import logging
 import re
 import unicodedata

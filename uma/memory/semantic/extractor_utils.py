@@ -16,7 +16,7 @@ canonical public API surface for fact extraction.
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from uma.common.types import Fact

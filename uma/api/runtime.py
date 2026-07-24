@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
 
 if TYPE_CHECKING:
-    from uma.common.results import ContextBundle
+    from uma.common.results import ContextBundle, MemoryResult
 
 from uma.common.compiled_memory import (
     build_compiled_memory_artifact,
@@ -920,7 +920,7 @@ class UMARuntime:
         query_text: str,
         memory_intent: str = "continuity",
         include_debug: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> "MemoryResult":
         """Retrieve compiled, evidence-backed memory results for one request scope.
 
         This path uses its own lane plan, may reuse context-path candidate
@@ -1107,7 +1107,9 @@ class UMARuntime:
         detailed_result: Mapping[str, Any],
         *,
         include_debug: bool,
-    ) -> Dict[str, Any]:
+    ) -> "MemoryResult":
+        from uma.common.results import CompiledMemory, MemoryResult
+
         facts = [
             self._serialize_memory_fact(fact)
             for fact in list(detailed_result.get("supporting_facts") or [])
@@ -1123,26 +1125,26 @@ class UMARuntime:
         provenance = dict(detailed_result.get("provenance") or {})
         ca = detailed_result.get("compiled_answer")
         compiled_memory = (
-            {
-                "memory_intent": ca.get("memory_intent"),
-                "provenance_valid": bool((ca.get("provenance") or {}).get("valid", True)),
-            }
+            CompiledMemory(
+                memory_intent=ca.get("memory_intent"),
+                provenance_valid=bool((ca.get("provenance") or {}).get("valid", True)),
+            )
             if ca is not None
             else None
         )
-        public_result: Dict[str, Any] = {
-            "query": detailed_result.get("query"),
-            "compiled_memory": compiled_memory,
-            "facts": facts,
-            "evidence": evidence,
-            "provenance_valid": bool(provenance.get("valid")),
-        }
         invalid_reasons = list(provenance.get("invalid_reasons") or [])
-        if invalid_reasons:
-            public_result["provenance_error"] = str(invalid_reasons[0])
-        if include_debug:
-            public_result["debug"] = dict(detailed_result)
-        return public_result
+        provenance_error = str(invalid_reasons[0]) if invalid_reasons else None
+        debug = dict(detailed_result) if include_debug else None
+
+        return MemoryResult(
+            query=detailed_result.get("query") or "",
+            compiled_memory=compiled_memory,
+            facts=facts,
+            evidence=evidence,
+            provenance_valid=bool(provenance.get("valid")),
+            provenance_error=provenance_error,
+            debug=debug,
+        )
 
     def _render_profile_overlay(self) -> str:
         """Render cached USER.md and SOUL.md overlays for every response."""

@@ -13,7 +13,6 @@ from uma.adapters.llm.provider_registry import get_embedder_factory, get_llm_fac
 from uma.adapters.db.sqlite_adapter import SQLiteAdapter
 from uma.adapters.llm import anthropic as anthropic_module
 from uma.adapters.llm import openai_compatible as shared_module
-from uma.adapters.llm.provider_registry import get_embedder_factory, get_llm_factory
 from uma.api.memory import UMAMemory
 from uma.common.config import UMAConfig
 from uma.common.config_types import EmbeddingConfig, LLMConfig, RuntimeConfig
@@ -467,14 +466,12 @@ async def test_health_check_returns_ok_or_degraded_on_initialized_instance(tmp_p
     memory = await init_uma_for_tests(tmp_path)
     result = memory.health_check()
 
-    assert result["status"] in ("ok", "degraded")
-    assert "checks" in result
-    assert _EXPECTED_CHECK_KEYS.issubset(result["checks"].keys())
+    assert result.status in ("ok", "degraded")
+    assert _EXPECTED_CHECK_KEYS.issubset(result.checks.keys())
 
-    for check in result["checks"].values():
-        assert "name" in check
-        assert "status" in check
-        assert check["status"] in ("ok", "error", "skipped")
+    for check in result.checks.values():
+        assert check.name
+        assert check.status in ("ok", "error", "skipped")
 
 
 @pytest.mark.asyncio
@@ -486,10 +483,9 @@ async def test_health_check_returns_error_when_not_initialized(tmp_path) -> None
 
     result = memory.health_check()
 
-    assert result["status"] == "error"
-    assert "checks" in result
-    assert "memory" in result["checks"]
-    assert result["checks"]["memory"]["status"] == "error"
+    assert result.status == "error"
+    assert "memory" in result.checks
+    assert result.checks["memory"].status == "error"
 
 
 # ── test_db_adapters ──────────────────────────────────────────

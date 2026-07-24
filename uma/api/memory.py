@@ -63,7 +63,8 @@ import threading
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional, Union
 
 if TYPE_CHECKING:
-    from uma.common.results import ContextBundle
+    from uma.common.results import ContextBundle, HealthStatus, MemoryResult
+    from uma.ingest.types import IngestReport
 
 from uma.common.config import UMAConfig
 from uma.common.config_types import RuntimeConfig, SecretsProviderConfig, parse_plugin_spec
@@ -86,7 +87,7 @@ from uma.common.initializers.runtime import (
 from uma.common.registry import FeatureLoader, FeaturePolicy, default_feature_registry
 from .runtime import AnimusProfileProvider, UMARuntime
 from uma.common.types import RuntimeContext
-from uma.common.injection_scan import scan_content, quarantine_enabled, InjectionDetectedError
+from uma.common.injection_scan import scan_content, InjectionDetectedError
 
 logger = logging.getLogger(__name__)
 
@@ -475,14 +476,20 @@ class UMAMemory:
         session_id: Optional[str] = None,
         memory_intent: str = "continuity",
         include_debug: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> "MemoryResult":
         """Return compiled, evidence-backed memory results for the explicit request scope.
 
         Contract:
-        - `memories` is the primary compiled-memory field
-        - `evidence` is mandatory and attached to every result path
-        - supporting facts/skills remain secondary evidence, not the product identity
-        - explicit `fallback` prevents silent degradation into chunk-only context retrieval
+        - returns a `MemoryResult` — attribute access, not dict access
+        - `compiled_memory` is the primary compiled-memory field; `None` on
+          the explicit evidence-only fallback path
+        - `facts` and `evidence` are serialized projections (dicts, not
+          `Fact` / `Chunk` domain types) — the memory API is a narrower
+          projection than `retrieve_context`
+        - `provenance_valid` / `provenance_error` surface provenance status
+          without exposing the full provenance sub-tree
+        - full retrieval detail available on `result.debug` only when
+          `include_debug=True`
         """
         runtime_context = self._resolve_runtime_context(
             user_id=user_id,
@@ -611,7 +618,7 @@ class UMAMemory:
         tenant_id: str = "default",
         workspace_id: Optional[str] = None,
         config: Optional[Any] = None,
-    ) -> Any:
+    ) -> "IngestReport":
         """Ingest an unstructured document into UMA memory.
 
         tenant_id is required for durable artifacts (DAT invariant). It
@@ -726,20 +733,23 @@ class UMAMemory:
     # Core API: Health and maintenance
     # ----------------------------------------------------------------------
 
-    def health_check(self) -> Dict[str, Any]:
+    def health_check(self) -> "HealthStatus":
         """Run basic dependency readiness checks."""
+        from uma.common.health import HealthCheck
+        from uma.common.results import HealthStatus
+
         if not self.initialized:
-            return {
-                "status": "error",
-                "checks": {
-                    "memory": {
-                        "name": "memory",
-                        "status": "error",
-                        "detail": "UMAMemory not initialized",
-                        "latency_ms": None,
-                    }
+            return HealthStatus(
+                status="error",
+                checks={
+                    "memory": HealthCheck(
+                        name="memory",
+                        status="error",
+                        detail="UMAMemory not initialized",
+                        latency_ms=None,
+                    )
                 },
-            }
+            )
 
         from uma.common.health import run_health_checks
 

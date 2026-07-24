@@ -152,7 +152,7 @@ async def generate_text(
                 type(e).__name__,
             )
             await asyncio.sleep(0)
-    assert last_err is not None
+    assert last_err is not None  # nosec B101 — invariant: loop exit implies error recorded
     raise last_err
 
 

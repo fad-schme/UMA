@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, List
+from typing import Any, List, Optional
 
 from uma.retrieve.rlm.context_pack import ContextPack
 from uma.retrieve.rlm.request import RetrievalRequest

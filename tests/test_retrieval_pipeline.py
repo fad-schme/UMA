@@ -8,14 +8,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from uma.common.storage_metadata import EPISODIC_LANE, PROCEDURAL_LANE, PROFILE_LANE, RAW_LANE, SEMANTIC_LANE, WIKI_LANE
-from uma.common.types import Chunk
-from uma.common.types import Chunk, Fact
-from uma.common.types import OwnershipRef, Skill
+from uma.common.types import Chunk, Fact, OwnershipRef, Skill
 from uma.memory.chunk.core import ChunkSearchOptions
 from uma.retrieve.planner import build_retrieval_plan
-from uma.retrieve.policy import RetrievalPolicy
-from uma.retrieve.policy import should_stop
-from uma.retrieve.ranking import Ranker
+from uma.retrieve.policy import RetrievalPolicy, should_stop
 from uma.retrieve.ranking import Ranker, fuse_candidates, rerank_candidates
 from uma.retrieve.rlm.snippet_refiner import SnippetRefiner
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID

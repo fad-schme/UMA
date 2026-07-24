@@ -21,12 +21,9 @@ Coding agent instructions
 from __future__ import annotations
 
 import logging
-import uuid
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Any
 
 from uma.adapters.llm.base import LLMInterface, EmbeddingInterface
-from uma.common.types import Skill
-from uma.common.integrity import hash_skill_content
 
 logger = logging.getLogger(__name__)
 

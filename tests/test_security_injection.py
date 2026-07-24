@@ -10,7 +10,6 @@ from collections import Counter
 from pathlib import Path
 from uma.common.config_types import SecurityConfig
 from uma.common.injection_scan import InjectionScanResult, apply_scan, configure_security, normalize_text, scan_content
-from uma.common.injection_scan import configure_security, scan_content, apply_scan, InjectionScanResult
 import pytest
 import re
 import time
