@@ -1689,3 +1689,48 @@ async def test_semantic_search_drops_vector_candidates_without_committed_sql_row
         query_text=build_fact_embedding_text(fact),
     )
     assert [item.id for item in committed_results] == [fact.id]
+
+
+# ── Fix #1 regression: SQL work is offloaded to a worker thread ────────
+#
+# BaseSQLStore._run_sync must dispatch its callable to a worker thread so
+# that concurrent async callers overlap. If SQL calls were sync-in-async
+# (the pre-fix state), two `gather`-ed calls would serialize on the event
+# loop and take ~2× the single-call time.
+#
+# The threshold is generous (~1.6× the sync body) to tolerate CI scheduler
+# jitter while still failing loudly if the offload regresses to a sync
+# call.
+
+
+@pytest.mark.asyncio
+async def test_run_sync_offloads_blocking_work_to_worker_thread() -> None:
+    """Two concurrent `_run_sync` calls with a 100ms sync body must
+    finish in ~100ms (parallel), not ~200ms (serialized).
+
+    Every store method that touches sqlite3 goes through `_run_sync`;
+    this test is the canonical proof that the offload works. If it
+    regresses, every store method regresses with it.
+    """
+    from uma.stores.base_sql_store import BaseSQLStore
+
+    def _slow_body() -> str:
+        # Sleep executes on the worker thread. If `_run_sync` ran the
+        # callable inline on the event loop, `gather` would serialize
+        # the two invocations.
+        time.sleep(0.10)
+        return "done"
+
+    start = time.monotonic()
+    results = await asyncio.gather(
+        BaseSQLStore._run_sync(_slow_body),
+        BaseSQLStore._run_sync(_slow_body),
+    )
+    elapsed = time.monotonic() - start
+
+    assert results == ["done", "done"]
+    assert elapsed < 0.16, (
+        f"Two 100ms `_run_sync` calls took {elapsed:.3f}s; expected "
+        f"~0.10s if the offload works. This suggests SQL work is "
+        f"running on the event loop again (regression of Fix #1)."
+    )

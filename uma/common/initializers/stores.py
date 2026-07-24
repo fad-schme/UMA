@@ -40,36 +40,46 @@ def initialize_stores(memory: "Any") -> dict:
             if memory._config_dir
             else None
         )
-        db_root_base = (
-            (storage_cfg.get("db_root_base") or "auto")
+        # db_root_base resolves relative paths to a stable anchor.
+        #
+        #   "config" (default) — resolve relative to the YAML file's
+        #       directory. The database travels with the config file and
+        #       is independent of which directory the process was
+        #       launched from.
+        #
+        #   "cwd" — resolve relative to the process working directory.
+        #       Opt-in only. Useful for per-project sandboxes but WILL
+        #       silently create a fresh empty database if the process is
+        #       launched from a different working directory.
+        #
+        # Any other value (including the legacy "auto") is treated as
+        # "config" and logged.
+        raw_base = (
+            storage_cfg.get("db_root_base")
             if isinstance(storage_cfg, dict)
-            else "auto"
+            else None
         )
-        db_root_base = str(db_root_base).strip().lower() or "auto"
-        db_files = ("episodic.db", "semantic.db", "procedural.db")
-
-        def _has_db_files(root: str) -> bool:
-            return any(os.path.exists(os.path.join(root, name)) for name in db_files)
+        db_root_base = str(raw_base or "config").strip().lower() or "config"
 
         if db_root_base in {"config", "config_dir"}:
-            db_root = cfg_root or cwd_root
+            if cfg_root is None:
+                logger.warning(
+                    "storage.db_root_base=%r requires a config file directory but the "
+                    "config was loaded without a source path; falling back to cwd resolution.",
+                    db_root_base,
+                )
+                db_root = cwd_root
+            else:
+                db_root = cfg_root
         elif db_root_base in {"cwd", "workdir"}:
             db_root = cwd_root
-        elif db_root_base == "auto":
-            if os.path.exists(cwd_root) and (
-                _has_db_files(cwd_root) or not (cfg_root and os.path.exists(cfg_root))
-            ):
-                db_root = cwd_root
-            elif cfg_root and os.path.exists(cfg_root):
-                db_root = cfg_root
-            else:
-                db_root = cwd_root
         else:
             logger.warning(
-                "Unknown storage.db_root_base=%r; falling back to auto resolution.",
+                "Unknown storage.db_root_base=%r (accepted values: 'config', 'cwd'); "
+                "falling back to config-relative resolution.",
                 db_root_base,
             )
-            db_root = cwd_root
+            db_root = cfg_root or cwd_root
     db_root = os.path.abspath(db_root.rstrip("/"))
 
     episodic_db_path = os.path.join(db_root, "episodic.db")

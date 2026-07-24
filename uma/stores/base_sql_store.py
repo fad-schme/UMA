@@ -29,11 +29,14 @@ Coding agent instructions
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
-from typing import Any, Iterable, List, Optional, Sequence
+from typing import Any, Awaitable, Callable, Iterable, List, Optional, Sequence, TypeVar
 
 from ..adapters.db.base import DBAdapter, DBConnection
+
+_T = TypeVar("_T")
 
 logger = logging.getLogger(__name__)
 DEFAULT_TENANT_ID = "default"
@@ -157,6 +160,27 @@ class BaseSQLStore:
             conn.rollback()
         except Exception:
             logger.exception("BaseSQLStore._safe_rollback%s: rollback failed.", ctx)
+
+    # ------------------------------------------------------------------ #
+    # Async offload for blocking SQL work
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    async def _run_sync(fn: Callable[..., _T], *args: Any, **kwargs: Any) -> _T:
+        """Run a blocking DB callable on the default thread executor.
+
+        Sqlite3 is a synchronous C API. Every store method that touches the
+        database must go through this helper so the event loop is not
+        blocked for the duration of the query. Concurrent async callers can
+        then genuinely overlap: readers run in parallel under WAL, and
+        writers serialize at the SQLite level rather than at the event
+        loop.
+
+        The whole per-method sync body is wrapped in one `to_thread` call so
+        that the connection is created, used, committed, and closed on the
+        same worker thread (sqlite3 default ``check_same_thread=True``).
+        """
+        return await asyncio.to_thread(fn, *args, **kwargs)
 
     # ------------------------------------------------------------------ #
     # Execution helpers

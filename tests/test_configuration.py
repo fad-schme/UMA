@@ -21,6 +21,7 @@ from uma.common.config_types import RetrievalConfig
 from uma.common.initializers.providers import initialize_embedder, initialize_llm
 from uma.stores.base_sql_store import BaseSQLStore
 import pytest
+import shutil
 import yaml
 
 # ── test_config_types ──────────────────────────────────────────
@@ -542,3 +543,121 @@ def test_safe_rollback_calls_connection(tmp_path):
     conn = _OkConn()
     store._safe_rollback(conn, "test")
     assert conn.called is True
+
+
+# ── Fix #3 regression: relative db_root resolution ─────────────────────
+#
+# `storage.db_root_base` decides whether a relative `db_root` is resolved
+# from the config file's directory (default `"config"`) or the process
+# working directory (`"cwd"`). The pre-fix default was implicitly cwd-
+# biased, which silently created a fresh empty database whenever the
+# process was launched from a different directory.
+#
+# These tests exercise the REAL entry point (`UMAMemory.from_yaml`) with
+# REAL committed fixture YAMLs. The only test-scoped element is the
+# working directory (`tmp_path`) — the DB is created there so the test
+# does not pollute the repo. The fixture yamls are loaded verbatim from
+# `tests/fixtures/db_root/` and copied byte-for-byte into the test's
+# config directory so relative-path resolution has a stable anchor.
+
+_DB_ROOT_FIXTURES = Path(__file__).parent / "fixtures" / "db_root"
+
+
+def _boot_from_fixture(
+    fixture_name: str,
+    *,
+    tmp_path: Path,
+    cwd: Path,
+) -> tuple[UMAMemory, str]:
+    """Copy the fixture into an isolated config dir, boot UMA from the
+    given cwd, and return (memory, resolved_db_root).
+
+    Copying is a real filesystem operation on a real yaml file — it is
+    not a mock. The copy exists solely so that the created DB files land
+    under `tmp_path` rather than under the repo's `tests/fixtures/` tree.
+    """
+    import os
+
+    cfg_dir = tmp_path / "cfg"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    cfg_path = cfg_dir / "uma.yaml"
+    shutil.copy(_DB_ROOT_FIXTURES / fixture_name, cfg_path)
+
+    prev_cwd = os.getcwd()
+    os.chdir(str(cwd))
+    try:
+        memory = UMAMemory.from_yaml(str(cfg_path))
+    finally:
+        os.chdir(prev_cwd)
+
+    # The episodic store's adapter holds the fully-resolved absolute
+    # db_path. That is the observable output of the resolver, so we key
+    # the assertion on it directly.
+    resolved = memory._stores["episodic"]._db_adapter.db_path
+    return memory, os.path.dirname(resolved)
+
+
+def test_db_root_base_default_resolves_relative_to_config_file(tmp_path: Path) -> None:
+    """A relative db_root MUST resolve relative to the config file even
+    when the process is launched from a different working directory.
+
+    Pre-fix, the resolver leaned on the CWD and silently created a fresh
+    empty database if the caller launched UMA from anywhere other than
+    the config-file directory. This locks the new default.
+    """
+    cfg_dir_a = tmp_path / "run-a"
+    cfg_dir_b = tmp_path / "run-b"
+    other_cwd_a = tmp_path / "elsewhere-a"
+    other_cwd_a.mkdir()
+    other_cwd_b = tmp_path / "elsewhere-b"
+    other_cwd_b.mkdir()
+
+    mem_a, root_a = _boot_from_fixture(
+        "config_mode.yaml", tmp_path=cfg_dir_a, cwd=cfg_dir_a
+    )
+    mem_b, root_b = _boot_from_fixture(
+        "config_mode.yaml", tmp_path=cfg_dir_b, cwd=other_cwd_b
+    )
+    try:
+        # Each run must resolve to the same location relative to ITS
+        # config directory — independent of the process working
+        # directory at launch time.
+        assert root_a == str((cfg_dir_a / "cfg" / ".uma" / "db").resolve())
+        assert root_b == str((cfg_dir_b / "cfg" / ".uma" / "db").resolve())
+    finally:
+        mem_a.shutdown()
+        mem_b.shutdown()
+
+
+def test_db_root_base_cwd_still_honors_working_directory(tmp_path: Path) -> None:
+    """`db_root_base: 'cwd'` is opt-in. It intentionally follows the
+    working directory — the whole point is per-project sandboxes.
+    """
+    cfg_dir = tmp_path / "cfg-root"
+    sandbox_a = tmp_path / "sandbox-a"
+    sandbox_a.mkdir()
+    sandbox_b = tmp_path / "sandbox-b"
+    sandbox_b.mkdir()
+
+    mem_a, root_a = _boot_from_fixture(
+        "cwd_mode.yaml", tmp_path=cfg_dir, cwd=sandbox_a
+    )
+    try:
+        assert root_a == str((sandbox_a / ".uma" / "db").resolve())
+    finally:
+        mem_a.shutdown()
+
+    # Re-boot from a DIFFERENT cwd; must land in a DIFFERENT db_root.
+    # Use a fresh cfg dir so the second UMAMemory doesn't collide with
+    # the first on the same sqlite files.
+    cfg_dir_b = tmp_path / "cfg-root-b"
+    mem_b, root_b = _boot_from_fixture(
+        "cwd_mode.yaml", tmp_path=cfg_dir_b, cwd=sandbox_b
+    )
+    try:
+        assert root_b == str((sandbox_b / ".uma" / "db").resolve())
+        assert root_a != root_b, (
+            "db_root_base='cwd' MUST follow the process working directory."
+        )
+    finally:
+        mem_b.shutdown()

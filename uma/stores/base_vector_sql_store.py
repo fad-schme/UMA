@@ -308,30 +308,32 @@ class BaseVectorSQLStore(BaseSQLStore):
             )
 
         ctx = f" [{log_context}]" if log_context else ""
-        conn = self._conn()
+
+        def _sync() -> Dict[str, Any]:
+            conn = self._conn()
+            try:
+                placeholders = ",".join("?" for _ in ids)
+                table = self._validated_table_name()
+                id_col = self._validated_id_column()
+                # nosec B608 — table/_id_col from _validated_table/id_column (frozenset-checked);
+                # placeholders is "?,?,?" only — all values bound as ?.
+                sql = (
+                    f"SELECT * FROM {table} "
+                    f"WHERE {id_col} IN ({placeholders}) "
+                    f"AND tenant_id=? AND owner_type=? AND owner_id=? "
+                    f"AND quarantined_at IS NULL"
+                )
+                params: List[Any] = list(ids) + [tenant_id, owner_type, owner_id]
+                rows = self._query_all(conn, sql, params, log_context)
+                return {r[id_col]: r for r in rows}
+            finally:
+                conn.close()
 
         try:
-            placeholders = ",".join("?" for _ in ids)
-            table = self._validated_table_name()
-            id_col = self._validated_id_column()
-            # nosec B608 — table/_id_col from _validated_table/id_column (frozenset-checked);
-            # placeholders is "?,?,?" only — all values bound as ?.
-            sql = (
-                f"SELECT * FROM {table} "
-                f"WHERE {id_col} IN ({placeholders}) "
-                f"AND tenant_id=? AND owner_type=? AND owner_id=? "
-                f"AND quarantined_at IS NULL"
-            )
-            params: List[Any] = list(ids) + [tenant_id, owner_type, owner_id]
-
-            rows = self._query_all(conn, sql, params, log_context)
-            row_map = {r[id_col]: r for r in rows}
-
+            row_map = await self._run_sync(_sync)
         except Exception:
             logger.exception("%s SQL fetch failed%s", self.__class__.__name__, ctx)
             return []
-        finally:
-            conn.close()
 
         ordered = []
         for sid in ids:
@@ -507,39 +509,43 @@ class BaseVectorSQLStore(BaseSQLStore):
     ) -> bool:
         """Set quarantined_at and append an audit log entry. Returns True if updated."""
         self._require_scope(tenant_id, owner_type, owner_id)
-        conn = self._conn()
-        try:
-            row = self._query_one(
-                conn,
-                f"SELECT meta FROM {self._validated_table_name()} WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",  # nosec B608 — table name from frozenset-validated property
-                params=[record_id, tenant_id, owner_type, owner_id],
-                log_context=f"quarantine_{self._table_name}_fetch",
-            )
-            if row is None:
-                return False
+
+        def _sync() -> bool:
+            conn = self._conn()
             try:
-                meta = json.loads(row["meta"]) if row["meta"] else {}
+                row = self._query_one(
+                    conn,
+                    f"SELECT meta FROM {self._validated_table_name()} WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",  # nosec B608 — table name from frozenset-validated property
+                    params=[record_id, tenant_id, owner_type, owner_id],
+                    log_context=f"quarantine_{self._table_name}_fetch",
+                )
+                if row is None:
+                    return False
+                try:
+                    meta = json.loads(row["meta"]) if row["meta"] else {}
+                except Exception:
+                    meta = {}
+                meta.setdefault("security", {}).setdefault("audit_log", []).append(audit_entry)
+                self._execute(
+                    conn,
+                    f"UPDATE {self._validated_table_name()} SET quarantined_at=?, meta=? WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",  # nosec B608 — table name from frozenset-validated property
+                    params=[quarantined_at, json.dumps(meta), record_id, tenant_id, owner_type, owner_id],
+                    log_context=f"quarantine_{self._table_name}",
+                )
+                conn.commit()
+                logger.info(
+                    "%s: quarantined record id=%s owner=%s:%s",
+                    self.__class__.__name__, record_id, owner_type, owner_id,
+                )
+                return True
             except Exception:
-                meta = {}
-            meta.setdefault("security", {}).setdefault("audit_log", []).append(audit_entry)
-            self._execute(
-                conn,
-                f"UPDATE {self._validated_table_name()} SET quarantined_at=?, meta=? WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",  # nosec B608 — table name from frozenset-validated property
-                params=[quarantined_at, json.dumps(meta), record_id, tenant_id, owner_type, owner_id],
-                log_context=f"quarantine_{self._table_name}",
-            )
-            conn.commit()
-            logger.info(
-                "%s: quarantined record id=%s owner=%s:%s",
-                self.__class__.__name__, record_id, owner_type, owner_id,
-            )
-            return True
-        except Exception:
-            self._safe_rollback(conn, f"quarantine_{self._table_name}")
-            logger.exception("%s.quarantine_record failed id=%s", self.__class__.__name__, record_id)
-            raise
-        finally:
-            conn.close()
+                self._safe_rollback(conn, f"quarantine_{self._table_name}")
+                logger.exception("%s.quarantine_record failed id=%s", self.__class__.__name__, record_id)
+                raise
+            finally:
+                conn.close()
+
+        return await self._run_sync(_sync)
 
     async def reinstate_quarantined_record(
         self,
@@ -552,36 +558,40 @@ class BaseVectorSQLStore(BaseSQLStore):
     ) -> bool:
         """Clear quarantined_at and append an audit log entry. Returns True if updated."""
         self._require_scope(tenant_id, owner_type, owner_id)
-        conn = self._conn()
-        try:
-            row = self._query_one(
-                conn,
-                f"SELECT meta FROM {self._validated_table_name()} WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",  # nosec B608 — table name from frozenset-validated property
-                params=[record_id, tenant_id, owner_type, owner_id],
-                log_context=f"reinstate_{self._table_name}_fetch",
-            )
-            if row is None:
-                return False
+
+        def _sync() -> bool:
+            conn = self._conn()
             try:
-                meta = json.loads(row["meta"]) if row["meta"] else {}
+                row = self._query_one(
+                    conn,
+                    f"SELECT meta FROM {self._validated_table_name()} WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",  # nosec B608 — table name from frozenset-validated property
+                    params=[record_id, tenant_id, owner_type, owner_id],
+                    log_context=f"reinstate_{self._table_name}_fetch",
+                )
+                if row is None:
+                    return False
+                try:
+                    meta = json.loads(row["meta"]) if row["meta"] else {}
+                except Exception:
+                    meta = {}
+                meta.setdefault("security", {}).setdefault("audit_log", []).append(audit_entry)
+                self._execute(
+                    conn,
+                    f"UPDATE {self._validated_table_name()} SET quarantined_at=NULL, meta=? WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",  # nosec B608 — table name from frozenset-validated property
+                    params=[json.dumps(meta), record_id, tenant_id, owner_type, owner_id],
+                    log_context=f"reinstate_{self._table_name}",
+                )
+                conn.commit()
+                logger.info(
+                    "%s: reinstated record id=%s owner=%s:%s",
+                    self.__class__.__name__, record_id, owner_type, owner_id,
+                )
+                return True
             except Exception:
-                meta = {}
-            meta.setdefault("security", {}).setdefault("audit_log", []).append(audit_entry)
-            self._execute(
-                conn,
-                f"UPDATE {self._validated_table_name()} SET quarantined_at=NULL, meta=? WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",  # nosec B608 — table name from frozenset-validated property
-                params=[json.dumps(meta), record_id, tenant_id, owner_type, owner_id],
-                log_context=f"reinstate_{self._table_name}",
-            )
-            conn.commit()
-            logger.info(
-                "%s: reinstated record id=%s owner=%s:%s",
-                self.__class__.__name__, record_id, owner_type, owner_id,
-            )
-            return True
-        except Exception:
-            self._safe_rollback(conn, f"reinstate_{self._table_name}")
-            logger.exception("%s.reinstate_quarantined_record failed id=%s", self.__class__.__name__, record_id)
-            raise
-        finally:
-            conn.close()
+                self._safe_rollback(conn, f"reinstate_{self._table_name}")
+                logger.exception("%s.reinstate_quarantined_record failed id=%s", self.__class__.__name__, record_id)
+                raise
+            finally:
+                conn.close()
+
+        return await self._run_sync(_sync)

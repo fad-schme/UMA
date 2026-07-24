@@ -13,10 +13,17 @@ profile: lite
 
 # Persistent storage for long-term memories and document chunks.
 storage:
-  # Relative paths are resolved from the process working directory because
-  # db_root_base is "cwd". Use "config" to resolve from this file's directory.
+  # Relative paths are resolved from THIS file's directory because
+  # db_root_base is "config". This keeps the database location stable no
+  # matter which working directory you launch the process from — the DB
+  # travels with the config file.
+  #
+  # Set db_root_base: "cwd" only if you want the database to live under
+  # the process working directory. That mode is useful for per-project
+  # sandboxes but will silently create a fresh empty DB if you launch the
+  # process from a different directory.
   db_root: ".uma/db"
-  db_root_base: "cwd"
+  db_root_base: "config"
   # SQLite is the built-in SQL backend.
   sql_backend: "sqlite"
   # LanceDB is the default local vector index. A custom backend must use a

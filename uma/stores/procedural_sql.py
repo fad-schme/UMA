@@ -276,136 +276,139 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         """
         self._validate_skill(skill)
 
-        conn = self._conn()
-        now = datetime.utcnow().isoformat()
-
-        try:
-            normalized_meta = normalize_skill_metadata(
-                skill.meta,
-                skill_id=skill.id,
-                owner_type=skill.owner_type,
-                owner_id=skill.owner_id,
-                created_at=skill.created_at,
-                updated_at=skill.updated_at,
-            )
-            payload = {
-                "id": skill.id,
-                "name": skill.name,
-                "trigger_phrases": json.dumps(skill.trigger_phrases),
-                "trigger_patterns": json.dumps(skill.trigger_patterns),
-                "plan": json.dumps(skill.plan),
-                "tools": json.dumps(skill.tools),
-                "example": skill.example,
-                "meta": json.dumps(normalized_meta),
-                "created_at": now,
-                "updated_at": now,
-                "tenant_id": getattr(skill, "tenant_id", None) or DEFAULT_TENANT_ID,
-                "owner_type": skill.owner_type,
-                "owner_id": skill.owner_id,
-                "workspace_id": getattr(skill, "workspace_id", None),
-                "origin_agent_id": getattr(skill, "origin_agent_id", None),
-                "origin_user_id": getattr(skill, "origin_user_id", None),
-                "origin_session_id": getattr(skill, "origin_session_id", None),
-                "scope_model_version": getattr(skill, "scope_model_version", None) or SCOPE_MODEL_VERSION,
-                "trust_score": float(_ts if (_ts := getattr(skill, "trust_score", None)) is not None else 0.5),
-                "content_hash": getattr(skill, "content_hash", None),
-                "quarantined_at": (
-                    getattr(skill, "quarantined_at").isoformat()
-                    if getattr(skill, "quarantined_at", None) is not None
-                    else None
-                ),
-            }
-
-            self._execute(
-                conn,
-                """
-                INSERT INTO skills (
-                    id, name, trigger_phrases, trigger_patterns, plan,
-                    tools, example, meta, created_at, updated_at, tenant_id,
-                    owner_type, owner_id, workspace_id, origin_agent_id,
-                    origin_user_id, origin_session_id, scope_model_version,
-                    trust_score, content_hash, quarantined_at
-                )
-                VALUES (
-                    :id, :name, :trigger_phrases, :trigger_patterns, :plan,
-                    :tools, :example, :meta, :created_at, :updated_at, :tenant_id,
-                    :owner_type, :owner_id, :workspace_id, :origin_agent_id,
-                    :origin_user_id, :origin_session_id, :scope_model_version,
-                    :trust_score, :content_hash, :quarantined_at
-                )
-                ON CONFLICT(id) DO UPDATE SET
-                    name=excluded.name,
-                    trigger_phrases=excluded.trigger_phrases,
-                    trigger_patterns=excluded.trigger_patterns,
-                    plan=excluded.plan,
-                    tools=excluded.tools,
-                    example=excluded.example,
-                    meta=excluded.meta,
-                    updated_at=excluded.updated_at,
-                    tenant_id=excluded.tenant_id,
-                    owner_type=excluded.owner_type,
-                    owner_id=excluded.owner_id,
-                    workspace_id=excluded.workspace_id,
-                    origin_agent_id=excluded.origin_agent_id,
-                    origin_user_id=excluded.origin_user_id,
-                    origin_session_id=excluded.origin_session_id,
-                    scope_model_version=excluded.scope_model_version,
-                    trust_score=excluded.trust_score,
-                    content_hash=excluded.content_hash,
-                    quarantined_at=excluded.quarantined_at
-                """,
-                params=payload,
-                log_context="add_skill",
-            )
-            try:
-                # C1: isolation must be populated by upstream validation
-                # (DAT invariant). We refuse to fall back to empty strings
-                # here — that would silently break isolation at the
-                # vector layer.
-                resolved_tenant = getattr(skill, "tenant_id", None) or DEFAULT_TENANT_ID
-                self.vector_index.upsert(
-                    ids=[skill.id],
-                    vectors=[embedding],
-                    tenant_ids=[resolved_tenant],
-                    owner_types=[skill.owner_type],
-                    owner_ids=[skill.owner_id],
-                    extra_metadata=[{
-                        "name": skill.name,
-                        "kb_lane": normalized_meta.get("kb_lane"),
-                        "scope_key": f"{skill.owner_type}:{skill.owner_id}",
-                    }],
-                )
-            except Exception:
-                logger.exception(
-                    "ProceduralSQLStore: vector upsert failed for skill id=%s",
-                    skill.id,
-                )
-                self._safe_rollback(conn, "add_skill")
-                raise
+        def _sync():
+            conn = self._conn()
+            now = datetime.utcnow().isoformat()
 
             try:
-                conn.commit()
-            except Exception:
-                self._safe_rollback(conn, "add_skill_commit")
+                normalized_meta = normalize_skill_metadata(
+                    skill.meta,
+                    skill_id=skill.id,
+                    owner_type=skill.owner_type,
+                    owner_id=skill.owner_id,
+                    created_at=skill.created_at,
+                    updated_at=skill.updated_at,
+                )
+                payload = {
+                    "id": skill.id,
+                    "name": skill.name,
+                    "trigger_phrases": json.dumps(skill.trigger_phrases),
+                    "trigger_patterns": json.dumps(skill.trigger_patterns),
+                    "plan": json.dumps(skill.plan),
+                    "tools": json.dumps(skill.tools),
+                    "example": skill.example,
+                    "meta": json.dumps(normalized_meta),
+                    "created_at": now,
+                    "updated_at": now,
+                    "tenant_id": getattr(skill, "tenant_id", None) or DEFAULT_TENANT_ID,
+                    "owner_type": skill.owner_type,
+                    "owner_id": skill.owner_id,
+                    "workspace_id": getattr(skill, "workspace_id", None),
+                    "origin_agent_id": getattr(skill, "origin_agent_id", None),
+                    "origin_user_id": getattr(skill, "origin_user_id", None),
+                    "origin_session_id": getattr(skill, "origin_session_id", None),
+                    "scope_model_version": getattr(skill, "scope_model_version", None) or SCOPE_MODEL_VERSION,
+                    "trust_score": float(_ts if (_ts := getattr(skill, "trust_score", None)) is not None else 0.5),
+                    "content_hash": getattr(skill, "content_hash", None),
+                    "quarantined_at": (
+                        getattr(skill, "quarantined_at").isoformat()
+                        if getattr(skill, "quarantined_at", None) is not None
+                        else None
+                    ),
+                }
+
+                self._execute(
+                    conn,
+                    """
+                    INSERT INTO skills (
+                        id, name, trigger_phrases, trigger_patterns, plan,
+                        tools, example, meta, created_at, updated_at, tenant_id,
+                        owner_type, owner_id, workspace_id, origin_agent_id,
+                        origin_user_id, origin_session_id, scope_model_version,
+                        trust_score, content_hash, quarantined_at
+                    )
+                    VALUES (
+                        :id, :name, :trigger_phrases, :trigger_patterns, :plan,
+                        :tools, :example, :meta, :created_at, :updated_at, :tenant_id,
+                        :owner_type, :owner_id, :workspace_id, :origin_agent_id,
+                        :origin_user_id, :origin_session_id, :scope_model_version,
+                        :trust_score, :content_hash, :quarantined_at
+                    )
+                    ON CONFLICT(id) DO UPDATE SET
+                        name=excluded.name,
+                        trigger_phrases=excluded.trigger_phrases,
+                        trigger_patterns=excluded.trigger_patterns,
+                        plan=excluded.plan,
+                        tools=excluded.tools,
+                        example=excluded.example,
+                        meta=excluded.meta,
+                        updated_at=excluded.updated_at,
+                        tenant_id=excluded.tenant_id,
+                        owner_type=excluded.owner_type,
+                        owner_id=excluded.owner_id,
+                        workspace_id=excluded.workspace_id,
+                        origin_agent_id=excluded.origin_agent_id,
+                        origin_user_id=excluded.origin_user_id,
+                        origin_session_id=excluded.origin_session_id,
+                        scope_model_version=excluded.scope_model_version,
+                        trust_score=excluded.trust_score,
+                        content_hash=excluded.content_hash,
+                        quarantined_at=excluded.quarantined_at
+                    """,
+                    params=payload,
+                    log_context="add_skill",
+                )
                 try:
-                    self.vector_index.delete([skill.id])
+                    # C1: isolation must be populated by upstream validation
+                    # (DAT invariant). We refuse to fall back to empty strings
+                    # here — that would silently break isolation at the
+                    # vector layer.
+                    resolved_tenant = getattr(skill, "tenant_id", None) or DEFAULT_TENANT_ID
+                    self.vector_index.upsert(
+                        ids=[skill.id],
+                        vectors=[embedding],
+                        tenant_ids=[resolved_tenant],
+                        owner_types=[skill.owner_type],
+                        owner_ids=[skill.owner_id],
+                        extra_metadata=[{
+                            "name": skill.name,
+                            "kb_lane": normalized_meta.get("kb_lane"),
+                            "scope_key": f"{skill.owner_type}:{skill.owner_id}",
+                        }],
+                    )
                 except Exception:
                     logger.exception(
-                        "ProceduralSQLStore: vector delete failed after commit error id=%s",
+                        "ProceduralSQLStore: vector upsert failed for skill id=%s",
                         skill.id,
                     )
+                    self._safe_rollback(conn, "add_skill")
+                    raise
+
+                try:
+                    conn.commit()
+                except Exception:
+                    self._safe_rollback(conn, "add_skill_commit")
+                    try:
+                        self.vector_index.delete([skill.id])
+                    except Exception:
+                        logger.exception(
+                            "ProceduralSQLStore: vector delete failed after commit error id=%s",
+                            skill.id,
+                        )
+                    raise
+
+                logger.info("ProceduralSQLStore: upserted skill id=%s", skill.id)
+                return skill
+
+            except Exception:
+                logger.exception("ProceduralSQLStore.add_skill failed for id=%s", skill.id)
                 raise
 
-            logger.info("ProceduralSQLStore: upserted skill id=%s", skill.id)
-            return skill
+            finally:
+                conn.close()
 
-        except Exception:
-            logger.exception("ProceduralSQLStore.add_skill failed for id=%s", skill.id)
-            raise
 
-        finally:
-            conn.close()
-
+        return await self._run_sync(_sync)
     async def get_skill(
         self,
         skill_id: str,
@@ -420,24 +423,26 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         if not tenant_id or not owner_type or not owner_id:
             logger.error("ProceduralSQLStore.get_skill requires tenant_id, owner_type and owner_id")
             raise ValueError("ProceduralSQLStore.get_skill requires tenant_id, owner_type and owner_id")
-        conn = self._conn()
-        try:
-            rows = self._query_all(
-                conn,
-                "SELECT * FROM skills WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
-                params=[skill_id, tenant_id, owner_type, owner_id],
-                log_context="get_skill",
-            )
-            if not rows:
-                return None
+        def _sync():
+            conn = self._conn()
+            try:
+                rows = self._query_all(
+                    conn,
+                    "SELECT * FROM skills WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
+                    params=[skill_id, tenant_id, owner_type, owner_id],
+                    log_context="get_skill",
+                )
+                if not rows:
+                    return None
 
-            return self._row_to_object(rows[0])
-        except Exception:
-            logger.exception("ProceduralSQLStore.get_skill failed for id=%s", skill_id)
-            raise
-        finally:
-            conn.close()
+                return self._row_to_object(rows[0])
+            except Exception:
+                logger.exception("ProceduralSQLStore.get_skill failed for id=%s", skill_id)
+                raise
+            finally:
+                conn.close()
 
+        return await self._run_sync(_sync)
     async def fetch_skills_by_ids(
         self,
         ids: List[str],
@@ -455,34 +460,36 @@ class ProceduralSQLStore(BaseVectorSQLStore):
             logger.error("ProceduralSQLStore.fetch_skills_by_ids requires tenant_id, owner_type and owner_id")
             raise ValueError("ProceduralSQLStore.fetch_skills_by_ids requires tenant_id, owner_type and owner_id")
 
-        conn = self._conn()
-        try:
-            placeholders = ",".join("?" for _ in ids)
-            params: List[Any] = list(ids) + [tenant_id, owner_type, owner_id]
-            # nosec B608 — placeholders is "?,?,?" only; all values bound as ?
-            sql = f"""
-                SELECT * FROM skills
-                WHERE id IN ({placeholders})
-                  AND tenant_id = ?
-                  AND owner_type = ?
-                  AND owner_id = ?
-                  AND quarantined_at IS NULL
-            """
-            rows = self._query_all(conn, sql, params=params, log_context="fetch_skills_by_ids")
-            row_map = {r["id"]: r for r in rows}
-            ordered: List[Skill] = []
-            for sid in ids:
-                row = row_map.get(sid)
-                if row is None:
-                    continue
-                ordered.append(self._row_to_object(row))
-            return ordered
-        except Exception:
-            logger.exception("ProceduralSQLStore.fetch_skills_by_ids failed")
-            raise
-        finally:
-            conn.close()
+        def _sync():
+            conn = self._conn()
+            try:
+                placeholders = ",".join("?" for _ in ids)
+                params: List[Any] = list(ids) + [tenant_id, owner_type, owner_id]
+                # nosec B608 — placeholders is "?,?,?" only; all values bound as ?
+                sql = f"""
+                    SELECT * FROM skills
+                    WHERE id IN ({placeholders})
+                      AND tenant_id = ?
+                      AND owner_type = ?
+                      AND owner_id = ?
+                      AND quarantined_at IS NULL
+                """
+                rows = self._query_all(conn, sql, params=params, log_context="fetch_skills_by_ids")
+                row_map = {r["id"]: r for r in rows}
+                ordered: List[Skill] = []
+                for sid in ids:
+                    row = row_map.get(sid)
+                    if row is None:
+                        continue
+                    ordered.append(self._row_to_object(row))
+                return ordered
+            except Exception:
+                logger.exception("ProceduralSQLStore.fetch_skills_by_ids failed")
+                raise
+            finally:
+                conn.close()
 
+        return await self._run_sync(_sync)
     async def list_skills(
         self,
         *,
@@ -498,27 +505,29 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         if not tenant_id or not owner_type or not owner_id:
             logger.error("ProceduralSQLStore.list_skills requires tenant_id, owner_type and owner_id")
             raise ValueError("ProceduralSQLStore.list_skills requires tenant_id, owner_type and owner_id")
-        conn = self._conn()
-        try:
-            quarantine_clause = _NO_FILTER if include_quarantined else _QUARANTINE_FILTER
-            sql = f"SELECT * FROM skills WHERE tenant_id=? AND owner_type=? AND owner_id=?{quarantine_clause} ORDER BY updated_at DESC"  # nosec B608 — quarantine_clause is _QUARANTINE_FILTER or _NO_FILTER (module constants)
-            params_list: list = [tenant_id, owner_type, owner_id]
-            if limit:
-                sql += " LIMIT ?"
-                params_list.append(int(limit))
-            rows = self._query_all(
-                conn,
-                sql,
-                params=params_list,
-                log_context="list_skills",
-            )
-            return [self._row_to_object(r) for r in rows]
-        except Exception:
-            logger.exception("ProceduralSQLStore.list_skills failed.")
-            raise
-        finally:
-            conn.close()
+        def _sync():
+            conn = self._conn()
+            try:
+                quarantine_clause = _NO_FILTER if include_quarantined else _QUARANTINE_FILTER
+                sql = f"SELECT * FROM skills WHERE tenant_id=? AND owner_type=? AND owner_id=?{quarantine_clause} ORDER BY updated_at DESC"  # nosec B608 — quarantine_clause is _QUARANTINE_FILTER or _NO_FILTER (module constants)
+                params_list: list = [tenant_id, owner_type, owner_id]
+                if limit:
+                    sql += " LIMIT ?"
+                    params_list.append(int(limit))
+                rows = self._query_all(
+                    conn,
+                    sql,
+                    params=params_list,
+                    log_context="list_skills",
+                )
+                return [self._row_to_object(r) for r in rows]
+            except Exception:
+                logger.exception("ProceduralSQLStore.list_skills failed.")
+                raise
+            finally:
+                conn.close()
 
+        return await self._run_sync(_sync)
     async def delete_skill(
         self,
         skill_id: str,
@@ -533,43 +542,45 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         if not tenant_id or not owner_type or not owner_id:
             logger.error("ProceduralSQLStore.delete_skill requires tenant_id, owner_type and owner_id")
             raise ValueError("ProceduralSQLStore.delete_skill requires tenant_id, owner_type and owner_id")
-        conn = self._conn()
-        try:
-            self._execute(
-                conn,
-                "DELETE FROM skills WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
-                params=[skill_id, tenant_id, owner_type, owner_id],
-                log_context="delete_skill",
-            )
-            conn.commit()
-
+        def _sync():
+            conn = self._conn()
             try:
-                self.vector_index.delete(ids=[skill_id])
-            except Exception:
-                logger.exception(
-                    "ProceduralSQLStore.delete_skill: vector delete failed id=%s",
+                self._execute(
+                    conn,
+                    "DELETE FROM skills WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
+                    params=[skill_id, tenant_id, owner_type, owner_id],
+                    log_context="delete_skill",
+                )
+                conn.commit()
+
+                try:
+                    self.vector_index.delete(ids=[skill_id])
+                except Exception:
+                    logger.exception(
+                        "ProceduralSQLStore.delete_skill: vector delete failed id=%s",
+                        skill_id,
+                    )
+
+                logger.info(
+                    "ProceduralSQLStore: deleted skill id=%s owner=%s:%s",
                     skill_id,
+                    owner_type,
+                    owner_id,
                 )
 
-            logger.info(
-                "ProceduralSQLStore: deleted skill id=%s owner=%s:%s",
-                skill_id,
-                owner_type,
-                owner_id,
-            )
+            except Exception:
+                self._safe_rollback(conn, "delete_skill")
+                logger.exception(
+                    "ProceduralSQLStore.delete_skill failed id=%s owner=%s:%s",
+                    skill_id,
+                    owner_type,
+                    owner_id,
+                )
+                raise
+            finally:
+                conn.close()
 
-        except Exception:
-            self._safe_rollback(conn, "delete_skill")
-            logger.exception(
-                "ProceduralSQLStore.delete_skill failed id=%s owner=%s:%s",
-                skill_id,
-                owner_type,
-                owner_id,
-            )
-            raise
-        finally:
-            conn.close()
-
+        return await self._run_sync(_sync)
     # ------------------------------------------------------------------ #
     # Semantic Search
     # ------------------------------------------------------------------ #

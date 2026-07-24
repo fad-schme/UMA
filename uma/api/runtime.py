@@ -8,6 +8,7 @@ runtime internally.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import threading
@@ -298,7 +299,7 @@ class UMARuntime:
             self._retrieval_audit_store_cached = None
             return None
 
-    def _append_retrieval_audit_row(
+    async def _append_retrieval_audit_row(
         self,
         *,
         runtime_context: RuntimeContext,
@@ -312,6 +313,9 @@ class UMARuntime:
         Fail-soft: any exception logs at WARNING and is swallowed. The
         retrieval result has already been built; an audit-log failure
         does not invalidate it.
+
+        The sqlite write is dispatched to a worker thread so the event
+        loop is not blocked by the audit-log I/O.
         """
         try:
             store = self._get_retrieval_audit_store()
@@ -347,7 +351,7 @@ class UMARuntime:
                 refined_via_llm=False,
                 pruned_via_llm=bool(result.get("_pruned_via_llm", False)),
             )
-            store.append(row)
+            await asyncio.to_thread(store.append, row)
         except Exception:
             logger.warning(
                 "retrieval audit: failed to write row (continuing)",
@@ -648,7 +652,7 @@ class UMARuntime:
             # "scan was skipped."
             result["query_scan_severity"] = query_scan_severity
             # CR3: write a structured audit log row for this retrieval.
-            self._append_retrieval_audit_row(
+            await self._append_retrieval_audit_row(
                 runtime_context=runtime_context,
                 query_text=normalized_query_text,
                 scan_severity=query_scan_severity,

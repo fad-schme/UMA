@@ -48,7 +48,7 @@ Data is stored under `.uma/` in the working directory:
 ```yaml
 storage:
   db_root: ".uma/db"
-  db_root_base: "cwd"
+  db_root_base: "config"
   sql_backend: "sqlite"
 
   # Embedded LanceDB (default):
@@ -70,6 +70,13 @@ storage:
   graph_config:
     enabled: false
 ```
+
+**`db_root_base`** decides where UMA looks for a relative `db_root`. Two values are accepted:
+
+- **`"config"` (default, recommended)** — relative paths are resolved from the directory of the YAML file itself. The database follows the config file. This is the safe choice for production: launching the process from any working directory reaches the same database.
+- **`"cwd"`** — relative paths are resolved from the process working directory. Useful for per-project sandboxes where each `cd` intentionally selects a different UMA instance. **Warning:** launching the process from a directory that doesn't already contain the DB will silently create a fresh empty one. If a user reports "UMA lost all my memories," the first thing to check is whether they launched from a different `cwd` with `db_root_base: "cwd"` set.
+
+If `db_root` is an absolute path, `db_root_base` has no effect.
 
 ### Working Memory
 
@@ -174,7 +181,6 @@ retrieval:
     max_semantic: 4
     max_chunks: 2
     snippet_max_chars: 600
-    snippet_refiner_enabled: true
     snippet_refiner_top_k: 6
     max_procedural: 2
     include_working_memory: true
@@ -246,14 +252,6 @@ features:
 ```
 
 To disable procedural memory: set `enabled: false` or remove the entry.
-
-### Pipeline
-
-```yaml
-pipeline:
-  defer_post_turn: false        # if true, post-turn processing runs in background queue
-  post_turn_queue_max: 200      # max queued post-turn jobs (when deferred)
-```
 
 ---
 

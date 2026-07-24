@@ -137,7 +137,30 @@ class UMAMemory:
 
     @classmethod
     def from_yaml(cls, path: str) -> "UMAMemory":
-        """Create a UMAMemory instance from YAML config."""
+        """Create a UMAMemory instance from a YAML config file.
+
+        Parameters
+        ----------
+        path : str
+            Filesystem path to a UMA config YAML. May be absolute or
+            relative to the process working directory.
+
+        Storage-path resolution
+        -----------------------
+        By default, relative `storage.db_root` values are resolved
+        relative to the CONFIG FILE'S directory (``db_root_base:
+        "config"``). This keeps the database in a stable location no
+        matter which directory the process is launched from.
+
+        .. warning::
+           If your YAML sets ``storage.db_root_base: "cwd"``, relative
+           db_root values are resolved from the process working
+           directory instead. Launching the process from a different
+           directory will silently create a fresh empty database — the
+           existing memories will appear "lost" until you return to the
+           original working directory. Prefer absolute paths or
+           ``db_root_base: "config"`` for production deployments.
+        """
         cfg = UMAConfig.load_yaml(path)
         mem = cls(cfg, config_path=path)
 

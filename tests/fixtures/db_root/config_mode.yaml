@@ -1,0 +1,68 @@
+# Fixture: relative db_root resolved against the config file's directory.
+# Used by test_db_root_base_default_resolves_relative_to_config_file to
+# lock the P1 default: launching UMA from any working directory MUST
+# resolve to the same database.
+profile: lite
+
+storage:
+  db_root: ".uma/db"
+  db_root_base: "config"
+  sql_backend: "sqlite"
+  vector_backend: "inmemory"
+  vector_config: {}
+  graph_backend: "disabled"
+  graph_config:
+    enabled: false
+
+working_memory:
+  max_tokens: 512
+  warning_ratio: 0.7
+  hard_limit_ratio: 0.95
+  chunk_size: 10
+  keep_recent_messages: 2
+  keep_recent_token_fraction: 0.1
+
+embedding:
+  provider: "ollama"
+  model: "nomic-embed-text"
+  dimension: 64
+  config:
+    host: "http://localhost:11434"
+
+llms:
+  agent:
+    provider: "ollama"
+    model: "llama3"
+    config:
+      host: "http://localhost:11434"
+  uma:
+    provider: "ollama"
+    model: "llama3"
+    config:
+      host: "http://localhost:11434"
+
+retrieval:
+  max_episodes: 5
+  max_facts: 10
+  max_skills: 5
+  max_graph_items: 5
+  max_evidence_chunks: 6
+  strict: true
+  hybrid:
+    enabled: true
+    top_k_dense: 0
+    top_k_sparse: 15
+    fusion_strategy: "rrf"
+  context:
+    max_working_messages: 6
+    max_episodic: 2
+    max_semantic: 4
+    max_chunks: 2
+    max_procedural: 2
+    max_graph: 3
+    include_working_memory: true
+    include_episodic: true
+    include_graph: false
+    include_procedural: true
+    snippet_max_chars: 240
+    snippet_refiner_top_k: 6

@@ -328,8 +328,8 @@ Promotion is opt-in. The default behavior is session-local; this matches "the us
 ## Performance Notes
 
 - `from_yaml` returns when retrieval is ready; ingestion warms up in the background. Calling `ingest_document` immediately after `from_yaml` is safe — it waits internally.
-- `process_turn` is async but does meaningful work (LLM fact extraction, embedding). Don't await it on the critical reply path if latency matters; defer with `pipeline.defer_post_turn: true` in your YAML.
-- `retrieve_context` typically runs in 50-300 ms depending on lane filter and corpus size on the Lite profile. The slow path is LLM-driven snippet refinement; disable it (`snippet_refiner_enabled: false`) if you don't need it.
+- `process_turn` is async but does meaningful work (LLM fact extraction, embedding). Don't `await` it on the critical reply path if latency matters; run it as a background task with `asyncio.create_task(memory.process_turn(...))` after you've sent the reply.
+- `retrieve_context` typically runs in 50-300 ms depending on lane filter and corpus size. Adjust `retrieval.context.snippet_max_chars` and the `max_*` caps to trim the response envelope.
 - The retrieval audit table grows ~1 row per retrieve call. Prune or rotate periodically if you serve a high volume.
 
 ---

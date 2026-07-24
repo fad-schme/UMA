@@ -229,157 +229,160 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         Insert or update an episode record + semantic embedding.
 
         """
-        conn = self._conn()
-        try:
-            owner_type = getattr(ep, "owner_type", "user") or "user"
-            owner_id = getattr(ep, "owner_id", "")
-            tenant_id = getattr(ep, "tenant_id", None) or DEFAULT_TENANT_ID
-            if not owner_id:
-                raise ValueError("EpisodicSQLStore.add_episode: owner_id must be set")
-            if not getattr(ep, "user_id", None):
-                raise ValueError("EpisodicSQLStore.add_episode: user_id must be set")
-
-            # Idempotency guard: if turn_id is present, avoid duplicating episodes on retries.
+        def _sync():
+            conn = self._conn()
             try:
-                meta = getattr(ep, "meta", None) or {}
-                turn_id = meta.get("turn_id")
-                if turn_id:
-                    existing = self._query_one(
-                        conn,
-                        """
-                        SELECT id FROM episodes
-                        WHERE tenant_id = ? AND owner_type = ? AND owner_id = ?
-                          AND json_extract(meta, '$.turn_id') = ?
-                        ORDER BY timestamp DESC
-                        LIMIT 1
-                        """,
-                        params=[tenant_id, owner_type, owner_id, str(turn_id)],
-                        log_context="add_episode_idempotency",
-                    )
-                    if existing:
-                        logger.info(
-                            "EpisodicSQLStore.add_episode: skipping duplicate (turn_id=%s) existing_id=%s",
-                            turn_id,
-                            (existing["id"] if hasattr(existing, "__getitem__") else None),
-                        )
-                        return
-            except Exception:
-                # Never break ingestion due to idempotency guard issues.
-                logger.exception("EpisodicSQLStore.add_episode: idempotency guard failed; continuing.")
+                owner_type = getattr(ep, "owner_type", "user") or "user"
+                owner_id = getattr(ep, "owner_id", "")
+                tenant_id = getattr(ep, "tenant_id", None) or DEFAULT_TENANT_ID
+                if not owner_id:
+                    raise ValueError("EpisodicSQLStore.add_episode: owner_id must be set")
+                if not getattr(ep, "user_id", None):
+                    raise ValueError("EpisodicSQLStore.add_episode: user_id must be set")
 
-            normalized_meta = normalize_episode_metadata(
-                ep.meta,
-                episode_id=ep.id,
-                owner_type=owner_type,
-                owner_id=owner_id,
-                timestamp=ep.timestamp,
-                session_id=getattr(ep, "session_id", None),
-            )
-            payload = {
-                "id": ep.id,
-                "tenant_id": getattr(ep, "tenant_id", None) or DEFAULT_TENANT_ID,
-                "owner_type": owner_type,
-                "owner_id": owner_id,
-                "workspace_id": getattr(ep, "workspace_id", None),
-                "session_id": getattr(ep, "session_id", None),
-                "user_id": ep.user_id,
-                "timestamp": ep.timestamp.isoformat(),
-                "summary": ep.summary,
-                "raw": ep.raw,
-                "tags": json.dumps(ep.tags),
-                "origin_agent_id": getattr(ep, "origin_agent_id", None),
-                "origin_user_id": getattr(ep, "origin_user_id", None),
-                "origin_session_id": getattr(ep, "origin_session_id", None),
-                "scope_model_version": getattr(ep, "scope_model_version", None) or SCOPE_MODEL_VERSION,
-                "trust_score": float(_ts if (_ts := getattr(ep, "trust_score", None)) is not None else 0.5),
-                "content_hash": getattr(ep, "content_hash", None),
-                "quarantined_at": (
-                    getattr(ep, "quarantined_at").isoformat()
-                    if getattr(ep, "quarantined_at", None) is not None
-                    else None
-                ),
-                "embedding": json.dumps(embedding),
-                "meta": json.dumps(normalized_meta),
-            }
-
-            self._execute(
-                conn,
-                """
-                INSERT INTO episodes (
-                    id, tenant_id, owner_type, owner_id, workspace_id, session_id,
-                    user_id, timestamp, summary, raw, tags, origin_agent_id,
-                    origin_user_id, origin_session_id, scope_model_version,
-                    trust_score, content_hash, quarantined_at, embedding, meta
-                )
-                VALUES (
-                    :id, :tenant_id, :owner_type, :owner_id, :workspace_id, :session_id,
-                    :user_id, :timestamp, :summary, :raw, :tags, :origin_agent_id,
-                    :origin_user_id, :origin_session_id, :scope_model_version,
-                    :trust_score, :content_hash, :quarantined_at, :embedding, :meta
-                )
-                ON CONFLICT(id) DO UPDATE SET
-                    tenant_id=excluded.tenant_id,
-                    owner_type=excluded.owner_type,
-                    owner_id=excluded.owner_id,
-                    workspace_id=excluded.workspace_id,
-                    session_id=excluded.session_id,
-                    user_id=excluded.user_id,
-                    timestamp=excluded.timestamp,
-                    summary=excluded.summary,
-                    raw=excluded.raw,
-                    tags=excluded.tags,
-                    origin_agent_id=excluded.origin_agent_id,
-                    origin_user_id=excluded.origin_user_id,
-                    origin_session_id=excluded.origin_session_id,
-                    scope_model_version=excluded.scope_model_version,
-                    trust_score=excluded.trust_score,
-                    content_hash=excluded.content_hash,
-                    quarantined_at=excluded.quarantined_at,
-                    embedding=excluded.embedding,
-                    meta=excluded.meta
-                """,
-                params=payload,
-                log_context="add_episode",
-            )
-
-            # Vector upsert (owner-scoped)
-            try:
-                self.vector_index.upsert(
-                    ids=[ep.id],
-                    vectors=[embedding],
-                    tenant_ids=[tenant_id],
-                    owner_types=[owner_type],
-                    owner_ids=[owner_id],
-                    extra_metadata=[{
-                        "kb_lane": normalized_meta.get("kb_lane"),
-                    }],
-                )
-            except Exception:
-                logger.exception("EpisodicSQLStore.add_episode: vector upsert failed for id=%s", ep.id)
-                self._safe_rollback(conn, "add_episode")
-                raise
-
-            try:
-                conn.commit()
-            except Exception:
-                self._safe_rollback(conn, "add_episode_commit")
+                # Idempotency guard: if turn_id is present, avoid duplicating episodes on retries.
                 try:
-                    self.vector_index.delete([ep.id])
+                    meta = getattr(ep, "meta", None) or {}
+                    turn_id = meta.get("turn_id")
+                    if turn_id:
+                        existing = self._query_one(
+                            conn,
+                            """
+                            SELECT id FROM episodes
+                            WHERE tenant_id = ? AND owner_type = ? AND owner_id = ?
+                              AND json_extract(meta, '$.turn_id') = ?
+                            ORDER BY timestamp DESC
+                            LIMIT 1
+                            """,
+                            params=[tenant_id, owner_type, owner_id, str(turn_id)],
+                            log_context="add_episode_idempotency",
+                        )
+                        if existing:
+                            logger.info(
+                                "EpisodicSQLStore.add_episode: skipping duplicate (turn_id=%s) existing_id=%s",
+                                turn_id,
+                                (existing["id"] if hasattr(existing, "__getitem__") else None),
+                            )
+                            return
                 except Exception:
-                    logger.exception(
-                        "EpisodicSQLStore.add_episode: vector delete failed after commit error id=%s",
-                        ep.id,
+                    # Never break ingestion due to idempotency guard issues.
+                    logger.exception("EpisodicSQLStore.add_episode: idempotency guard failed; continuing.")
+
+                normalized_meta = normalize_episode_metadata(
+                    ep.meta,
+                    episode_id=ep.id,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    timestamp=ep.timestamp,
+                    session_id=getattr(ep, "session_id", None),
+                )
+                payload = {
+                    "id": ep.id,
+                    "tenant_id": getattr(ep, "tenant_id", None) or DEFAULT_TENANT_ID,
+                    "owner_type": owner_type,
+                    "owner_id": owner_id,
+                    "workspace_id": getattr(ep, "workspace_id", None),
+                    "session_id": getattr(ep, "session_id", None),
+                    "user_id": ep.user_id,
+                    "timestamp": ep.timestamp.isoformat(),
+                    "summary": ep.summary,
+                    "raw": ep.raw,
+                    "tags": json.dumps(ep.tags),
+                    "origin_agent_id": getattr(ep, "origin_agent_id", None),
+                    "origin_user_id": getattr(ep, "origin_user_id", None),
+                    "origin_session_id": getattr(ep, "origin_session_id", None),
+                    "scope_model_version": getattr(ep, "scope_model_version", None) or SCOPE_MODEL_VERSION,
+                    "trust_score": float(_ts if (_ts := getattr(ep, "trust_score", None)) is not None else 0.5),
+                    "content_hash": getattr(ep, "content_hash", None),
+                    "quarantined_at": (
+                        getattr(ep, "quarantined_at").isoformat()
+                        if getattr(ep, "quarantined_at", None) is not None
+                        else None
+                    ),
+                    "embedding": json.dumps(embedding),
+                    "meta": json.dumps(normalized_meta),
+                }
+
+                self._execute(
+                    conn,
+                    """
+                    INSERT INTO episodes (
+                        id, tenant_id, owner_type, owner_id, workspace_id, session_id,
+                        user_id, timestamp, summary, raw, tags, origin_agent_id,
+                        origin_user_id, origin_session_id, scope_model_version,
+                        trust_score, content_hash, quarantined_at, embedding, meta
                     )
+                    VALUES (
+                        :id, :tenant_id, :owner_type, :owner_id, :workspace_id, :session_id,
+                        :user_id, :timestamp, :summary, :raw, :tags, :origin_agent_id,
+                        :origin_user_id, :origin_session_id, :scope_model_version,
+                        :trust_score, :content_hash, :quarantined_at, :embedding, :meta
+                    )
+                    ON CONFLICT(id) DO UPDATE SET
+                        tenant_id=excluded.tenant_id,
+                        owner_type=excluded.owner_type,
+                        owner_id=excluded.owner_id,
+                        workspace_id=excluded.workspace_id,
+                        session_id=excluded.session_id,
+                        user_id=excluded.user_id,
+                        timestamp=excluded.timestamp,
+                        summary=excluded.summary,
+                        raw=excluded.raw,
+                        tags=excluded.tags,
+                        origin_agent_id=excluded.origin_agent_id,
+                        origin_user_id=excluded.origin_user_id,
+                        origin_session_id=excluded.origin_session_id,
+                        scope_model_version=excluded.scope_model_version,
+                        trust_score=excluded.trust_score,
+                        content_hash=excluded.content_hash,
+                        quarantined_at=excluded.quarantined_at,
+                        embedding=excluded.embedding,
+                        meta=excluded.meta
+                    """,
+                    params=payload,
+                    log_context="add_episode",
+                )
+
+                # Vector upsert (owner-scoped)
+                try:
+                    self.vector_index.upsert(
+                        ids=[ep.id],
+                        vectors=[embedding],
+                        tenant_ids=[tenant_id],
+                        owner_types=[owner_type],
+                        owner_ids=[owner_id],
+                        extra_metadata=[{
+                            "kb_lane": normalized_meta.get("kb_lane"),
+                        }],
+                    )
+                except Exception:
+                    logger.exception("EpisodicSQLStore.add_episode: vector upsert failed for id=%s", ep.id)
+                    self._safe_rollback(conn, "add_episode")
+                    raise
+
+                try:
+                    conn.commit()
+                except Exception:
+                    self._safe_rollback(conn, "add_episode_commit")
+                    try:
+                        self.vector_index.delete([ep.id])
+                    except Exception:
+                        logger.exception(
+                            "EpisodicSQLStore.add_episode: vector delete failed after commit error id=%s",
+                            ep.id,
+                        )
+                    raise
+
+                logger.info("EpisodicSQLStore: upserted episode id=%s", ep.id)
+
+            except Exception:
+                logger.exception("EpisodicSQLStore.add_episode: failure for id=%s", ep.id)
                 raise
+            finally:
+                conn.close()
 
-            logger.info("EpisodicSQLStore: upserted episode id=%s", ep.id)
 
-        except Exception:
-            logger.exception("EpisodicSQLStore.add_episode: failure for id=%s", ep.id)
-            raise
-        finally:
-            conn.close()
-
+        return await self._run_sync(_sync)
     async def get_episode(
         self,
         episode_id: str,
@@ -390,21 +393,23 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     ) -> Optional[Episode]:
         """Fetch a single episode by ID within the ownership scope, or ``None`` if not found."""
         self._require_scope(tenant_id, owner_type, owner_id)
-        conn = self._conn()
-        try:
-            row = self._query_one(
-                conn,
-                "SELECT * FROM episodes WHERE id = ? AND tenant_id = ? AND owner_type = ? AND owner_id = ?",
-                params=[episode_id, tenant_id, owner_type, owner_id],
-                log_context="get_episode",
-            )
-            return self._row_to_object(row) if row else None
-        except Exception:
-            logger.exception("EpisodicSQLStore.get_episode failed id=%s", episode_id)
-            raise
-        finally:
-            conn.close()
+        def _sync():
+            conn = self._conn()
+            try:
+                row = self._query_one(
+                    conn,
+                    "SELECT * FROM episodes WHERE id = ? AND tenant_id = ? AND owner_type = ? AND owner_id = ?",
+                    params=[episode_id, tenant_id, owner_type, owner_id],
+                    log_context="get_episode",
+                )
+                return self._row_to_object(row) if row else None
+            except Exception:
+                logger.exception("EpisodicSQLStore.get_episode failed id=%s", episode_id)
+                raise
+            finally:
+                conn.close()
 
+        return await self._run_sync(_sync)
     async def delete_episode(
         self,
         episode_id: str,
@@ -415,39 +420,41 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     ) -> None:
         """Permanently delete an episode record and its vector-index entry."""
         self._require_scope(tenant_id, owner_type, owner_id)
-        conn = self._conn()
-        try:
-            self._execute(
-                conn,
-                "DELETE FROM episodes WHERE id = ? AND tenant_id = ? AND owner_type = ? AND owner_id = ?",
-                params=[episode_id, tenant_id, owner_type, owner_id],
-                log_context="delete_episode",
-            )
-            conn.commit()
-            logger.info(
-                "EpisodicSQLStore: deleted episode id=%s owner=%s:%s",
-                episode_id,
-                owner_type,
-                owner_id,
-            )
-
+        def _sync():
+            conn = self._conn()
             try:
-                self.vector_index.delete(ids=[episode_id])
+                self._execute(
+                    conn,
+                    "DELETE FROM episodes WHERE id = ? AND tenant_id = ? AND owner_type = ? AND owner_id = ?",
+                    params=[episode_id, tenant_id, owner_type, owner_id],
+                    log_context="delete_episode",
+                )
+                conn.commit()
+                logger.info(
+                    "EpisodicSQLStore: deleted episode id=%s owner=%s:%s",
+                    episode_id,
+                    owner_type,
+                    owner_id,
+                )
+
+                try:
+                    self.vector_index.delete(ids=[episode_id])
+                except Exception:
+                    logger.exception("EpisodicSQLStore.delete_episode: vector delete failed id=%s", episode_id)
+
             except Exception:
-                logger.exception("EpisodicSQLStore.delete_episode: vector delete failed id=%s", episode_id)
+                self._safe_rollback(conn, "delete_episode")
+                logger.exception(
+                    "EpisodicSQLStore.delete_episode failed id=%s owner=%s:%s",
+                    episode_id,
+                    owner_type,
+                    owner_id,
+                )
+                raise
+            finally:
+                conn.close()
 
-        except Exception:
-            self._safe_rollback(conn, "delete_episode")
-            logger.exception(
-                "EpisodicSQLStore.delete_episode failed id=%s owner=%s:%s",
-                episode_id,
-                owner_type,
-                owner_id,
-            )
-            raise
-        finally:
-            conn.close()
-
+        return await self._run_sync(_sync)
     # ------------------------------------------------------------------ #
     # Listing / Retention Helpers
     # ------------------------------------------------------------------ #
@@ -461,66 +468,71 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     ) -> List[Episode]:
         """Return episodes for the given scope, newest first. Excludes quarantined records."""
         self._require_scope(tenant_id, owner_type, owner_id)
-        conn = self._conn()
-        try:
-            quarantine_clause = _NO_FILTER if include_quarantined else _QUARANTINE_FILTER
-            rows = self._query_all(
-                conn,
-                f"SELECT * FROM episodes WHERE tenant_id = ? AND owner_type = ? AND owner_id = ?{quarantine_clause}",  # nosec B608 — quarantine_clause is _QUARANTINE_FILTER or _NO_FILTER (module constants)
-                params=[tenant_id, owner_type, owner_id],
-                log_context="list_episodes",
-            )
-            logger.debug(
-                "EpisodicSQLStore.list_episodes owner=%s:%s count=%d",
-                owner_type,
-                owner_id,
-                len(rows or []),
-            )
-            return [self._row_to_object(row) for row in rows]
-        except Exception:
-            logger.exception(
-                "EpisodicSQLStore.list_episodes failed owner=%s:%s",
-                owner_type,
-                owner_id,
-            )
-            raise
-        finally:
-            conn.close()
+        def _sync():
+            conn = self._conn()
+            try:
+                quarantine_clause = _NO_FILTER if include_quarantined else _QUARANTINE_FILTER
+                rows = self._query_all(
+                    conn,
+                    f"SELECT * FROM episodes WHERE tenant_id = ? AND owner_type = ? AND owner_id = ?{quarantine_clause}",  # nosec B608 — quarantine_clause is _QUARANTINE_FILTER or _NO_FILTER (module constants)
+                    params=[tenant_id, owner_type, owner_id],
+                    log_context="list_episodes",
+                )
+                logger.debug(
+                    "EpisodicSQLStore.list_episodes owner=%s:%s count=%d",
+                    owner_type,
+                    owner_id,
+                    len(rows or []),
+                )
+                return [self._row_to_object(row) for row in rows]
+            except Exception:
+                logger.exception(
+                    "EpisodicSQLStore.list_episodes failed owner=%s:%s",
+                    owner_type,
+                    owner_id,
+                )
+                raise
+            finally:
+                conn.close()
 
+        return await self._run_sync(_sync)
     async def list_recent(self, tenant_id: Optional[str] = None, owner_type: str = "", owner_id: str = "", n: int = 5) -> List[Episode]:
         """Return the ``k`` most recent episodes for the scope. Convenience wrapper over ``list_episodes``."""
         self._require_scope(tenant_id, owner_type, owner_id)
-        conn = self._conn()
-        try:
-            rows = self._query_all(
-                conn,
-                """
-                SELECT * FROM episodes
-                WHERE tenant_id = ? AND owner_type = ? AND owner_id = ?
-                  AND quarantined_at IS NULL
-                ORDER BY timestamp DESC
-                LIMIT ?
-                """,
-                params=[tenant_id, owner_type, owner_id, n],
-                log_context="list_recent",
-            )
-            logger.debug(
-                "EpisodicSQLStore.list_recent owner=%s:%s count=%d",
-                owner_type,
-                owner_id,
-                len(rows or []),
-            )
-            return [self._row_to_object(row) for row in rows]
-        except Exception:
-            logger.exception(
-                "EpisodicSQLStore.list_recent failed owner=%s:%s",
-                owner_type,
-                owner_id,
-            )
-            raise
-        finally:
-            conn.close()
+        def _sync():
+            conn = self._conn()
+            try:
+                rows = self._query_all(
+                    conn,
+                    """
+                    SELECT * FROM episodes
+                    WHERE tenant_id = ? AND owner_type = ? AND owner_id = ?
+                      AND quarantined_at IS NULL
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """,
+                    params=[tenant_id, owner_type, owner_id, n],
+                    log_context="list_recent",
+                )
+                logger.debug(
+                    "EpisodicSQLStore.list_recent owner=%s:%s count=%d",
+                    owner_type,
+                    owner_id,
+                    len(rows or []),
+                )
+                return [self._row_to_object(row) for row in rows]
+            except Exception:
+                logger.exception(
+                    "EpisodicSQLStore.list_recent failed owner=%s:%s",
+                    owner_type,
+                    owner_id,
+                )
+                raise
+            finally:
+                conn.close()
 
+
+        return await self._run_sync(_sync)
     async def fetch_summaries(
         self,
         ids: List[str],
@@ -536,41 +548,43 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             return []
         self._require_scope(tenant_id, owner_type, owner_id)
 
-        conn = self._conn()
-        try:
-            placeholders = ",".join("?" for _ in ids)
-            # nosec B608 — placeholders is "?,?,?" only; all values bound as ?
-            sql = f"""
-                SELECT id, user_id, timestamp, summary
-                FROM episodes
-                WHERE id IN ({placeholders})
-                  AND tenant_id = ?
-                  AND owner_type = ?
-                  AND owner_id = ?
-            """
-            params = list(ids) + [tenant_id, owner_type, owner_id]
-            rows = self._query_all(conn, sql, params=params, log_context="fetch_episode_summaries")
-            row_map = {r["id"]: r for r in rows}
-            ordered: List[dict] = []
-            for eid in ids:
-                row = row_map.get(eid)
-                if row is None:
-                    continue
-                ordered.append(
-                    {
-                        "id": row["id"],
-                        "user_id": row["user_id"],
-                        "timestamp": row["timestamp"],
-                        "summary": row["summary"],
-                    }
-                )
-            return ordered
-        except Exception:
-            logger.exception("EpisodicSQLStore.fetch_summaries failed.")
-            raise
-        finally:
-            conn.close()
+        def _sync():
+            conn = self._conn()
+            try:
+                placeholders = ",".join("?" for _ in ids)
+                # nosec B608 — placeholders is "?,?,?" only; all values bound as ?
+                sql = f"""
+                    SELECT id, user_id, timestamp, summary
+                    FROM episodes
+                    WHERE id IN ({placeholders})
+                      AND tenant_id = ?
+                      AND owner_type = ?
+                      AND owner_id = ?
+                """
+                params = list(ids) + [tenant_id, owner_type, owner_id]
+                rows = self._query_all(conn, sql, params=params, log_context="fetch_episode_summaries")
+                row_map = {r["id"]: r for r in rows}
+                ordered: List[dict] = []
+                for eid in ids:
+                    row = row_map.get(eid)
+                    if row is None:
+                        continue
+                    ordered.append(
+                        {
+                            "id": row["id"],
+                            "user_id": row["user_id"],
+                            "timestamp": row["timestamp"],
+                            "summary": row["summary"],
+                        }
+                    )
+                return ordered
+            except Exception:
+                logger.exception("EpisodicSQLStore.fetch_summaries failed.")
+                raise
+            finally:
+                conn.close()
 
+        return await self._run_sync(_sync)
     async def fetch_transcripts(
         self,
         ids: List[str],
@@ -586,42 +600,44 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             return []
         self._require_scope(tenant_id, owner_type, owner_id)
 
-        conn = self._conn()
-        try:
-            placeholders = ",".join("?" for _ in ids)
-            # nosec B608 — placeholders is "?,?,?" only; all values bound as ?
-            sql = f"""
-                SELECT id, user_id, timestamp, summary, raw
-                FROM episodes
-                WHERE id IN ({placeholders})
-                  AND tenant_id = ?
-                  AND owner_type = ?
-                  AND owner_id = ?
-            """
-            params = list(ids) + [tenant_id, owner_type, owner_id]
-            rows = self._query_all(conn, sql, params=params, log_context="fetch_episode_transcripts")
-            row_map = {r["id"]: r for r in rows}
-            ordered: List[dict] = []
-            for eid in ids:
-                row = row_map.get(eid)
-                if row is None:
-                    continue
-                ordered.append(
-                    {
-                        "id": row["id"],
-                        "user_id": row["user_id"],
-                        "timestamp": row["timestamp"],
-                        "summary": row["summary"],
-                        "raw": (row["raw"] if ("raw" in (row.keys() if hasattr(row, "keys") else [])) else None),
-                    }
-                )
-            return ordered
-        except Exception:
-            logger.exception("EpisodicSQLStore.fetch_transcripts failed.")
-            raise
-        finally:
-            conn.close()
+        def _sync():
+            conn = self._conn()
+            try:
+                placeholders = ",".join("?" for _ in ids)
+                # nosec B608 — placeholders is "?,?,?" only; all values bound as ?
+                sql = f"""
+                    SELECT id, user_id, timestamp, summary, raw
+                    FROM episodes
+                    WHERE id IN ({placeholders})
+                      AND tenant_id = ?
+                      AND owner_type = ?
+                      AND owner_id = ?
+                """
+                params = list(ids) + [tenant_id, owner_type, owner_id]
+                rows = self._query_all(conn, sql, params=params, log_context="fetch_episode_transcripts")
+                row_map = {r["id"]: r for r in rows}
+                ordered: List[dict] = []
+                for eid in ids:
+                    row = row_map.get(eid)
+                    if row is None:
+                        continue
+                    ordered.append(
+                        {
+                            "id": row["id"],
+                            "user_id": row["user_id"],
+                            "timestamp": row["timestamp"],
+                            "summary": row["summary"],
+                            "raw": (row["raw"] if ("raw" in (row.keys() if hasattr(row, "keys") else [])) else None),
+                        }
+                    )
+                return ordered
+            except Exception:
+                logger.exception("EpisodicSQLStore.fetch_transcripts failed.")
+                raise
+            finally:
+                conn.close()
 
+        return await self._run_sync(_sync)
     # ------------------------------------------------------------------ #
     # Semantic Search (vector → SQL → Episode)
     # ------------------------------------------------------------------ #
@@ -712,44 +728,46 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             return []
         self._require_scope(tenant_id, owner_type, owner_id)
 
-        conn = self._conn()
-        try:
-            # B608: placeholders is "?,?,?" — safe parameterized, no user data interpolated.
-            placeholders = ",".join("?" for _ in ids)
-            params: List[str] = list(ids) + [tenant_id, owner_type, owner_id]
-            # nosec B608 — placeholders is "?,?,?" only; all values bound as ?
-            sql = f"SELECT * FROM episodes WHERE id IN ({placeholders}) AND tenant_id=? AND owner_type=? AND owner_id=? AND quarantined_at IS NULL"
-            rows = self._query_all(conn, sql, params=params, log_context="fetch_episodes_by_ids")
-            row_map = {r["id"]: r for r in rows}
-            ordered: List[Episode] = []
-            for eid in ids:
-                row = row_map.get(eid)
-                if row is None:
-                    continue
-                ordered.append(self._row_to_object(row))
-            missing = max(0, len(ids) - len(ordered))
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "EpisodicSQLStore.fetch_by_ids ids=%d fetched=%d owner=%s:%s",
-                    len(ids),
-                    len(ordered),
-                    owner_type,
-                    owner_id,
-                )
-            if missing:
-                logger.warning(
-                    "EpisodicSQLStore.fetch_by_ids missing=%d owner=%s:%s",
-                    missing,
-                    owner_type,
-                    owner_id,
-                )
-            return ordered
-        except Exception:
-            logger.exception("EpisodicSQLStore.fetch_by_ids failed")
-            raise
-        finally:
-            conn.close()
+        def _sync():
+            conn = self._conn()
+            try:
+                # B608: placeholders is "?,?,?" — safe parameterized, no user data interpolated.
+                placeholders = ",".join("?" for _ in ids)
+                params: List[str] = list(ids) + [tenant_id, owner_type, owner_id]
+                # nosec B608 — placeholders is "?,?,?" only; all values bound as ?
+                sql = f"SELECT * FROM episodes WHERE id IN ({placeholders}) AND tenant_id=? AND owner_type=? AND owner_id=? AND quarantined_at IS NULL"
+                rows = self._query_all(conn, sql, params=params, log_context="fetch_episodes_by_ids")
+                row_map = {r["id"]: r for r in rows}
+                ordered: List[Episode] = []
+                for eid in ids:
+                    row = row_map.get(eid)
+                    if row is None:
+                        continue
+                    ordered.append(self._row_to_object(row))
+                missing = max(0, len(ids) - len(ordered))
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "EpisodicSQLStore.fetch_by_ids ids=%d fetched=%d owner=%s:%s",
+                        len(ids),
+                        len(ordered),
+                        owner_type,
+                        owner_id,
+                    )
+                if missing:
+                    logger.warning(
+                        "EpisodicSQLStore.fetch_by_ids missing=%d owner=%s:%s",
+                        missing,
+                        owner_type,
+                        owner_id,
+                    )
+                return ordered
+            except Exception:
+                logger.exception("EpisodicSQLStore.fetch_by_ids failed")
+                raise
+            finally:
+                conn.close()
 
+        return await self._run_sync(_sync)
     async def upsert_cluster_summary(
         self,
         *,
@@ -765,72 +783,74 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         self._require_scope(tenant_id, owner_type, owner_id)
         if not user_id:
             raise ValueError("EpisodicSQLStore.upsert_cluster_summary requires user_id")
-        conn = self._conn()
-        try:
-            payload = {
-                "id": f"cluster:{owner_type}:{owner_id}:{user_id}:{latest_timestamp}",
-                "summary": summary,
-                "episode_ids": json.dumps(episode_ids or []),
-                "tenant_id": tenant_id,
-                "owner_type": owner_type,
-                "owner_id": owner_id,
-                "workspace_id": None,
-                "session_id": None,
-                "user_id": user_id,
-                "origin_agent_id": None,
-                "origin_user_id": user_id,
-                "origin_session_id": None,
-                "scope_model_version": SCOPE_MODEL_VERSION,
-                "latest_timestamp": latest_timestamp,
-            }
-            self._execute(
-                conn,
-                """
-                INSERT INTO episode_clusters (
-                    id, summary, episode_ids, tenant_id, owner_type, owner_id,
-                    workspace_id, session_id, user_id, origin_agent_id, origin_user_id,
-                    origin_session_id, scope_model_version, latest_timestamp
-                ) VALUES (
-                    :id, :summary, :episode_ids, :tenant_id, :owner_type, :owner_id,
-                    :workspace_id, :session_id, :user_id, :origin_agent_id, :origin_user_id,
-                    :origin_session_id, :scope_model_version, :latest_timestamp
+        def _sync():
+            conn = self._conn()
+            try:
+                payload = {
+                    "id": f"cluster:{owner_type}:{owner_id}:{user_id}:{latest_timestamp}",
+                    "summary": summary,
+                    "episode_ids": json.dumps(episode_ids or []),
+                    "tenant_id": tenant_id,
+                    "owner_type": owner_type,
+                    "owner_id": owner_id,
+                    "workspace_id": None,
+                    "session_id": None,
+                    "user_id": user_id,
+                    "origin_agent_id": None,
+                    "origin_user_id": user_id,
+                    "origin_session_id": None,
+                    "scope_model_version": SCOPE_MODEL_VERSION,
+                    "latest_timestamp": latest_timestamp,
+                }
+                self._execute(
+                    conn,
+                    """
+                    INSERT INTO episode_clusters (
+                        id, summary, episode_ids, tenant_id, owner_type, owner_id,
+                        workspace_id, session_id, user_id, origin_agent_id, origin_user_id,
+                        origin_session_id, scope_model_version, latest_timestamp
+                    ) VALUES (
+                        :id, :summary, :episode_ids, :tenant_id, :owner_type, :owner_id,
+                        :workspace_id, :session_id, :user_id, :origin_agent_id, :origin_user_id,
+                        :origin_session_id, :scope_model_version, :latest_timestamp
+                    )
+                    ON CONFLICT(id) DO UPDATE SET
+                        summary=excluded.summary,
+                        episode_ids=excluded.episode_ids,
+                        tenant_id=excluded.tenant_id,
+                        owner_type=excluded.owner_type,
+                        owner_id=excluded.owner_id,
+                        workspace_id=excluded.workspace_id,
+                        session_id=excluded.session_id,
+                        user_id=excluded.user_id,
+                        origin_agent_id=excluded.origin_agent_id,
+                        origin_user_id=excluded.origin_user_id,
+                        origin_session_id=excluded.origin_session_id,
+                        scope_model_version=excluded.scope_model_version,
+                        latest_timestamp=excluded.latest_timestamp
+                    """,
+                    params=payload,
+                    log_context="upsert_cluster_summary",
                 )
-                ON CONFLICT(id) DO UPDATE SET
-                    summary=excluded.summary,
-                    episode_ids=excluded.episode_ids,
-                    tenant_id=excluded.tenant_id,
-                    owner_type=excluded.owner_type,
-                    owner_id=excluded.owner_id,
-                    workspace_id=excluded.workspace_id,
-                    session_id=excluded.session_id,
-                    user_id=excluded.user_id,
-                    origin_agent_id=excluded.origin_agent_id,
-                    origin_user_id=excluded.origin_user_id,
-                    origin_session_id=excluded.origin_session_id,
-                    scope_model_version=excluded.scope_model_version,
-                    latest_timestamp=excluded.latest_timestamp
-                """,
-                params=payload,
-                log_context="upsert_cluster_summary",
-            )
-            conn.commit()
-            logger.debug(
-                "EpisodicSQLStore.upsert_cluster_summary owner=%s:%s user_id=%s",
-                owner_type,
-                owner_id,
-                user_id,
-            )
-        except Exception:
-            self._safe_rollback(conn, "upsert_cluster_summary")
-            logger.exception(
-                "EpisodicSQLStore.upsert_cluster_summary failed owner=%s:%s",
-                owner_type,
-                owner_id,
-            )
-            raise
-        finally:
-            conn.close()
+                conn.commit()
+                logger.debug(
+                    "EpisodicSQLStore.upsert_cluster_summary owner=%s:%s user_id=%s",
+                    owner_type,
+                    owner_id,
+                    user_id,
+                )
+            except Exception:
+                self._safe_rollback(conn, "upsert_cluster_summary")
+                logger.exception(
+                    "EpisodicSQLStore.upsert_cluster_summary failed owner=%s:%s",
+                    owner_type,
+                    owner_id,
+                )
+                raise
+            finally:
+                conn.close()
 
+        return await self._run_sync(_sync)
     async def list_cluster_summaries(
         self,
         *,
@@ -843,62 +863,64 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     ) -> List[dict]:
         """Return cluster summaries for the scope ordered by ``latest_timestamp`` descending."""
         self._require_scope(tenant_id, owner_type, owner_id)
-        conn = self._conn()
-        try:
-            where = ["tenant_id = ?", "owner_type = ?", "owner_id = ?"]
-            params: List[Any] = [tenant_id, owner_type, owner_id]
-            if isinstance(time_range, dict):
-                start = time_range.get("start")
-                end = time_range.get("end")
-                if start is not None:
-                    where.append("latest_timestamp >= ?")
-                    params.append(str(start))
-                if end is not None:
-                    where.append("latest_timestamp <= ?")
-                    params.append(str(end))
-            # nosec B608 — 'where' list is built exclusively from
-            # hardcoded literal strings ("tenant_id = ?", "owner_type = ?",
-            # "latest_timestamp >= ?"); no user data is interpolated as SQL structure.
-            sql = f"""
-                SELECT * FROM episode_clusters
-                WHERE {' AND '.join(where)}
-                ORDER BY latest_timestamp DESC
-                LIMIT ?
-            """
-            params.append(int(k))
-            rows = self._query_all(conn, sql, params=params, log_context="list_cluster_summaries")
-            out: List[dict] = []
-            for row in rows or []:
-                try:
-                    episode_ids = json.loads(row["episode_ids"]) if row.get("episode_ids") else []
-                except Exception:
-                    episode_ids = []
-                out.append(
-                    {
-                        "id": row["id"],
-                        "owner_type": row["owner_type"],
-                        "owner_id": row["owner_id"],
-                        "user_id": row["user_id"],
-                        "summary": row["summary"],
-                        "episode_ids": episode_ids,
-                        "latest_timestamp": row["latest_timestamp"],
-                        "count": len(episode_ids),
-                    }
+        def _sync():
+            conn = self._conn()
+            try:
+                where = ["tenant_id = ?", "owner_type = ?", "owner_id = ?"]
+                params: List[Any] = [tenant_id, owner_type, owner_id]
+                if isinstance(time_range, dict):
+                    start = time_range.get("start")
+                    end = time_range.get("end")
+                    if start is not None:
+                        where.append("latest_timestamp >= ?")
+                        params.append(str(start))
+                    if end is not None:
+                        where.append("latest_timestamp <= ?")
+                        params.append(str(end))
+                # nosec B608 — 'where' list is built exclusively from
+                # hardcoded literal strings ("tenant_id = ?", "owner_type = ?",
+                # "latest_timestamp >= ?"); no user data is interpolated as SQL structure.
+                sql = f"""
+                    SELECT * FROM episode_clusters
+                    WHERE {' AND '.join(where)}
+                    ORDER BY latest_timestamp DESC
+                    LIMIT ?
+                """
+                params.append(int(k))
+                rows = self._query_all(conn, sql, params=params, log_context="list_cluster_summaries")
+                out: List[dict] = []
+                for row in rows or []:
+                    try:
+                        episode_ids = json.loads(row["episode_ids"]) if row.get("episode_ids") else []
+                    except Exception:
+                        episode_ids = []
+                    out.append(
+                        {
+                            "id": row["id"],
+                            "owner_type": row["owner_type"],
+                            "owner_id": row["owner_id"],
+                            "user_id": row["user_id"],
+                            "summary": row["summary"],
+                            "episode_ids": episode_ids,
+                            "latest_timestamp": row["latest_timestamp"],
+                            "count": len(episode_ids),
+                        }
+                    )
+                logger.debug(
+                    "EpisodicSQLStore.list_cluster_summaries owner=%s:%s count=%d",
+                    owner_type,
+                    owner_id,
+                    len(out),
                 )
-            logger.debug(
-                "EpisodicSQLStore.list_cluster_summaries owner=%s:%s count=%d",
-                owner_type,
-                owner_id,
-                len(out),
-            )
-            return out
-        except Exception:
-            logger.exception(
-                "EpisodicSQLStore.list_cluster_summaries failed owner=%s:%s",
-                owner_type,
-                owner_id,
-            )
-            raise
-        finally:
-            conn.close()
+                return out
+            except Exception:
+                logger.exception(
+                    "EpisodicSQLStore.list_cluster_summaries failed owner=%s:%s",
+                    owner_type,
+                    owner_id,
+                )
+                raise
+            finally:
+                conn.close()
 
+        return await self._run_sync(_sync)

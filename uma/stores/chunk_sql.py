@@ -202,138 +202,141 @@ class ChunkSQLStore(BaseVectorSQLStore):
 
     async def upsert_chunk(self, chunk: Chunk, embedding: List[float]) -> None:
         """Insert or update a document chunk. Embeds the chunk and persists to SQL then vector store."""
-        conn = self._conn()
-        try:
-            normalized_meta = normalize_chunk_metadata(
-                chunk.meta,
-                chunk_id=chunk.id,
-                doc_id=chunk.doc_id,
-                owner_type=chunk.owner_type,
-                owner_id=chunk.owner_id,
-                created_at=chunk.created_at,
-                updated_at=chunk.updated_at,
-                page_range=chunk.page_range,
-                position=chunk.position,
-                source_path=chunk.source_path,
-                source_hash=chunk.source_hash,
-            )
-            payload = {
-                "id": chunk.id,
-                "doc_id": chunk.doc_id,
-                "text": chunk.text,
-                "page_start": chunk.page_range[0],
-                "page_end": chunk.page_range[1],
-                "position": chunk.position,
-                "source_path": chunk.source_path,
-                "source_hash": chunk.source_hash,
-                "created_at": chunk.created_at.isoformat(),
-                "updated_at": chunk.updated_at.isoformat(),
-                "tenant_id": getattr(chunk, "tenant_id", None) or DEFAULT_TENANT_ID,
-                "owner_type": chunk.owner_type,
-                "owner_id": chunk.owner_id,
-                "workspace_id": getattr(chunk, "workspace_id", None),
-                "origin_agent_id": getattr(chunk, "origin_agent_id", None),
-                "origin_user_id": getattr(chunk, "origin_user_id", None),
-                "origin_session_id": getattr(chunk, "origin_session_id", None),
-                "scope_model_version": getattr(chunk, "scope_model_version", None) or SCOPE_MODEL_VERSION,
-                "trust_score": float(_ts if (_ts := getattr(chunk, "trust_score", None)) is not None else 0.5),
-                "quarantined_at": (
-                    getattr(chunk, "quarantined_at").isoformat()
-                    if getattr(chunk, "quarantined_at", None) is not None
-                    else None
-                ),
-                "meta": json.dumps(normalized_meta),
-            }
-
-            self._execute(
-                conn,
-                """
-                INSERT INTO chunks (
-                    id, doc_id, text, page_start, page_end, position,
-                    source_path, source_hash, created_at, updated_at,
-                    tenant_id, owner_type, owner_id, workspace_id,
-                    origin_agent_id, origin_user_id, origin_session_id,
-                    scope_model_version, trust_score, quarantined_at, meta
-                ) VALUES (
-                    :id, :doc_id, :text, :page_start, :page_end, :position,
-                    :source_path, :source_hash, :created_at, :updated_at,
-                    :tenant_id, :owner_type, :owner_id, :workspace_id,
-                    :origin_agent_id, :origin_user_id, :origin_session_id,
-                    :scope_model_version, :trust_score, :quarantined_at, :meta
-                )
-                ON CONFLICT(id) DO UPDATE SET
-                    doc_id=excluded.doc_id,
-                    text=excluded.text,
-                    page_start=excluded.page_start,
-                    page_end=excluded.page_end,
-                    position=excluded.position,
-                    source_path=excluded.source_path,
-                    source_hash=excluded.source_hash,
-                    created_at=excluded.created_at,
-                    updated_at=excluded.updated_at,
-                    tenant_id=excluded.tenant_id,
-                    owner_type=excluded.owner_type,
-                    owner_id=excluded.owner_id,
-                    workspace_id=excluded.workspace_id,
-                    origin_agent_id=excluded.origin_agent_id,
-                    origin_user_id=excluded.origin_user_id,
-                    origin_session_id=excluded.origin_session_id,
-                    scope_model_version=excluded.scope_model_version,
-                    trust_score=excluded.trust_score,
-                    quarantined_at=excluded.quarantined_at,
-                    meta=excluded.meta
-                """,
-                params=payload,
-                log_context="chunk_upsert",
-            )
-
-            # Vector index upsert (projection)
+        def _sync():
+            conn = self._conn()
             try:
-                resolved_tenant = getattr(chunk, "tenant_id", None) or DEFAULT_TENANT_ID
-                # C1: isolation fields go as explicit parameters; everything
-                # else lives in extra_metadata. The vector index promotes
-                # tenant_id/owner_type/owner_id into first-class indexable
-                # columns so isolation is enforced by construction.
-                extra_meta = {
+                normalized_meta = normalize_chunk_metadata(
+                    chunk.meta,
+                    chunk_id=chunk.id,
+                    doc_id=chunk.doc_id,
+                    owner_type=chunk.owner_type,
+                    owner_id=chunk.owner_id,
+                    created_at=chunk.created_at,
+                    updated_at=chunk.updated_at,
+                    page_range=chunk.page_range,
+                    position=chunk.position,
+                    source_path=chunk.source_path,
+                    source_hash=chunk.source_hash,
+                )
+                payload = {
+                    "id": chunk.id,
                     "doc_id": chunk.doc_id,
-                    "kb_lane": normalized_meta.get("kb_lane"),
-                    "position": int(chunk.position),
-                    "page_start": int(chunk.page_range[0]),
-                    "page_end": int(chunk.page_range[1]),
-                    "scope_key": f"{chunk.owner_type}:{chunk.owner_id}",
+                    "text": chunk.text,
+                    "page_start": chunk.page_range[0],
+                    "page_end": chunk.page_range[1],
+                    "position": chunk.position,
+                    "source_path": chunk.source_path,
+                    "source_hash": chunk.source_hash,
+                    "created_at": chunk.created_at.isoformat(),
+                    "updated_at": chunk.updated_at.isoformat(),
+                    "tenant_id": getattr(chunk, "tenant_id", None) or DEFAULT_TENANT_ID,
+                    "owner_type": chunk.owner_type,
+                    "owner_id": chunk.owner_id,
+                    "workspace_id": getattr(chunk, "workspace_id", None),
+                    "origin_agent_id": getattr(chunk, "origin_agent_id", None),
+                    "origin_user_id": getattr(chunk, "origin_user_id", None),
+                    "origin_session_id": getattr(chunk, "origin_session_id", None),
+                    "scope_model_version": getattr(chunk, "scope_model_version", None) or SCOPE_MODEL_VERSION,
+                    "trust_score": float(_ts if (_ts := getattr(chunk, "trust_score", None)) is not None else 0.5),
+                    "quarantined_at": (
+                        getattr(chunk, "quarantined_at").isoformat()
+                        if getattr(chunk, "quarantined_at", None) is not None
+                        else None
+                    ),
+                    "meta": json.dumps(normalized_meta),
                 }
-                self.vector_index.upsert(
-                    ids=[chunk.id],
-                    vectors=[embedding],
-                    tenant_ids=[resolved_tenant],
-                    owner_types=[chunk.owner_type],
-                    owner_ids=[chunk.owner_id],
-                    extra_metadata=[extra_meta],
-                )
-            except Exception:
-                logger.exception("ChunkSQLStore: vector upsert failed for id=%s", chunk.id)
-                self._safe_rollback(conn, "chunk_upsert")
-                raise
 
-            try:
-                conn.commit()
-            except Exception:
-                self._safe_rollback(conn, "chunk_upsert_commit")
-                try:
-                    self.vector_index.delete([chunk.id])
-                except Exception:
-                    logger.exception(
-                        "ChunkSQLStore: vector delete failed after commit error id=%s",
-                        chunk.id,
+                self._execute(
+                    conn,
+                    """
+                    INSERT INTO chunks (
+                        id, doc_id, text, page_start, page_end, position,
+                        source_path, source_hash, created_at, updated_at,
+                        tenant_id, owner_type, owner_id, workspace_id,
+                        origin_agent_id, origin_user_id, origin_session_id,
+                        scope_model_version, trust_score, quarantined_at, meta
+                    ) VALUES (
+                        :id, :doc_id, :text, :page_start, :page_end, :position,
+                        :source_path, :source_hash, :created_at, :updated_at,
+                        :tenant_id, :owner_type, :owner_id, :workspace_id,
+                        :origin_agent_id, :origin_user_id, :origin_session_id,
+                        :scope_model_version, :trust_score, :quarantined_at, :meta
                     )
+                    ON CONFLICT(id) DO UPDATE SET
+                        doc_id=excluded.doc_id,
+                        text=excluded.text,
+                        page_start=excluded.page_start,
+                        page_end=excluded.page_end,
+                        position=excluded.position,
+                        source_path=excluded.source_path,
+                        source_hash=excluded.source_hash,
+                        created_at=excluded.created_at,
+                        updated_at=excluded.updated_at,
+                        tenant_id=excluded.tenant_id,
+                        owner_type=excluded.owner_type,
+                        owner_id=excluded.owner_id,
+                        workspace_id=excluded.workspace_id,
+                        origin_agent_id=excluded.origin_agent_id,
+                        origin_user_id=excluded.origin_user_id,
+                        origin_session_id=excluded.origin_session_id,
+                        scope_model_version=excluded.scope_model_version,
+                        trust_score=excluded.trust_score,
+                        quarantined_at=excluded.quarantined_at,
+                        meta=excluded.meta
+                    """,
+                    params=payload,
+                    log_context="chunk_upsert",
+                )
+
+                # Vector index upsert (projection)
+                try:
+                    resolved_tenant = getattr(chunk, "tenant_id", None) or DEFAULT_TENANT_ID
+                    # C1: isolation fields go as explicit parameters; everything
+                    # else lives in extra_metadata. The vector index promotes
+                    # tenant_id/owner_type/owner_id into first-class indexable
+                    # columns so isolation is enforced by construction.
+                    extra_meta = {
+                        "doc_id": chunk.doc_id,
+                        "kb_lane": normalized_meta.get("kb_lane"),
+                        "position": int(chunk.position),
+                        "page_start": int(chunk.page_range[0]),
+                        "page_end": int(chunk.page_range[1]),
+                        "scope_key": f"{chunk.owner_type}:{chunk.owner_id}",
+                    }
+                    self.vector_index.upsert(
+                        ids=[chunk.id],
+                        vectors=[embedding],
+                        tenant_ids=[resolved_tenant],
+                        owner_types=[chunk.owner_type],
+                        owner_ids=[chunk.owner_id],
+                        extra_metadata=[extra_meta],
+                    )
+                except Exception:
+                    logger.exception("ChunkSQLStore: vector upsert failed for id=%s", chunk.id)
+                    self._safe_rollback(conn, "chunk_upsert")
+                    raise
+
+                try:
+                    conn.commit()
+                except Exception:
+                    self._safe_rollback(conn, "chunk_upsert_commit")
+                    try:
+                        self.vector_index.delete([chunk.id])
+                    except Exception:
+                        logger.exception(
+                            "ChunkSQLStore: vector delete failed after commit error id=%s",
+                            chunk.id,
+                        )
+                    raise
+
+            except Exception:
+                logger.exception("ChunkSQLStore.upsert_chunk failed for id=%s", chunk.id)
                 raise
+            finally:
+                conn.close()
 
-        except Exception:
-            logger.exception("ChunkSQLStore.upsert_chunk failed for id=%s", chunk.id)
-            raise
-        finally:
-            conn.close()
 
+        return await self._run_sync(_sync)
     async def search(
         self,
         query_embedding: List[float],
@@ -531,33 +534,35 @@ class ChunkSQLStore(BaseVectorSQLStore):
         params["keyword_weight"] = float(keyword_weight)
         # min_score already accounts for presence/absence of phrases (baseline behavior).
 
-        conn = self._conn()
-        try:
-            rows = self._query_all(conn, sql, params=params, log_context="chunk_lexical_search")
-            if logger.isEnabledFor(logging.INFO):
-                avg_score = 0.0
-                try:
-                    scores = [float(r.get("score") or 0.0) for r in (rows or []) if hasattr(r, "get")]
-                    avg_score = (sum(scores) / len(scores)) if scores else 0.0
-                except Exception:
+        def _sync():
+            conn = self._conn()
+            try:
+                rows = self._query_all(conn, sql, params=params, log_context="chunk_lexical_search")
+                if logger.isEnabledFor(logging.INFO):
                     avg_score = 0.0
-                logger.info(
-                    "ChunkSQLStore.lexical_search query_len=%d terms=%d phrases=%d returned=%d avg_score=%.2f top_terms=%r top_phrases=%r",
-                    len(query_text),
-                    len(terms),
-                    len(phrases),
-                    len(rows or []),
-                    avg_score,
-                    terms[:3],
-                    phrases[:2],
-                )
-            return [self._row_to_object(r) for r in rows]
-        except Exception:
-            logger.exception("ChunkSQLStore.lexical_search failed.")
-            raise
-        finally:
-            conn.close()
+                    try:
+                        scores = [float(r.get("score") or 0.0) for r in (rows or []) if hasattr(r, "get")]
+                        avg_score = (sum(scores) / len(scores)) if scores else 0.0
+                    except Exception:
+                        avg_score = 0.0
+                    logger.info(
+                        "ChunkSQLStore.lexical_search query_len=%d terms=%d phrases=%d returned=%d avg_score=%.2f top_terms=%r top_phrases=%r",
+                        len(query_text),
+                        len(terms),
+                        len(phrases),
+                        len(rows or []),
+                        avg_score,
+                        terms[:3],
+                        phrases[:2],
+                    )
+                return [self._row_to_object(r) for r in rows]
+            except Exception:
+                logger.exception("ChunkSQLStore.lexical_search failed.")
+                raise
+            finally:
+                conn.close()
 
+        return await self._run_sync(_sync)
     async def fetch_by_doc_and_position_range(
         self,
         *,
@@ -583,36 +588,38 @@ class ChunkSQLStore(BaseVectorSQLStore):
             logger.error("ChunkSQLStore.fetch_by_doc_and_position_range requires tenant_id")
             raise ValueError("ChunkSQLStore.fetch_by_doc_and_position_range requires tenant_id")
 
-        conn = self._conn()
-        try:
-            rows = self._query_all(
-                conn,
-                """
-                SELECT *
-                FROM chunks
-                WHERE tenant_id = ?
-                  AND owner_type = ?
-                  AND owner_id = ?
-                  AND doc_id = ?
-                  AND position BETWEEN ? AND ?
-                  AND quarantined_at IS NULL
-                ORDER BY position ASC
-                """,
-                params=[tenant_id, owner_type, owner_id, doc_id, pos_start_i, pos_end_i],
-                log_context=log_context,
-            )
-            return [self._row_to_object(r) for r in (rows or [])]
-        except Exception:
-            logger.exception(
-                "ChunkSQLStore.fetch_by_doc_and_position_range failed owner=%s:%s doc_id=%s",
-                owner_type,
-                owner_id,
-                doc_id,
-            )
-            raise
-        finally:
-            conn.close()
+        def _sync():
+            conn = self._conn()
+            try:
+                rows = self._query_all(
+                    conn,
+                    """
+                    SELECT *
+                    FROM chunks
+                    WHERE tenant_id = ?
+                      AND owner_type = ?
+                      AND owner_id = ?
+                      AND doc_id = ?
+                      AND position BETWEEN ? AND ?
+                      AND quarantined_at IS NULL
+                    ORDER BY position ASC
+                    """,
+                    params=[tenant_id, owner_type, owner_id, doc_id, pos_start_i, pos_end_i],
+                    log_context=log_context,
+                )
+                return [self._row_to_object(r) for r in (rows or [])]
+            except Exception:
+                logger.exception(
+                    "ChunkSQLStore.fetch_by_doc_and_position_range failed owner=%s:%s doc_id=%s",
+                    owner_type,
+                    owner_id,
+                    doc_id,
+                )
+                raise
+            finally:
+                conn.close()
 
+        return await self._run_sync(_sync)
     async def fetch_by_ids(
         self,
         ids: List[str],
@@ -637,38 +644,40 @@ class ChunkSQLStore(BaseVectorSQLStore):
             owner_type,
             owner_id,
         )
-        conn = self._conn()
-        try:
-            # B608: placeholders is "?,?,?" — safe parameterized, no user data interpolated.
-            placeholders = ",".join("?" for _ in ids)
-            params: List[Any] = list(ids)
-            scope_clause = self._scope_where(tenant_id, owner_type, owner_id, params)
-            # nosec B608 — placeholders is "?,?,?" only; scope_clause is the fixed
-            # string "tenant_id=? AND owner_type=? AND owner_id=?" from _scope_where().
-            sql = f"SELECT * FROM chunks WHERE id IN ({placeholders}) AND {scope_clause} AND quarantined_at IS NULL"
-            rows = self._query_all(conn, sql, params=params, log_context="fetch_by_ids")
-            row_map = {r["id"]: r for r in rows}
-            ordered: List[Chunk] = []
-            for cid in ids:
-                row = row_map.get(cid)
-                if row is None:
-                    continue
-                ordered.append(self._row_to_object(row))
-            missing = max(0, len(ids) - len(ordered))
-            if missing:
-                logger.warning(
-                    "ChunkSQLStore.fetch_by_ids: missing=%d owner=%s:%s",
-                    missing,
-                    owner_type,
-                    owner_id,
-                )
-            return ordered
-        except Exception:
-            logger.exception("ChunkSQLStore.fetch_by_ids failed.")
-            raise
-        finally:
-            conn.close()
+        def _sync():
+            conn = self._conn()
+            try:
+                # B608: placeholders is "?,?,?" — safe parameterized, no user data interpolated.
+                placeholders = ",".join("?" for _ in ids)
+                params: List[Any] = list(ids)
+                scope_clause = self._scope_where(tenant_id, owner_type, owner_id, params)
+                # nosec B608 — placeholders is "?,?,?" only; scope_clause is the fixed
+                # string "tenant_id=? AND owner_type=? AND owner_id=?" from _scope_where().
+                sql = f"SELECT * FROM chunks WHERE id IN ({placeholders}) AND {scope_clause} AND quarantined_at IS NULL"
+                rows = self._query_all(conn, sql, params=params, log_context="fetch_by_ids")
+                row_map = {r["id"]: r for r in rows}
+                ordered: List[Chunk] = []
+                for cid in ids:
+                    row = row_map.get(cid)
+                    if row is None:
+                        continue
+                    ordered.append(self._row_to_object(row))
+                missing = max(0, len(ids) - len(ordered))
+                if missing:
+                    logger.warning(
+                        "ChunkSQLStore.fetch_by_ids: missing=%d owner=%s:%s",
+                        missing,
+                        owner_type,
+                        owner_id,
+                    )
+                return ordered
+            except Exception:
+                logger.exception("ChunkSQLStore.fetch_by_ids failed.")
+                raise
+            finally:
+                conn.close()
 
+        return await self._run_sync(_sync)
     async def list_chunks_for_owner(
         self,
         *,
@@ -681,22 +690,24 @@ class ChunkSQLStore(BaseVectorSQLStore):
         """List chunks for an owner scope. Quarantined excluded by default."""
         if not tenant_id or not owner_type or not owner_id:
             raise ValueError("ChunkSQLStore.list_chunks_for_owner requires scope")
-        conn = self._conn()
-        try:
-            quarantine_clause = _NO_FILTER if include_quarantined else _QUARANTINE_FILTER
-            sql = f"SELECT * FROM chunks WHERE tenant_id=? AND owner_type=? AND owner_id=?{quarantine_clause} ORDER BY updated_at DESC"  # nosec B608 — quarantine_clause is _QUARANTINE_FILTER or _NO_FILTER (module constants)
-            chunk_params: list = [tenant_id, owner_type, owner_id]
-            if limit:
-                sql += " LIMIT ?"
-                chunk_params.append(int(limit))
-            rows = self._query_all(conn, sql, params=chunk_params, log_context="list_chunks_owner")
-            return [self._row_to_object(r) for r in rows]
-        except Exception:
-            logger.exception("ChunkSQLStore.list_chunks_for_owner failed.")
-            raise
-        finally:
-            conn.close()
+        def _sync():
+            conn = self._conn()
+            try:
+                quarantine_clause = _NO_FILTER if include_quarantined else _QUARANTINE_FILTER
+                sql = f"SELECT * FROM chunks WHERE tenant_id=? AND owner_type=? AND owner_id=?{quarantine_clause} ORDER BY updated_at DESC"  # nosec B608 — quarantine_clause is _QUARANTINE_FILTER or _NO_FILTER (module constants)
+                chunk_params: list = [tenant_id, owner_type, owner_id]
+                if limit:
+                    sql += " LIMIT ?"
+                    chunk_params.append(int(limit))
+                rows = self._query_all(conn, sql, params=chunk_params, log_context="list_chunks_owner")
+                return [self._row_to_object(r) for r in rows]
+            except Exception:
+                logger.exception("ChunkSQLStore.list_chunks_for_owner failed.")
+                raise
+            finally:
+                conn.close()
 
+        return await self._run_sync(_sync)
     async def delete_chunk(
         self,
         chunk_id: str,
@@ -708,24 +719,26 @@ class ChunkSQLStore(BaseVectorSQLStore):
         """Delete a chunk from SQL + vector store."""
         if not tenant_id or not owner_type or not owner_id:
             raise ValueError("ChunkSQLStore.delete_chunk requires scope")
-        conn = self._conn()
-        try:
-            self._execute(
-                conn,
-                "DELETE FROM chunks WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
-                params=[chunk_id, tenant_id, owner_type, owner_id],
-                log_context="delete_chunk",
-            )
-            conn.commit()
+        def _sync():
+            conn = self._conn()
             try:
-                self.vector_index.delete([chunk_id])
+                self._execute(
+                    conn,
+                    "DELETE FROM chunks WHERE id=? AND tenant_id=? AND owner_type=? AND owner_id=?",
+                    params=[chunk_id, tenant_id, owner_type, owner_id],
+                    log_context="delete_chunk",
+                )
+                conn.commit()
+                try:
+                    self.vector_index.delete([chunk_id])
+                except Exception:
+                    logger.exception("ChunkSQLStore.delete_chunk: vector delete failed id=%s", chunk_id)
+                logger.info("ChunkSQLStore: deleted chunk id=%s owner=%s:%s", chunk_id, owner_type, owner_id)
             except Exception:
-                logger.exception("ChunkSQLStore.delete_chunk: vector delete failed id=%s", chunk_id)
-            logger.info("ChunkSQLStore: deleted chunk id=%s owner=%s:%s", chunk_id, owner_type, owner_id)
-        except Exception:
-            self._safe_rollback(conn, "delete_chunk")
-            logger.exception("ChunkSQLStore.delete_chunk failed id=%s", chunk_id)
-            raise
-        finally:
-            conn.close()
+                self._safe_rollback(conn, "delete_chunk")
+                logger.exception("ChunkSQLStore.delete_chunk failed id=%s", chunk_id)
+                raise
+            finally:
+                conn.close()
 
+        return await self._run_sync(_sync)
