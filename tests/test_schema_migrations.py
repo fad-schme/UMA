@@ -47,6 +47,30 @@ def _indexes(db_path: str, table: str) -> set[str]:
         conn.close()
 
 
+def test_store_metadata_uses_only_canonical_uma_names(tmp_path) -> None:
+    db_path = str(tmp_path / "metadata.sqlite")
+
+    EpisodicSQLStore(
+        db_adapter=SQLiteAdapter(db_path),
+        vector_index=_NoopVectorIndex(),
+    )
+
+    conn = sqlite3.connect(db_path)
+    try:
+        meta = dict(
+            conn.execute(
+                "SELECT meta_key, meta_value FROM uma_store_meta"
+            ).fetchall()
+        )
+    finally:
+        conn.close()
+
+    assert meta["format_name"] == "uma"
+    assert meta["uma_version"]
+    assert meta["store_name"] == "episodic"
+    assert set(meta) == {"format_name", "uma_version", "store_name"}
+
+
 @pytest.mark.asyncio
 async def test_document_store_migrates_old_rows_and_persists_scope_fields(tmp_path) -> None:
     db_path = str(tmp_path / "documents.sqlite")

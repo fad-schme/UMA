@@ -1,4 +1,5 @@
 # Python
+__MACOSX/
 __pycache__/
 .pycache*
 *.py[cod]
@@ -83,3 +84,4 @@ tmp.md
 runs/
 locomo/*
 examples/*
+config/*

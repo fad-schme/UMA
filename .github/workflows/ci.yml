@@ -1,15 +1,35 @@
 name: CI
 
+# Run the complete quality gate for pull requests and keep long-lived branches
+# green after merges. This workflow never writes repository contents.
 on:
-  push:
-    branches: ["main", "develop"]
   pull_request:
-    branches: ["main"]
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+# A newer commit makes an older run for the same branch or PR irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Default every job and third-party action to read-only repository access.
+permissions:
+  contents: read
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
 
 jobs:
-  test:
+  # UMA supports Python 3.9 and newer. Run the full suite on every supported
+  # minor version so packaging or language compatibility regressions are caught.
+  tests:
     name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     strategy:
       fail-fast: false
@@ -17,41 +37,282 @@ jobs:
         python-version: ["3.9", "3.10", "3.11", "3.12"]
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v6
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
-          cache: "pip"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.txt
 
-      - name: Install UMA and dev dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+      - name: Install UMA and test dependencies
+        run: python -m pip install --editable ".[dev]"
 
-      - name: Run tests
-        run: |
-          PYTHONPATH=. pytest tests/ -q --tb=short
+      - name: Check installed dependency consistency
+        run: python -m pip check
 
-  lint:
-    name: Security scan (Bandit)
+      - name: Run full test suite
+        run: python -m pytest tests/ -q --tb=short
+
+  # These tests exercise UMA's trust, quarantine, injection, integrity, and
+  # ingestion boundaries explicitly. They remain visible as their own required
+  # check even though the compatibility matrix also runs them.
+  security-invariants:
+    name: Security invariants
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-          cache: "pip"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.txt
 
-      - name: Install dev dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+      - name: Install UMA and test dependencies
+        run: python -m pip install --editable ".[dev]"
+
+      - name: Run security invariant tests
+        run: python -m pytest tests/test_security_*.py -q --tb=short
+
+  # Provider registration, configuration parsing, and vector dimensions are
+  # public integration contracts. Keep them isolated for quick diagnosis.
+  contract-tests:
+    name: Provider and vector contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.txt
+
+      - name: Install UMA and test dependencies
+        run: python -m pip install --editable ".[dev]"
+
+      - name: Run contract tests
+        run: >-
+          python -m pytest
+          tests/test_configuration.py
+          tests/test_vector_contract.py
+          -q --tb=short
+
+  # Ruff catches undefined names, import mistakes, and other static correctness
+  # problems before they become runtime failures.
+  lint:
+    name: Lint (Ruff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install Ruff
+        run: python -m pip install ruff
+
+      - name: Run Ruff
+        run: ruff check uma/ tests/ --output-format=github
+
+  # Bandit blocks medium-or-higher findings when confidence is at least medium.
+  # This avoids accepting known security issues without failing on speculative,
+  # low-confidence string-construction warnings.
+  static-analysis:
+    name: Static analysis (Bandit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install Bandit
+        run: python -m pip install "bandit[toml]"
 
       - name: Run Bandit
+        run: >-
+          bandit
+          --recursive uma/
+          --severity-level medium
+          --confidence-level medium
+          --format txt
+
+  # Audit both direct and transitive dependencies in the environment users get
+  # from the documented development install. Any known vulnerability fails CI.
+  dependency-audit:
+    name: Dependency audit (pip-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.txt
+
+      - name: Install UMA and audit tooling
+        run: python -m pip install --editable ".[dev]"
+
+      - name: Audit dependencies for known vulnerabilities
+        run: >-
+          pip-audit
+          --strict
+          --vulnerability-service pypi
+          --format columns
+
+  # Scan the complete reachable Git history so credentials cannot be hidden in
+  # an earlier commit and then removed only from the branch tip.
+  secret-scan:
+    name: Secret scan (Gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Verify that the source distribution and wheel can be produced and that
+  # their package metadata is valid before a release is attempted.
+  package-build:
+    name: Build package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install build tooling
+        run: python -m pip install build twine
+
+      - name: Build source distribution and wheel
+        run: python -m build
+
+      - name: Validate package metadata
+        run: python -m twine check dist/*
+
+  # Documentation feedback is intentionally non-blocking: broken external links
+  # or a missing changelog entry should be visible without masking code quality.
+  docs-lint:
+    name: Documentation checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check Markdown links
+        uses: gaurav-nelson/github-action-markdown-link-check@v1
+        with:
+          use-quiet-mode: yes
+          use-verbose-mode: yes
+
+      - name: Warn when UMA changes omit the changelog
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          bandit -r uma/ -ll --exit-zero
+          changed_files="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          if grep -q '^uma/' <<<"$changed_files" &&
+             ! grep -q '^CHANGELOG\.md$' <<<"$changed_files"; then
+            echo "::warning::UMA source changed without a CHANGELOG.md update."
+          fi
+
+  # Configure only "CI / All checks passed" as the required branch-protection
+  # check. Jobs can then be added or removed without changing that rule.
+  all-checks-passed:
+    name: All checks passed
+    needs:
+      - tests
+      - security-invariants
+      - contract-tests
+      - lint
+      - static-analysis
+      - dependency-audit
+      - secret-scan
+      - package-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+
+    steps:
+      - name: Verify all required jobs succeeded
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          results = json.loads(os.environ["NEEDS_JSON"])
+          failed = [
+              name
+              for name, outcome in results.items()
+              if outcome.get("result") != "success"
+          ]
+
+          if failed:
+              print(f"Failed or skipped jobs: {', '.join(sorted(failed))}")
+              sys.exit(1)
+
+          print("All required CI jobs passed.")
+          PY
