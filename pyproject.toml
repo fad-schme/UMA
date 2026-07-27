@@ -46,7 +46,7 @@ skips = ["B608","B105"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W"]
-ignore = ["E402"]
+ignore = ["E402", "E501"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]

@@ -9,6 +9,7 @@ env/
 venv/
 .venv/
 .venv*
+.claude/skills/dev/*
 ENV/
 AGENTS.md
 .codex/
