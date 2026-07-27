@@ -162,6 +162,148 @@ async def test_skill_round_trip_trust_score_and_content_hash(tmp_path):
     assert result is not None
     assert result.trust_score == pytest.approx(0.6)
     assert result.content_hash == ch
+    # Description previously read back as "" because the procedural store
+    # did not persist it (Phase 1 of the memory-promotion feature fixed the
+    # gap). Assert here so the round-trip is enforced going forward.
+    assert result.description == "Greet the user."
+    # Default kind for a plain procedural skill.
+    assert result.kind == "procedural"
+    # focus_areas is an agent-profile field and stays [] on plain rows.
+    assert result.focus_areas == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: memory-promotion schema — kind, description, focus_areas,
+# profile_embedding are now persisted; agent_profile rows skip the vector
+# index by design (so procedural search never sees them).
+# ---------------------------------------------------------------------------
+
+
+class _RecordingVI(VectorIndex):
+    """VectorIndex that records upsert calls so tests can assert whether
+    a given add_skill path went through the vector index or bypassed it.
+    Query returns []; delete is a no-op."""
+
+    def __init__(self) -> None:
+        self.upsert_calls: list[dict] = []
+
+    def upsert(self, ids, vectors, *, tenant_ids, owner_types, owner_ids, extra_metadata=None) -> None:
+        self.upsert_calls.append({
+            "ids": list(ids),
+            "owner_types": list(owner_types),
+            "owner_ids": list(owner_ids),
+        })
+
+    def query(self, vector, *, tenant_id, owner_type, owner_id, k=10, extra_filters=None):
+        return []
+
+    def delete(self, ids) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_procedural_skill_persists_new_columns(tmp_path):
+    """New columns (kind, description, focus_areas) roundtrip on a plain
+    procedural skill. profile_embedding stays None (only populated for
+    agent_profile rows)."""
+    store = _proc(tmp_path)
+    skill = Skill(
+        id="skill_002",
+        name="triage_pr",
+        description="Triage incoming pull requests.",
+        kind="procedural",
+        focus_areas=["reviews", "pull requests"],
+        created_at=_NOW,
+        updated_at=_NOW,
+        owner_type="agent",
+        owner_id="agent-default",
+        tenant_id="default",
+        plan={"steps": ["read the diff"]},
+    )
+    await store.add_skill(skill, _VEC)
+
+    result = await store.get_skill(
+        "skill_002", tenant_id="default", owner_type="agent", owner_id="agent-default"
+    )
+    assert result is not None
+    assert result.kind == "procedural"
+    assert result.description == "Triage incoming pull requests."
+    assert result.focus_areas == ["reviews", "pull requests"]
+    # profile_embedding stays None for procedural rows — the vector index
+    # holds the embedding, not the SQL column.
+    assert result.embedding is None
+
+
+@pytest.mark.asyncio
+async def test_agent_profile_roundtrips_and_skips_vector_index(tmp_path):
+    """agent_profile rows store their embedding in the profile_embedding
+    BLOB column and MUST NOT enter the vector index. This closes the
+    retrieval-leakage risk that would otherwise need a `WHERE kind=` filter
+    on every procedural read path."""
+    recording_vi = _RecordingVI()
+    store = ProceduralSQLStore(SQLiteAdapter(str(tmp_path / "p.db")), recording_vi)
+    profile_vec = [0.25] * 64
+    skill = Skill(
+        id="skill_profile_agent-default",
+        name="agent-default profile",
+        description="I help with code review and PR triage.",
+        kind="agent_profile",
+        focus_areas=["code review", "PRs", "triage"],
+        created_at=_NOW,
+        updated_at=_NOW,
+        owner_type="agent",
+        owner_id="agent:agent-default",
+        tenant_id="default",
+    )
+    await store.add_skill(skill, profile_vec)
+
+    # Contract: the vector index MUST NOT have been touched for an
+    # agent_profile row.
+    assert recording_vi.upsert_calls == [], (
+        f"agent_profile row leaked into vector index: {recording_vi.upsert_calls!r}"
+    )
+
+    # Contract: the embedding roundtrips through the SQL BLOB column,
+    # within float32 precision.
+    result = await store.get_skill(
+        "skill_profile_agent-default",
+        tenant_id="default",
+        owner_type="agent",
+        owner_id="agent:agent-default",
+    )
+    assert result is not None
+    assert result.kind == "agent_profile"
+    assert result.focus_areas == ["code review", "PRs", "triage"]
+    assert result.description == "I help with code review and PR triage."
+    assert result.embedding is not None
+    assert len(result.embedding) == 64
+    # float32 packing rounds; approx compare.
+    for stored, original in zip(result.embedding, profile_vec):
+        assert stored == pytest.approx(original, rel=1e-5, abs=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_procedural_add_skill_still_writes_vector_index(tmp_path):
+    """Regression: kind='procedural' rows must still populate the vector
+    index (this is the mechanism procedural search relies on). Only
+    kind='agent_profile' rows bypass it."""
+    recording_vi = _RecordingVI()
+    store = ProceduralSQLStore(SQLiteAdapter(str(tmp_path / "p.db")), recording_vi)
+    skill = Skill(
+        id="skill_normal",
+        name="normal_skill",
+        description="A normal procedural skill.",
+        kind="procedural",
+        created_at=_NOW,
+        updated_at=_NOW,
+        owner_type="agent",
+        owner_id="agent-default",
+        tenant_id="default",
+    )
+    await store.add_skill(skill, _VEC)
+
+    assert len(recording_vi.upsert_calls) == 1
+    assert recording_vi.upsert_calls[0]["ids"] == ["skill_normal"]
 
 
 # ---------------------------------------------------------------------------

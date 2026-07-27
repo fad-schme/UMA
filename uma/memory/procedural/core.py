@@ -14,13 +14,33 @@ Responsibilities
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timezone
 import logging
 from typing import Any, List, Optional
 
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
-from uma.common.types import OwnershipRef, Skill
+from uma.common.types import AgentProfile, OwnershipRef, Skill
 from uma.common.dedupe import dedupe_by_id
 from uma.common.ownership import validate_explicit_owner
+
+
+def _agent_profile_row_id(agent_id: str) -> str:
+    """Deterministic row id for the agent-profile Skill row.
+
+    One row per agent — the id is derived from agent_id so that upsert
+    always finds the same row (idempotent overwrite semantics).
+    """
+    return f"skill_agent_profile:{agent_id}"
+
+
+def _agent_profile_owner_id(agent_id: str) -> str:
+    """Owner-scope id for the agent-profile Skill row.
+
+    Matches the ``agent:<id>`` convention used by
+    :meth:`PromotionPolicy.select_promotion_target` when it targets
+    agent scope.
+    """
+    return f"agent:{agent_id}"
 
 logger = logging.getLogger(__name__)
 
@@ -240,6 +260,123 @@ class ProceduralCore:
         except Exception:
             logger.exception("ProceduralCore.delete_skill failed for id=%s", skill_id)
             return False
+
+    # ------------------------------------------------------------------
+    # PUBLIC API — agent profile (memory-promotion feature)
+    # ------------------------------------------------------------------
+
+    async def upsert_agent_profile(
+        self,
+        *,
+        agent_id: str,
+        description: str,
+        focus_areas: List[str],
+        embedding: List[float],
+        tenant_id: str = DEFAULT_TENANT_ID,
+    ) -> AgentProfile:
+        """Insert-or-overwrite the agent's profile row.
+
+        The profile is persisted as a Skill row with ``kind='agent_profile'``.
+        The row id is deterministic (``skill_agent_profile:<agent_id>``) so
+        repeated calls overwrite the same row. Owner scope is
+        ``('agent', 'agent:<agent_id>')``.
+
+        Agent-profile rows never enter the vector index (they are only
+        fetched by agent_id via :meth:`get_agent_profile`), so this write
+        cannot leak into normal procedural search.
+        """
+        if self.store is None:
+            raise RuntimeError("ProceduralCore.upsert_agent_profile: store is missing")
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise ValueError("agent_id must be a non-empty string")
+        if not isinstance(description, str) or not description.strip():
+            raise ValueError("description must be a non-empty string")
+        if not isinstance(focus_areas, list):
+            raise ValueError("focus_areas must be a list of strings")
+        for item in focus_areas:
+            if not isinstance(item, str):
+                raise ValueError("focus_areas entries must be strings")
+        if not isinstance(embedding, list) or not embedding:
+            raise ValueError("embedding must be a non-empty list of floats")
+
+        now = datetime.now(timezone.utc)
+        skill = Skill(
+            id=_agent_profile_row_id(agent_id),
+            name=f"agent profile: {agent_id}",
+            description=description,
+            kind="agent_profile",
+            focus_areas=list(focus_areas),
+            created_at=now,
+            updated_at=now,
+            owner_type="agent",
+            owner_id=_agent_profile_owner_id(agent_id),
+            tenant_id=tenant_id,
+        )
+        await self.store.add_skill(skill, embedding)
+        return AgentProfile(
+            agent_id=agent_id,
+            description=description,
+            focus_areas=list(focus_areas),
+            profile_embedding=list(embedding),
+            tenant_id=tenant_id,
+        )
+
+    async def get_agent_profile(
+        self,
+        *,
+        agent_id: str,
+        tenant_id: str = DEFAULT_TENANT_ID,
+    ) -> Optional[AgentProfile]:
+        """Return the agent's profile if set, else None.
+
+        Fetches directly by row id under the agent-owner scope. The
+        embedding is decoded from the SQL ``profile_embedding`` BLOB by
+        :meth:`ProceduralSQLStore._row_to_object` (the agent_profile row
+        is never in the vector index).
+        """
+        if self.store is None:
+            return None
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise ValueError("agent_id must be a non-empty string")
+
+        try:
+            skill = await self.store.get_skill(
+                _agent_profile_row_id(agent_id),
+                tenant_id=tenant_id,
+                owner_type="agent",
+                owner_id=_agent_profile_owner_id(agent_id),
+            )
+        except Exception:
+            logger.exception(
+                "ProceduralCore.get_agent_profile failed for agent_id=%s", agent_id
+            )
+            return None
+        if skill is None:
+            return None
+        if getattr(skill, "kind", "procedural") != "agent_profile":
+            # Defensive: an id collision with a normal skill would be a
+            # bug elsewhere, but never return a non-profile as if it were
+            # a profile.
+            logger.warning(
+                "ProceduralCore.get_agent_profile: row id=%s exists but kind=%r; ignoring",
+                skill.id,
+                skill.kind,
+            )
+            return None
+        embedding = list(skill.embedding or [])
+        if not embedding:
+            logger.warning(
+                "ProceduralCore.get_agent_profile: agent_id=%s has empty profile_embedding",
+                agent_id,
+            )
+            return None
+        return AgentProfile(
+            agent_id=agent_id,
+            description=skill.description,
+            focus_areas=list(skill.focus_areas or []),
+            profile_embedding=embedding,
+            tenant_id=str(skill.tenant_id or tenant_id),
+        )
 
     # ------------------------------------------------------------------
     # PUBLIC API — retrieval

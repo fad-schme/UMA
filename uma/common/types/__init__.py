@@ -13,6 +13,7 @@ from .types_chunk import Chunk
 from .types_fact import Fact
 from .types_episode import Episode
 from .types_skill import Skill
+from .types_promotion import AgentProfile, QualifierDecision
 
 __all__ = [
     "OwnerType",
@@ -24,4 +25,6 @@ __all__ = [
     "Fact",
     "Episode",
     "Skill",
+    "AgentProfile",
+    "QualifierDecision",
 ]

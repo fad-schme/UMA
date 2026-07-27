@@ -15,6 +15,18 @@ async def uma_memory(tmp_path):
     try:
         yield mem
     finally:
+        # Phase 5: promotion is fire-and-forget. Drain any lingering
+        # background tasks before shutdown so a test that scheduled a
+        # promotion but did not explicitly await it cannot leave a task
+        # bleeding into the next test's fixture teardown.
+        pipeline = getattr(mem, "pipeline", None)
+        if pipeline is not None and hasattr(pipeline, "await_pending_background"):
+            try:
+                await pipeline.await_pending_background()
+            except Exception:
+                # Best-effort drain; do not let teardown mask a test
+                # failure with a fixture-level exception.
+                pass
         try:
             mem.shutdown()
         except Exception:

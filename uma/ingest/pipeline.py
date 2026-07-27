@@ -27,10 +27,11 @@ Coding Agent Instructions
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 import logging
 import hashlib
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional, List, Set
 from uma.memory.promotion import PromotionPolicy
 from uma.adapters.observability.context import request_context
 from uma.adapters.observability.metrics import increment, timed
@@ -100,6 +101,12 @@ class MemoryPipeline:
         self.mem = memory_client
         self.hooks = hooks
         self.promotion_policy = promotion_policy
+        # Fire-and-forget background tasks (currently: promotion). We
+        # keep strong references so tasks aren't garbage-collected
+        # mid-flight (asyncio quirk) and so tests / shutdown paths can
+        # await pending work via ``await_pending_background``. Each task
+        # removes itself from the set via done_callback.
+        self._background_tasks: Set[asyncio.Task] = set()
         if promotion_policy is None:
             logger.info("PromotionPolicy disabled (none provided).")
         else:
@@ -233,7 +240,16 @@ class MemoryPipeline:
                             logger.debug("pipeline: fact meta annotation failed, skipping fact", exc_info=True)
                             continue
 
-                await self._maybe_promote_facts(user_id=user_id, facts=facts)
+                # Phase 5: promotion is fire-and-forget. The reply path
+                # (and every downstream step in this pipeline) must not
+                # wait on promotion latency. The scheduled task runs
+                # after this function returns; tests and graceful
+                # shutdown can await it via ``await_pending_background``.
+                self._schedule_promotion(
+                    user_id=user_id,
+                    facts=facts,
+                    tenant_id=resolved_tenant_id,
+                )
 
                 await self._update_graph(
                     user_id,
@@ -251,21 +267,108 @@ class MemoryPipeline:
     # ------------------------------------------------------------------
     # PROMOTION (OPTIONAL)
     # ------------------------------------------------------------------
-    async def _maybe_promote_facts(self, user_id: str, facts: Any) -> None:
-        """Optionally promote eligible facts to agent-scoped knowledge.
+    def _schedule_promotion(
+        self,
+        *,
+        user_id: str,
+        facts: Any,
+        tenant_id: str,
+    ) -> Optional[asyncio.Task]:
+        """Schedule a fire-and-forget promotion pass.
 
-        This is a best-effort stage:
-        - NEVER raises to caller
-        - bounded by policy.max_promotions_per_turn
-        - only promotes if we can supply an embedding (so vector search stays correct)
+        Returns the created task, or None when there's nothing to
+        schedule (no policy bound or no facts to consider). Callers do
+        NOT await the result — that would defeat the fire-and-forget
+        contract.
 
-        Requirements on UMAMemory shape:
-        - semantic_core with async upsert_fact(fact, embedding)
-        # NOTE:
-        # Promotion requires embeddings to already exist on facts.
-        # v1 does NOT compute embeddings here to avoid adding LLM / embedder calls
-        # to the pipeline. Facts without embeddings are skipped intentionally.
+        The task is tracked in ``self._background_tasks`` so:
+          1. It isn't garbage-collected before it runs (an asyncio
+             pitfall — `create_task` returns a reference that the
+             caller must retain).
+          2. Tests and shutdown paths can await pending work via
+             :meth:`await_pending_background`.
+        The done-callback removes the task from the set on completion.
+        """
+        if self.promotion_policy is None:
+            return None
+        if not facts:
+            return None
+        coro = self._safe_promotion_task(
+            user_id=user_id,
+            facts=facts,
+            tenant_id=tenant_id,
+        )
+        task = asyncio.create_task(coro, name=f"promotion-{tenant_id}-{user_id}")
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
 
+    async def _safe_promotion_task(
+        self,
+        *,
+        user_id: str,
+        facts: Any,
+        tenant_id: str,
+    ) -> None:
+        """Outer safety net for the fire-and-forget promotion task.
+
+        ``_maybe_promote_facts`` is documented as never raising to the
+        caller. This wrapper is defense-in-depth: if a future change to
+        the promotion body breaks that contract, the exception would
+        otherwise be silently swallowed by asyncio's default
+        "Task exception was never retrieved" handling. Logging it
+        explicitly here keeps the failure observable.
+        """
+        try:
+            await self._maybe_promote_facts(
+                user_id=user_id,
+                facts=facts,
+                tenant_id=tenant_id,
+            )
+        except Exception:
+            logger.exception(
+                "Background promotion task raised; swallowed to protect the reply path."
+            )
+
+    async def await_pending_background(self) -> None:
+        """Await all pending fire-and-forget background tasks.
+
+        Called by tests to observe the effect of promotion after
+        ``process_turn`` returns. Production callers rarely need this,
+        but a graceful-shutdown path can use it to drain in-flight work
+        before closing stores. Safe to call when no tasks are pending.
+        """
+        if not self._background_tasks:
+            return
+        # Snapshot — the done_callback mutates the set during gather.
+        pending = list(self._background_tasks)
+        await asyncio.gather(*pending, return_exceptions=True)
+
+    async def _maybe_promote_facts(
+        self,
+        user_id: str,
+        facts: Any,
+        tenant_id: str = DEFAULT_TENANT_ID,
+    ) -> None:
+        """Promote qualifying facts into the agent's KB.
+
+        Contract:
+            - NEVER raises to caller (best-effort stage)
+            - Bounded by ``policy.max_promotions_per_turn``
+            - Requires:
+                * a ``PromotionPolicy`` bound on the memory
+                * an ``AgentProfile`` set via ``UMAMemory.set_agent_profile``
+                * a semantic core with async ``upsert_fact(fact, embedding)``
+                * embeddings already present on facts (populated by the
+                  extractor; not computed here to keep the pipeline free
+                  of LLM/embedder calls)
+              Any missing requirement is a silent no-op for the turn.
+
+        Each candidate fact goes through
+        :meth:`PromotionPolicy.qualifies_for_agent_kb`, which composes
+        quarantine + is_eligible + scope-match against the agent profile.
+        There is no "no-profile" pathway — the scope-match gate is the
+        only pathway to the agent KB.
         """
         policy = getattr(self, "promotion_policy", None)
         if policy is None:
@@ -293,6 +396,20 @@ class MemoryPipeline:
             logger.warning("Promotion enabled but semantic_core is missing; skipping promotions.")
             return
 
+        procedural_core = getattr(self.mem, "procedural_core", None)
+        if procedural_core is None:
+            logger.warning(
+                "Promotion enabled but procedural_core is missing; skipping promotions."
+            )
+            return
+
+        policy_agent_id = getattr(policy, "agent_id", None)
+        if not policy_agent_id:
+            logger.warning(
+                "Promotion enabled but policy has no agent_id; skipping promotions."
+            )
+            return
+
         max_promotions = getattr(policy, "max_promotions_per_turn", 5)
         try:
             max_promotions = int(max_promotions)
@@ -301,29 +418,64 @@ class MemoryPipeline:
         if max_promotions <= 0:
             return
 
+        # Fetch the agent profile once per turn. Required — no legacy
+        # is_eligible-only pathway. If the profile is absent or the
+        # fetch fails, promotion is a no-op for this turn (an operator
+        # must call set_agent_profile to opt in).
+        try:
+            agent_profile = await procedural_core.get_agent_profile(
+                agent_id=policy_agent_id,
+                tenant_id=tenant_id,
+            )
+        except Exception:
+            logger.exception(
+                "Promotion: get_agent_profile failed for agent_id=%s; skipping promotions this turn.",
+                policy_agent_id,
+            )
+            return
+        if agent_profile is None:
+            logger.debug(
+                "Promotion: no agent_profile set for agent_id=%s; skipping promotions this turn.",
+                policy_agent_id,
+            )
+            return
+
         promoted_count = 0
 
         for fact in fact_list:
             if promoted_count >= max_promotions:
                 break
 
-            try:
-                if not policy.is_eligible(fact):
-                    continue
-                target = policy.select_promotion_target(fact)
-                if target is None:
-                    continue
-            except Exception:
-                logger.exception("PromotionPolicy target selection failed; skipping fact.")
-                continue
-
-            # Require embedding to keep the agent KB searchable. If absent, skip.
+            # Embedding is required — promoted rows must be searchable,
+            # and the qualifier's embedding branch needs the vector too.
+            # Facts without embeddings can never be promoted, so we skip
+            # them before running the qualifier.
             embedding = _get_fact_embedding(fact)
             if embedding is None:
                 logger.debug(
                     "Skipping promotion for fact id=%r (no embedding present in fact.meta).",
                     getattr(fact, "id", None),
                 )
+                continue
+
+            try:
+                decision = policy.qualifies_for_agent_kb(
+                    fact,
+                    agent_profile,
+                    fact_embedding=embedding,
+                )
+                if not decision.passed:
+                    logger.debug(
+                        "Promotion: dropped fact id=%r reasons=%s",
+                        getattr(fact, "id", None),
+                        decision.reasons,
+                    )
+                    continue
+                target = policy.select_promotion_target(fact)
+                if target is None:
+                    continue
+            except Exception:
+                logger.exception("PromotionPolicy target selection failed; skipping fact.")
                 continue
 
             try:

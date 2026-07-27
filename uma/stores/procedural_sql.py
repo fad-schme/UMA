@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import struct
 from datetime import datetime
 from typing import Any, List, Optional
 
@@ -29,6 +30,29 @@ from .base_vector_sql_store import BaseVectorSQLStore
 # fragments containing no user data.
 _QUARANTINE_FILTER = " AND quarantined_at IS NULL"
 _NO_FILTER = ""
+
+
+def _pack_embedding(vec: Optional[List[float]]) -> Optional[bytes]:
+    """Serialize a float vector to a little-endian float32 BLOB.
+
+    Used for the ``profile_embedding`` column on ``kind='agent_profile'``
+    rows — these do NOT go through the vector index (so they cannot leak
+    into normal skill retrieval), so the embedding must be stored inline.
+    Returns None for a None/empty input.
+    """
+    if not vec:
+        return None
+    return struct.pack(f"<{len(vec)}f", *(float(x) for x in vec))
+
+
+def _unpack_embedding(blob: Optional[bytes]) -> Optional[List[float]]:
+    """Inverse of :func:`_pack_embedding`. Returns None on empty input."""
+    if not blob:
+        return None
+    count = len(blob) // 4
+    if count == 0:
+        return None
+    return list(struct.unpack(f"<{count}f", blob))
 
 from .base_sql_store import DEFAULT_TENANT_ID
 from ..adapters.db.base import DBAdapter
@@ -114,6 +138,13 @@ class ProceduralSQLStore(BaseVectorSQLStore):
             self._ensure_column(conn, "skills", "trust_score", "REAL NOT NULL DEFAULT 0.5")
             self._ensure_column(conn, "skills", "content_hash", "TEXT")
             self._ensure_column(conn, "skills", "quarantined_at", "DATETIME")
+            # Agent-profile support (memory-promotion feature): existing
+            # procedural rows read back with kind='procedural' and
+            # description='' via the column DEFAULTs — no data migration.
+            self._ensure_column(conn, "skills", "kind", "TEXT NOT NULL DEFAULT 'procedural'")
+            self._ensure_column(conn, "skills", "description", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "skills", "focus_areas", "TEXT")
+            self._ensure_column(conn, "skills", "profile_embedding", "BLOB")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_owner ON skills(owner_type, owner_id);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_tenant_owner ON skills(tenant_id, owner_type, owner_id);")
 
@@ -194,10 +225,27 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         )
 
         row_keys = row.keys() if hasattr(row, "keys") else []
+
+        # New columns for the promotion feature. All four default safely
+        # for legacy rows written before the migration: `kind` and
+        # `description` have SQL DEFAULT values, `focus_areas` and
+        # `profile_embedding` are nullable.
+        kind_val = row["kind"] if "kind" in row_keys and row["kind"] is not None else "procedural"
+        description_val = row["description"] if "description" in row_keys and row["description"] is not None else ""
+        focus_areas_raw = row["focus_areas"] if "focus_areas" in row_keys else None
+        try:
+            focus_areas = json.loads(focus_areas_raw) if focus_areas_raw else []
+        except Exception:  # nosec B110 — malformed JSON in a legacy row falls back to empty; procedural code must not raise on a legacy read.
+            logger.debug("procedural_sql: malformed focus_areas JSON on skill id=%r; using [].", row["id"], exc_info=True)
+            focus_areas = []
+        profile_embedding_blob = row["profile_embedding"] if "profile_embedding" in row_keys else None
+        profile_embedding = _unpack_embedding(profile_embedding_blob)
+
         return Skill(
             id=row["id"],
             name=row["name"],
-            description="",
+            description=description_val,
+            kind=kind_val,
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
             tenant_id=(row["tenant_id"] if "tenant_id" in row_keys else DEFAULT_TENANT_ID),
@@ -221,6 +269,12 @@ class ProceduralSQLStore(BaseVectorSQLStore):
             tools=tools,
             example=row["example"],
             meta=normalized_meta,
+            focus_areas=focus_areas,
+            # agent_profile rows carry their embedding in the SQL BLOB
+            # (they never enter the vector index); surface it on the
+            # Skill dataclass so callers see the vector without a
+            # second lookup.
+            embedding=profile_embedding,
         )
     # ------------------------------------------------------------------ #
     # Validation
@@ -289,9 +343,21 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                     created_at=skill.created_at,
                     updated_at=skill.updated_at,
                 )
+                # For kind='agent_profile' rows the embedding is stored
+                # inline in the profile_embedding BLOB column and NOT
+                # written to the vector index. This keeps procedural
+                # search (which goes through the vector index) blind to
+                # agent profiles by construction.
+                is_agent_profile = getattr(skill, "kind", "procedural") == "agent_profile"
+                profile_embedding_bytes = _pack_embedding(embedding) if is_agent_profile else None
+
                 payload = {
                     "id": skill.id,
                     "name": skill.name,
+                    "description": getattr(skill, "description", "") or "",
+                    "kind": getattr(skill, "kind", "procedural") or "procedural",
+                    "focus_areas": json.dumps(list(getattr(skill, "focus_areas", None) or [])),
+                    "profile_embedding": profile_embedding_bytes,
                     "trigger_phrases": json.dumps(skill.trigger_phrases),
                     "trigger_patterns": json.dumps(skill.trigger_patterns),
                     "plan": json.dumps(skill.plan),
@@ -321,21 +387,29 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                     conn,
                     """
                     INSERT INTO skills (
-                        id, name, trigger_phrases, trigger_patterns, plan,
-                        tools, example, meta, created_at, updated_at, tenant_id,
-                        owner_type, owner_id, workspace_id, origin_agent_id,
-                        origin_user_id, origin_session_id, scope_model_version,
-                        trust_score, content_hash, quarantined_at
+                        id, name, description, kind, focus_areas,
+                        profile_embedding, trigger_phrases, trigger_patterns,
+                        plan, tools, example, meta, created_at, updated_at,
+                        tenant_id, owner_type, owner_id, workspace_id,
+                        origin_agent_id, origin_user_id, origin_session_id,
+                        scope_model_version, trust_score, content_hash,
+                        quarantined_at
                     )
                     VALUES (
-                        :id, :name, :trigger_phrases, :trigger_patterns, :plan,
-                        :tools, :example, :meta, :created_at, :updated_at, :tenant_id,
-                        :owner_type, :owner_id, :workspace_id, :origin_agent_id,
-                        :origin_user_id, :origin_session_id, :scope_model_version,
-                        :trust_score, :content_hash, :quarantined_at
+                        :id, :name, :description, :kind, :focus_areas,
+                        :profile_embedding, :trigger_phrases, :trigger_patterns,
+                        :plan, :tools, :example, :meta, :created_at, :updated_at,
+                        :tenant_id, :owner_type, :owner_id, :workspace_id,
+                        :origin_agent_id, :origin_user_id, :origin_session_id,
+                        :scope_model_version, :trust_score, :content_hash,
+                        :quarantined_at
                     )
                     ON CONFLICT(id) DO UPDATE SET
                         name=excluded.name,
+                        description=excluded.description,
+                        kind=excluded.kind,
+                        focus_areas=excluded.focus_areas,
+                        profile_embedding=excluded.profile_embedding,
                         trigger_phrases=excluded.trigger_phrases,
                         trigger_patterns=excluded.trigger_patterns,
                         plan=excluded.plan,
@@ -358,6 +432,24 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                     params=payload,
                     log_context="add_skill",
                 )
+                if is_agent_profile:
+                    # Agent-profile rows deliberately never enter the
+                    # vector index — they are only ever fetched by
+                    # agent_id via get_agent_profile / list_skills, and
+                    # skipping the upsert closes the retrieval-leakage
+                    # risk that a `WHERE kind='procedural'` filter would
+                    # otherwise be needed to close.
+                    try:
+                        conn.commit()
+                    except Exception:
+                        self._safe_rollback(conn, "add_skill_commit_agent_profile")
+                        raise
+                    logger.info(
+                        "ProceduralSQLStore: upserted agent_profile id=%s (vector index skipped by design)",
+                        skill.id,
+                    )
+                    return skill
+
                 try:
                     # C1: isolation must be populated by upstream validation
                     # (DAT invariant). We refuse to fall back to empty strings

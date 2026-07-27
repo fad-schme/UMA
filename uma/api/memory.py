@@ -86,7 +86,7 @@ from uma.common.initializers.runtime import (
 )
 from uma.common.registry import FeatureLoader, FeaturePolicy, default_feature_registry
 from .runtime import AnimusProfileProvider, UMARuntime
-from uma.common.types import RuntimeContext
+from uma.common.types import AgentProfile, RuntimeContext
 from uma.common.injection_scan import scan_content, InjectionDetectedError
 
 logger = logging.getLogger(__name__)
@@ -427,7 +427,88 @@ class UMAMemory:
         self._agent_id = agent_id.strip()
         logger.debug("UMAMemory.set_context: bound agent identity agent=%s", self._agent_id)
         return self
-    
+
+    # ----------------------------------------------------------------------
+    # Agent Profile (memory-promotion feature)
+    # ----------------------------------------------------------------------
+
+    async def set_agent_profile(
+        self,
+        *,
+        description: str,
+        focus_areas: list[str],
+        tenant_id: str = "default",
+    ) -> AgentProfile:
+        """Upsert this instance's agent profile.
+
+        The profile is consulted by ``PromotionPolicy.qualifies_for_agent_kb``
+        to decide which user-owned facts qualify for elevation into the
+        agent's global KB during ``process_turn``. Without a profile
+        set, the pipeline falls back to the plain ``is_eligible`` gates.
+
+        Uses ``self.agent_id`` (bound via :meth:`set_context`). Computes
+        the profile embedding from ``description`` via the configured
+        embedder. Idempotent — a second call for the same agent overwrites.
+        The row is persisted in the procedural store with
+        ``kind='agent_profile'`` and never enters the vector index.
+        """
+        if not self.agent_id:
+            raise ValueError(
+                "UMAMemory.set_agent_profile requires a bound agent_id. "
+                "Call set_context(agent_id=...) first."
+            )
+        if self.procedural_core is None:
+            raise RuntimeError(
+                "UMAMemory.set_agent_profile: procedural_core is not initialized."
+            )
+        if self.embedder is None:
+            raise RuntimeError(
+                "UMAMemory.set_agent_profile: embedder is not initialized."
+            )
+        if not isinstance(description, str) or not description.strip():
+            raise ValueError("description must be a non-empty string")
+        if not isinstance(focus_areas, list):
+            raise ValueError("focus_areas must be a list of strings")
+
+        embeddings = await self.embedder.embed([description])
+        if not embeddings or not embeddings[0]:
+            raise RuntimeError(
+                "UMAMemory.set_agent_profile: embedder returned no vector for description."
+            )
+        embedding = list(embeddings[0])
+
+        profile = await self.procedural_core.upsert_agent_profile(
+            agent_id=self.agent_id,
+            description=description,
+            focus_areas=list(focus_areas),
+            embedding=embedding,
+            tenant_id=tenant_id,
+        )
+        logger.info(
+            "UMAMemory.set_agent_profile: upserted agent_id=%s focus_areas=%d",
+            self.agent_id,
+            len(profile.focus_areas),
+        )
+        return profile
+
+    async def get_agent_profile(
+        self,
+        *,
+        tenant_id: str = "default",
+    ) -> Optional[AgentProfile]:
+        """Return this instance's agent profile, or None if unset."""
+        if not self.agent_id:
+            raise ValueError(
+                "UMAMemory.get_agent_profile requires a bound agent_id. "
+                "Call set_context(agent_id=...) first."
+            )
+        if self.procedural_core is None:
+            return None
+        return await self.procedural_core.get_agent_profile(
+            agent_id=self.agent_id,
+            tenant_id=tenant_id,
+        )
+
     # ----------------------------------------------------------------------
     # Core API: Retrieval
     # ----------------------------------------------------------------------

@@ -65,11 +65,22 @@ _ALLOWED_SCHEMA_COLUMNS: frozenset = frozenset({
     "description", "trigger_phrases", "trigger_patterns", "plan", "tools",
     "example", "text", "position", "page_start", "page_end",
     "supersedes", "superseded_by", "superseded_at",
+    # Skill discriminator + agent-profile fields. `kind` distinguishes
+    # ordinary procedural rows from `agent_profile` rows (one per agent,
+    # consulted by PromotionPolicy.qualifies_for_agent_kb). `focus_areas`
+    # is the JSON-encoded keyword list the qualifier's deterministic
+    # branch matches against fact text. `profile_embedding` holds the
+    # agent-profile embedding as a BLOB — agent_profile rows never enter
+    # the vector index, so procedural search cannot leak them.
+    "kind", "focus_areas", "profile_embedding",
 })
 # Column type definitions used in ALTER TABLE ADD COLUMN statements.
 _ALLOWED_COLUMN_DEFS: frozenset = frozenset({
     "TEXT",
     "TEXT NOT NULL DEFAULT 'default'",
+    "TEXT NOT NULL DEFAULT 'procedural'",
+    "TEXT NOT NULL DEFAULT ''",
+    "BLOB",
     "DATETIME",
     "REAL NOT NULL DEFAULT 0.5",
 })

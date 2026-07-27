@@ -18,14 +18,46 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from typing import Iterable, Optional, Set
+import math
+from typing import Iterable, List, Optional, Set
 
 from uma.common.accessors import get_attr_or_key
 from uma.common.ownership import validate_explicit_owner
-from uma.common.types import Fact, SCOPE_MODEL_VERSION
+from uma.common.types import AgentProfile, Fact, QualifierDecision, SCOPE_MODEL_VERSION
 from uma.common.trust import SourceDescriptor, score_source
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Scope-match thresholds (memory-promotion feature)
+# ---------------------------------------------------------------------------
+# These are codebase constants, not YAML-tunable, until we have calibration
+# data. Promotion is a policy inside the codebase for v1; user-visible
+# tunability lands as a follow-up when the numbers stop being guesses.
+#
+# SCOPE_COSINE_THRESHOLD is deliberately generous (0.6): the embedding
+# branch is the fallback when the deterministic keyword match misses, and
+# a too-tight threshold would reject relevant facts phrased differently
+# from the profile description. A tighter threshold (0.75+) can be set
+# later without breaking the API.
+SCOPE_COSINE_THRESHOLD: float = 0.6
+
+
+def _cosine(a: List[float], b: List[float]) -> float:
+    """Cosine similarity between two float vectors.
+
+    Returns 0.0 on shape mismatch (defensive — a mismatch means the
+    embedder that produced the fact vector disagrees with the one that
+    produced the profile, which is a configuration bug we should not
+    silently score as "similar"). Uses the same epsilon-guard pattern
+    as ``InMemoryVectorIndex._cosine`` to avoid divide-by-zero.
+    """
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a)) + 1e-8
+    nb = math.sqrt(sum(y * y for y in b)) + 1e-8
+    return dot / (na * nb)
 
 
 class PromotionPolicy:
@@ -160,6 +192,134 @@ class PromotionPolicy:
             return False
 
         return True
+
+    # ------------------------------------------------------------------ #
+    # Scope-match layer (memory-promotion feature)
+    # ------------------------------------------------------------------ #
+
+    def qualifies_for_agent_kb(
+        self,
+        fact: Fact,
+        agent_profile: AgentProfile,
+        fact_embedding: List[float],
+    ) -> QualifierDecision:
+        """Composite gate for agent-KB promotion.
+
+        Combines the existing :meth:`is_eligible` content gates with a
+        scope-match against the agent's declared focus. This is the
+        ONLY pathway into the agent's KB — there is no
+        is_eligible-only fallback for callers without a profile.
+
+        Gate order (matters for ``decision.reasons``):
+            1. Quarantine: ``fact.quarantined_at is None`` — cheap and
+               short-circuits everything else so we never embed or
+               log-tag a quarantined fact.
+            2. Existing ``is_eligible`` — content-level gates
+               (salience, confidence, predicate/subject/object rules,
+               source-type allowlist, PII blocklist).
+            3. Scope match — deterministic keyword match on
+               ``focus_areas`` OR cosine similarity between the fact
+               embedding and the profile embedding. Either passing is
+               sufficient.
+
+        This is a pure decision function — no I/O, no logging. The
+        caller (``MemoryPipeline._maybe_promote_facts``) does the
+        embedding lookup, the promotion write, and the ``logger.debug``
+        on drops.
+
+        Parameters
+        ----------
+        fact
+            The candidate fact.
+        agent_profile
+            The bound agent profile. Callers gate on
+            ``get_agent_profile`` returning non-None before invoking
+            this method.
+        fact_embedding
+            Required. The fact's embedding, matching the profile's
+            embedder. Callers gate on the embedding being present
+            (facts without one cannot be promoted regardless — the
+            agent KB needs the vector to search them later).
+        """
+        reasons: List[str] = []
+
+        # Gate 1: quarantine
+        quarantine_ok = getattr(fact, "quarantined_at", None) is None
+        if not quarantine_ok:
+            reasons.append("quarantined")
+            return QualifierDecision(
+                passed=False,
+                reasons=reasons,
+                quarantine_ok=False,
+                is_eligible=False,
+                scope_matched=False,
+            )
+
+        # Gate 2: existing content eligibility (salience, confidence, PII,
+        # predicate/source blocklist, etc.)
+        eligible = self.is_eligible(fact)
+        if not eligible:
+            reasons.append("ineligible")
+            return QualifierDecision(
+                passed=False,
+                reasons=reasons,
+                quarantine_ok=True,
+                is_eligible=False,
+                scope_matched=False,
+            )
+
+        # Gate 3: scope match — deterministic OR embedding branch
+        scope_matched = self._scope_matches(fact, agent_profile, fact_embedding)
+        if not scope_matched:
+            reasons.append("scope_mismatch")
+            return QualifierDecision(
+                passed=False,
+                reasons=reasons,
+                quarantine_ok=True,
+                is_eligible=True,
+                scope_matched=False,
+            )
+
+        return QualifierDecision(
+            passed=True,
+            reasons=reasons,
+            quarantine_ok=True,
+            is_eligible=True,
+            scope_matched=True,
+        )
+
+    @staticmethod
+    def _scope_matches(
+        fact: Fact,
+        agent_profile: AgentProfile,
+        fact_embedding: List[float],
+    ) -> bool:
+        """Return True if the fact is in-scope for the agent's profile.
+
+        Two branches, OR-combined:
+          (a) any ``focus_area`` appears as a case-insensitive substring
+              in ``subject + predicate + object`` — subsumes both spec
+              §6.2 "tag intersection" and "keyword hit" for the
+              Q5=derive-on-the-fly answer.
+          (b) cosine similarity between ``fact_embedding`` and
+              ``agent_profile.profile_embedding`` is at least
+              ``SCOPE_COSINE_THRESHOLD``.
+        """
+        # Deterministic branch — cheap; do first.
+        try:
+            fact_text = (
+                f"{fact.subject} {fact.predicate} {str(fact.object)}"
+            ).lower()
+        except Exception:
+            fact_text = ""
+        if fact_text:
+            for focus_area in agent_profile.focus_areas:
+                if focus_area and focus_area.lower() in fact_text:
+                    return True
+
+        # Embedding branch
+        sim = _cosine(fact_embedding, agent_profile.profile_embedding)
+        return sim >= SCOPE_COSINE_THRESHOLD
 
     def select_promotion_target(self, fact: Fact) -> Optional[tuple[str, str, str, str | None]]:
         """
