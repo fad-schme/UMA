@@ -257,7 +257,7 @@ To disable procedural memory: set `enabled: false` or remove the entry.
 
 ## Alternate Vector Backends
 
-The vector backend is a user configuration choice. All backends implement the same C1-contract `VectorIndex` interface — see `uma-vector-contract.md` for details.
+The vector backend is a user configuration choice. All backends implement the same C1-contract `VectorIndex` interface — see `vector-contract.md` for details.
 
 **LanceDB (default, embedded — no extra install):**
 
@@ -299,7 +299,7 @@ await memory.rebuild_vector_indexes(tenant_id="default")
 ## Install Surfaces
 
 ```bash
-# Minimal (Lite profile — no external services)
+# Minimal (Lite profile — embedded SQLite + LanceDB, no separate services)
 # Uses Ollama for LLM and embeddings by default
 pip install -e .
 

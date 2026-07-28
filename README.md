@@ -26,7 +26,7 @@ management.
 ## ✨ Why UMA
 
 - 🧠 **Six typed memory lanes** — working memory, semantic facts, raw chunks, episodic, procedural, compiled wiki. You choose what to query.
-- 🪶 **One install, zero external services** — embedded SQLite + LanceDB. `pip install -e .` and you're running.
+- 🪶 **Embedded by default** — SQLite + LanceDB, no separate services to run. `pip install -e .` and you're running.
 - 🛡️ **Security by design** — every artifact is owner-scoped, injection-scanned, trust-scored, and content-hashed before it touches storage.
 - 🔍 **Evidence-backed retrieval** — every fact carries provenance back to source chunks. No silent degradation into "vibes-based" RAG.
 - 🏢 **Multi-tenant by construction** — cross-tenant access is impossible at the storage layer, not by application-layer convention.
@@ -85,7 +85,9 @@ The [OWASP Top 10 for LLM Applications 2025](https://genai.owasp.org/llm-top-10/
 
 **Six of ten LLM categories apply** (LLM01, LLM02 partial, LLM04, LLM08, LLM09 partial, LLM10 partial). There is no security theater — the four categories marked out of scope genuinely require capabilities UMA does not have: output rendering (LLM05), autonomous tool use (LLM06), system prompt management (LLM07), and model supply-chain procurement (LLM03). UMA makes an adjacent contribution to LLM03 at the document ingest boundary, but the core supply-chain threat — model provenance and dependency integrity — belongs to the layer above UMA.
 
-For the full security model — including the injection pattern catalog, severity behavior, quarantine lifecycle, and integrity verification — see [`.claude/skills/uma-security.md`](.claude/skills/uma-security.md) for the deep dive, or [`ARCHITECTURE.md`](ARCHITECTURE.md) for the architectural model.
+**Scanner evaluation status.** The injection catalog is currently regression-tested against an internal smoke corpus of 42 known attack strings and 33 benign controls (see `tests/test_security_injection.py`). Public benchmark results against adversarial-injection corpora (LOCOMO, TensorTrust, HackAPrompt) are in progress and will be published with precision / recall / F1 numbers by corpus and UMA version when complete. Do not read the smoke-corpus pass rate as a general-purpose accuracy claim.
+
+For the full security model — including the injection pattern catalog, severity behavior, quarantine lifecycle, and integrity verification — see [`.claude/skills/security.md`](.claude/skills/security.md) for the deep dive, or [`ARCHITECTURE.md`](ARCHITECTURE.md) for the architectural model.
 
 ---
 
@@ -96,32 +98,41 @@ pip install -e .
 ```
 
 ```python
+import asyncio
+
 from uma import UMAMemory
 
-# Pass the path to your uma.yaml — any accessible location works.
-memory = UMAMemory.from_yaml("/path/to/your/uma.yaml").set_context(agent_id="my-agent")
 
-context = await memory.retrieve_context(
-    query_text=user_message,
-    user_id="user-123",
-    tenant_id="default",
-    session_id="session-1",
-)
+async def main():
+    # Pass the path to your uma.yaml — any accessible location works.
+    memory = UMAMemory.from_yaml("/path/to/your/uma.yaml").set_context(agent_id="my-agent")
 
-reply = await your_llm(context, user_message)   # you own this
+    user_message = "..."   # your inbound turn
 
-await memory.process_turn(
-    user_id="user-123",
-    user_msg=user_message,
-    assistant_reply=reply,
-    session_id="session-1",
-    tenant_id="default",
-)
+    context = await memory.retrieve_context(
+        query_text=user_message,
+        user_id="user-123",
+        tenant_id="default",
+        session_id="session-1",
+    )
+
+    reply = await your_llm(context, user_message)   # you own this
+
+    await memory.process_turn(
+        user_id="user-123",
+        user_msg=user_message,
+        assistant_reply=reply,
+        session_id="session-1",
+        tenant_id="default",
+    )
+
+
+asyncio.run(main())
 ```
 
 That's the whole loop. For the full agent integration pattern — pre-LLM injection scanning, error handling, multi-tenant SaaS, rate limiting — **ask your coding assistant** (see below).
 
-If a storage adapter needs credentials, `uma.yaml` also accepts an optional `secrets:` block; the reference shape lives in [`.claude/skills/uma-configure.md`](.claude/skills/uma-configure.md).
+If a storage adapter needs credentials, `uma.yaml` also accepts an optional `secrets:` block; the reference shape lives in [`.claude/skills/configure.md`](.claude/skills/configure.md).
 
 ---
 
@@ -132,32 +143,32 @@ If a storage adapter needs credentials, `uma.yaml` also accepts an optional `sec
 UMA ships eight Agent Skills under `.claude/skills/`. They're structured markdown files with YAML frontmatter that Claude Code (and any [Agent Skills](https://docs.claude.com/en/agents-and-tools/agent-skills/overview)-compatible assistant) automatically loads as context when you ask questions about the project. No setup. No `@` mentions. Just ask:
 
 > *"How do I integrate UMA into my chatbot?"*
-> → `uma-agent-loop.md` loads — end-to-end pattern with code
+> → `agent-loop.md` loads — end-to-end pattern with code
 
 > *"What happens when a user sends a prompt injection?"*
-> → `uma-security.md` + `uma-quarantine.md` load — full flow from scan to storage
+> → `security.md` + `quarantine.md` load — full flow from scan to storage
 
 > *"How do I write a custom vector backend?"*
-> → `uma-vector-contract.md` loads — the contract, atomicity, score normalization
+> → `vector-contract.md` loads — the contract, atomicity, score normalization
 
 > *"How do I filter by lane?"*
-> → `uma-lanes.md` loads — the six lanes, when to use each
+> → `lanes.md` loads — the six lanes, when to use each
 
 > *"My YAML — can you help me configure Anthropic as the LLM?"*
-> → `uma-configure.md` loads — full YAML reference
+> → `configure.md` loads — full YAML reference
 
 ### The eight skills
 
 | Skill | Covers |
 | --- | --- |
-| [`uma-overview.md`](.claude/skills/uma-overview.md) | What UMA is, design philosophy, DAT invariants, security primitives at a glance |
-| [`uma-api.md`](.claude/skills/uma-api.md) | Full public API — every method, every management function, scope fields |
-| [`uma-lanes.md`](.claude/skills/uma-lanes.md) | Six memory lanes, storage contracts, quarantine semantics, retrieval pipeline |
-| [`uma-configure.md`](.claude/skills/uma-configure.md) | YAML reference, LLM/embedding providers, security configuration, install surfaces |
-| [`uma-security.md`](.claude/skills/uma-security.md) | Two-layer scanning, pattern catalog, severity behavior, integrity verification |
-| [`uma-agent-loop.md`](.claude/skills/uma-agent-loop.md) | End-to-end integration: scan → retrieve → LLM → process_turn |
-| [`uma-vector-contract.md`](.claude/skills/uma-vector-contract.md) | Vector isolation contract, push-down filters, custom backend authoring |
-| [`uma-quarantine.md`](.claude/skills/uma-quarantine.md) | Quarantine lifecycle, management API, composition with trust scoring |
+| [`overview.md`](.claude/skills/overview.md) | What UMA is, design philosophy, DAT invariants, security primitives at a glance |
+| [`api.md`](.claude/skills/api.md) | Full public API — every method, every management function, scope fields |
+| [`lanes.md`](.claude/skills/lanes.md) | Six memory lanes, storage contracts, quarantine semantics, retrieval pipeline |
+| [`configure.md`](.claude/skills/configure.md) | YAML reference, LLM/embedding providers, security configuration, install surfaces |
+| [`security.md`](.claude/skills/security.md) | Two-layer scanning, pattern catalog, severity behavior, integrity verification |
+| [`agent-loop.md`](.claude/skills/agent-loop.md) | End-to-end integration: scan → retrieve → LLM → process_turn |
+| [`vector-contract.md`](.claude/skills/vector-contract.md) | Vector isolation contract, push-down filters, custom backend authoring |
+| [`quarantine.md`](.claude/skills/quarantine.md) | Quarantine lifecycle, management API, composition with trust scoring |
 
 Each skill is under 500 lines, follows the Agent Skills specification (third-person `description` field for discovery), and is verified against the patched codebase — no phantom APIs.
 
