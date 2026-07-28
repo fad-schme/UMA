@@ -93,7 +93,7 @@ UMA is a memory SDK — the OWASP Agentic Security Initiative (ASI) is the most 
 | **LLM07** System Prompt Leakage | Out of scope | System prompts live in the calling application, not UMA. |
 | **LLM08** Vector and Embedding Weaknesses | In scope — primary | C1 contract: isolation (`tenant_id` / `owner_type` / `owner_id`) pushed into every vector query *before* the k-nearest cap — a heavy tenant cannot starve others. All three adapters refuse empty isolation at upsert. SQL layer adds the same filter. Write-time scanning addresses the RAG poisoning sub-problem. |
 | **LLM09** Misinformation | Partial | Every fact carries provenance back to source chunks. Quarantined facts excluded at SQL retrieval layer (`AND quarantined_at IS NULL`). `provenance_valid` is a top-level field on every `retrieve_memory` result. |
-| **LLM10** Unbounded Consumption | In scope | `set_rate_limit_hook` fires at the top of every public method. `max_file_bytes` and `pdf_max_pages` cap ingest resource use. |
+| **LLM10** Unbounded Consumption | Partial | Ingest side (UMA-owned): `max_file_bytes` and `pdf_max_pages` cap resource use. Retrieval side (caller-owned): `set_rate_limit_hook` exposes a single plug-point on every public method — UMA ships no default limiter and owns no throttling policy (accounting, storage, timeouts, and refusal semantics are the caller's). |
 
 The vector isolation contract (C1) and the rate-limit hook are documented separately; see `uma-security.md` for the full model.
 

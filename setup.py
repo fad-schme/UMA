@@ -50,6 +50,7 @@ setup(
         "vector": ["faiss-cpu", "weaviate-client", "pinecone-client", "fastembed"],
         "graph": ["neo4j"],
         "postgres": ["psycopg2-binary>=2.9"],
+        "security": ["google-re2>=1.1"],
         "dev": ["pytest", "matplotlib", "PyPDF2", "pytest-asyncio"],
         "ollama": ["ollama"],
         "parsers": ["PyPDF2", "beautifulsoup4", "markdown", "pandas"],

@@ -5,6 +5,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [unreleased]
+
+### Added
+- **`google-re2` regex backend for the injection scanner** via a new
+  `pip install uma[security]` install extra. When installed, `scan_content`
+  and every rule-function scorer compile their patterns through RE2, which
+  is linear-time by construction — ReDoS is impossible regardless of what
+  patterns future contributors add. Base install falls back to Python's
+  `re` with a one-time WARNING at first import. All 200 shipped patterns
+  are already RE2-compatible (verified); no pattern rewrites required.
+- **`uma/common/_regex_backend.py`** — single canonical selector for the
+  security-critical regex engine. Exposes `compile`, `MULTILINE`,
+  `IGNORECASE`, `DOTALL`, `error`, and `USING_RE2`. Scoped deliberately to
+  the write-time attack surface; other UMA code paths that use regex are
+  unchanged.
+- **`tests/test_injection_scan_perf.py`** — ReDoS-defense benchmark. A
+  100 KB realistic input must scan under a backend-aware ceiling (200 ms
+  under RE2, 1000 ms under the `re` fallback). A crafted adversarial
+  input with repeated tokens must scan under 50 ms. CI ratchet against
+  future pathological patterns.
+
+### Changed
+- **`uma/common/rule_functions.py` patterns precompiled at module load**
+  instead of recompiled on every scorer call. Behaviour identical; removes
+  per-call `re.compile` overhead on the write-time hot path.
+- **OWASP LLM10 posture corrected from "In scope" to "Partial"** across
+  `README.md`, `ARCHITECTURE.md`, `.claude/skills/overview.md`, and
+  `.claude/skills/security.md` (row + frontmatter description). UMA-owned
+  defenses cover only the ingest side (`max_file_bytes`, `pdf_max_pages`).
+  The retrieval side is a caller-owned plug-point: `set_rate_limit_hook`
+  registers a single hook, but UMA ships no default limiter and owns no
+  throttling policy — accounting, storage, timeouts, and refusal semantics
+  are the caller's. No code changes; documentation now reflects what the
+  code actually does.
+
+---
+
 ## [0.1.5-beta] — 2026-07-23
 
 ### Added

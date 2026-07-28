@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-import re
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 
 from uma.common import rule_functions as _rf
+from uma.common import _regex_backend
 from uma.common.config_types import SecurityConfig
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,7 @@ _CATALOG_PATHS = (
 class _CompiledPattern:
     key: str
     kind: str          # "regex" | "hex"
-    value: Any         # compiled re.Pattern or hex string
+    value: Any         # compiled Pattern from _regex_backend, or hex string
 
 
 @dataclass(frozen=True)
@@ -76,9 +76,9 @@ def _compile_catalog(extra_path: Optional[str] = None) -> List[_CompiledRule]:
                 patterns.append(_CompiledPattern(key=key, kind="hex", value=hex_str))
             else:
                 try:
-                    rx = re.compile(pat, re.MULTILINE)
+                    rx = _regex_backend.compile(pat, _regex_backend.MULTILINE)
                     patterns.append(_CompiledPattern(key=key, kind="regex", value=rx))
-                except re.error:
+                except _regex_backend.error:
                     logger.warning("injection_scan: bad pattern in rule %s key %s", rule.get("name"), key)
         compiled.append(_CompiledRule(
             name=rule["name"],
