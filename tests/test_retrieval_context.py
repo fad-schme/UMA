@@ -19,7 +19,12 @@ from uma.common.types.types_fact import Fact
 from uma.retrieve.policy import should_stop
 from uma.retrieve.rlm.context_pack import ContextPack
 from uma.retrieve.rlm.controller import RLMController
-from uma.retrieve.rlm.decisions import ControllerDecision, RetrievalAction, deterministic_decision
+from uma.retrieve.rlm.decisions import (
+    ControllerDecision,
+    RetrievalAction,
+    SearchSemanticAction,
+    deterministic_decision,
+)
 from uma.retrieve.rlm.domain import ensure_fact_domain, filter_facts_by_domains
 from uma.retrieve.rlm.environment import UMAMemoryEnvironment
 from uma.retrieve.rlm.evidence import expand_evidence_chunks_from_facts
@@ -993,7 +998,7 @@ async def test_environment_execute_action_delegates_semantic_search_to_core(uma_
 
     result = await env.execute_action(
         request=request,
-        action=RetrievalAction(action="search_semantic", k=7, filters={"predicate": "LIKES"}),
+        action=SearchSemanticAction(k=7, filters={"predicate": "LIKES"}),
         query_embedding=[1, 2, 3],
         query_text="coffee",
         owner_type="user",

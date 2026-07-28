@@ -23,9 +23,9 @@ The controller may:
 """
 
 import logging
-from typing import Any, Dict, List, Literal, Optional, NoReturn, Set, Tuple
+from typing import Annotated, Any, Dict, List, Literal, Optional, Set, Tuple, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from .domain import PREFERENCE_PREDICATES, filter_facts_by_domains
 from .entity_seed import extract_candidate_entities
@@ -36,215 +36,128 @@ logger = logging.getLogger(__name__)
 
 MAX_FACT_IDS = 50
 
-ActionType = Literal[
-    "search_semantic",
-    "fetch_more_facts",              # ← NEW
-    "search_episodic",
-    "episodic_clusters",
-    "fetch_episode_clusters",
-    "search_procedural",
-    "fetch_facts",
-    "fetch_chunks",
-    "search_chunks",
-    "graph_neighbors",
-    "expand_graph",
-    "stop",
-]
+
+# --------------------------------------------------------------------------- #
+# Action space — one subtype per action. Per-branch invariants are enforced
+# structurally by pydantic v2, not by a runtime `if/elif` on a string enum.
+# Adding an action means adding a class and extending the RetrievalAction
+# union — no central validator to edit.
+# --------------------------------------------------------------------------- #
 
 
-class RetrievalAction(BaseModel):
+class _RetrievalActionBase(BaseModel):
     """
-    A single bounded retrieval action.
+    Fields shared across every action. Not instantiated directly.
 
-    IMPORTANT:
-    - Each action has a strict contract.
-    - Invalid combinations are rejected.
+    `extra="forbid"` preserves the invariant the old flat validator enforced
+    for `stop` (and implicitly for the reject-lists on every other branch):
+    unrecognized fields raise instead of being silently ignored.
     """
 
-    action: ActionType
+    model_config = ConfigDict(extra="forbid")
+
     reason: str = ""
-
-    # Common bounds
-    k: Optional[int] = Field(default=None, ge=1, le=500)
-
-    # Semantic / procedural
-    filters: Optional[Dict[str, Any]] = None
-
-    # Semantic refinement (NEW)
-    predicate: Optional[str] = None
     owner_type: Optional[Literal["user", "agent"]] = None
 
-    # Episodic
+
+class SearchSemanticAction(_RetrievalActionBase):
+    action: Literal["search_semantic"] = "search_semantic"
+    k: int = Field(ge=1, le=500)
+    filters: Optional[Dict[str, Any]] = None
+
+
+class FetchMoreFactsAction(_RetrievalActionBase):
+    action: Literal["fetch_more_facts"] = "fetch_more_facts"
+    k: int = Field(ge=1, le=500)
+    predicate: str = Field(min_length=1)
+    filters: Optional[Dict[str, Any]] = None
+
+
+class FetchFactsAction(_RetrievalActionBase):
+    action: Literal["fetch_facts"] = "fetch_facts"
+    ids: List[str] = Field(min_length=1, max_length=MAX_FACT_IDS)
+
+
+class SearchEpisodicAction(_RetrievalActionBase):
+    action: Literal["search_episodic"] = "search_episodic"
+    k: int = Field(ge=1, le=500)
+    filters: Optional[Dict[str, Any]] = None
+
+
+class EpisodicClustersAction(_RetrievalActionBase):
+    action: Literal["episodic_clusters"] = "episodic_clusters"
+    k: int = Field(ge=1, le=500)
+
+
+class FetchEpisodeClustersAction(_RetrievalActionBase):
+    action: Literal["fetch_episode_clusters"] = "fetch_episode_clusters"
+    k: int = Field(ge=1, le=500)
     time_range: Optional[Dict[str, Any]] = None
     min_salience: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
-    # Fetch-by-id
-    ids: Optional[List[str]] = None
 
-    # Graph
-    node_id: Optional[str] = None
-    predicate_scope: Optional[List[str]] = None
-    domain_scope: Optional[List[str]] = None
-    depth: Optional[int] = Field(default=None, ge=1, le=3)
-    subject: Optional[str] = None
-    direction: Optional[str] = None
-    hops: Optional[int] = Field(default=None, ge=1, le=3)
-
-    # Conflict resolution
-    fact_ids: Optional[List[str]] = None
-
-    @model_validator(mode="after")
-    def validate_action(self) -> "RetrievalAction":
-        """
-        Enforce per-action contracts.
-
-        This prevents the controller from emitting ambiguous or unsafe actions.
-        """
-        def _raise(msg: str) -> "NoReturn":
-            logger.error("RetrievalAction.validate_action failed: %s", msg)
-            raise ValueError(msg)
-
-        a = self.action
-
-        # --- STOP ---
-        if a == "stop":
-            if any(
-                [
-                    self.k,
-                    self.filters,
-                    self.time_range,
-                    self.ids,
-                    self.node_id,
-                    self.predicate_scope,
-                    self.domain_scope,
-                    self.depth,
-                ]
-            ):
-                _raise("stop action must not include any parameters")
-            return self
-
-        # --- SEARCH SEMANTIC ---
-        if a == "search_semantic":
-            if self.k is None:
-                _raise("search_semantic requires k")
-            if self.ids or self.node_id:
-                _raise("search_semantic does not accept ids or node_id")
-            return self
-
-        # --- SEARCH EPISODIC ---
-        if a == "search_episodic":
-            if self.k is None:
-                _raise("search_episodic requires k")
-            if self.ids or self.node_id:
-                _raise("search_episodic does not accept ids or node_id")
-            return self
-
-        # --- EPISODIC CLUSTERS ---
-        if a == "episodic_clusters":
-            if self.k is None:
-                _raise("episodic_clusters requires k")
-            if self.filters or self.ids or self.node_id:
-                _raise("episodic_clusters does not accept filters, ids, or node_id")
-            return self
-
-        if a == "fetch_episode_clusters":
-            if self.k is None:
-                _raise("fetch_episode_clusters requires k")
-            if self.filters or self.ids or self.node_id:
-                _raise("fetch_episode_clusters does not accept filters, ids, or node_id")
-            if self.min_salience is not None and not (0 <= self.min_salience <= 1):
-                _raise("min_salience must be between 0 and 1")
-            return self
-
-        # --- SEARCH PROCEDURAL ---
-        if a == "search_procedural":
-            if self.k is None:
-                _raise("search_procedural requires k")
-            if self.ids or self.node_id:
-                _raise("search_procedural does not accept ids or node_id")
-            return self
-
-        # --- FETCH FACTS ---
-        if a == "fetch_facts":
-            if not self.ids:
-                _raise("fetch_facts requires ids")
-            if self.k or self.filters or self.node_id:
-                _raise("fetch_facts does not accept k, filters, or node_id")
-            return self
-
-        # --- FETCH CHUNKS ---
-        if a == "fetch_chunks":
-            if not self.ids:
-                _raise("fetch_chunks requires ids")
-            if self.k or self.filters or self.node_id or self.time_range:
-                _raise("fetch_chunks does not accept k, filters, node_id, or time_range")
-            return self
-
-        # --- SEARCH CHUNKS ---
-        if a == "search_chunks":
-            if self.k is None:
-                _raise("search_chunks requires k")
-            if self.ids or self.node_id or self.time_range:
-                _raise("search_chunks does not accept ids, node_id, or time_range")
-            return self
-        
-        # --- FETCH MORE FACTS (predicate-scoped semantic expansion) ---
-        if a == "fetch_more_facts":
-            if self.k is None:
-                _raise("fetch_more_facts requires k")
-            if not self.predicate or not isinstance(self.predicate, str):
-                _raise("fetch_more_facts requires a non-empty predicate")
-            if self.ids or self.node_id or self.time_range:
-                _raise("fetch_more_facts does not accept ids, node_id, or time_range")
-            if self.owner_type and self.owner_type not in {"user", "agent"}:
-                _raise("owner_type must be one of: user, agent")
-            return self
-        
-        if a == "expand_graph":
-            if not self.subject or not isinstance(self.subject, str):
-                _raise("expand_graph requires a non-empty subject")
-            if self.k is None:
-                _raise("expand_graph requires k")
-            if self.filters or self.ids or self.time_range:
-                _raise("expand_graph does not accept filters, ids, or time_range")
-            if self.node_id:
-                _raise("expand_graph does not accept node_id")
-            if self.domain_scope is not None:
-                if not isinstance(self.domain_scope, list):
-                    _raise("domain_scope must be a list")
-                if len(self.domain_scope) > 10:
-                    _raise("domain_scope too large (max 10)")
-            if self.direction:
-                dir_val = str(self.direction).lower()
-                if dir_val not in {"inbound", "outbound", "both"}:
-                    _raise("direction must be one of: inbound, outbound, both")
-                self.direction = dir_val
-            if self.hops is None:
-                self.hops = 1
-            return self
+class SearchProceduralAction(_RetrievalActionBase):
+    action: Literal["search_procedural"] = "search_procedural"
+    k: int = Field(ge=1, le=500)
+    filters: Optional[Dict[str, Any]] = None
 
 
-        # --- GRAPH NEIGHBORS ---
-        if a == "graph_neighbors":
-            if not self.node_id:
-                _raise("graph_neighbors requires node_id")
-            if self.k is None:
-                _raise("graph_neighbors requires k")
-            if self.depth is None:
-                self.depth = 1
-            if self.predicate_scope:
-                if not isinstance(self.predicate_scope, list):
-                    _raise("predicate_scope must be a list")
-                if len(self.predicate_scope) > 20:
-                    _raise("predicate_scope too large (max 20)")
-            if self.domain_scope is not None:
-                if not isinstance(self.domain_scope, list):
-                    _raise("domain_scope must be a list")
-                if len(self.domain_scope) > 10:
-                    _raise("domain_scope too large (max 10)")
-            return self
+class FetchChunksAction(_RetrievalActionBase):
+    action: Literal["fetch_chunks"] = "fetch_chunks"
+    ids: List[str] = Field(min_length=1)
 
-        _raise(f"Unknown action: {a}")
+
+class SearchChunksAction(_RetrievalActionBase):
+    action: Literal["search_chunks"] = "search_chunks"
+    k: int = Field(ge=1, le=500)
+
+
+class ExpandGraphAction(_RetrievalActionBase):
+    action: Literal["expand_graph"] = "expand_graph"
+    k: int = Field(ge=1, le=500)
+    subject: str = Field(min_length=1)
+    predicate: Optional[str] = None
+    domain_scope: Optional[List[str]] = Field(default=None, max_length=10)
+    direction: Optional[Literal["inbound", "outbound", "both"]] = None
+    hops: int = Field(default=1, ge=1, le=3)
+
+
+class GraphNeighborsAction(_RetrievalActionBase):
+    action: Literal["graph_neighbors"] = "graph_neighbors"
+    k: int = Field(ge=1, le=500)
+    node_id: str = Field(min_length=1)
+    predicate_scope: Optional[List[str]] = Field(default=None, max_length=20)
+    domain_scope: Optional[List[str]] = Field(default=None, max_length=10)
+    depth: int = Field(default=1, ge=1, le=3)
+
+
+class StopAction(_RetrievalActionBase):
+    action: Literal["stop"] = "stop"
+    # No other fields. `extra="forbid"` on the base ensures the old
+    # "stop action must not include any parameters" invariant survives.
+
+
+# Discriminated union: pydantic dispatches on the `action` string literal at
+# parse time. `RetrievalAction` is a type alias, not a class — every call
+# site that used to write `RetrievalAction(action="X", ...)` now writes the
+# specific subtype directly (e.g. `SearchSemanticAction(k=7)`).
+RetrievalAction = Annotated[
+    Union[
+        SearchSemanticAction,
+        FetchMoreFactsAction,
+        FetchFactsAction,
+        SearchEpisodicAction,
+        EpisodicClustersAction,
+        FetchEpisodeClustersAction,
+        SearchProceduralAction,
+        FetchChunksAction,
+        SearchChunksAction,
+        ExpandGraphAction,
+        GraphNeighborsAction,
+        StopAction,
+    ],
+    Field(discriminator="action"),
+]
 
 
 class ControllerDecision(BaseModel):
@@ -312,8 +225,7 @@ def _decide_zero_yield_fallback(pack: Any, cfg: Dict[str, Any]) -> Optional[Cont
                 "RLM_DECISION trace_id=%s intent=%s domains=%s fallback=search_chunks reason=fetch_more_facts_zero_yield",
                 trace_id, (intent or "").upper(), active_domains,
             )
-            action = RetrievalAction(
-                action="search_chunks",
+            action = SearchChunksAction(
                 k=min(max_items_per_type * max(3, chunk_fallback_k_multiplier), 180),
                 owner_type=getattr(pack, "owner_type", None),
             )
@@ -327,8 +239,8 @@ def _decide_zero_yield_fallback(pack: Any, cfg: Dict[str, Any]) -> Optional[Cont
             "RLM_DECISION trace_id=%s intent=%s domains=%s fallback=search_semantic reason=fetch_more_facts_zero_yield",
             trace_id, (intent or "").upper(), active_domains,
         )
-        return ControllerDecision(actions=[RetrievalAction(
-            action="search_semantic", k=max_items_per_type, owner_type=getattr(pack, "owner_type", None),
+        return ControllerDecision(actions=[SearchSemanticAction(
+            k=max_items_per_type, owner_type=getattr(pack, "owner_type", None),
         )])
 
     if last_action == "expand_graph" and last_novelty == 0 and last_store == "graph":
@@ -337,8 +249,7 @@ def _decide_zero_yield_fallback(pack: Any, cfg: Dict[str, Any]) -> Optional[Cont
                 "RLM_DECISION trace_id=%s intent=%s domains=%s fallback=search_chunks reason=expand_graph_zero_yield",
                 trace_id, (intent or "").upper(), active_domains,
             )
-            action = RetrievalAction(
-                action="search_chunks",
+            action = SearchChunksAction(
                 k=min(max_items_per_type * max(3, chunk_fallback_k_multiplier), 180),
                 owner_type=getattr(pack, "owner_type", None),
             )
@@ -352,8 +263,8 @@ def _decide_zero_yield_fallback(pack: Any, cfg: Dict[str, Any]) -> Optional[Cont
             "RLM_DECISION trace_id=%s intent=%s domains=%s fallback=search_semantic reason=expand_graph_zero_yield",
             trace_id, (intent or "").upper(), active_domains,
         )
-        return ControllerDecision(actions=[RetrievalAction(
-            action="search_semantic", k=max_items_per_type, owner_type=getattr(pack, "owner_type", None),
+        return ControllerDecision(actions=[SearchSemanticAction(
+            k=max_items_per_type, owner_type=getattr(pack, "owner_type", None),
         )])
 
     return None
@@ -389,8 +300,7 @@ def _decide_semantic(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> List[Retr
         )
         if predicate and score > 0:
             offset = getattr(pack, "get_predicate_offset")(predicate)
-            actions.append(RetrievalAction(
-                action="fetch_more_facts",
+            actions.append(FetchMoreFactsAction(
                 predicate=predicate,
                 k=max_items_per_type,
                 filters={"offset": offset},
@@ -403,8 +313,7 @@ def _decide_semantic(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> List[Retr
                 "RLM_DECISION trace_id=%s intent=%s domains=%s eligible_predicates=%s fallback=search_semantic reason=no_relevant_predicates",
                 trace_id, (intent or "").upper(), active_domains, eligible,
             )
-            actions.append(RetrievalAction(
-                action="search_semantic",
+            actions.append(SearchSemanticAction(
                 k=max_items_per_type,
                 owner_type=getattr(pack, "owner_type", None),
             ))
@@ -413,8 +322,7 @@ def _decide_semantic(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> List[Retr
             "RLM_DECISION trace_id=%s intent=%s domains=%s fallback=search_semantic reason=no_facts_in_pack",
             trace_id, (intent or "").upper(), active_domains,
         )
-        actions.append(RetrievalAction(
-            action="search_semantic",
+        actions.append(SearchSemanticAction(
             k=max_items_per_type,
             owner_type=getattr(pack, "owner_type", None),
         ))
@@ -435,8 +343,7 @@ def _decide_chunk_fallback(pack: Any, cfg: Dict[str, Any]) -> List[RetrievalActi
     except Exception:
         logger.exception("_decide_chunk_fallback: failed to mark chunk_fallback_used")
         raise
-    return [RetrievalAction(
-        action="search_chunks",
+    return [SearchChunksAction(
         k=min(max_items_per_type * chunk_fallback_k_multiplier, 120),
         owner_type=getattr(pack, "owner_type", None),
     )]
@@ -454,24 +361,21 @@ def _decide_episodic_clusters(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> 
         # Enterprise: compiled cluster summaries are the primary path.
         episodes = getattr(pack, "episodes", []) or []
         has_cluster = any(isinstance(ep, dict) and "episode_ids" in ep for ep in episodes)
-        actions = [RetrievalAction(
-            action="fetch_episode_clusters",
+        actions: List[RetrievalAction] = [FetchEpisodeClustersAction(
             k=cluster_k,
             time_range=None,
             min_salience=salience_threshold,
             owner_type=owner_type,
         )]
         if not has_cluster and len(getattr(pack, "steps", []) or []) >= 2:
-            actions.append(RetrievalAction(
-                action="search_episodic",
+            actions.append(SearchEpisodicAction(
                 k=max_items_per_type,
                 owner_type=owner_type,
             ))
         return actions
 
     # Lite/cont: no consolidation — direct vector search over raw episodes.
-    return [RetrievalAction(
-        action="search_episodic",
+    return [SearchEpisodicAction(
         k=max_items_per_type,
         owner_type=owner_type,
     )]
@@ -508,8 +412,7 @@ def _decide_graph(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> List[Retriev
                 trace_id, (intent or "").upper(), active_domains,
                 predicate_scope[: max(1, int(graph_predicate_limit))],
             )
-            actions.append(RetrievalAction(
-                action="expand_graph",
+            actions.append(ExpandGraphAction(
                 subject=getattr(pack, "user_id", None),
                 predicate=predicate_scope[0],
                 domain_scope=["user_profile"],
@@ -572,8 +475,7 @@ def _decide_graph(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> List[Retriev
     )
     # Keep bounded: expand around at most 2 topical entities per step.
     for ent in (entities or [])[:2]:
-        actions.append(RetrievalAction(
-            action="expand_graph",
+        actions.append(ExpandGraphAction(
             subject=ent,
             predicate=predicate,
             domain_scope=["kb_doc"],

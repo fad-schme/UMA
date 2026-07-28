@@ -9,7 +9,14 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from .context_pack import ContextPack
-from .decisions import RetrievalAction
+from .decisions import (
+    EpisodicClustersAction,
+    RetrievalAction,
+    SearchChunksAction,
+    SearchEpisodicAction,
+    SearchProceduralAction,
+    SearchSemanticAction,
+)
 from . import decisions
 from .intent import classify_query_intent
 from .domain import (
@@ -560,7 +567,7 @@ class RLMController:
             if self._semantic_lanes_active(pack):
                 results = await self.env.execute_action(
                     request=request,
-                    action=RetrievalAction(action="search_semantic", k=self.max_items_per_type, reason="baseline"),
+                    action=SearchSemanticAction(k=self.max_items_per_type, reason="baseline"),
                     query_embedding=list(query_embedding),
                     query_text=pack.query_text,
                     owner_type=owner_type,
@@ -594,7 +601,7 @@ class RLMController:
             if self._lane_active(pack, "raw"):
                 chunks = await self.env.execute_action(
                     request=request,
-                    action=RetrievalAction(action="search_chunks", k=self.max_items_per_type, reason="baseline"),
+                    action=SearchChunksAction(k=self.max_items_per_type, reason="baseline"),
                     query_embedding=list(query_embedding),
                     query_text=pack.query_text,
                     owner_type=owner_type,
@@ -627,7 +634,7 @@ class RLMController:
         else:
             skills = await self.env.execute_action(
                 request=request,
-                action=RetrievalAction(action="search_procedural", k=self.max_items_per_type, reason="baseline"),
+                action=SearchProceduralAction(k=self.max_items_per_type, reason="baseline"),
                 query_embedding=list(query_embedding),
                 query_text=pack.query_text,
                 owner_type=owner_type,
@@ -648,7 +655,7 @@ class RLMController:
                 # Enterprise: clusters built by consolidation — primary path.
                 episodes = await self.env.execute_action(
                     request=request,
-                    action=RetrievalAction(action="episodic_clusters", k=self.cluster_k, reason="baseline"),
+                    action=EpisodicClustersAction(k=self.cluster_k, reason="baseline"),
                     query_embedding=list(query_embedding),
                     query_text=pack.query_text,
                     owner_type=owner_type,
@@ -659,7 +666,7 @@ class RLMController:
                 # Lite/cont: no consolidation, direct vector search over raw episodes.
                 episodes = await self.env.execute_action(
                     request=request,
-                    action=RetrievalAction(action="search_episodic", k=self.episodic_k, reason="baseline"),
+                    action=SearchEpisodicAction(k=self.episodic_k, reason="baseline"),
                     query_embedding=list(query_embedding),
                     query_text=pack.query_text,
                     owner_type=owner_type,
