@@ -7,7 +7,7 @@
 # =============================================================================
 
 [build-system]
-requires = ["setuptools>=61", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 # -----------------------------------------------------------------------------
@@ -18,7 +18,8 @@ build-backend = "setuptools.build_meta"
 name = "uma"
 description = "UMA: modular memory and context manager for AI agents"
 readme = "README.md"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.9"
 authors = [
     { name = "a.Diaz-Schmeier", email = "ad-schme@ai-mem-engineering.com" },
@@ -27,7 +28,6 @@ keywords = ["memory", "context", "rag", "ai", "agents", "llm"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
@@ -74,9 +74,8 @@ ollama   = ["ollama"]
 e2e      = ["openai>=1.0.0"]
 
 # Storage backends
-vector   = ["faiss-cpu", "weaviate-client", "pinecone-client", "fastembed"]
+vector   = ["faiss-cpu"]
 graph    = ["neo4j"]
-postgres = ["psycopg2-binary>=2.9"]
 
 # Security: enable the google-re2 backend for ReDoS-proof injection scanning.
 # See uma/common/_regex_backend.py.

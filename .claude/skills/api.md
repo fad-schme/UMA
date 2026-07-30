@@ -1,6 +1,6 @@
 ---
 name: uma-api
-description: Full public API reference for UMA — every UMAMemory method, every management function, scope fields, security entry points, and rate-limit hook registration. Use this skill when answering questions about method signatures, return shapes, what arguments a UMA call requires, how to use `process_turn`/`retrieve_context`/`retrieve_memory`/`ingest_document`, how to register a rate-limit hook, or how to call any management or quarantine API.
+description: Full public API reference for UMA — every UMAMemory method, immutable agent scoping, promotion profiles, management functions, scope fields, security entry points, and rate-limit hook registration. Use this skill when answering questions about method signatures, return shapes, required arguments, promotion, or any management or quarantine API.
 ---
 
 # UMA — Public API Reference
@@ -12,18 +12,64 @@ from uma import UMAMemory
 
 # Pass any path — absolute or relative to where your application runs.
 # "config/uma.yaml" is a convention, not a requirement.
-memory = UMAMemory.from_yaml("/path/to/your/uma.yaml")
+runtime = UMAMemory.from_yaml("/path/to/your/uma.yaml")
 ```
 
 `from_yaml` accepts any path — absolute or relative to the working directory of the running process. `"config/uma.yaml"` is the convention used throughout the examples, but the file can live anywhere accessible to your application at runtime (e.g. `"./uma.yaml"`, `"/etc/myapp/uma.yaml"`, or any other location you choose). There is one initialization path — no `init_lite()` or `init_cont()` variants.
 
-### Bind agent identity (optional, once per instance)
+### Create an immutable per-agent instance
 
 ```python
-memory = memory.set_context(agent_id="agent-default")
+memory = runtime.set_context(agent_id="agent-default")
 ```
 
-`set_context` binds the fixed agent identity to the instance. It is not per-request state — call it once at startup. Returns `self` for chaining.
+`set_context` does not mutate `memory`. It returns a distinct
+`ScopedUMAMemory` whose `agent_id` cannot be reassigned. Create and reuse one
+scoped instance per agent; do not call `set_context` per request on a shared
+scoped instance.
+
+```python
+agent_a = memory.set_context(agent_id="agent-a")
+agent_b = memory.set_context(agent_id="agent-b")
+
+assert agent_a.agent_id == "agent-a"
+assert agent_b.agent_id == "agent-b"
+```
+
+Retrieval, turn processing, bootstrap ingestion, and promotion profile methods
+require a scoped instance.
+
+---
+
+## Promotion Profile APIs
+
+### `set_agent_profile` — Enable profile-gated promotion
+
+```python
+profile = await memory.set_agent_profile(
+    description="An infrastructure assistant focused on Kubernetes operations",
+    focus_areas=["kubernetes", "containers", "incident response"],
+    tenant_id="default",
+)
+```
+
+The profile opts this agent into built-in promotion. Facts extracted by
+`process_turn` remain session-local unless they pass quarantine, confidence,
+salience, source-safety, and profile-scope gates. Promotion is copy-based and
+preserves provenance; the source fact is never widened in place.
+
+### `get_agent_profile` — Read the configured profile
+
+```python
+profile = await memory.get_agent_profile(tenant_id="default")
+if profile is None:
+    # No profile means automatic promotion is a no-op.
+    ...
+```
+
+Promotion runs in a bounded background task after turn extraction. It never
+blocks the reply path, and a promotion failure does not fail `process_turn`.
+See `promotion.md` for the complete gate and ownership contract.
 
 ---
 

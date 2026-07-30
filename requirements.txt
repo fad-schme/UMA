@@ -12,6 +12,5 @@
 #   pip install -e '.[graph]'
 #   pip install -e '.[ollama]'
 #   pip install -e '.[parsers]'
-#   pip install -e '.[postgres]'
 
 -e .[dev]

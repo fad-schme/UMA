@@ -1,0 +1,23 @@
+# Exclude generated OS metadata, Python caches, and local quality artifacts
+# from source distributions even if they exist in the working tree.
+global-exclude .DS_Store
+global-exclude ._*
+global-exclude Thumbs.db
+global-exclude Desktop.ini
+global-exclude *.py[cod]
+global-exclude .coverage
+global-exclude .coverage.*
+global-exclude coverage.xml
+global-exclude *.zip
+global-exclude *.tar.gz
+
+prune __MACOSX
+prune .pytest_cache
+prune .ruff_cache
+prune .pytype
+prune .hypothesis
+prune .tox
+prune .nox
+prune htmlcov
+prune build
+prune dist

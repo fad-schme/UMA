@@ -97,7 +97,7 @@ The scope fields are not interchangeable. Treat them as a hierarchy:
 |---|---|---|
 | `tenant_id` | Forever | Customer / org boundary; rarely changes |
 | `user_id` | Forever within tenant | One person |
-| `agent_id` | Forever within instance | Bound once via `set_context()` |
+| `agent_id` | Forever within scoped instance | Immutable view returned by `set_context()` |
 | `session_id` | Conversation thread | New chat, new tab, new continuation |
 | `request_id` | Single API call | Auto-generated if you don't pass one |
 | `workspace_id` | Project / channel | Optional secondary scope |
@@ -313,15 +313,21 @@ Cross-tenant isolation is enforced by the vector index (LanceDB pushes tenant in
 
 ## Promotion Pattern (Optional)
 
-Facts extracted from a turn are session-local by default. To make them durable across sessions:
+Facts extracted from a turn are session-local by default. Configure the
+scoped agent's profile once to enable built-in, profile-gated promotion:
 
 ```python
-# After process_turn, the facts are extracted but session-scoped
-# To promote — set up promotion_policy on the memory instance
-memory.promotion_policy = MyPromotionPolicy(...)
+await memory.set_agent_profile(
+    description="Infrastructure assistant for Kubernetes operations",
+    focus_areas=["kubernetes", "containers", "incident response"],
+    tenant_id=TENANT,
+)
 ```
 
-Promotion is opt-in. The default behavior is session-local; this matches "the user said something just for this conversation" semantics.
+`process_turn` then evaluates extracted facts in a bounded background task.
+Only non-quarantined, eligible facts that match the profile are copied into a
+broader scope. The original fact and its provenance remain unchanged. Without
+an agent profile, promotion is a no-op. See `promotion.md`.
 
 ---
 

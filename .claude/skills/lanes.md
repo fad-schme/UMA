@@ -1,17 +1,17 @@
 ---
 name: uma-lanes
-description: Explains UMA's six memory lanes (working memory, semantic facts, raw chunks, episodic, procedural, wiki) — what each one stores, its retrieval role, its storage contract, session-vs-durable scope, quarantine semantics, and the canonical retrieval pipeline that all production retrieval follows. Use this skill when answering questions about which lane to use, how lanes differ, how to filter by lane, what `lane_filter` accepts, how candidates flow through fusion/rerank/trust-adjustment/selection, or any question about chunk metadata and the SQL-vs-vector storage split.
+description: Explains UMA's six public lane_filter values plus the profile and optional graph planner/plugin views — what each stores, its retrieval role, storage contract, session-vs-durable scope, quarantine semantics, and the canonical retrieval pipeline. Use this skill when answering questions about which lane to use, how lanes differ, what lane_filter accepts, how candidates flow through retrieval, or the SQL-vs-vector storage split.
 ---
 
 # UMA — Memory Lanes
 
 ## Overview
 
-UMA stores and retrieves memory across six typed lanes. Each lane has a distinct responsibility, storage contract, and retrieval role. Lane selection is explicit — ownership scope alone does not distinguish which lane to query.
+UMA exposes six public `lane_filter` values: `raw`, `semantic`, `episodic`, `procedural`, `wiki`, and `working_memory`. The planner also uses `profile` as a projection over the semantic store, while the optional graph plugin contributes `graph`; together these are the eight lane names used in the architecture.
 
 ---
 
-## The Six Lanes
+## The Six Public Filter Lanes
 
 ### 1. Working Memory (`working_memory`)
 

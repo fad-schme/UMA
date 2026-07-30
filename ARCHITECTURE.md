@@ -19,7 +19,7 @@ Both products are owned by `UMAMemory`, initialized from a config file, and oper
 
 ## Memory Lanes
 
-UMA stores and retrieves across eight typed lanes. Lane selection is explicit — ownership scope alone does not determine which lane to query.
+UMA exposes six public `lane_filter` lanes. The planner also uses `profile` (a semantic-store projection) and optional `graph`, for eight architectural lane names in total. Lane selection is explicit — ownership scope alone does not determine which lane to query.
 
 | Lane | Store | Role | Scope default |
 |------|-------|------|---------------|
@@ -454,6 +454,7 @@ from uma.api.management import (
 # Initialize
 # Replace with the path to your uma.yaml
 memory = UMAMemory.from_yaml("/path/to/your/uma.yaml").set_context(agent_id="agent-default")
+# set_context returns an immutable per-agent view; the source instance is unchanged.
 
 # Optional: pre-LLM injection gate (never raises)
 scan = memory.scan_user_input(user_msg)
@@ -471,6 +472,9 @@ result  = await memory.retrieve_memory(query_text=..., user_id=..., session_id=.
 await memory.process_turn(user_id=..., user_msg=..., assistant_reply=..., session_id=..., tenant_id=...)
 await memory.process_turn(..., skip_scan=True)  # bypass Layer-2 entry scan
 report = await memory.ingest_document(file_path, owner_type="user", owner_id=..., tenant_id=...)
+
+# Opt this agent into profile-gated, copy-based promotion
+await memory.set_agent_profile(description=..., focus_areas=[...], tenant_id=...)
 
 # Bootstrap (Animus integration)
 await memory.load_memory_bootstrap("MEMORY.md", user_id=..., tenant_id=...)
@@ -513,13 +517,14 @@ LLM and embedding values in `uma.yaml` are user-customizable baselines — set p
 
 UMA is in **beta**. Schema and API may change. No backward-compatibility guarantees are made; the codebase deliberately removes obsolete paths rather than preserving them.
 
-For developer-facing documentation, see the eight Agent Skills under `.claude/skills/`:
+For developer-facing documentation, see the nine Agent Skills under `.claude/skills/`:
 
 - `uma-overview.md` — orientation, philosophy, DAT invariants
 - `uma-api.md` — full public API reference
-- `uma-lanes.md` — the six memory lanes
+- `lanes.md` — six public filter lanes plus the profile and optional graph planner/plugin views
 - `uma-configure.md` — YAML configuration reference
 - `uma-security.md` — full security model
 - `uma-agent-loop.md` — end-to-end integration pattern
+- `promotion.md` — public profile-gated promotion contract
 - `uma-vector-contract.md` — the C1 vector contract
 - `uma-quarantine.md` — quarantine lifecycle

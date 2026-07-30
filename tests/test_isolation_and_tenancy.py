@@ -1513,8 +1513,9 @@ async def _init_memory_with_procedural_feature(tmp_path) -> UMAMemory:
     cfg_path = tmp_path / "uma_test.yaml"
     cfg_path.write_text(yaml.safe_dump(cfg))
 
-    memory = UMAMemory.from_yaml(str(cfg_path))
-    memory.set_context(agent_id="agent-default")
+    memory = UMAMemory.from_yaml(str(cfg_path)).set_context(
+        agent_id="agent-default"
+    )
     memory._ensure_ingestion_ready()
     return memory
 
@@ -1639,14 +1640,28 @@ def test_agent_id_setter_is_removed_from_public_surface(uma_memory) -> None:
         uma_memory.agent_id = "agent-deprecated-test"
 
 
+def test_set_context_returns_distinct_immutable_agent_views(uma_memory) -> None:
+    agent_a = uma_memory.set_context(agent_id="agent-a")
+    agent_b = uma_memory.set_context(agent_id="agent-b")
+
+    assert agent_a is not agent_b
+    assert agent_a.agent_id == "agent-a"
+    assert agent_b.agent_id == "agent-b"
+    assert uma_memory.agent_id == "agent-default"
+
+    with pytest.raises(AttributeError, match="immutable"):
+        agent_a._agent_id = "agent-b"
+
+
 @pytest.mark.asyncio
 async def test_retrieve_context_raises_if_set_context_not_called(tmp_path) -> None:
     """_resolve_runtime_context must raise rather than fall back to 'agent-default'."""
-    from tests.helpers.runtime import init_uma_for_tests
-
-    # init_uma_for_tests calls set_context; create a raw instance without it
-    memory = await init_uma_for_tests(tmp_path, agent_id="agent-test")
-    memory._agent_id = None  # simulate missing set_context
+    db_root = tmp_path / "db"
+    db_root.mkdir(parents=True, exist_ok=True)
+    cfg = build_test_config(db_root=db_root)
+    cfg_path = tmp_path / "uma_test.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg))
+    memory = UMAMemory.from_yaml(str(cfg_path))
 
     with pytest.raises(ValueError, match="agent_id"):
         await memory.retrieve_context(

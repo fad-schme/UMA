@@ -112,6 +112,8 @@ from uma.api.management import (
 )
 
 memory = UMAMemory.from_yaml("config/uma.yaml").set_context(agent_id="agent-default")
+# set_context returns a new immutable per-agent view; it does not mutate the
+# unscoped UMAMemory container.
 
 # Pre-LLM injection gate (returns dict, never raises)
 scan = memory.scan_user_input(user_msg)
@@ -122,6 +124,9 @@ result  = await memory.retrieve_memory(query_text=..., user_id=..., tenant_id=..
 
 # Ingest — raises InjectionDetectedError on high-severity user_msg
 await memory.process_turn(user_id=..., user_msg=..., assistant_reply=..., session_id=...)
+
+# Optional: opt this agent into profile-gated fact promotion
+await memory.set_agent_profile(description=..., focus_areas=[...], tenant_id=...)
 
 # Rate-limit hook (optional)
 memory.set_rate_limit_hook(my_hook)

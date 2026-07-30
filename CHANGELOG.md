@@ -27,15 +27,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   future pathological patterns.
 
 ### Changed
+- **Agent identity binding is immutable.** `set_context(agent_id=...)` now
+  returns a distinct per-agent `ScopedUMAMemory` view and never mutates the
+  source runtime. Each scoped instance owns its turn pipeline and promotion
+  policy, preventing concurrent agents from overwriting ambient identity.
+- **Promotion is a documented public feature.** Every scoped instance has a
+  bound default `PromotionPolicy`; `set_agent_profile` opts the agent into
+  background, profile-gated promotion, while no profile remains a safe no-op.
+- **Feature method registration is internal-only.** `register_methods` is now
+  `_register_methods`, and built-in features use the private attachment path.
+- **Packaging license metadata migrated to PEP 639.** The build backend now
+  requires setuptools 77+, uses the `Apache-2.0` SPDX expression, declares
+  `LICENSE` and `NOTICE` explicitly, and removes the deprecated license
+  classifier.
 - **`uma/common/rule_functions.py` patterns precompiled at module load**
   instead of recompiled on every scorer call. Behaviour identical; removes
   per-call `re.compile` overhead on the write-time hot path.
 - **Packaging consolidated into `pyproject.toml`.** `setup.py` deleted;
   every field (runtime dependencies, optional-dependencies, project
   metadata, package-data, dynamic version) now lives in `pyproject.toml`
-  as the single source of truth. All existing extras preserved
-  (`llm`, `openai`, `ollama`, `vector`, `graph`, `postgres`, `security`,
-  `parsers`, `dev`). Build with `python -m build`; install with
+  as the single source of truth. Supported extras remain
+  (`llm`, `openai`, `ollama`, `vector`, `graph`, `security`, `parsers`,
+  `dev`); the `vector` extra now installs only the implemented FAISS
+  backend. Build with `python -m build`; install with
   `pip install .` or `pip install -e '.[dev]'`. Anyone invoking
   `python setup.py <cmd>` directly will need to switch to `pip` or
   `python -m build` — the file is gone.
@@ -55,6 +69,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   ported: `python -m build` runs in an isolated environment where the
   stale-tree problem does not occur. If you hit it, `git clean -fdx`
   before building.
+- **Unsupported backend dependencies** — removed Weaviate, Pinecone, and
+  FastEmbed from the `vector` extra and removed the `postgres` extra.
+  UMA Lite has no corresponding adapters; custom adapters must declare
+  their own client dependencies.
 
 ---
 

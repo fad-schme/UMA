@@ -96,7 +96,7 @@ class ProceduralFeature(UMAFeature):
 
         # Attach methods to UMAMemory (thin, well-defined surface)
         try:
-            memory_client.register_methods(
+            memory_client._register_methods(
                 self.name,
                 {
                     "procedural_health": self._health,

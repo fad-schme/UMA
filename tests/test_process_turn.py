@@ -361,28 +361,28 @@ async def test_retrieval_does_not_see_prior_session_turn_artifacts_by_default(um
 
 @pytest.mark.asyncio
 async def test_retrieval_does_not_share_turn_artifacts_across_agents(uma_memory) -> None:
-    mem = uma_memory
-    assert mem.agent_id
+    mem_a = uma_memory.set_context(agent_id="agent-a")
+    mem_b = uma_memory.set_context(agent_id="agent-b")
 
-    mem._agent_id = "agent-a"
-    await mem.process_turn(
+    await mem_a.process_turn(
         user_id="user:u1",
         user_msg="I like coffee.",
         assistant_reply="Good choice.",
         session_id="shared-session",
     )
 
-    mem._agent_id = "agent-b"
-    await mem.process_turn(
+    await mem_b.process_turn(
         user_id="user:u1",
         user_msg="I like tea.",
         assistant_reply="Nice.",
         session_id="shared-session",
     )
 
-    sem_conn = mem._stores["semantic"]._conn()
+    assert mem_a.pipeline is not mem_b.pipeline
+
+    sem_conn = mem_a._stores["semantic"]._conn()
     try:
-        rows = mem._stores["semantic"]._query_all(
+        rows = mem_a._stores["semantic"]._query_all(
             sem_conn,
             "SELECT id, object FROM facts WHERE owner_type=? AND owner_id=? ORDER BY id ASC",
             params=["user", "user:u1"],
@@ -392,7 +392,7 @@ async def test_retrieval_does_not_share_turn_artifacts_across_agents(uma_memory)
     finally:
         sem_conn.close()
 
-    req_a = mem.runtime._build_retrieval_request(
+    req_a = mem_a.runtime._build_retrieval_request(
         RuntimeContext(
             tenant_id=DEFAULT_TENANT_ID,
             agent_id="agent-a",
@@ -401,7 +401,7 @@ async def test_retrieval_does_not_share_turn_artifacts_across_agents(uma_memory)
             session_id="shared-session",
         )
     )
-    req_b = mem.runtime._build_retrieval_request(
+    req_b = mem_b.runtime._build_retrieval_request(
         RuntimeContext(
             tenant_id=DEFAULT_TENANT_ID,
             agent_id="agent-b",
@@ -410,13 +410,13 @@ async def test_retrieval_does_not_share_turn_artifacts_across_agents(uma_memory)
             session_id="shared-session",
         )
     )
-    facts_a = await mem.memory_env.fetch_facts_by_ids(
+    facts_a = await mem_a.memory_env.fetch_facts_by_ids(
         req_a,
         fact_ids,
         owner_type="user",
         owner_id="user:u1",
     )
-    facts_b = await mem.memory_env.fetch_facts_by_ids(
+    facts_b = await mem_b.memory_env.fetch_facts_by_ids(
         req_b,
         fact_ids,
         owner_type="user",

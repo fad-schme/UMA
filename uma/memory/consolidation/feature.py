@@ -142,7 +142,7 @@ class ConsolidationFeature(UMAFeature):
                 )
 
         try:
-            memory_client.register_methods(
+            memory_client._register_methods(
                 self.name,
                 {
                     "consolidation_health": _health,

@@ -3,6 +3,9 @@ __MACOSX/
 __pycache__/
 .pycache*
 *.py[cod]
+._*
+Thumbs.db
+Desktop.ini
 *.so
 .Python
 env/
@@ -15,8 +18,16 @@ AGENTS.md
 .codex/
 .gold_runs/
 .ruff_cache/
+.pytype/
+.hypothesis/
+.tox/
+.nox/
 # Pytest
 .pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
 # Byte-compiled / optimized / DLL files
 *.pyc
 *.pyo

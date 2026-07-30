@@ -15,7 +15,7 @@
 
 ## Universal Memory Architecture
 
-UMA is a memory and context runtime SDK for developers building AI agents. It ingests data, stores it across six typed memory lanes, and exposes a small retrieval surface. **UMA manages memory only** — your application owns prompts, tool use, reasoning, and final responses.
+UMA is a memory and context runtime SDK for developers building AI agents. It ingests data and exposes six public `lane_filter` lanes. The planner also uses `profile` (a semantic-store projection) and optional `graph`, for eight architectural lane names in total. **UMA manages memory only** — your application owns prompts, tool use, reasoning, and final responses.
 
 UMA does not generate assistant replies and does not perform agent reasoning.
 Developers bring their own LLM or agent loop and use UMA strictly for memory
@@ -25,7 +25,7 @@ management.
 
 ## ✨ Why UMA
 
-- 🧠 **Six typed memory lanes** — working memory, semantic facts, raw chunks, episodic, procedural, compiled wiki. You choose what to query.
+- 🧠 **Six public filter lanes, eight architectural lane names** — the public `lane_filter` values are working memory, raw, semantic, episodic, procedural, and wiki; the planner also uses profile and optional graph
 - 🪶 **Embedded storage by default** — SQLite + LanceDB require no separate storage service. Configure a local or remote LLM and embedding provider for model-backed operations.
 - 🛡️ **Security by design** — every artifact is owner-scoped, injection-scanned, trust-scored, and content-hashed before it touches storage.
 - 🔍 **Evidence-backed retrieval** — every fact carries provenance back to source chunks. No silent degradation into "vibes-based" RAG.
@@ -155,7 +155,7 @@ baseline, thresholds, and run command.
 
 **You shouldn't have to read tons of documentation to use UMA.** Ask your coding agent instead.
 
-UMA ships eight Agent Skills under `.claude/skills/`. They're structured markdown files with YAML frontmatter that Claude Code (and any [Agent Skills](https://docs.claude.com/en/agents-and-tools/agent-skills/overview)-compatible assistant) automatically loads as context when you ask questions about the project. No setup. No `@` mentions. Just ask:
+UMA ships nine Agent Skills under `.claude/skills/`. They're structured markdown files with YAML frontmatter that Claude Code (and any [Agent Skills](https://docs.claude.com/en/agents-and-tools/agent-skills/overview)-compatible assistant) automatically loads as context when you ask questions about the project. No setup. No `@` mentions. Just ask:
 
 > *"How do I integrate UMA into my chatbot?"*
 > → `agent-loop.md` loads — end-to-end pattern with code
@@ -167,21 +167,25 @@ UMA ships eight Agent Skills under `.claude/skills/`. They're structured markdow
 > → `vector-contract.md` loads — the contract, atomicity, score normalization
 
 > *"How do I filter by lane?"*
-> → `lanes.md` loads — the six lanes, when to use each
+> → `lanes.md` loads — the six public filter lanes plus the profile and optional graph views
+
+> *"How does fact promotion work?"*
+> → `promotion.md` loads — agent profiles, eligibility gates, scope changes, and provenance
 
 > *"My YAML — can you help me configure Anthropic as the LLM?"*
 > → `configure.md` loads — full YAML reference
 
-### The eight skills
+### The nine skills
 
 | Skill | Covers |
 | --- | --- |
 | [`overview.md`](.claude/skills/overview.md) | What UMA is, design philosophy, DAT invariants, security primitives at a glance |
 | [`api.md`](.claude/skills/api.md) | Full public API — every method, every management function, scope fields |
-| [`lanes.md`](.claude/skills/lanes.md) | Six memory lanes, storage contracts, quarantine semantics, retrieval pipeline |
+| [`lanes.md`](.claude/skills/lanes.md) | Six public filter lanes plus the profile and optional graph planner/plugin views |
 | [`configure.md`](.claude/skills/configure.md) | YAML reference, LLM/embedding providers, security configuration, install surfaces |
 | [`security.md`](.claude/skills/security.md) | Two-layer scanning, pattern catalog, severity behavior, integrity verification |
 | [`agent-loop.md`](.claude/skills/agent-loop.md) | End-to-end integration: scan → retrieve → LLM → process_turn |
+| [`promotion.md`](.claude/skills/promotion.md) | Public agent-profile API, promotion gates, ownership changes, and provenance |
 | [`vector-contract.md`](.claude/skills/vector-contract.md) | Vector isolation contract, push-down filters, custom backend authoring |
 | [`quarantine.md`](.claude/skills/quarantine.md) | Quarantine lifecycle, management API, composition with trust scoring |
 

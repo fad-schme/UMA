@@ -254,9 +254,10 @@ async def test_invalid_promotion_targets_are_rejected(uma_memory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_turn_without_policy_does_not_silently_promote(uma_memory) -> None:
+async def test_process_turn_without_profile_does_not_silently_promote(uma_memory) -> None:
     memory = uma_memory
-    assert memory.promotion_policy is None
+    assert memory.promotion_policy is not None
+    assert await memory.get_agent_profile() is None
 
     await memory.process_turn(
         user_id="user:u1",
@@ -264,6 +265,7 @@ async def test_process_turn_without_policy_does_not_silently_promote(uma_memory)
         assistant_reply="the team uses kubernetes cluster orchestration for production workloads.",
         session_id="session-a",
     )
+    await memory.pipeline.await_pending_background()
 
     sem_conn = memory._stores["semantic"]._conn()
     try:
@@ -563,8 +565,6 @@ async def test_promotion_without_agent_profile_promotes_nothing(uma_memory) -> N
     assert memory.agent_id
     assert await memory.get_agent_profile() is None  # nothing bound
 
-    memory.promotion_policy = PromotionPolicy(agent_id=memory.agent_id)
-
     await memory.process_turn(
         user_id="user:u1",
         user_msg="hello",
@@ -606,8 +606,7 @@ async def test_promotion_uses_scope_match_when_profile_is_bound(uma_memory) -> N
         focus_areas=["kubernetes"],
     )
 
-    policy = PromotionPolicy(agent_id=memory.agent_id)
-    memory.promotion_policy = policy
+    policy = memory.promotion_policy
 
     # Patch qualifies_for_agent_kb to record calls; keep the return
     # value shaped correctly so the pipeline continues.
@@ -658,8 +657,6 @@ async def test_promotion_with_orthogonal_profile_blocks_all_facts(uma_memory) ->
         description="botanical gardening and horticultural techniques",
         focus_areas=["gardening", "horticulture"],
     )
-    memory.promotion_policy = PromotionPolicy(agent_id=memory.agent_id)
-
     await memory.process_turn(
         user_id="user:u1",
         user_msg="hello",
@@ -700,8 +697,6 @@ async def test_promotion_get_agent_profile_failure_promotes_nothing(uma_memory) 
         description="kubernetes cluster orchestration expertise",
         focus_areas=["kubernetes"],
     )
-    memory.promotion_policy = PromotionPolicy(agent_id=memory.agent_id)
-
     # Patch procedural_core.get_agent_profile to raise. The fire-and-forget
     # promotion task will hit this exception and log it; nothing gets
     # promoted this turn.
@@ -759,8 +754,6 @@ async def test_process_turn_returns_before_promotion_completes(uma_memory) -> No
     import time
     memory = uma_memory
     assert memory.agent_id
-    memory.promotion_policy = PromotionPolicy(agent_id=memory.agent_id)
-
     # Trigger pipeline init so we can patch it.
     await memory.process_turn(
         user_id="user:u1",
@@ -846,8 +839,6 @@ async def test_promotion_background_task_exception_does_not_break_turn(uma_memor
         description="kubernetes cluster orchestration",
         focus_areas=["kubernetes"],
     )
-    memory.promotion_policy = PromotionPolicy(agent_id=memory.agent_id)
-
     # Trigger pipeline init so we can patch the method.
     await memory.process_turn(
         user_id="user:u1",
@@ -889,15 +880,14 @@ async def test_await_pending_background_is_safe_when_no_tasks_pending(uma_memory
     when nothing is scheduled — supports test cleanup and graceful
     shutdown paths that don't know whether promotions ran."""
     memory = uma_memory
-    # pipeline is lazily initialized on the first process_turn — trigger
-    # init with a no-policy turn so _schedule_promotion returns None
-    # early (no task created).
+    # The pipeline is lazily initialized on the first process_turn.
     await memory.process_turn(
         user_id="user:u1",
         user_msg="prime",
         assistant_reply="pipeline init trigger",
         session_id="session-empty-drain",
     )
+    await memory.pipeline.await_pending_background()
     assert memory.pipeline._background_tasks == set()
     # Should return immediately without raising.
     await memory.pipeline.await_pending_background()
@@ -911,8 +901,6 @@ async def test_promotion_task_is_tracked_and_removed_on_completion(uma_memory) -
     done_callback once the task finishes."""
     memory = uma_memory
     assert memory.agent_id
-    memory.promotion_policy = PromotionPolicy(agent_id=memory.agent_id)
-
     await memory.process_turn(
         user_id="user:u1",
         user_msg="hello",

@@ -414,6 +414,11 @@ async def test_feature_loader_attaches_procedural_feature(tmp_path):
     assert callable(getattr(memory, "procedural_health"))
 
 
+def test_feature_method_registration_is_internal_only() -> None:
+    assert not hasattr(UMAMemory, "register_methods")
+    assert hasattr(UMAMemory, "_register_methods")
+
+
 @pytest.mark.asyncio
 async def test_feature_loader_skips_failed_attachment_when_policy_is_log_and_skip(tmp_path):
     db_root = tmp_path / "db"

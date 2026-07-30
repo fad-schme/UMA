@@ -28,7 +28,7 @@ Typical developer workflow
 
     memory = UMAMemory.from_yaml("uma.yaml")
 
-2. Optionally bind the fixed agent identity:
+2. Create an immutable, agent-scoped instance:
 
     memory = memory.set_context(
         agent_id="agent-default",
@@ -211,7 +211,6 @@ class UMAMemory:
         self.semantic_salience_threshold = self.cfg.semantic_salience_threshold
         self._secrets_cfg = self.cfg.secrets
         self._secrets_provider: Optional[SecretsProvider] = self._build_secrets_provider(self._secrets_cfg)
-        self._agent_id: Optional[str] = None
         self._runtime: Optional[UMARuntime] = None
         self.animus_profile_provider = AnimusProfileProvider()
 
@@ -262,10 +261,7 @@ class UMAMemory:
 
     @property
     def agent_id(self) -> Optional[str]:
-        """Return the current runtime agent identity, if one is known."""
-        if isinstance(self._agent_id, str):
-            normalized = self._agent_id.strip()
-            return normalized or None
+        """Return None on the unscoped runtime container."""
         return None
 
     def _build_secrets_provider(
@@ -419,14 +415,21 @@ class UMAMemory:
         self,
         *,
         agent_id: Optional[str] = None,
-    ) -> "UMAMemory":
-        """Bind the fixed UMA agent identity."""
+    ) -> "ScopedUMAMemory":
+        """Return a new immutable view bound to one agent identity.
+
+        The source instance is never mutated. Create one scoped instance per
+        agent and reuse it for that agent's requests.
+        """
         if not isinstance(agent_id, str) or not agent_id.strip():
             raise ValueError("UMAMemory.set_context requires a non-empty agent_id.")
 
-        self._agent_id = agent_id.strip()
-        logger.debug("UMAMemory.set_context: bound agent identity agent=%s", self._agent_id)
-        return self
+        scoped = ScopedUMAMemory(self, agent_id=agent_id.strip())
+        logger.debug(
+            "UMAMemory.set_context: created immutable scoped instance agent=%s",
+            scoped.agent_id,
+        )
+        return scoped
 
     # ----------------------------------------------------------------------
     # Agent Profile (memory-promotion feature)
@@ -443,10 +446,10 @@ class UMAMemory:
 
         The profile is consulted by ``PromotionPolicy.qualifies_for_agent_kb``
         to decide which user-owned facts qualify for elevation into the
-        agent's global KB during ``process_turn``. Without a profile
-        set, the pipeline falls back to the plain ``is_eligible`` gates.
+        agent's global KB during ``process_turn``. Without a profile, automatic
+        promotion is a no-op; there is no eligibility-only fallback.
 
-        Uses ``self.agent_id`` (bound via :meth:`set_context`). Computes
+        Uses the immutable agent identity bound via :meth:`set_context`. Computes
         the profile embedding from ``description`` via the configured
         embedder. Idempotent — a second call for the same agent overwrites.
         The row is persisted in the procedural store with
@@ -1111,13 +1114,13 @@ class UMAMemory:
             services=services,
         )
 
-    def register_methods(
+    def _register_methods(
         self,
         feature_name: str,
         methods: dict[str, Any],
         allow_override: Optional[bool] = None,
     ) -> None:
-        """Attach feature methods to UMAMemory with collision checks."""
+        """Attach internal feature methods to UMAMemory with collision checks."""
         allow_override = (
             self._feature_policy.allow_method_override
             if allow_override is None
@@ -1129,3 +1132,80 @@ class UMAMemory:
                     f"Feature '{feature_name}' attempted to override '{name}'"
                 )
             setattr(self, name, func)
+
+
+class ScopedUMAMemory(UMAMemory):
+    """Immutable per-agent view over an initialized UMA runtime.
+
+    Storage, providers, and retrieval infrastructure remain owned by the base
+    ``UMAMemory`` instance. Agent identity, turn ingestion, and promotion state
+    are isolated on this view so concurrent agents never communicate through
+    mutable ambient scope.
+    """
+
+    def __init__(
+        self,
+        memory: UMAMemory,
+        *,
+        agent_id: str,
+    ) -> None:
+        from uma.memory.promotion import PromotionPolicy
+
+        object.__setattr__(self, "_scoped_memory", memory)
+        object.__setattr__(self, "_scoped_agent_id", agent_id)
+        object.__setattr__(
+            self,
+            "_scoped_promotion_policy",
+            PromotionPolicy(agent_id=agent_id),
+        )
+        object.__setattr__(self, "_scoped_pipeline", None)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._scoped_memory, name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name in {"agent_id", "_agent_id", "_scoped_agent_id"}:
+            raise AttributeError("ScopedUMAMemory agent_id is immutable")
+        object.__setattr__(self, name, value)
+
+    @property
+    def agent_id(self) -> str:
+        """Return this view's immutable agent identity."""
+        return self._scoped_agent_id
+
+    @property
+    def runtime(self) -> UMARuntime:
+        """Return the shared stateless retrieval runtime."""
+        return self._scoped_memory.runtime
+
+    @property
+    def promotion_policy(self) -> Any:
+        """Return the agent-bound promotion policy used by this view."""
+        return self._scoped_promotion_policy
+
+    @property
+    def pipeline(self) -> Any:
+        """Return this agent view's turn-ingestion pipeline."""
+        return self._scoped_pipeline
+
+    @pipeline.setter
+    def pipeline(self, value: Any) -> None:
+        object.__setattr__(self, "_scoped_pipeline", value)
+
+    def set_context(
+        self,
+        *,
+        agent_id: Optional[str] = None,
+    ) -> "ScopedUMAMemory":
+        """Return another immutable agent-scoped view over the same runtime."""
+        return self._scoped_memory.set_context(agent_id=agent_id)
+
+    def _ensure_retrieval_ready(self) -> None:
+        self._scoped_memory._ensure_retrieval_ready()
+
+    def _ensure_ingestion_ready(self) -> None:
+        self._scoped_memory._ensure_ingestion_ready()
+
+    def shutdown(self) -> None:
+        """Shut down the underlying UMA runtime and its shared resources."""
+        self._scoped_memory.shutdown()
