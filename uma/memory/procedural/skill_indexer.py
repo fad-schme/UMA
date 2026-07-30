@@ -21,7 +21,7 @@ Coding agent instructions
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Any
+from typing import Any
 
 from uma.adapters.llm.base import LLMInterface, EmbeddingInterface
 
@@ -53,10 +53,10 @@ class SkillIndexer:
     def _build_embedding_text(
         self,
         name: str,
-        trigger_phrases: List[str],
-        trigger_patterns: List[str],
-        plan: Dict[str, Any],
-        tools: List[str],
+        trigger_phrases: list[str],
+        trigger_patterns: list[str],
+        plan: dict[str, Any],
+        tools: list[str],
         example: str,
     ) -> str:
         """

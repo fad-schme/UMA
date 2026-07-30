@@ -141,7 +141,7 @@ Vector store is never the source of truth. It stores only ids, vectors, isolatio
 
 ## Runtime Profile
 
-UMA Lite uses a single embedded profile: SQLite (authoritative) + LanceDB (vector index). No external services required.
+UMA Lite embeds SQLite (authoritative) and LanceDB (vector index), so it requires no external storage service. An LLM and embedding provider must still be configured; these may run locally or remotely.
 
 | Config | Use |
 |---|---|

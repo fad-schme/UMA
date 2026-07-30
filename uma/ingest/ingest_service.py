@@ -5,7 +5,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple
+from typing import Any, NamedTuple
 
 from .types import (
     CaptureSourceResult,
@@ -193,10 +193,10 @@ def _read_text_source(path: str, *, api_name: str) -> str:
 
 async def _embed_and_persist_facts(
     *,
-    facts: List[Fact],
+    facts: list[Fact],
     embedder: Any,
     semantic_store: Any,
-    warnings: List[str] | None = None,
+    warnings: list[str] | None = None,
     log_context: str,
 ) -> list[str]:
     if not facts:
@@ -419,7 +419,7 @@ async def _capture_bootstrap_source(
     signature_builder: Any,
     entry_extractor: Any,
     config: Any | None = None,
-) -> tuple[str, str, list[str], dict[str, Any], str, Dict[str, Any] | None]:
+) -> tuple[str, str, list[str], dict[str, Any], str, dict[str, Any] | None]:
     normalized_user_id = runtime_context.user_id
     normalized_tenant_id = runtime_context.tenant_id
     normalized_path = _validate_text_source_path(file_path, api_name=api_name)
@@ -496,7 +496,7 @@ async def _run_manifest_gate(
     owner_id: str,
     tenant_id: str,
     workspace_id: str | None,
-    warnings: List[str],
+    warnings: list[str],
 ) -> tuple[dict, Any | None, IngestReport | None]:
     ingest_signature = _build_ingest_signature(config, runtime)
     exact_manifest = await _load_existing_manifest(
@@ -568,8 +568,8 @@ def _prepare_document_chunks(
     *,
     parsed: ParsedDocument,
     config: IngestConfig,
-    warnings: List[str],
-) -> tuple[List[DocumentChunk], IngestReport | None]:
+    warnings: list[str],
+) -> tuple[list[DocumentChunk], IngestReport | None]:
     sections = normalize_document(parsed)
     if not sections:
         warnings.append("no sections after normalization")
@@ -606,8 +606,8 @@ def _prepare_document_chunks(
     )
 
 
-def _chunk_records_to_inputs(chunks: List[Chunk]) -> List[DocumentChunk]:
-    out: List[DocumentChunk] = []
+def _chunk_records_to_inputs(chunks: list[Chunk]) -> list[DocumentChunk]:
+    out: list[DocumentChunk] = []
     for chunk in chunks or []:
         meta = dict(getattr(chunk, "meta", None) or {})
         out.append(
@@ -631,7 +631,7 @@ async def _fetch_existing_chunks_for_doc(
     owner_type: str,
     owner_id: str,
     doc_id: str,
-) -> List[Chunk]:
+) -> list[Chunk]:
     chunk_store = getattr(runtime.chunk_core, "store", None)
     if chunk_store is None:
         return []
@@ -659,7 +659,7 @@ async def _fetch_existing_chunks_for_doc(
 async def _persist_chunks(
     *,
     parsed: ParsedDocument,
-    final_chunks: List[DocumentChunk],
+    final_chunks: list[DocumentChunk],
     config: IngestConfig,
     runtime: _IngestRuntime,
     ingest_signature: dict,
@@ -668,8 +668,8 @@ async def _persist_chunks(
     owner_id: str,
     tenant_id: str,
     workspace_id: str | None,
-    warnings: List[str],
-) -> List[Chunk]:
+    warnings: list[str],
+) -> list[Chunk]:
     is_supersession = existing_manifest is not None and getattr(existing_manifest, "doc_id", None) != parsed.doc_id
     chunk_rows = _build_chunk_rows(
         parsed=parsed,
@@ -729,19 +729,19 @@ async def _persist_chunks(
 def _build_chunk_rows(
     *,
     parsed: ParsedDocument,
-    final_chunks: List[DocumentChunk],
+    final_chunks: list[DocumentChunk],
     config: IngestConfig,
     tenant_id: str,
     owner_type: str,
     owner_id: str,
     workspace_id: str | None,
-) -> Dict[str, Chunk]:
-    chunk_rows: Dict[str, Chunk] = {}
+) -> dict[str, Chunk]:
+    chunk_rows: dict[str, Chunk] = {}
     now = datetime.now(timezone.utc)
     for chunk in final_chunks:
         text_hash = hashlib.sha256((chunk.text or "").encode("utf-8")).hexdigest()
         chunk_trust = score_source(SourceDescriptor(kind="document"))
-        chunk_meta: Dict[str, Any] = {
+        chunk_meta: dict[str, Any] = {
             "text_hash": text_hash,
             "chunk_size_tokens": config.chunk_size_tokens,
             "overlap_tokens": config.overlap_tokens,
@@ -780,13 +780,13 @@ def _build_chunk_rows(
 
 async def _embed_and_upsert_chunks(
     *,
-    final_chunks: List[DocumentChunk],
-    chunk_rows: Dict[str, Chunk],
+    final_chunks: list[DocumentChunk],
+    chunk_rows: dict[str, Chunk],
     config: IngestConfig,
     runtime: _IngestRuntime,
-    warnings: List[str],
-) -> List[Chunk]:
-    created_chunks: List[Chunk] = []
+    warnings: list[str],
+) -> list[Chunk]:
+    created_chunks: list[Chunk] = []
     logger.info(
         "DOC_CHUNK_EMBED_AND_PERSIST count=%d sample_ids=%s",
         len(final_chunks),
@@ -823,16 +823,16 @@ async def _embed_and_upsert_chunks(
 async def _extract_facts_and_update_graph(
     *,
     parsed: ParsedDocument,
-    final_chunks: List[DocumentChunk],
-    persisted_chunks: List[Chunk],
+    final_chunks: list[DocumentChunk],
+    persisted_chunks: list[Chunk],
     config: IngestConfig,
     runtime: _IngestRuntime,
     owner_type: str,
     owner_id: str,
     tenant_id: str,
     workspace_id: str | None,
-    warnings: List[str],
-) -> tuple[List[Fact], int, int, List[str]]:
+    warnings: list[str],
+) -> tuple[list[Fact], int, int, list[str]]:
     # H3 defense: drop quarantined chunks before fact extraction.
     # Quarantine means "do not use this artifact for anything." Sending a
     # quarantined chunk to the LLM is a use — it pays for the call, may
@@ -915,7 +915,7 @@ async def _extract_facts_and_update_graph(
         fact.meta["extractor_version"] = _EXTRACTOR_VERSION
         fact.meta["chunker_version"] = _CHUNKER_VERSION
 
-    persisted_fact_ids: List[str] = []
+    persisted_fact_ids: list[str] = []
     if extracted_fact_records:
         persisted_fact_ids = await _embed_and_persist_facts(
             facts=extracted_fact_records,
@@ -947,7 +947,7 @@ async def capture_source(
     passed explicitly by the caller; falling back to DEFAULT_TENANT_ID silently
     is a tenancy break and is no longer allowed at this layer.
     """
-    warnings: List[str] = []
+    warnings: list[str] = []
     if memory is None:
         raise ValueError("capture_source: memory is required")
 
@@ -1217,6 +1217,123 @@ def _build_memory_bootstrap_signature(*, raw_text: str) -> dict[str, Any]:
     }
 
 
+def _build_memory_bootstrap_chunks(
+    *,
+    entries: list[str],
+    doc_id: str,
+    user_id: str,
+    tenant_id: str,
+    workspace_id: str | None,
+    normalized_path: str,
+    source_hash: str,
+    now: datetime,
+) -> tuple[
+    list[DocumentChunk],
+    dict[str, Chunk],
+    dict[str, tuple[float, dict[str, Any], datetime | None]],
+]:
+    """Build and security-scan one authoritative chunk per bootstrap entry."""
+    final_chunks: list[DocumentChunk] = []
+    chunk_rows: dict[str, Chunk] = {}
+    scan_verdicts: dict[str, tuple[float, dict[str, Any], datetime | None]] = {}
+    for position, entry in enumerate(entries):
+        chunk_id = hashlib.sha256(
+            f"memory_chunk:{user_id}:{source_hash}:{position}".encode()
+        ).hexdigest()
+        doc_chunk = DocumentChunk(
+            chunk_id=chunk_id,
+            doc_id=doc_id,
+            text=entry,
+            page_range=(1, 1),
+            position=position,
+        )
+        final_chunks.append(doc_chunk)
+        chunk_meta: dict[str, Any] = {
+            "text_hash": hashlib.sha256(entry.encode()).hexdigest(),
+            "source_kind": "memory_bootstrap",
+            "chunker_version": _MEMORY_BOOTSTRAP_VERSION,
+        }
+        trust, chunk_meta, quarantined_at = scan_artifact_text(
+            entry,
+            score_source(SourceDescriptor(kind="bootstrap_memory")),
+            chunk_meta,
+            log_context=f"memory_bootstrap/{user_id}/{position}",
+            now=now,
+        )
+        scan_verdicts[chunk_id] = (trust, chunk_meta, quarantined_at)
+        chunk_rows[chunk_id] = Chunk(
+            id=chunk_id,
+            doc_id=doc_id,
+            text=entry,
+            page_range=(1, 1),
+            position=position,
+            source_path=normalized_path,
+            source_hash=source_hash,
+            created_at=now,
+            updated_at=now,
+            tenant_id=tenant_id,
+            owner_type="user",
+            owner_id=user_id,
+            workspace_id=workspace_id,
+            trust_score=trust,
+            quarantined_at=quarantined_at,
+            meta=chunk_meta,
+        )
+    return final_chunks, chunk_rows, scan_verdicts
+
+
+def _build_memory_bootstrap_facts(
+    *,
+    final_chunks: list[DocumentChunk],
+    scan_verdicts: dict[str, tuple[float, dict[str, Any], datetime | None]],
+    doc_id: str,
+    user_id: str,
+    tenant_id: str,
+    workspace_id: str | None,
+    normalized_path: str,
+    source_hash: str,
+    now: datetime,
+) -> list[Fact]:
+    """Derive one provenance-backed fact from each scanned bootstrap chunk."""
+    facts: list[Fact] = []
+    for doc_chunk in final_chunks:
+        trust, chunk_meta, quarantined_at = scan_verdicts[doc_chunk.chunk_id]
+        fact_meta: dict[str, Any] = {
+            "doc_id": doc_id,
+            "source_path": normalized_path,
+            "source_hash": source_hash,
+            "fact_text": doc_chunk.text,
+            "fact_type": "claim",
+            "ingest_pipeline_version": _MEMORY_BOOTSTRAP_VERSION,
+        }
+        if chunk_meta.get("security"):
+            fact_meta["security"] = dict(chunk_meta["security"])
+        fact_id = "fact_" + hashlib.sha256(
+            f"memory_fact:{user_id}:{source_hash}:{doc_chunk.chunk_id}".encode()
+        ).hexdigest()
+        facts.append(
+            Fact(
+                id=fact_id,
+                subject=user_id,
+                predicate="STATES",
+                object=doc_chunk.text,
+                created_at=now,
+                updated_at=now,
+                source_ids=[doc_chunk.chunk_id],
+                confidence=1.0,
+                owner_type="user",
+                owner_id=user_id,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                trust_score=trust,
+                quarantined_at=quarantined_at,
+                content_hash=hash_fact_content(user_id, "STATES", doc_chunk.text),
+                meta=fact_meta,
+            )
+        )
+    return facts
+
+
 
 async def ingest_memory_bootstrap(
     file_path: str,
@@ -1224,7 +1341,7 @@ async def ingest_memory_bootstrap(
     memory: Any,
     runtime_context: Any,
     config: Any | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Ingest MEMORY.md with one chunk + one fact per bullet for clean per-entry provenance.
 
     Bypasses the LLM extraction pipeline (which skips chunks < 300 chars) to ensure
@@ -1254,65 +1371,20 @@ async def ingest_memory_bootstrap(
     if skip is not None:
         return skip
 
-    # Build one Chunk + one Fact per bullet, bypassing the LLM extraction pipeline.
     doc_id = f"memory-bootstrap:{source_hash[:24]}"
     now = datetime.now(timezone.utc)
-    warnings: List[str] = []
+    warnings: list[str] = []
 
-    final_chunks: List[DocumentChunk] = []
-    chunk_rows: Dict[str, Any] = {}
-    # Per-chunk scan verdicts are computed at the boundary (when bullet text
-    # enters UMA) and inherited by the derived fact. Option A discipline:
-    # scan at the boundary; everything derived inherits.
-    chunk_scan_verdicts: Dict[str, tuple[float, Dict[str, Any], "datetime | None"]] = {}
-
-    for i, entry in enumerate(entries):
-        chunk_id = hashlib.sha256(
-            f"memory_chunk:{user_id}:{source_hash}:{i}".encode("utf-8")
-        ).hexdigest()
-        text_hash = hashlib.sha256(entry.encode("utf-8")).hexdigest()
-        doc_chunk = DocumentChunk(
-            chunk_id=chunk_id,
-            doc_id=doc_id,
-            text=entry,
-            page_range=(1, 1),
-            position=i,
-        )
-        final_chunks.append(doc_chunk)
-
-        chunk_trust = score_source(SourceDescriptor(kind="bootstrap_memory"))
-        chunk_meta: Dict[str, Any] = {
-            "text_hash": text_hash,
-            "source_kind": "memory_bootstrap",
-            "chunker_version": _MEMORY_BOOTSTRAP_VERSION,
-        }
-        chunk_trust, chunk_meta, chunk_quarantined_at = scan_artifact_text(
-            entry,
-            chunk_trust,
-            chunk_meta,
-            log_context=f"memory_bootstrap/{user_id}/{i}",
-            now=now,
-        )
-        chunk_scan_verdicts[chunk_id] = (chunk_trust, chunk_meta, chunk_quarantined_at)
-
-        chunk_rows[chunk_id] = Chunk(
-            id=chunk_id,
-            doc_id=doc_id,
-            text=entry,
-            page_range=(1, 1),
-            position=i,
-            source_path=normalized_path,
-            source_hash=source_hash,
-            created_at=now,
-            updated_at=now,
-            tenant_id=tenant_id,
-            owner_type="user",
-            owner_id=user_id,
-            workspace_id=workspace_id,
-            trust_score=chunk_trust,
-            quarantined_at=chunk_quarantined_at,
-            meta=chunk_meta,
-        )
+    final_chunks, chunk_rows, chunk_scan_verdicts = _build_memory_bootstrap_chunks(
+        entries=entries,
+        doc_id=doc_id,
+        user_id=user_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        normalized_path=normalized_path,
+        source_hash=source_hash,
+        now=now,
+    )
 
     created_chunks = await _embed_and_upsert_chunks(
         final_chunks=final_chunks,
@@ -1322,49 +1394,17 @@ async def ingest_memory_bootstrap(
         warnings=warnings,
     )
 
-    # One fact per entry, citing its chunk for provenance.
-    # Facts inherit the scan verdict from their source chunk (Option A): the
-    # boundary scan happened at chunk-construction time above; nothing new
-    # enters UMA at this step. Inheriting keeps trust scores consistent and
-    # ensures a quarantined chunk produces a quarantined fact.
-    facts: List[Fact] = []
-    for doc_chunk in final_chunks:
-        fact_id = "fact_" + hashlib.sha256(
-            f"memory_fact:{user_id}:{source_hash}:{doc_chunk.chunk_id}".encode("utf-8")
-        ).hexdigest()
-        inherited_trust, chunk_meta_for_fact, inherited_quarantined_at = chunk_scan_verdicts[doc_chunk.chunk_id]
-        fact_meta: Dict[str, Any] = {
-            "doc_id": doc_id,
-            "source_path": normalized_path,
-            "source_hash": source_hash,
-            "fact_text": doc_chunk.text,
-            "fact_type": "claim",
-            "ingest_pipeline_version": _MEMORY_BOOTSTRAP_VERSION,
-        }
-        # Propagate the chunk's security record so retrieval and audit can see
-        # the same scan verdict on both artifacts.
-        chunk_security = (chunk_meta_for_fact or {}).get("security")
-        if chunk_security:
-            fact_meta["security"] = dict(chunk_security)
-        f = Fact(
-            id=fact_id,
-            subject=user_id,
-            predicate="STATES",
-            object=doc_chunk.text,
-            created_at=now,
-            updated_at=now,
-            source_ids=[doc_chunk.chunk_id],
-            confidence=1.0,
-            owner_type="user",
-            owner_id=user_id,
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            trust_score=inherited_trust,
-            quarantined_at=inherited_quarantined_at,
-            content_hash=hash_fact_content(user_id, "STATES", doc_chunk.text),
-            meta=fact_meta,
-        )
-        facts.append(f)
+    facts = _build_memory_bootstrap_facts(
+        final_chunks=final_chunks,
+        scan_verdicts=chunk_scan_verdicts,
+        doc_id=doc_id,
+        user_id=user_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        normalized_path=normalized_path,
+        source_hash=source_hash,
+        now=now,
+    )
 
     persisted_fact_ids = await _embed_and_persist_facts(
         facts=facts,
@@ -1425,7 +1465,7 @@ async def ingest_daily_diary_bootstrap(
     memory: Any,
     runtime_context: Any,
     config: Any | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Ingest a daily diary file.
 
     Runs the full document pipeline (chunker + LLM fact extraction) for the

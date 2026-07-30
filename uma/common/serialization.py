@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from uma.common.types import Chunk
 
 
-def chunk_to_dict(ch: Chunk) -> Dict[str, Any]:
+def chunk_to_dict(ch: Chunk) -> dict[str, Any]:
     return {
         "id": ch.id,
         "doc_id": ch.doc_id,

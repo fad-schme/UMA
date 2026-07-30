@@ -21,7 +21,7 @@ Integration
 from __future__ import annotations
 
 import logging
-from typing import List, Iterable, Dict
+from typing import Iterable
 
 from uma.adapters.llm.base import LLMInterface  # you must implement this
 from uma.adapters.llm.controller import LLMCallContext, generate_text
@@ -60,7 +60,7 @@ class WorkingMemorySummarizer:
 
     async def summarize_messages(
         self,
-        messages: Iterable[Dict[str, str]],
+        messages: Iterable[dict[str, str]],
         extra_instructions: str | None = None,
     ) -> str:
         """
@@ -87,7 +87,7 @@ class WorkingMemorySummarizer:
           raising, so the calling code can continue without crashing.
         """
         # Build content to summarize
-        text_blocks: List[str] = []
+        text_blocks: list[str] = []
         for msg in messages:
             if isinstance(msg, dict):
                 role = msg.get("role", "unknown")

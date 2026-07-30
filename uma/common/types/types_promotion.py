@@ -23,7 +23,6 @@ Coding agent instructions
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
 
 
 @dataclass(frozen=True)
@@ -53,8 +52,8 @@ class AgentProfile:
 
     agent_id: str
     description: str
-    focus_areas: List[str]
-    profile_embedding: List[float]
+    focus_areas: list[str]
+    profile_embedding: list[float]
     tenant_id: str = "default"
 
     def __post_init__(self) -> None:
@@ -91,7 +90,7 @@ class QualifierDecision:
     """
 
     passed: bool
-    reasons: List[str] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
     quarantine_ok: bool = False
     is_eligible: bool = False
     scope_matched: bool = False

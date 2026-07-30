@@ -5,13 +5,13 @@ import json
 import logging
 from dataclasses import dataclass
 import re
-from typing import Any, Callable, Dict, Optional, Sequence, TypeVar
+from typing import Any, Callable, Optional, Sequence, TypeVar
 
 T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
-Message = Dict[str, str]  # {"role": "...", "content": "..."}
+Message = dict[str, str]  # {"role": "...", "content": "..."}
 
 
 @dataclass(frozen=True)
@@ -32,7 +32,7 @@ class LLMCallContext:
     owner_id: Optional[str] = None
 
 
-def extract_json_object(raw: str, *, max_chars: int = 50_000) -> Dict[str, Any]:
+def extract_json_object(raw: str, *, max_chars: int = 50_000) -> dict[str, Any]:
     """
     Extract and parse a JSON object from a possibly noisy LLM response.
 
@@ -164,7 +164,7 @@ async def generate_json(
     cfg: Optional[LLMCallConfig] = None,
     ctx: Optional[LLMCallContext] = None,
     repair_messages_fn: Optional[Callable[[str], Sequence[Message]]] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     cfg = cfg or LLMCallConfig()
     ctx = ctx or LLMCallContext()
 
@@ -207,7 +207,7 @@ async def generate_model(
     llm: Any,
     messages: Sequence[Message],
     max_tokens: int,
-    model_validate: Callable[[Dict[str, Any]], T],
+    model_validate: Callable[[dict[str, Any]], T],
     cfg: Optional[LLMCallConfig] = None,
     ctx: Optional[LLMCallContext] = None,
     repair_messages_fn: Optional[Callable[[str], Sequence[Message]]] = None,
@@ -246,7 +246,7 @@ async def generate_model(
                 raise
             parsed = {}
 
-    def _log_validation_failure(stage: str, payload: Dict[str, Any]) -> None:
+    def _log_validation_failure(stage: str, payload: dict[str, Any]) -> None:
         preview = json.dumps(payload, default=str) if isinstance(payload, dict) else str(payload)
         if len(preview) > 2000:
             preview = preview[:2000] + "...(truncated)"

@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, List, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence
 
 from uma.common.integrity import (
     hash_chunk_content,
@@ -53,7 +53,7 @@ class QuarantinedRecord:
     lane: str
     quarantined_at: datetime
     severity: str
-    matched_rules: List[str]
+    matched_rules: list[str]
     owner_type: str
     owner_id: str
     content_preview: str
@@ -363,13 +363,13 @@ async def list_quarantined(
     tenant_id: str = "default",
     lane: Optional[str] = None,
     limit: int = 100,
-) -> List[QuarantinedRecord]:
+) -> list[QuarantinedRecord]:
     """
     Return quarantined records across all lanes (or a specific lane), owner-scoped.
     lane must be one of: "semantic", "episodic", "procedural", "raw" (or None for all).
     """
     lanes_to_check = [lane] if lane else list(_LANE_STORE_KEY.keys())
-    results: List[QuarantinedRecord] = []
+    results: list[QuarantinedRecord] = []
 
     for ln in lanes_to_check:
         store_key = _LANE_STORE_KEY.get(ln)
@@ -576,7 +576,7 @@ def list_retrieval_audit(
     user_id: Optional[str] = None,
     severity_min: Optional[str] = None,
     limit: int = 100,
-) -> List[dict]:
+) -> list[dict]:
     """Read recent retrieval-audit rows.
 
     One row per `retrieve_context` / `retrieve_memory` call (the audit

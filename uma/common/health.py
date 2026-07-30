@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, asdict
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from uma.adapters.db.base import DBAdapter
 from uma.adapters.vector.base import VectorIndex
@@ -30,7 +30,7 @@ class HealthCheck:
     detail: str
     latency_ms: Optional[float] = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -59,6 +59,7 @@ def _check_db(name: str, adapter: Optional[DBAdapter]) -> HealthCheck:
                     logger.debug("Health check cursor close failed for %s", name)
             return "ok", "connection ok"
         except Exception as exc:
+            logger.debug("_check_sql: connection check failed: %s", exc, exc_info=True)
             return "error", f"connection failed: {exc}"
         finally:
             try:
@@ -101,6 +102,7 @@ def _check_vector(name: str, index: Optional[VectorIndex], dim: int) -> HealthCh
             )
             return "ok", "query ok"
         except Exception as exc:
+            logger.debug("_check_vector: query check failed: %s", exc, exc_info=True)
             return "error", f"query failed: {exc}"
 
     status, detail, latency = _timed(_probe)
@@ -119,6 +121,7 @@ def _check_graph(name: str, adapter: Optional[GraphAdapter]) -> HealthCheck:
             adapter.run_query("RETURN 1 AS ok")
             return "ok", "query ok"
         except Exception as exc:
+            logger.debug("_check_graph: query check failed: %s", exc, exc_info=True)
             return "error", f"query failed: {exc}"
 
     status, detail, latency = _timed(_probe)
@@ -152,7 +155,7 @@ def run_health_checks(memory: Any) -> "HealthStatus":
     """
     from uma.common.results import HealthStatus
 
-    checks: Dict[str, HealthCheck] = {}
+    checks: dict[str, HealthCheck] = {}
 
     epi_store = getattr(getattr(memory, "episodic_core", None), "store", None)
     sem_core = getattr(memory, "semantic_core", None)

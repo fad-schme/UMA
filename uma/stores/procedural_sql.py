@@ -21,7 +21,7 @@ import json
 import logging
 import struct
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 from .base_vector_sql_store import BaseVectorSQLStore
 
@@ -32,7 +32,7 @@ _QUARANTINE_FILTER = " AND quarantined_at IS NULL"
 _NO_FILTER = ""
 
 
-def _pack_embedding(vec: Optional[List[float]]) -> Optional[bytes]:
+def _pack_embedding(vec: Optional[list[float]]) -> Optional[bytes]:
     """Serialize a float vector to a little-endian float32 BLOB.
 
     Used for the ``profile_embedding`` column on ``kind='agent_profile'``
@@ -45,7 +45,7 @@ def _pack_embedding(vec: Optional[List[float]]) -> Optional[bytes]:
     return struct.pack(f"<{len(vec)}f", *(float(x) for x in vec))
 
 
-def _unpack_embedding(blob: Optional[bytes]) -> Optional[List[float]]:
+def _unpack_embedding(blob: Optional[bytes]) -> Optional[list[float]]:
     """Inverse of :func:`_pack_embedding`. Returns None on empty input."""
     if not blob:
         return None
@@ -320,7 +320,7 @@ class ProceduralSQLStore(BaseVectorSQLStore):
     # CRUD operations
     # ------------------------------------------------------------------ #
 
-    async def add_skill(self, skill: Skill, embedding: List[float]) -> Skill:
+    async def add_skill(self, skill: Skill, embedding: list[float]) -> Skill:
         """
         Insert or update a Skill record + vector embedding.
 
@@ -537,12 +537,12 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         return await self._run_sync(_sync)
     async def fetch_skills_by_ids(
         self,
-        ids: List[str],
+        ids: list[str],
         *,
         tenant_id: Optional[str] = None,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
-    ) -> List[Skill]:
+    ) -> list[Skill]:
         """
         Fetch skills by IDs, owner-scoped, preserving input order.
         """
@@ -556,7 +556,7 @@ class ProceduralSQLStore(BaseVectorSQLStore):
             conn = self._conn()
             try:
                 placeholders = ",".join("?" for _ in ids)
-                params: List[Any] = list(ids) + [tenant_id, owner_type, owner_id]
+                params: list[Any] = list(ids) + [tenant_id, owner_type, owner_id]
                 # nosec B608 — placeholders is "?,?,?" only; all values bound as ?
                 sql = f"""
                     SELECT * FROM skills
@@ -568,7 +568,7 @@ class ProceduralSQLStore(BaseVectorSQLStore):
                 """
                 rows = self._query_all(conn, sql, params=params, log_context="fetch_skills_by_ids")
                 row_map = {r["id"]: r for r in rows}
-                ordered: List[Skill] = []
+                ordered: list[Skill] = []
                 for sid in ids:
                     row = row_map.get(sid)
                     if row is None:
@@ -590,7 +590,7 @@ class ProceduralSQLStore(BaseVectorSQLStore):
         owner_id: Optional[str] = None,
         limit: Optional[int] = None,
         include_quarantined: bool = False,
-    ) -> List[Skill]:
+    ) -> list[Skill]:
         """
         List skills ordered by updated_at DESC. Quarantined skills excluded by default.
         """
@@ -679,13 +679,13 @@ class ProceduralSQLStore(BaseVectorSQLStore):
 
     async def search(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         *,
         tenant_id: Optional[str] = None,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
         k: int = 5,
-    ) -> List[Skill]:
+    ) -> list[Skill]:
         """
         Retrieve top-k procedural skills by vector similarity.
 

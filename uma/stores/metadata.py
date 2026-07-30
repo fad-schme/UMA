@@ -8,7 +8,6 @@ Helpers for tracking UMA storage format metadata inside SQL stores.
 from __future__ import annotations
 
 import logging
-from typing import Dict
 
 from uma.version import __version__ as UMA_VERSION
 
@@ -17,7 +16,7 @@ logger = logging.getLogger(__name__)
 FORMAT_NAME = "uma"
 
 
-def ensure_store_metadata(store: object, conn: object, store_name: str) -> Dict[str, str]:
+def ensure_store_metadata(store: object, conn: object, store_name: str) -> dict[str, str]:
     """
     Ensure UMA metadata exists in the store and validate format.
 

@@ -25,7 +25,7 @@ Coding Agent Instructions
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
 from uma.common.types import Fact, RuntimeContext, SCOPE_MODEL_VERSION
@@ -76,13 +76,13 @@ class SemanticCore:
         if self.store is None:
             logger.error("SemanticCore: store missing or unsupported")
             raise RuntimeError("SemanticCore: store missing or unsupported")
-        
+
 
     # ------------------------------------------------------------------
     # PUBLIC API (WRITE / INGEST)
     # ------------------------------------------------------------------
 
-    async def upsert_fact(self, fact: Fact, embedding: List[float]) -> None:
+    async def upsert_fact(self, fact: Fact, embedding: list[float]) -> None:
         """
         Persist a fact + embedding.
 
@@ -127,7 +127,7 @@ class SemanticCore:
         text: str,
         *,
         extra_meta: dict | None = None,
-    ) -> List[Fact]:
+    ) -> list[Fact]:
         """
         Extract semantic facts (not persisted).
         Normalizes user_id to the canonical identity format.
@@ -148,7 +148,7 @@ class SemanticCore:
         extra_meta: dict | None = None,
         turn_context: Optional[RuntimeContext] = None,
         source_kind: str = "turn_user",
-    ) -> List[Fact]:
+    ) -> list[Fact]:
         """
         Extract + ingest facts into the semantic self.store.
 
@@ -233,11 +233,11 @@ class SemanticCore:
         owner_type: str,
         owner_id: str,
         limit: Optional[int] = None,
-    ) -> List[Fact]:
+    ) -> list[Fact]:
         """
         List facts for an owner scope (ownership-only).
         """
-       
+
         if not hasattr(self.store, "list_facts_for_owner"):
             logger.error("SemanticCore.list_facts_for_owner: store missing or unsupported")
             raise RuntimeError("SemanticCore.list_facts_for_owner: store missing or unsupported")
@@ -271,7 +271,7 @@ class SemanticCore:
         - This is a maintenance/pruning API, not a retrieval filter.
         - Store must enforce ownership in the delete path.
         """
-        
+
         if not fact_id or not isinstance(fact_id, str):
             logger.error("SemanticCore.delete_fact requires fact_id as a non-empty string")
             raise ValueError("SemanticCore.delete_fact requires fact_id as a non-empty string")
@@ -320,16 +320,16 @@ class SemanticCore:
 
     async def search(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         *,
         tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         k: int = 10,
         offset: int = 0,
-        filters: Optional[Dict[str, Any]] = None,
+        filters: Optional[dict[str, Any]] = None,
         query_text: Optional[str] = None,
-    ) -> List[Fact]:
+    ) -> list[Fact]:
         """
         Unified semantic retrieval entry point (ownership-only).
 
@@ -361,7 +361,7 @@ class SemanticCore:
             top_k_sparse = 15
         dense_k = int(k) if top_k_dense <= 0 else max(0, int(top_k_dense))
 
-        dense_facts: List[Any] = []
+        dense_facts: list[Any] = []
         try:
             logger.debug("SemanticCore.search: path=vector owner=%s:%s", owner_type, owner_id)
             found = await self.store.search(
@@ -378,7 +378,7 @@ class SemanticCore:
             logger.exception("SemanticCore.search failed owner=%s:%s", owner_type, owner_id)
             raise
 
-        sparse_facts: List[Any] = []
+        sparse_facts: list[Any] = []
         if (
             hybrid_enabled
             and top_k_sparse > 0
@@ -424,7 +424,7 @@ class SemanticCore:
                 logger.exception("SemanticCore.search: lexical search failed owner=%s:%s", owner_type, owner_id)
                 raise
 
-        facts: List[Any] = (
+        facts: list[Any] = (
             fuse_candidates(dense=dense_facts, sparse=sparse_facts, strategy=fusion_strategy)
             if sparse_facts
             else dense_facts
@@ -468,7 +468,7 @@ class SemanticCore:
         owner_id: str,
         k: int,
         offset: int = 0,
-    ) -> List[Fact]:
+    ) -> list[Fact]:
         """
         Fetch additional facts for an owner scope, filtered by predicate using deterministic paging.
 
@@ -499,7 +499,7 @@ class SemanticCore:
             )
             raise
 
-        filtered: List[Any] = []
+        filtered: list[Any] = []
         for f in facts or []:
             pred_val = getattr(f, "predicate", None) if hasattr(f, "predicate") else (
                 f.get("predicate") if isinstance(f, dict) else None
@@ -514,16 +514,16 @@ class SemanticCore:
 
     async def fetch_by_ids(
         self,
-        ids: List[str],
+        ids: list[str],
         *,
         tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
-    ) -> List[Fact]:
+    ) -> list[Fact]:
         """
         Fetch facts by IDs (authoritative payload) with ownership enforcement.
         """
-    
+
         if not hasattr(self.store, "fetch_by_ids"):
             return []
         if not tenant_id or not owner_type or not owner_id:
@@ -575,11 +575,11 @@ class SemanticCore:
     # INTERNALS
     # ------------------------------------------------------------------
 
-    def _dedup_facts(self, facts: List[Fact]) -> List[Fact]:
+    def _dedup_facts(self, facts: list[Fact]) -> list[Fact]:
         return dedupe_by_id(facts or [])
 
 
-def _fact_topics(f: Any) -> List[str]:
+def _fact_topics(f: Any) -> list[str]:
     meta = getattr(f, "meta", None) or {}
     if isinstance(f, dict):
         meta = f.get("meta") or {}

@@ -56,7 +56,18 @@ jobs:
         run: python -m pip check
 
       - name: Run full test suite
-        run: python -m pytest tests/ -q --tb=short
+        run: >-
+          python -m pytest tests/ -q --tb=short
+          --cov=uma
+          --cov-report=term-missing
+          --cov-report=xml
+
+      - name: Preserve coverage report
+        if: matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-xml
+          path: coverage.xml
 
   # These tests exercise UMA's trust, quarantine, injection, integrity, and
   # ingestion boundaries explicitly. They remain visible as their own required

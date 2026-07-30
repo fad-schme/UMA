@@ -118,10 +118,19 @@ class UMAConfig(dict):
     # ----- MAIN VALIDATION -----
     def _validate(self):
         logger.info("Validating UMA config...")
+        self._validate_storage()
+        self._validate_working_memory()
+        self._validate_embedding()
+        self._validate_secrets()
+        self._validate_llms()
+        self._validate_retrieval()
+        self._validate_rlm()
+        self._validate_optional_lanes()
+        self._validate_features()
+        self._warn_on_secrets()
+        logger.info("UMA configuration validated successfully.")
 
-        # -----------------------
-        # STORAGE
-        # -----------------------
+    def _validate_storage(self) -> None:
         self._require_nonempty_str("storage", "db_root")
         sql_backend = self.storage.get("sql_backend")
         known_sql = ("sqlite",)
@@ -145,9 +154,7 @@ class UMAConfig(dict):
                 "'storage.graph_backend' must be 'disabled' or a plugin spec 'module:callable'"
             )
 
-        # -----------------------
-        # WORKING MEMORY
-        # -----------------------
+    def _validate_working_memory(self) -> None:
         self._require_positive_int("working_memory", "max_tokens")
         self._require_ratio("working_memory", "warning_ratio")
         self._require_ratio("working_memory", "hard_limit_ratio")
@@ -159,10 +166,7 @@ class UMAConfig(dict):
         if "keep_recent_token_fraction" in wm_section:
             self._require_ratio("working_memory", "keep_recent_token_fraction")
 
-        
-        # -----------------------
-        # EMBEDDING
-        # -----------------------
+    def _validate_embedding(self) -> None:
         self._require("embedding", "provider")
         provider = self.embedding.provider
         if provider == "ollama":
@@ -174,9 +178,7 @@ class UMAConfig(dict):
         if "config" in self.embedding and not isinstance(self.embedding["config"], dict):
             raise ValueError("'embedding.config' must be a mapping")
 
-        # -----------------------
-        # SECRETS
-        # -----------------------
+    def _validate_secrets(self) -> None:
         secrets_cfg = self.get("secrets")
         if secrets_cfg is not None:
             if not isinstance(secrets_cfg, dict):
@@ -188,9 +190,7 @@ class UMAConfig(dict):
             if options is not None and not isinstance(options, dict):
                 raise ValueError("'secrets.options' must be a mapping")
 
-        # -----------------------
-        # LLM / LLMS
-        # -----------------------
+    def _validate_llms(self) -> None:
         if "llms" in self and isinstance(self.llms, dict):
             if "uma" not in self.llms:
                 raise ValueError("'llms.uma' section is required")
@@ -223,9 +223,7 @@ class UMAConfig(dict):
             if "config" in self.llm and not isinstance(self.llm["config"], dict):
                 raise ValueError("'llm.config' must be a mapping")
 
-        # -----------------------
-        # RETRIEVAL
-        # -----------------------
+    def _validate_retrieval(self) -> None:
         for key in ("max_episodes", "max_facts", "max_skills", "max_graph_items"):
             self._require_positive_int("retrieval", key)
         if "strict" in self.retrieval and not isinstance(self.retrieval.get("strict"), bool):
@@ -275,9 +273,7 @@ class UMAConfig(dict):
                 if key in context_cfg and (not isinstance(context_cfg[key], int) or context_cfg[key] < 0):
                     raise ValueError(f"'retrieval.context.{key}' must be a non-negative integer")
 
-        # -----------------------
-        # RETRIEVAL.RLM (optional)
-        # -----------------------
+    def _validate_rlm(self) -> None:
         rlm = self.retrieval.get("rlm")
         if rlm is not None:
             if not isinstance(rlm, dict):
@@ -318,9 +314,7 @@ class UMAConfig(dict):
                             f"'retrieval.rlm.predicate_allowlist.{dom}' must be a list of non-empty strings"
                         )
 
-        # -----------------------
-        # CONSOLIDATION
-        # -----------------------
+    def _validate_optional_lanes(self) -> None:
         if "consolidation" in self:
             self._require("consolidation", "enabled")
             self._require_positive_int("consolidation", "max_episodes_per_cycle")
@@ -333,9 +327,6 @@ class UMAConfig(dict):
             if p is None or not (0 <= p <= 1):
                 raise ValueError("'consolidation.prune_min_fact_salience' must be between 0 and 1")
 
-        # -----------------------
-        # SEMANTIC (optional overrides)
-        # -----------------------
         if "semantic" in self:
             semantic_cfg = self.semantic
             if not isinstance(semantic_cfg, dict):
@@ -347,9 +338,7 @@ class UMAConfig(dict):
                 if not (0 <= val <= 1):
                     raise ValueError("'semantic.salience_threshold' must be between 0 and 1")
 
-        # -----------------------
-        # FEATURES
-        # -----------------------
+    def _validate_features(self) -> None:
         features = self.get("features")
         if features is None:
             features = {}
@@ -390,6 +379,3 @@ class UMAConfig(dict):
                 policy["allow_method_override"], bool
             ):
                 raise ValueError("'features.policy.allow_method_override' must be boolean")
-
-        self._warn_on_secrets()
-        logger.info("UMA configuration validated successfully.")

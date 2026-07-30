@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Iterable, List, Tuple
+from typing import Iterable
 
 from uma.common.types import Fact
 
@@ -19,7 +19,7 @@ class FactResolver(ABC):
     @abstractmethod
     def resolve(
         self, existing: Iterable[Fact], new: Fact
-    ) -> Tuple[Fact, List[Fact]]:
+    ) -> tuple[Fact, list[Fact]]:
         raise NotImplementedError
 
 
@@ -28,7 +28,7 @@ class LatestWinsFactResolver(FactResolver):
 
     def resolve(
         self, existing: Iterable[Fact], new: Fact
-    ) -> Tuple[Fact, List[Fact]]:
+    ) -> tuple[Fact, list[Fact]]:
         facts = list(existing) + [new]
 
         if not facts:

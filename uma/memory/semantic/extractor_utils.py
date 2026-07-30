@@ -17,7 +17,7 @@ import json
 import logging
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from uma.common.types import Fact
 from uma.common.storage_metadata import normalize_fact_metadata
@@ -220,7 +220,8 @@ def _clamp01(x: float) -> float:
 def _safe_float(v: Any, default: float = 0.7) -> float:
     try:
         return float(v)
-    except Exception:
+    except Exception as exc:
+        logger.debug("_safe_float: numeric coercion failed: %s", exc, exc_info=True)
         return float(default)
 
 
@@ -239,11 +240,11 @@ def build_prompt(
     min_fact_words: int,
     mode: str,
     chunk_text: Optional[str] = None,
-    items: Optional[List[Dict[str, str]]] = None,
+    items: Optional[list[dict[str, str]]] = None,
     doc_text: Optional[str] = None,
     max_facts: Optional[int] = None,
     max_facts_per_chunk: Optional[int] = None,
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     """
     Keep prompts generic and schema-strict.
     Hard constraints (max facts, word caps, token caps) are enforced in code after parsing.
@@ -418,11 +419,11 @@ def _chunk_quality_score(ch: DocumentChunk) -> float:
 
 
 def select_chunks_for_fact_extraction(
-    chunks: List[DocumentChunk],
+    chunks: list[DocumentChunk],
     *,
     max_chunks: Optional[int] = None,
     max_per_page: Optional[int] = None,
-) -> List[DocumentChunk]:
+) -> list[DocumentChunk]:
     """
     Deterministically select the highest-quality chunks for extraction.
 
@@ -436,13 +437,13 @@ def select_chunks_for_fact_extraction(
     ordered = sorted(chunks, key=lambda c: (int(getattr(c, "position", 0) or 0), getattr(c, "chunk_id", "")))
 
     # Group by page_range when available; fallback to None.
-    buckets: Dict[str, List[DocumentChunk]] = {}
+    buckets: dict[str, list[DocumentChunk]] = {}
     for ch in ordered:
         pr = getattr(ch, "page_range", None)
         key = str(pr) if pr is not None else "none"
         buckets.setdefault(key, []).append(ch)
 
-    selected: List[DocumentChunk] = []
+    selected: list[DocumentChunk] = []
 
     for _, group in buckets.items():
         scored = [(float(_chunk_quality_score(c)), c) for c in group]
@@ -462,11 +463,11 @@ def select_chunks_for_fact_extraction(
 # Batching
 # ---------------------------------------------------------------------
 def partition_batches_by_chars(
-    chunks: List[DocumentChunk],
+    chunks: list[DocumentChunk],
     *,
     batch_size_chunks: int,
     max_chars: int,
-) -> List[List[DocumentChunk]]:
+) -> list[list[DocumentChunk]]:
     if not chunks:
         return []
     batch_size_chunks = max(1, int(batch_size_chunks))
@@ -474,8 +475,8 @@ def partition_batches_by_chars(
 
     ordered = sorted(chunks, key=lambda c: (int(getattr(c, "position", 0) or 0), getattr(c, "chunk_id", "")))
 
-    batches: List[List[DocumentChunk]] = []
-    cur: List[DocumentChunk] = []
+    batches: list[list[DocumentChunk]] = []
+    cur: list[DocumentChunk] = []
     cur_chars = 0
 
     def _item_chars(ch: DocumentChunk) -> int:
@@ -516,7 +517,8 @@ def coerce_object_text(obj: Any) -> str:
         return _normalize_ws(obj)
     try:
         return _normalize_ws(json.dumps(obj, ensure_ascii=False))
-    except Exception:
+    except Exception as exc:
+        logger.debug("coerce_object_text: JSON serialization failed: %s", exc, exc_info=True)
         return _normalize_ws(str(obj))
 
 
@@ -527,7 +529,7 @@ def enforce_fact_limits(
     *,
     object_max_words: int,
     max_fact_tokens: int,
-) -> Tuple[str, str, str]:
+) -> tuple[str, str, str]:
     subj_n = _truncate_words(_normalize_ws(subj), 12)
     pred_n = _truncate_words(_normalize_ws(pred), 5) or "STATES"
     obj_n = _truncate_words(_normalize_ws(obj_text), int(object_max_words))
@@ -568,17 +570,17 @@ def parse_facts_list_into_facts(
     doc_id: str,
     source_path: str,
     source_hash: str,
-) -> List[Fact]:
+) -> list[Fact]:
     if not isinstance(facts_payload, list):
         return []
 
     source_chunk_id = str(chunk.chunk_id) if chunk is not None else "doc_summary"
     chunk_doc_id = str(chunk.doc_id) if chunk is not None else doc_id
-    drop_counts: Dict[str, int] = {}
+    drop_counts: dict[str, int] = {}
     in_count = len(facts_payload)
-    dropped_object_previews: List[Tuple[str, int]] = []
+    dropped_object_previews: list[tuple[str, int]] = []
     dropped_object_preview_limit = 3
-    out: List[Fact] = []
+    out: list[Fact] = []
 
     for item in facts_payload:
         try:
@@ -698,7 +700,7 @@ def parse_chunk_payload_into_facts(
     doc_id: str,
     source_path: str,
     source_hash: str,
-) -> List[Fact]:
+) -> list[Fact]:
     if not isinstance(payload, dict):
         return []
     facts_payload = payload.get("facts")
@@ -748,7 +750,7 @@ def fallback_fact_for_chunk(
 
 
 
-def batch_repair_messages(bad: str, *, max_facts_per_chunk: int) -> List[Dict[str, str]]:
+def batch_repair_messages(bad: str, *, max_facts_per_chunk: int) -> list[dict[str, str]]:
     return [
         {
             "role": "system",
@@ -771,7 +773,7 @@ def batch_repair_messages(bad: str, *, max_facts_per_chunk: int) -> List[Dict[st
     ]
 
 
-def single_repair_messages(bad: str, *, max_facts: int) -> List[Dict[str, str]]:
+def single_repair_messages(bad: str, *, max_facts: int) -> list[dict[str, str]]:
     return [
         {
             "role": "system",

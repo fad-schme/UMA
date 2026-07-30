@@ -7,7 +7,7 @@ empty defaults — tests override only the fields under assertion.
 
 from __future__ import annotations
 
-from typing import Any, Iterable, List, Optional
+from typing import Any, Iterable, Optional
 
 from uma.common.results import ContextBundle, Confidence, DebugInfo, Provenance
 
@@ -15,18 +15,18 @@ from uma.common.results import ContextBundle, Confidence, DebugInfo, Provenance
 def make_context_bundle(
     *,
     query: str = "",
-    working_memory: Optional[List[Any]] = None,
-    episodic: Optional[List[Any]] = None,
-    facts: Optional[List[Any]] = None,
-    chunks: Optional[List[Any]] = None,
-    documents: Optional[List[dict]] = None,
-    skills: Optional[List[Any]] = None,
-    graph: Optional[List[Any]] = None,
+    working_memory: Optional[list[Any]] = None,
+    episodic: Optional[list[Any]] = None,
+    facts: Optional[list[Any]] = None,
+    chunks: Optional[list[Any]] = None,
+    documents: Optional[list[dict]] = None,
+    skills: Optional[list[Any]] = None,
+    graph: Optional[list[Any]] = None,
     confidence: Optional[Confidence] = None,
     query_scan_severity: str = "none",
     lane_filter: Optional[Iterable[str]] = None,
     active_lanes: Optional[Iterable[str]] = None,
-    trace: Optional[List[dict]] = None,
+    trace: Optional[list[dict]] = None,
     pruned_via_llm: bool = False,
     provenance: Optional[Provenance] = None,
 ) -> ContextBundle:

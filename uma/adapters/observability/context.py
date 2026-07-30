@@ -9,7 +9,7 @@ from __future__ import annotations
 import contextvars
 import uuid
 from contextlib import contextmanager
-from typing import Iterator, Optional, Tuple
+from typing import Iterator, Optional
 
 _request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
 _trace_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("trace_id", default="-")
@@ -36,7 +36,7 @@ def request_context(
     request_id: Optional[str] = None,
     trace_id: Optional[str] = None,
     generate: bool = True,
-) -> Iterator[Tuple[str, str]]:
+) -> Iterator[tuple[str, str]]:
     """
     Context manager that sets request_id/trace_id for structured logging.
     """

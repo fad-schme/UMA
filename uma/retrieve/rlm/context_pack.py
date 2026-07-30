@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +35,9 @@ class ContextPack:
 
     # Query routing (deterministic; for logging and decisions only)
     intent: Optional[str] = None
-    active_lanes: List[str] = field(default_factory=list)
-    active_domains: List[str] = field(default_factory=list)
-    lane_plan: Dict[str, Any] = field(default_factory=dict)
+    active_lanes: list[str] = field(default_factory=list)
+    active_domains: list[str] = field(default_factory=list)
+    lane_plan: dict[str, Any] = field(default_factory=dict)
 
     # CR3: severity result of the boundary scan on the query_text.
     # Mirrors RetrievalRequest.query_scan_severity. Downstream LLM
@@ -53,35 +53,35 @@ class ContextPack:
     # writer reads these directly rather than inferring.
     refined_via_llm: bool = False
     pruned_via_llm: bool = False
-    
+
 
     # Memory layers
-    working_memory: List[Any] = field(default_factory=list)
-    episodes: List[Any] = field(default_factory=list)
-    facts: List[Any] = field(default_factory=list)
-    chunks: List[Any] = field(default_factory=list)
-    query_chunks: List[Any] = field(default_factory=list)
-    neighbor_chunks: List[Any] = field(default_factory=list)
-    evidence_chunks: List[Any] = field(default_factory=list)
-    skills: List[Any] = field(default_factory=list)
-    graph: List[Any] = field(default_factory=list)
+    working_memory: list[Any] = field(default_factory=list)
+    episodes: list[Any] = field(default_factory=list)
+    facts: list[Any] = field(default_factory=list)
+    chunks: list[Any] = field(default_factory=list)
+    query_chunks: list[Any] = field(default_factory=list)
+    neighbor_chunks: list[Any] = field(default_factory=list)
+    evidence_chunks: list[Any] = field(default_factory=list)
+    skills: list[Any] = field(default_factory=list)
+    graph: list[Any] = field(default_factory=list)
 
     # Controller trace
-    steps: List[Dict[str, Any]] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
+    steps: list[dict[str, Any]] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     coverage: Optional[Any] = None
 
     # --- Evidence accounting ---
-    seen_fact_ids: Set[str] = field(default_factory=set)
-    seen_chunk_ids: Set[str] = field(default_factory=set)
-    seen_episode_ids: Set[str] = field(default_factory=set)
-    seen_skill_ids: Set[str] = field(default_factory=set)
-    seen_graph_ids: Set[str] = field(default_factory=set)
+    seen_fact_ids: set[str] = field(default_factory=set)
+    seen_chunk_ids: set[str] = field(default_factory=set)
+    seen_episode_ids: set[str] = field(default_factory=set)
+    seen_skill_ids: set[str] = field(default_factory=set)
+    seen_graph_ids: set[str] = field(default_factory=set)
 
-    novelty_history: List[Dict[str, int]] = field(default_factory=list)
-    predicate_offsets: Dict[str, int] = field(default_factory=dict)
+    novelty_history: list[dict[str, int]] = field(default_factory=list)
+    predicate_offsets: dict[str, int] = field(default_factory=dict)
 
-    def snapshot(self) -> Dict[str, Any]:
+    def snapshot(self) -> dict[str, Any]:
         """Safe summary for logs / telemetry."""
         return {
             "user_id": self.user_id,
@@ -133,7 +133,7 @@ class ContextPack:
         except Exception:
             logger.exception("ContextPack.record_seen failed")
 
-    def compute_novelty(self, items: List[Any], store: str) -> int:
+    def compute_novelty(self, items: list[Any], store: str) -> int:
         """Return the number of IDs in ``ids`` not yet seen in this session."""
         if not items:
             return 0
@@ -144,7 +144,7 @@ class ContextPack:
         seen = self._seen_set(store)
         return sum(1 for i in new_ids if i not in seen)
 
-    def apply_novelty(self, items: List[Any], store: str) -> Dict[str, int]:
+    def apply_novelty(self, items: list[Any], store: str) -> dict[str, int]:
         """Record ``ids`` as seen and return the novelty count."""
         store = self._normalize_store(store)
         novelty = self.compute_novelty(items, store)
@@ -166,7 +166,7 @@ class ContextPack:
         self.predicate_offsets[key] = self.get_predicate_offset(key) + int(delta)
         return self.predicate_offsets[key]
 
-    def _seen_set(self, store: str) -> Set[str]:
+    def _seen_set(self, store: str) -> set[str]:
         mapping = {
             "facts": self.seen_fact_ids,
             "chunks": self.seen_chunk_ids,
@@ -186,7 +186,7 @@ class ContextPack:
         return store
 
 
-def _collect_ids(items: List[Any]) -> Set[str]:
+def _collect_ids(items: list[Any]) -> set[str]:
     """
     Defensive helper for evidence accounting.
 
@@ -198,7 +198,7 @@ def _collect_ids(items: List[Any]) -> Set[str]:
     - Fact retrieval should return Fact objects (never dicts) where possible
     - Dict conversion should happen only at serialization/report boundaries
     """
-    out: Set[str] = set()
+    out: set[str] = set()
     for it in items or []:
         try:
             if isinstance(it, dict) and it.get("id"):

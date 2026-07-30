@@ -1,40 +1,119 @@
+# =============================================================================
+# UMA — Universal Memory Architecture
+#
+# Single source of truth for packaging, metadata, and optional dependencies.
+# Historically split across setup.py + pyproject.toml with drift; consolidated
+# into this file. See CHANGELOG.md `[unreleased]` for the migration note.
+# =============================================================================
+
 [build-system]
-requires = ["setuptools>=64", "wheel"]
+requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
+
+# -----------------------------------------------------------------------------
+# Project metadata (PEP 621)
+# -----------------------------------------------------------------------------
 
 [project]
 name = "uma"
-description = "UMA: Unified Memory Architecture for AI agents"
+description = "UMA: modular memory and context manager for AI agents"
 readme = "README.md"
+license = { text = "Apache-2.0" }
 requires-python = ">=3.9"
-license = {text = "Apache-2.0"}
-urls = {Homepage = "https://uma.memory-engineering.com", Repository = "https://github.com/fad-schme/UMA"}
 authors = [
-  { name = "a.Diaz-Schmeier", email = "ad-schme@memory-engineering.com" },
+    { name = "a.Diaz-Schmeier", email = "ad-schme@ai-mem-engineering.com" },
 ]
-dynamic = ["version"]
+keywords = ["memory", "context", "rag", "ai", "agents", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Runtime dependencies (was `install_requires` in setup.py).
+# Every entry here is imported unconditionally by the base install.
 dependencies = [
-  "pyyaml",
-  "numpy",
-  "aiohttp",
-  "charset-normalizer",
-  "pydantic>=2",
-  "lancedb>=0.25.3",
+    "pyyaml",
+    "numpy",
+    "aiohttp",
+    "charset-normalizer",
+    "pydantic>=2",
+    "lancedb>=0.25.3",
 ]
+
+# Version read dynamically from uma/version.py so it stays in sync with the
+# `__version__` attribute the runtime imports.
+dynamic = ["version"]
+
+[project.urls]
+Homepage      = "https://uma.ai-mem-engineering.com"
+Documentation = "https://uma.ai-mem-engineering.com/docs.html"
+
+# -----------------------------------------------------------------------------
+# Optional dependencies — install with `pip install -e '.[<name>]'`
+#
+# Every extra lives here. Do not add a second install_requires block anywhere
+# else in the repo; the old setup.py/pyproject.toml split was the source of
+# finding #24 drift.
+# -----------------------------------------------------------------------------
 
 [project.optional-dependencies]
-llm = ["anthropic"]
-openai = ["openai>=1.0.0"]
-dev = ["pytest", "matplotlib", "PyPDF2", "pytest-asyncio", "bandit","ruff", "pip-audit", "beautifulsoup4", "markdown", "pandas"]
-ollama = ["ollama"]
+
+# LLM providers
+llm      = ["anthropic"]
+openai   = ["openai>=1.0.0"]
+ollama   = ["ollama"]
+e2e      = ["openai>=1.0.0"]
+
+# Storage backends
+vector   = ["faiss-cpu", "weaviate-client", "pinecone-client", "fastembed"]
+graph    = ["neo4j"]
+postgres = ["psycopg2-binary>=2.9"]
+
+# Security: enable the google-re2 backend for ReDoS-proof injection scanning.
+# See uma/common/_regex_backend.py.
+security = ["google-re2>=1.1"]
+
+# Document parsers used by the ingest pipeline.
+parsers  = ["PyPDF2", "beautifulsoup4", "markdown", "pandas"]
+
+# Development / test tools. `pip install -e '.[dev]'` is what
+# requirements.txt resolves to.
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "bandit[toml]",
+    "pip-audit",
+    "ruff",
+    "matplotlib",
+    "PyPDF2",
+]
+
+# -----------------------------------------------------------------------------
+# Setuptools-specific configuration
+# -----------------------------------------------------------------------------
+
+[tool.setuptools]
+include-package-data = true
 
 [tool.setuptools.dynamic]
-version = {attr = "uma.version.__version__"}
+version = { attr = "uma.version.__version__" }
 
 [tool.setuptools.packages.find]
+include = ["uma", "uma.*"]
 namespaces = true
-include = ["uma*"]
-exclude = [".venv*", ".pytest_cache*"]
+
+[tool.setuptools.package-data]
+"uma.common" = ["injection_patterns*.yaml"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
@@ -42,10 +121,10 @@ asyncio_default_fixture_loop_scope = "function"
 addopts = "--basetemp=.pytest_tmp"
 
 [tool.bandit]
-skips = ["B608","B105"]
+skips = ["B608", "B105"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W"]
+select = ["E", "F", "W", "UP006"]
 ignore = ["E402", "E501"]
 
 [tool.ruff.lint.per-file-ignores]

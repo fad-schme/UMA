@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Optional, Sequence
 
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
 from uma.common.types import Chunk
@@ -30,13 +30,13 @@ from uma.common.dedupe import dedupe_by_id
 logger = logging.getLogger(__name__)
 
 
-def partition_chunks_by_route(chunks: List[Chunk]) -> tuple[List[Chunk], List[Chunk], List[Chunk]]:
+def partition_chunks_by_route(chunks: list[Chunk]) -> tuple[list[Chunk], list[Chunk], list[Chunk]]:
     """
     Partition chunks into (evidence, query_hits, neighbors) based on meta.retrieval_route.
     """
-    evidence: List[Chunk] = []
-    query_hits: List[Chunk] = []
-    neighbors: List[Chunk] = []
+    evidence: list[Chunk] = []
+    query_hits: list[Chunk] = []
+    neighbors: list[Chunk] = []
     for ch in chunks or []:
         meta = getattr(ch, "meta", None) or {}
         route = meta.get("retrieval_route") if isinstance(meta, dict) else None
@@ -50,10 +50,10 @@ def partition_chunks_by_route(chunks: List[Chunk]) -> tuple[List[Chunk], List[Ch
 
 
 def merge_chunks_with_precedence(
-    evidence: List[Chunk],
-    query_hits: List[Chunk],
-    neighbors: List[Chunk],
-) -> List[Chunk]:
+    evidence: list[Chunk],
+    query_hits: list[Chunk],
+    neighbors: list[Chunk],
+) -> list[Chunk]:
     """
     Merge chunk buckets with deterministic precedence:
     1) evidence, 2) query hits, 3) neighbors.
@@ -90,7 +90,7 @@ class ChunkCore:
     # PUBLIC API — ingest / CRUD
     # ------------------------------------------------------------------
 
-    async def upsert_chunk(self, chunk: Chunk, embedding: List[float]) -> bool:
+    async def upsert_chunk(self, chunk: Chunk, embedding: list[float]) -> bool:
         """
         Persist a chunk and its embedding into the backing store and vector index.
         Returns True on success, False on failure.
@@ -111,13 +111,13 @@ class ChunkCore:
     async def search_chunks_for_rlm(
         self,
         *,
-        query_embedding: List[float],
+        query_embedding: list[float],
         tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         k: int,
         query_text: Optional[str],
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         """
         RLM-friendly chunk retrieval wrapper.
 
@@ -163,21 +163,21 @@ class ChunkCore:
     async def _search(
         self,
         user_id: str,
-        query_embedding: List[float],
+        query_embedding: list[float],
         *,
         tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         k: int = 10,
         doc_id: Optional[str] = None,
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         """
         Internal vector-only chunk search (no lexical fallback or filtering).
         Used by `search_chunks` to build the primary candidate set.
         """
         if self.store is None:
             return []
-        chunks: List[Chunk] = []
+        chunks: list[Chunk] = []
         try:
             found = await self.store.search(
                 query_embedding=query_embedding,
@@ -202,14 +202,14 @@ class ChunkCore:
         owner_type: str,
         owner_id: str,
         k: int = 10,
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         """
         Internal lexical-only chunk search (SQL LIKE).
         Used by `search_chunks` as a fallback/merge signal.
         """
         if self.store is None or not hasattr(self.store, "lexical_search"):
             return []
-        chunks: List[Chunk] = []
+        chunks: list[Chunk] = []
         try:
             found = await self.store.lexical_search(
                 query_text=query_text,
@@ -233,7 +233,7 @@ class ChunkCore:
         owner_type: str,
         owner_id: str,
         log_context: str = "ChunkCore.fetch_by_ids",
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         """
         Internal ID fetch for chunks (authoritative payload).
         Used by environment/controller for bounded evidence expansion.
@@ -257,13 +257,13 @@ class ChunkCore:
     async def search_chunks(
         self,
         *,
-        query_embedding: List[float],
+        query_embedding: list[float],
         tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
         k: int = 10,
         options: Optional[ChunkSearchOptions] = None,
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         """
         Unified chunk search: vector → hybrid → term-filter → neighbor expansion.
 
@@ -321,14 +321,14 @@ class ChunkCore:
     async def _execute_hybrid_search(
         self,
         *,
-        query_embedding: List[float],
+        query_embedding: list[float],
         tenant_id: str,
         owner_type: str,
         owner_id: str,
         k: int,
         query_text: Optional[str],
         doc_id: Optional[str],
-    ) -> tuple[List[Chunk], set[str]]:
+    ) -> tuple[list[Chunk], set[str]]:
         memory = getattr(self, "_memory", None)
         retrieval_cfg = getattr(memory, "retrieval_cfg", None) if memory is not None else None
         hybrid_cfg = getattr(retrieval_cfg, "hybrid", None) if retrieval_cfg is not None else None
@@ -387,7 +387,7 @@ class ChunkCore:
                 chunks = fuse_candidates(dense=dense_chunks, sparse=list(found), strategy=fusion_strategy)
         return chunks, lexical_ids
 
-    def _tag_retrieval_metadata(self, chunks: List[Chunk], lexical_ids: set[str]) -> None:
+    def _tag_retrieval_metadata(self, chunks: list[Chunk], lexical_ids: set[str]) -> None:
         if lexical_ids:
             for ch in chunks:
                 meta = getattr(ch, "meta", None) or {}
@@ -435,12 +435,12 @@ class ChunkCore:
                 raise
 
     @staticmethod
-    def _apply_term_filter(chunks: List[Chunk], query_text: str) -> List[Chunk]:
+    def _apply_term_filter(chunks: list[Chunk], query_text: str) -> list[Chunk]:
         from uma.retrieve.user_query_helper import build_query_term_set, text_matches_query_terms
         term_set = build_query_term_set(query_text)
         if not term_set or (not term_set.terms and not term_set.phrases):
             return chunks
-        filtered: List[Chunk] = []
+        filtered: list[Chunk] = []
         for ch in chunks:
             if isinstance(ch, dict):
                 logger.error("ChunkCore._apply_term_filter: expected Chunk objects; got dict")
@@ -451,11 +451,11 @@ class ChunkCore:
 
     @staticmethod
     def _shortlist_for_neighbor_expansion(
-        chunks: List[Chunk],
+        chunks: list[Chunk],
         *,
         shortlist_k: Optional[int],
         shortlist_max_per_doc: Optional[int],
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         """
         Select a deterministic subset of chunks to serve as neighbor-expansion anchors.
 
@@ -475,8 +475,8 @@ class ChunkCore:
         if per_doc is None or per_doc <= 0:
             per_doc = k
 
-        out: List[Chunk] = []
-        per_doc_counts: Dict[str, int] = {}
+        out: list[Chunk] = []
+        per_doc_counts: dict[str, int] = {}
         for ch in chunks:
             if len(out) >= k:
                 break
@@ -496,10 +496,10 @@ class ChunkCore:
         tenant_id: str = DEFAULT_TENANT_ID,
         owner_type: str,
         owner_id: str,
-        anchors: List[Chunk],
+        anchors: list[Chunk],
         window: int = 1,
         max_total: int = 24,
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         """
         Deterministically expand anchor chunks by doc-local adjacency (position ± window),
         bounded by max_total, with strict owner scope.
@@ -528,7 +528,7 @@ class ChunkCore:
             raise TypeError("ChunkCore.expand_neighbors expected Chunk anchors; got dict(s).")
 
         # Compute merged ranges per doc to minimize SQL calls.
-        ranges_by_doc: Dict[str, List[Tuple[int, int]]] = {}
+        ranges_by_doc: dict[str, list[tuple[int, int]]] = {}
         for a in anchors:
             doc_id = str(getattr(a, "doc_id", "") or "")
             if not doc_id:
@@ -541,11 +541,11 @@ class ChunkCore:
             end = max(1, pos + window_i)
             ranges_by_doc.setdefault(doc_id, []).append((start, end))
 
-        def _merge_ranges(ranges: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+        def _merge_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
             if not ranges:
                 return []
             rs = sorted(ranges, key=lambda x: (x[0], x[1]))
-            merged: List[Tuple[int, int]] = []
+            merged: list[tuple[int, int]] = []
             cur_s, cur_e = rs[0]
             for s, e in rs[1:]:
                 if s <= cur_e + 1:
@@ -559,9 +559,9 @@ class ChunkCore:
         merged_ranges_by_doc = {doc: _merge_ranges(rgs) for doc, rgs in ranges_by_doc.items()}
 
         # Fetch rows in deterministic position order.
-        fetched_by_doc: Dict[str, List[Chunk]] = {}
+        fetched_by_doc: dict[str, list[Chunk]] = {}
         for doc_id, ranges in merged_ranges_by_doc.items():
-            fetched: List[Chunk] = []
+            fetched: list[Chunk] = []
             for s, e in ranges:
                 try:
                     rows = await self.store.fetch_by_doc_and_position_range(
@@ -579,9 +579,9 @@ class ChunkCore:
                     fetched.extend(rows)
             fetched_by_doc[doc_id] = dedupe_by_id(fetched)
 
-        by_doc_pos: Dict[str, Dict[int, Chunk]] = {}
+        by_doc_pos: dict[str, dict[int, Chunk]] = {}
         for doc_id, rows in fetched_by_doc.items():
-            pos_map: Dict[int, Chunk] = {}
+            pos_map: dict[int, Chunk] = {}
             for ch in rows:
                 try:
                     pos = int(getattr(ch, "position", 0) or 0)
@@ -591,7 +591,7 @@ class ChunkCore:
                     pos_map[pos] = ch
             by_doc_pos[doc_id] = pos_map
 
-        out: List[Chunk] = []
+        out: list[Chunk] = []
         seen: set[str] = set()
 
         for a in anchors:

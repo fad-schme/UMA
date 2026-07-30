@@ -8,15 +8,15 @@ Canonical deduplication helpers.
 from __future__ import annotations
 
 import hashlib
-from typing import Any, List
+from typing import Any
 
 
-def dedupe_by_id(items: List[Any]) -> List[Any]:
+def dedupe_by_id(items: list[Any]) -> list[Any]:
     """Return a deduplicated list of artifacts, keeping the first occurrence of each ID."""
     if not items:
         return []
     seen = set()
-    out: List[Any] = []
+    out: list[Any] = []
     for it in items:
         key = None
         if isinstance(it, dict):
@@ -32,7 +32,7 @@ def dedupe_by_id(items: List[Any]) -> List[Any]:
     return out
 
 
-def dedupe_evidence_by_text(items: List[dict]) -> List[dict]:
+def dedupe_evidence_by_text(items: list[dict]) -> list[dict]:
     """Deduplicate serialized evidence dicts by text content hash.
 
     Two items are considered duplicates when their normalized text is identical.
@@ -41,7 +41,7 @@ def dedupe_evidence_by_text(items: List[dict]) -> List[dict]:
     if not items:
         return []
     seen: set[str] = set()
-    out: List[dict] = []
+    out: list[dict] = []
     for it in items:
         text = (it.get("text") or "").strip()
         key = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest() if text else id(it)

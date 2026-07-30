@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import re
 from uuid import uuid4
-from typing import List
 
 from .types import ParsedDocument, NormalizedSection
 
@@ -38,7 +37,7 @@ def _reflow_soft_wrapped_lines(text: str) -> str:
     """
     if not text:
         return ""
-    out_lines: List[str] = []
+    out_lines: list[str] = []
     lines = text.splitlines()
     i = 0
     while i < len(lines):
@@ -69,7 +68,7 @@ def _reflow_soft_wrapped_lines(text: str) -> str:
     return "\n".join(out_lines)
 
 
-def _drop_repeated_lines_across_pages(pages: List[str], *, min_repeats: int = 3) -> List[str]:
+def _drop_repeated_lines_across_pages(pages: list[str], *, min_repeats: int = 3) -> list[str]:
     """
     Drop lines that repeat across many pages (common headers/footers).
 
@@ -78,7 +77,7 @@ def _drop_repeated_lines_across_pages(pages: List[str], *, min_repeats: int = 3)
     if not pages:
         return []
     counts: dict[str, int] = {}
-    per_page_lines: List[List[str]] = []
+    per_page_lines: list[list[str]] = []
     for text in pages:
         lines = []
         for ln in (text or "").splitlines():
@@ -97,7 +96,7 @@ def _drop_repeated_lines_across_pages(pages: List[str], *, min_repeats: int = 3)
     to_drop = {s for s, c in counts.items() if c >= int(min_repeats)}
     if not to_drop:
         return pages
-    out_pages: List[str] = []
+    out_pages: list[str] = []
     for lines in per_page_lines:
         kept = [ln for ln in lines if not (ln and ln in to_drop)]
         out_pages.append("\n".join(kept))
@@ -120,7 +119,7 @@ def _clean_page_text(text: str) -> str:
     return cleaned.strip()
 
 
-def normalize_document(parsed: ParsedDocument) -> List[NormalizedSection]:
+def normalize_document(parsed: ParsedDocument) -> list[NormalizedSection]:
     """
     Normalize document pages into sections.
 
@@ -136,7 +135,7 @@ def normalize_document(parsed: ParsedDocument) -> List[NormalizedSection]:
     page_texts = [t for _, t in (parsed.pages or [])]
     page_texts = _drop_repeated_lines_across_pages(page_texts, min_repeats=3)
 
-    sections: List[NormalizedSection] = []
+    sections: list[NormalizedSection] = []
     for (page_num, _), text in zip(parsed.pages, page_texts):
         cleaned = _clean_page_text(text or "")
         if not cleaned:

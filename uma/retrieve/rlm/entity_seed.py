@@ -10,26 +10,30 @@ of candidate entity strings that can be resolved to graph node ids.
 
 from __future__ import annotations
 
+import logging
 import re
-from typing import Any, List
+from typing import Any
 
 from uma.retrieve.user_query_helper import extract_keywords_and_phrases
 
 
+logger = logging.getLogger(__name__)
 _RE_ACRONYM = re.compile(r"\b[A-Z]{2,10}\b")
 
 
 def _safe_str(x: Any) -> str:
     try:
         return str(x or "").strip()
-    except Exception:
+    except Exception as exc:
+        logger.debug("_safe_str: string coercion failed: %s", exc, exc_info=True)
         return ""
 
 
 def _fact_text(f: Any) -> str:
     try:
         meta = f.get("meta") if isinstance(f, dict) else getattr(f, "meta", None)
-    except Exception:
+    except Exception as exc:
+        logger.debug("_fact_text: fact metadata access failed: %s", exc, exc_info=True)
         meta = None
     if isinstance(meta, dict):
         ft = _safe_str(meta.get("fact_text"))
@@ -38,23 +42,25 @@ def _fact_text(f: Any) -> str:
     try:
         obj = f.get("object") if isinstance(f, dict) else getattr(f, "object", None)
         return _safe_str(obj)
-    except Exception:
+    except Exception as exc:
+        logger.debug("_fact_text: fact object access failed: %s", exc, exc_info=True)
         return ""
 
 
 def _chunk_text(ch: Any) -> str:
     try:
         return _safe_str(ch.get("text") if isinstance(ch, dict) else getattr(ch, "text", None))
-    except Exception:
+    except Exception as exc:
+        logger.debug("_chunk_text: chunk text access failed: %s", exc, exc_info=True)
         return ""
 
 
 def extract_candidate_entities(
     query_text: str,
-    facts: List[Any],
-    chunks: List[Any],
+    facts: list[Any],
+    chunks: list[Any],
     limit: int = 5,
-) -> List[str]:
+) -> list[str]:
     """
     Extract a bounded list of candidate entity strings for graph seeding.
 
@@ -67,7 +73,7 @@ def extract_candidate_entities(
     if limit_i == 0:
         return []
 
-    out: List[str] = []
+    out: list[str] = []
     seen = set()
 
     q = _safe_str(query_text)
@@ -106,7 +112,7 @@ def extract_candidate_entities(
                     return out
 
     # Evidence blob: bounded and optional.
-    blob_parts: List[str] = []
+    blob_parts: list[str] = []
     for f in (facts or [])[:8]:
         t = _fact_text(f)
         if t:

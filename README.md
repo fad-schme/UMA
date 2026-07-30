@@ -26,7 +26,7 @@ management.
 ## ✨ Why UMA
 
 - 🧠 **Six typed memory lanes** — working memory, semantic facts, raw chunks, episodic, procedural, compiled wiki. You choose what to query.
-- 🪶 **Embedded by default** — SQLite + LanceDB, no separate services to run. `pip install -e .` and you're running.
+- 🪶 **Embedded storage by default** — SQLite + LanceDB require no separate storage service. Configure a local or remote LLM and embedding provider for model-backed operations.
 - 🛡️ **Security by design** — every artifact is owner-scoped, injection-scanned, trust-scored, and content-hashed before it touches storage.
 - 🔍 **Evidence-backed retrieval** — every fact carries provenance back to source chunks. No silent degradation into "vibes-based" RAG.
 - 🏢 **Multi-tenant by construction** — cross-tenant access is impossible at the storage layer, not by application-layer convention.
@@ -52,6 +52,8 @@ Security in UMA isn't a feature — it's the shape of every code path. Five prim
 3. **Content hashing + integrity verification** — SHA-256 on every typed artifact; on-demand verification quarantines tampered records
 4. **Ingest gating** — MIME consistency, file size caps, HTML/Markdown sanitization
 5. **Retrieval audit log** — every retrieve call is recorded with a hashed query preview
+
+The pre-LLM gate is advisory: it reports a signal for the caller's policy. The write-time boundary scan is the enforcing control.
 
 ### Defense-in-Depth Against Memory Poisoning (ASI06)
 
@@ -133,6 +135,19 @@ asyncio.run(main())
 That's the whole loop. For the full agent integration pattern — pre-LLM injection scanning, error handling, multi-tenant SaaS, rate limiting — **ask your coding assistant** (see below).
 
 If a storage adapter needs credentials, `uma.yaml` also accepts an optional `secrets:` block; the reference shape lives in [`.claude/skills/configure.md`](.claude/skills/configure.md).
+
+---
+
+## Testing and coverage
+
+The default suite is hermetic. The CI matrix runs it with `pytest-cov`, reports
+line coverage, and preserves `coverage.xml` as a workflow artifact. The measured
+baseline on 2026-07-30 is **71%** across `uma/` (691 passed, 2 opt-in skips).
+
+Real-model fact-extraction precision and recall are measured separately against
+local Ollama so CI does not depend on a model service. See
+[`tests/e2e/README.md`](tests/e2e/README.md) for the held-out corpus, published
+baseline, thresholds, and run command.
 
 ---
 

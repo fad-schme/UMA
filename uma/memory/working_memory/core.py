@@ -28,7 +28,7 @@ request scope; working memory only stores session-local conversational state.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from uma.common.types import RuntimeContext, SessionScope
 from uma.common.injection_scan import scan_artifact_text
@@ -118,7 +118,7 @@ class WorkingMemoryCore:
         scope: SessionScope,
         role: str,
         content: str,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> WorkingMemoryMessage:
         """
         Append a new message to working memory.
@@ -198,7 +198,7 @@ class WorkingMemoryCore:
         last_n: Optional[int] = None,
         *,
         include_quarantined: bool = False,
-    ) -> List[WorkingMemoryMessage]:
+    ) -> list[WorkingMemoryMessage]:
         """Return the working memory message list (optionally last N).
 
         H4: quarantined messages are excluded by default. Pass
@@ -295,7 +295,7 @@ class WorkingMemoryCore:
         try:
             # Summarize in chunks to avoid oversized prompts.
             if len(payload) > self._chunk_size:
-                chunk_summaries: List[str] = []
+                chunk_summaries: list[str] = []
                 for i in range(0, len(payload), self._chunk_size):
                     chunk = payload[i : i + self._chunk_size]
                     chunk_summary = await self._summarizer.summarize_messages(

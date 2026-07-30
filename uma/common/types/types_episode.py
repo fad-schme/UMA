@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from .types_owner import OwnerType
 
@@ -52,9 +52,9 @@ class Episode:
     # Existing optional fields
     # -------------------------
     raw: Optional[str] = None
-    tags: List[str] = field(default_factory=list)
-    embedding: Optional[List[float]] = None
-    meta: Dict[str, Any] = field(default_factory=dict)
+    tags: list[str] = field(default_factory=list)
+    embedding: Optional[list[float]] = None
+    meta: dict[str, Any] = field(default_factory=dict)
 
     # Existing timestamps
     created_at: Optional[datetime] = None

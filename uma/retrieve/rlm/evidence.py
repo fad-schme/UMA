@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 from uma.retrieve.rlm.context_pack import ContextPack
 from uma.retrieve.rlm.request import RetrievalRequest
@@ -15,7 +15,7 @@ async def expand_evidence_chunks_from_facts(
     request: RetrievalRequest,
     pack: ContextPack,
     max_items_per_type: int,
-) -> List[Any]:
+) -> list[Any]:
     """Evidence expansion: fetch chunks referenced by fact.source_ids (bounded).
 
     IMPORTANT (Ownership / Lane Strategy)
@@ -38,7 +38,7 @@ async def expand_evidence_chunks_from_facts(
             return (f.get("owner_type"), f.get("owner_id"))
         return (getattr(f, "owner_type", None), getattr(f, "owner_id", None))
 
-    def _get_source_ids(f: Any) -> List[str]:
+    def _get_source_ids(f: Any) -> list[str]:
         src = f.get("source_ids") if isinstance(f, dict) else getattr(f, "source_ids", None)
         if isinstance(src, list):
             return [str(x) for x in src if x]
@@ -57,7 +57,7 @@ async def expand_evidence_chunks_from_facts(
         return []
 
     # Build a bounded, deterministic list of cited (scope, chunk_id) pairs.
-    cited_pairs: List[tuple[tuple[str, str], str]] = []
+    cited_pairs: list[tuple[tuple[str, str], str]] = []
     seen_global: set[str] = set()
 
     for f in pack.facts:
@@ -82,8 +82,8 @@ async def expand_evidence_chunks_from_facts(
         return []
 
     # Group by scope while preserving first-seen order of scopes.
-    scope_order: List[tuple[str, str]] = []
-    by_scope: dict[tuple[str, str], List[str]] = {}
+    scope_order: list[tuple[str, str]] = []
+    by_scope: dict[tuple[str, str], list[str]] = {}
     for scope, sid in cited_pairs:
         if scope not in by_scope:
             by_scope[scope] = []
@@ -96,7 +96,7 @@ async def expand_evidence_chunks_from_facts(
         len(scope_order),
     )
 
-    chunks_ev_all: List[Any] = []
+    chunks_ev_all: list[Any] = []
 
     # Fetch per scope; this prevents KB agent facts from being expanded using user scope (and vice versa).
     for (s_owner_type, s_owner_id) in scope_order:

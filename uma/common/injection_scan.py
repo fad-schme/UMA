@@ -14,7 +14,7 @@ import logging
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 import yaml
 
@@ -47,12 +47,12 @@ class _CompiledRule:
     severity: str      # "low" | "medium" | "high"
     category: str
     threat_level: int
-    patterns: Tuple    # tuple of _CompiledPattern
-    function_names: Tuple  # tuple of str
+    patterns: tuple    # tuple of _CompiledPattern
+    function_names: tuple  # tuple of str
 
 
-def _compile_catalog(extra_path: Optional[str] = None) -> List[_CompiledRule]:
-    raw_rules: List[Dict] = []
+def _compile_catalog(extra_path: Optional[str] = None) -> list[_CompiledRule]:
+    raw_rules: list[dict] = []
     for catalog_path in _CATALOG_PATHS:
         with open(catalog_path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
@@ -66,10 +66,10 @@ def _compile_catalog(extra_path: Optional[str] = None) -> List[_CompiledRule]:
         except Exception:
             logger.warning("injection_scan: could not load custom patterns from %s", extra_path)
 
-    compiled: List[_CompiledRule] = []
+    compiled: list[_CompiledRule] = []
     for rule in raw_rules:
         meta = rule.get("meta", {})
-        patterns: List[_CompiledPattern] = []
+        patterns: list[_CompiledPattern] = []
         for key, pat in rule.get("strings", {}).items():
             if isinstance(pat, str) and pat.startswith("{") and pat.endswith("}"):
                 hex_str = pat.strip("{} ").replace(" ", "").lower()
@@ -91,13 +91,13 @@ def _compile_catalog(extra_path: Optional[str] = None) -> List[_CompiledRule]:
     return compiled
 
 
-_CATALOG: List[_CompiledRule] = _compile_catalog()
+_CATALOG: list[_CompiledRule] = _compile_catalog()
 
 # ---------------------------------------------------------------------------
 # Function weights — scorers are called only when a rule's regex matched
 # ---------------------------------------------------------------------------
 
-FUNCTION_WEIGHTS: Dict[str, float] = {
+FUNCTION_WEIGHTS: dict[str, float] = {
     "intent_score": 1.5,
     "structure_score": 1.0,
     "encoding_score": 1.0,
@@ -108,7 +108,7 @@ FUNCTION_WEIGHTS: Dict[str, float] = {
     "invisible_text": 1.0,
 }
 
-_RULE_FN_MAP: Dict[str, Any] = {
+_RULE_FN_MAP: dict[str, Any] = {
     "intent_score": _rf.intent_score,
     "structure_score": _rf.structure_score,
     "encoding_score": _rf.encoding_score,
@@ -126,11 +126,11 @@ _RULE_FN_MAP: Dict[str, Any] = {
 @dataclass
 class InjectionScanResult:
     severity: str        # "none" | "low" | "medium" | "high"
-    matched_rules: List[str]
+    matched_rules: list[str]
     score: float
-    categories: List[str]
+    categories: list[str]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "severity": self.severity,
             "matched_rules": self.matched_rules,
@@ -151,7 +151,7 @@ class InjectionDetectedError(Exception):
         score:         Numeric scan score.
     """
 
-    def __init__(self, severity: str, matched_rules: List[str], score: float) -> None:
+    def __init__(self, severity: str, matched_rules: list[str], score: float) -> None:
         self.severity = severity
         self.matched_rules = matched_rules
         self.score = score
@@ -214,8 +214,8 @@ def scan_content(text: str) -> InjectionScanResult:
     text_bytes_hex = text.encode("utf-8", errors="ignore").hex()
     has_cjk = any("\u3400" <= char <= "\u9fff" for char in normalized)
 
-    matched_rules: List[str] = []
-    matched_categories: List[str] = []
+    matched_rules: list[str] = []
+    matched_categories: list[str] = []
     regex_score = 0.0
     function_score = 0.0
     has_high_rule = False
@@ -292,7 +292,7 @@ def scan_content(text: str) -> InjectionScanResult:
 _SEVERITY_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3}
 
 
-def severity_from_meta(meta: Optional[Dict[str, Any]]) -> str:
+def severity_from_meta(meta: Optional[dict[str, Any]]) -> str:
     """Read the boundary-scan severity off an artifact's stored meta dict.
 
     Returns the severity string from `meta["security"]["injection_scan"]["severity"]`
@@ -336,10 +336,10 @@ def max_severity(*severities: str) -> str:
 
 def apply_scan(
     trust_score: float,
-    meta: Dict[str, Any],
+    meta: dict[str, Any],
     result: InjectionScanResult,
     log_context: str = "",
-) -> Tuple[float, Dict[str, Any]]:
+) -> tuple[float, dict[str, Any]]:
     """Return (adjusted_trust_score, updated_meta) based on scan result.
 
     Does not mutate the input meta dict.
@@ -372,11 +372,11 @@ def apply_scan(
 def scan_artifact_text(
     text: str,
     trust_score: float,
-    meta: Dict[str, Any],
+    meta: dict[str, Any],
     *,
     log_context: str,
     now: "datetime | None" = None,
-) -> Tuple[float, Dict[str, Any], "datetime | None"]:
+) -> tuple[float, dict[str, Any], "datetime | None"]:
     """Canonical write-time scan for any UMA artifact.
 
     Combines scan_content, apply_scan, and quarantine timestamp computation.

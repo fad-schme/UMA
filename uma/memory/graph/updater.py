@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, List
+from typing import Any
 
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
 from uma.common.types.types_scope import validate_owner_type, validate_tenant_id
@@ -85,7 +85,7 @@ class GraphUpdater:
     # BATCH FACTS (document ingest path)
     # ------------------------------------------------------------------
 
-    async def add_facts_batch(self, facts: List[Any]) -> int:
+    async def add_facts_batch(self, facts: list[Any]) -> int:
         """Persist a list of facts into the graph, skipping quarantined ones.
 
         Used by the document ingest path. Processes facts sequentially —
@@ -240,7 +240,8 @@ class GraphUpdater:
                     if hasattr(x, "isoformat"):
                         return str(x.isoformat())
                     return str(x)
-                except Exception:
+                except Exception as exc:
+                    logger.debug("GraphUpdater._to_iso: timestamp coercion failed: %s", exc, exc_info=True)
                     return ""
 
             created_at_s = _to_iso(getattr(fact, "created_at", None))
@@ -286,7 +287,7 @@ class GraphUpdater:
     # LINKS: EPISODE ↔ FACTS (STAMP OWNERSHIP)
     # ------------------------------------------------------------------
 
-    def link_episode_to_facts(self, episode: Any, facts: List[Any]) -> None:
+    def link_episode_to_facts(self, episode: Any, facts: list[Any]) -> None:
         """
         Link an Episode to the Facts it mentions.
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from .base import VectorIndex
 
@@ -58,9 +58,9 @@ class QdrantIndex(VectorIndex):
 
     def upsert(
         self,
-        ids: List[str],
-        vectors: List[List[float]],
-        metadata: Optional[List[Dict]] = None,
+        ids: list[str],
+        vectors: list[list[float]],
+        metadata: Optional[list[dict]] = None,
     ) -> None:
         self._validate_upsert_inputs(ids, vectors)
         if not vectors:
@@ -94,10 +94,10 @@ class QdrantIndex(VectorIndex):
 
     def query(
         self,
-        vector: List[float],
+        vector: list[float],
         k: int = 10,
-        filters: Optional[Dict] = None,
-    ) -> List[Tuple[str, float]]:
+        filters: Optional[dict] = None,
+    ) -> list[tuple[str, float]]:
         if not isinstance(k, int) or k <= 0:
             raise ValueError("QdrantIndex.query: k must be a positive integer.")
         if filters is not None and not isinstance(filters, dict):
@@ -129,7 +129,7 @@ class QdrantIndex(VectorIndex):
             logger.exception("QdrantIndex.query failed collection=%s", self.collection)
             raise
 
-        results: List[Tuple[str, float]] = []
+        results: list[tuple[str, float]] = []
         for point in points or []:
             payload = getattr(point, "payload", None) or {}
             item_id = payload.get("uma_id") if isinstance(payload, dict) else None
@@ -139,7 +139,7 @@ class QdrantIndex(VectorIndex):
             results.append((resolved_id, float(getattr(point, "score", 0.0))))
         return results
 
-    def delete(self, ids: List[str]) -> None:
+    def delete(self, ids: list[str]) -> None:
         if not ids:
             return
         point_ids = [self._point_id(item_id) for item_id in ids]
@@ -177,7 +177,7 @@ class QdrantIndex(VectorIndex):
         )
         logger.info("Created Qdrant collection=%s dim=%d", self.collection, self.dim)
 
-    def _coerce_vector(self, vector: List[float]) -> List[float]:
+    def _coerce_vector(self, vector: list[float]) -> list[float]:
         if not isinstance(vector, list) or len(vector) != self.dim:
             raise ValueError(
                 f"QdrantIndex: expected vector dim={self.dim}, got="
@@ -189,7 +189,7 @@ class QdrantIndex(VectorIndex):
                 raise ValueError("QdrantIndex: vectors must contain numeric values.")
         return coerced
 
-    def _validate_upsert_inputs(self, ids: List[str], vectors: List[List[float]]) -> None:
+    def _validate_upsert_inputs(self, ids: list[str], vectors: list[list[float]]) -> None:
         if len(ids) != len(vectors):
             raise ValueError("QdrantIndex.upsert: ids and vectors length mismatch.")
         for item_id in ids:
@@ -202,11 +202,12 @@ class QdrantIndex(VectorIndex):
     def _point_id(value: str) -> str:
         try:
             return str(uuid.UUID(str(value)))
-        except Exception:
+        except Exception as exc:
+            logger.debug("QdrantIndex._point_id: using deterministic UUID fallback: %s", exc, exc_info=True)
             return str(uuid.uuid5(uuid.NAMESPACE_DNS, str(value)))
 
     @staticmethod
-    def _build_filter(filters: Optional[Dict[str, Any]]):
+    def _build_filter(filters: Optional[dict[str, Any]]):
         if not filters:
             return None
         must = [

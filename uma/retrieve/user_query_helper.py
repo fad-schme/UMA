@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 import logging
-from typing import Dict, Iterable, List, Set, Tuple
+from typing import Iterable
 
 from uma.common.accessors import get_attr_or_key
 
@@ -137,18 +137,18 @@ _GENERIC_TERMS = {
 
 @dataclass(frozen=True)
 class QueryTermSet:
-    terms: List[str]
-    phrases: List[str]
-    entities: List[str]
+    terms: list[str]
+    phrases: list[str]
+    entities: list[str]
 
 
-def get_stopwords() -> Set[str]:
+def get_stopwords() -> set[str]:
     # Return a copy to prevent accidental mutation of module-level constants.
     """Return the set of English stopwords used for lexical query processing."""
     return set(_STOPWORDS)
 
 
-def get_generic_terms() -> Set[str]:
+def get_generic_terms() -> set[str]:
     # Return a copy to prevent accidental mutation of module-level constants.
     """Return generic terms that are excluded from predicate and entity matching."""
     return set(_GENERIC_TERMS)
@@ -186,13 +186,13 @@ def _normalize_for_keywords(text: str) -> str:
     return text
 
 
-def _tokenize(text: str) -> List[str]:
+def _tokenize(text: str) -> list[str]:
     return text.split()
 
 
-def _simple_pos_tag(tokens: List[str]) -> List[Tuple[str, str]]:
+def _simple_pos_tag(tokens: list[str]) -> list[tuple[str, str]]:
     stop = get_stopwords()
-    tags: List[Tuple[str, str]] = []
+    tags: list[tuple[str, str]] = []
     for token in tokens:
         if token in stop:
             tags.append((token, "O"))
@@ -212,14 +212,14 @@ def _simple_pos_tag(tokens: List[str]) -> List[Tuple[str, str]]:
 
 
 def _extract_short_phrases(
-    tokens: List[str],
-    tags: List[Tuple[str, str]],
+    tokens: list[str],
+    tags: list[tuple[str, str]],
     *,
     min_len: int = MIN_PHRASE_LEN,
     max_len: int = MAX_PHRASE_LEN,
-) -> List[str]:
+) -> list[str]:
     stop = get_stopwords()
-    phrases: Set[str] = set()
+    phrases: set[str] = set()
     length = len(tokens)
     pos_labels = [p for (_, p) in tags]
 
@@ -249,8 +249,8 @@ def _extract_short_phrases(
     return list(phrases)
 
 
-def _build_index_map(tokens: List[str]) -> Dict[str, int]:
-    first: Dict[str, int] = {}
+def _build_index_map(tokens: list[str]) -> dict[str, int]:
+    first: dict[str, int] = {}
     for i, token in enumerate(tokens):
         if token not in first:
             first[token] = i
@@ -278,7 +278,7 @@ def _score_term(term: str, first_occurrence_index: int, total_tokens: int) -> fl
     return max(score, 0.0)
 
 
-def extract_keywords_and_phrases(text: str) -> Dict[str, List[str]]:
+def extract_keywords_and_phrases(text: str) -> dict[str, list[str]]:
     """Extract significant keywords and noun phrases from a query for term matching."""
     normalized = _normalize_for_keywords(text)
     if not normalized:
@@ -294,8 +294,8 @@ def extract_keywords_and_phrases(text: str) -> Dict[str, List[str]]:
 
     stop = get_stopwords()
     generic = get_generic_terms()
-    phrase_scores: Dict[str, float] = {}
-    keyword_scores: Dict[str, float] = {}
+    phrase_scores: dict[str, float] = {}
+    keyword_scores: dict[str, float] = {}
 
     phrase_candidates = _extract_short_phrases(tokens, tags)
     for phrase in phrase_candidates:
@@ -328,9 +328,9 @@ def extract_keywords_and_phrases(text: str) -> Dict[str, List[str]]:
     return {"keyphrases": keyphrases_sorted, "keywords": keywords_sorted}
 
 
-def _unique_preserve_order(items: Iterable[str]) -> List[str]:
+def _unique_preserve_order(items: Iterable[str]) -> list[str]:
     seen = set()
-    out: List[str] = []
+    out: list[str] = []
     for item in items:
         if not item:
             continue
@@ -341,7 +341,7 @@ def _unique_preserve_order(items: Iterable[str]) -> List[str]:
     return out
 
 
-def _extract_entities(text: str) -> List[str]:
+def _extract_entities(text: str) -> list[str]:
     if not text:
         return []
     acronyms = re.findall(r"\b[A-Z]{2,}\b", text)

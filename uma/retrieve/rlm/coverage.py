@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from uma.common.accessors import get_attr_or_key
 
@@ -25,7 +25,7 @@ class CoverageReport:
     graph_predicate_support: int
     graph_predicate_total: int
     contradiction_count: int
-    contradictions: List[str]
+    contradictions: list[str]
     has_contradictions: bool
     require_semantic: bool
     enough: bool
@@ -36,23 +36,23 @@ class CoverageReport:
     novelty_recent_sum: int
     diminishing_returns: bool
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialise the coverage report to a plain dict for logging and debugging."""
         return self.__dict__
 
 
 def assess_coverage(
     *,
-    facts: List[Any],
-    episodes: List[Any],
-    graph: List[Any],
+    facts: list[Any],
+    episodes: list[Any],
+    graph: list[Any],
     salience_threshold: float,
     min_semantic_facts: int,
     min_high_salience_facts: int,
     min_cluster_summaries: int,
     require_semantic: bool,
     prefer_clusters: bool,
-    novelty_history: Optional[List[Dict[str, int]]] = None,
+    novelty_history: Optional[list[dict[str, int]]] = None,
     novelty_window: int = 2,
     min_recent_novelty: int = 1,
 ) -> CoverageReport:
@@ -120,10 +120,10 @@ def assess_coverage(
 
 
 def compute_novelty_signals(
-    novelty_history: List[Dict[str, int]],
+    novelty_history: list[dict[str, int]],
     window: int,
     min_recent_sum: int,
-) -> Tuple[int, int, bool]:
+) -> tuple[int, int, bool]:
     """Compute last-step and windowed novelty totals, and a diminishing-returns flag."""
     if not novelty_history:
         return 0, 0, False
@@ -139,7 +139,7 @@ def compute_novelty_signals(
     return last, total, total < min_recent_sum
 
 
-def compute_confidence(coverage: CoverageReport) -> Dict[str, float]:
+def compute_confidence(coverage: CoverageReport) -> dict[str, float]:
     """
     Compute a simple confidence score from coverage signals.
     """
@@ -185,8 +185,8 @@ def _fact_salience(fact: Any) -> float:
         return 0.0
 
 
-def _fact_entities(facts: List[Any], limit: int = 12) -> List[str]:
-    entities: List[str] = []
+def _fact_entities(facts: list[Any], limit: int = 12) -> list[str]:
+    entities: list[str] = []
     seen = set()
     for f in facts or []:
         if len(entities) >= limit:
@@ -216,7 +216,7 @@ def _fact_entities(facts: List[Any], limit: int = 12) -> List[str]:
     return entities
 
 
-def _graph_entity_support(facts: List[Any], graph: List[Any]) -> Tuple[int, int]:
+def _graph_entity_support(facts: list[Any], graph: list[Any]) -> tuple[int, int]:
     entities = _fact_entities(facts)
     if not entities:
         return 0, 0
@@ -239,8 +239,8 @@ def _graph_entity_support(facts: List[Any], graph: List[Any]) -> Tuple[int, int]
     return support, len(entities)
 
 
-def _graph_predicate_support(facts: List[Any], graph: List[Any]) -> Tuple[int, int]:
-    predicates: List[str] = []
+def _graph_predicate_support(facts: list[Any], graph: list[Any]) -> tuple[int, int]:
+    predicates: list[str] = []
     seen = set()
     for f in facts or []:
         try:
@@ -277,7 +277,7 @@ def _is_cluster_summary(item: Any) -> bool:
 def _is_episode_summary(item: Any) -> bool:
     return isinstance(item, dict) and "summary" in item
 
-def detect_contradictions(episodes: List[Any]) -> List[str]:
+def detect_contradictions(episodes: list[Any]) -> list[str]:
     """
     Lightweight contradiction detection from episode summaries.
 
@@ -290,15 +290,15 @@ def detect_contradictions(episodes: List[Any]) -> List[str]:
         return []
 
     groups = _contradiction_groups()
-    positive: Dict[str, set] = {name: set() for name, _ in groups}
-    negative: Dict[str, set] = {name: set() for name, _ in groups}
+    positive: dict[str, set] = {name: set() for name, _ in groups}
+    negative: dict[str, set] = {name: set() for name, _ in groups}
 
     for summary in summaries:
         for name, (pos_verbs, neg_verbs) in groups:
             positive[name].update(_extract_objects(summary, pos_verbs))
             negative[name].update(_extract_objects(summary, neg_verbs))
 
-    contradictions: List[str] = []
+    contradictions: list[str] = []
     for name in positive.keys():
         overlap = positive[name] & negative[name]
         for obj in sorted(overlap):
@@ -313,7 +313,7 @@ def _episode_summary_text(item: Any) -> str:
     return str(getattr(item, "summary", "")).lower()
 
 
-def _contradiction_groups() -> List[Tuple[str, Tuple[List[str], List[str]]]]:
+def _contradiction_groups() -> list[tuple[str, tuple[list[str], list[str]]]]:
     """
     Define simple verb polarity groups.
 
@@ -344,11 +344,11 @@ def _contradiction_groups() -> List[Tuple[str, Tuple[List[str], List[str]]]]:
     ]
 
 
-def _extract_objects(text: str, verbs: List[str]) -> List[str]:
+def _extract_objects(text: str, verbs: list[str]) -> list[str]:
     """
     Extract object phrases following given verbs.
     """
-    out: List[str] = []
+    out: list[str] = []
     if not text:
         return out
 

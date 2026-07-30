@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 from uma.adapters.graph.base import GraphAdapter
 from uma.common.types.types_scope import validate_owner_type, validate_tenant_id
@@ -78,7 +78,7 @@ class GraphCore:
         except Exception:
             logger.exception("GraphCore.add_episode failed.")
 
-    def add_facts(self, facts: List[Any]) -> None:
+    def add_facts(self, facts: list[Any]) -> None:
         """Insert Fact nodes (turn ingest path — sequential, small batch)."""
         for fact in facts:
             try:
@@ -86,7 +86,7 @@ class GraphCore:
             except Exception:
                 logger.exception("GraphCore.add_facts failed.")
 
-    async def add_facts_batch(self, facts: List[Any]) -> int:
+    async def add_facts_batch(self, facts: list[Any]) -> int:
         """Insert Fact nodes (document ingest path — quarantine-filtered, returns count)."""
         try:
             return await self.updater.add_facts_batch(facts)
@@ -193,7 +193,7 @@ class GraphCore:
             logger.exception("GraphCore.insert_fact_triplet failed.")
             return False
 
-    def link_episode_to_facts(self, episode: Any, facts: List[Any]) -> None:
+    def link_episode_to_facts(self, episode: Any, facts: list[Any]) -> None:
         """Link Episode to its extracted Facts."""
         try:
             self.updater.link_episode_to_facts(episode, facts)
@@ -214,11 +214,11 @@ class GraphCore:
         tenant_id: str,
         owner_type: str,
         owner_id: str,
-        predicate_scope: Optional[List[str]] = None,
-        domain_scope: Optional[List[str]] = None,
+        predicate_scope: Optional[list[str]] = None,
+        domain_scope: Optional[list[str]] = None,
         depth: int = 1,
         k: int = 10,
-    ) -> List[dict]:
+    ) -> list[dict]:
         """
         Fetch graph neighbors for a node, STRICTLY scoped by ownership.
 
@@ -343,10 +343,10 @@ class GraphCore:
         tenant_id: str,
         owner_type: str,
         owner_id: str,
-        names: List[str],
-        domain_scope: Optional[List[str]] = None,
+        names: list[str],
+        domain_scope: Optional[list[str]] = None,
         limit: int = 8,
-    ) -> List[str]:
+    ) -> list[str]:
         try:
             tenant_id = validate_tenant_id(tenant_id)
             owner_type = validate_owner_type(owner_type)
@@ -361,7 +361,7 @@ class GraphCore:
             return []
 
         limit_i = max(1, min(50, int(limit)))
-        cleaned: List[str] = []
+        cleaned: list[str] = []
         seen = set()
         for name in names or []:
             value = str(name or "").strip().lower()
@@ -409,7 +409,7 @@ class GraphCore:
             logger.exception("GraphCore.resolve_nodes failed")
             return []
 
-        out: List[str] = []
+        out: list[str] = []
         seen_ids = set()
         for row in rows or []:
             try:
@@ -426,7 +426,7 @@ class GraphCore:
                 continue
         return out
 
-    def query(self, cypher: str, params: Optional[dict] = None) -> List[dict]:
+    def query(self, cypher: str, params: Optional[dict] = None) -> list[dict]:
         raise RuntimeError("GraphCore.query is unsafe and not available in normal runtime flow")
 
     # ------------------------------------------------------------------

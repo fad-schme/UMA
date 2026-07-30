@@ -11,10 +11,10 @@ Added: should_stop() helper for RLM controller stopping decisions.
 """
 
 from __future__ import annotations
-from typing import Set, Dict, Any, Tuple
+from typing import Any
 
 # -- existing keyword set --
-RECALL_KEYWORDS: Set[str] = {
+RECALL_KEYWORDS: set[str] = {
     "remember",
     "recall",
     "previous",
@@ -96,13 +96,13 @@ class RetrievalPolicy:
 def should_stop(
     *,
     recall_score: float,
-    coverage: Dict[str, Any],
+    coverage: dict[str, Any],
     calls_made: int = 0,
     max_calls: int = DEFAULT_MAX_RLM_CALLS,
     tokens_used: int = 0,
     token_budget: int = DEFAULT_TOKEN_BUDGET,
     user_results_count: int = 0,
-) -> Tuple[bool, str]:
+) -> tuple[bool, str]:
     """
     Decide whether the RLM controller should stop recursion.
 

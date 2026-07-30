@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 from .base_vector_sql_store import BaseVectorSQLStore
 
@@ -224,7 +224,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
     # CRUD operations
     # ------------------------------------------------------------------ #
 
-    async def add_episode(self, ep: Episode, embedding: List[float]) -> None:
+    async def add_episode(self, ep: Episode, embedding: list[float]) -> None:
         """
         Insert or update an episode record + semantic embedding.
 
@@ -465,7 +465,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         owner_type: str = "",
         owner_id: str = "",
         include_quarantined: bool = False,
-    ) -> List[Episode]:
+    ) -> list[Episode]:
         """Return episodes for the given scope, newest first. Excludes quarantined records."""
         self._require_scope(tenant_id, owner_type, owner_id)
         def _sync():
@@ -496,7 +496,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 conn.close()
 
         return await self._run_sync(_sync)
-    async def list_recent(self, tenant_id: Optional[str] = None, owner_type: str = "", owner_id: str = "", n: int = 5) -> List[Episode]:
+    async def list_recent(self, tenant_id: Optional[str] = None, owner_type: str = "", owner_id: str = "", n: int = 5) -> list[Episode]:
         """Return the ``k`` most recent episodes for the scope. Convenience wrapper over ``list_episodes``."""
         self._require_scope(tenant_id, owner_type, owner_id)
         def _sync():
@@ -535,12 +535,12 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         return await self._run_sync(_sync)
     async def fetch_summaries(
         self,
-        ids: List[str],
+        ids: list[str],
         *,
         tenant_id: Optional[str] = None,
         owner_type: str,
         owner_id: str,
-    ) -> List[dict]:
+    ) -> list[dict]:
         """
         Fetch episode summaries by IDs (owner-scoped), preserving requested order.
         """
@@ -564,7 +564,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 params = list(ids) + [tenant_id, owner_type, owner_id]
                 rows = self._query_all(conn, sql, params=params, log_context="fetch_episode_summaries")
                 row_map = {r["id"]: r for r in rows}
-                ordered: List[dict] = []
+                ordered: list[dict] = []
                 for eid in ids:
                     row = row_map.get(eid)
                     if row is None:
@@ -587,12 +587,12 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         return await self._run_sync(_sync)
     async def fetch_transcripts(
         self,
-        ids: List[str],
+        ids: list[str],
         *,
         tenant_id: Optional[str] = None,
         owner_type: str,
         owner_id: str,
-    ) -> List[dict]:
+    ) -> list[dict]:
         """
         Fetch episode transcripts (raw) by IDs (owner-scoped), preserving requested order.
         """
@@ -616,7 +616,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 params = list(ids) + [tenant_id, owner_type, owner_id]
                 rows = self._query_all(conn, sql, params=params, log_context="fetch_episode_transcripts")
                 row_map = {r["id"]: r for r in rows}
-                ordered: List[dict] = []
+                ordered: list[dict] = []
                 for eid in ids:
                     row = row_map.get(eid)
                     if row is None:
@@ -644,14 +644,14 @@ class EpisodicSQLStore(BaseVectorSQLStore):
 
     async def search(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         *,
         tenant_id: Optional[str] = None,
         owner_type: str,
         owner_id: str,
         k: int = 20,
         offset: int = 0,
-    ) -> List[Episode]:
+    ) -> list[Episode]:
         """
         Semantic episodic search.
 
@@ -717,12 +717,12 @@ class EpisodicSQLStore(BaseVectorSQLStore):
 
     async def fetch_by_ids(
         self,
-        ids: List[str],
+        ids: list[str],
         *,
         tenant_id: Optional[str] = None,
         owner_type: str,
         owner_id: str,
-    ) -> List[Episode]:
+    ) -> list[Episode]:
         """Bulk-fetch episodes by ID list within the ownership scope. Returns only non-quarantined records."""
         if not ids:
             return []
@@ -733,12 +733,12 @@ class EpisodicSQLStore(BaseVectorSQLStore):
             try:
                 # B608: placeholders is "?,?,?" — safe parameterized, no user data interpolated.
                 placeholders = ",".join("?" for _ in ids)
-                params: List[str] = list(ids) + [tenant_id, owner_type, owner_id]
+                params: list[str] = list(ids) + [tenant_id, owner_type, owner_id]
                 # nosec B608 — placeholders is "?,?,?" only; all values bound as ?
                 sql = f"SELECT * FROM episodes WHERE id IN ({placeholders}) AND tenant_id=? AND owner_type=? AND owner_id=? AND quarantined_at IS NULL"
                 rows = self._query_all(conn, sql, params=params, log_context="fetch_episodes_by_ids")
                 row_map = {r["id"]: r for r in rows}
-                ordered: List[Episode] = []
+                ordered: list[Episode] = []
                 for eid in ids:
                     row = row_map.get(eid)
                     if row is None:
@@ -775,7 +775,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         owner_type: str,
         owner_id: str,
         user_id: str,
-        episode_ids: List[str],
+        episode_ids: list[str],
         summary: str,
         latest_timestamp: str,
     ) -> None:
@@ -860,14 +860,14 @@ class EpisodicSQLStore(BaseVectorSQLStore):
         k: int = 5,
         max_episodes: Optional[int] = None,
         time_range: Optional[dict] = None,
-    ) -> List[dict]:
+    ) -> list[dict]:
         """Return cluster summaries for the scope ordered by ``latest_timestamp`` descending."""
         self._require_scope(tenant_id, owner_type, owner_id)
         def _sync():
             conn = self._conn()
             try:
                 where = ["tenant_id = ?", "owner_type = ?", "owner_id = ?"]
-                params: List[Any] = [tenant_id, owner_type, owner_id]
+                params: list[Any] = [tenant_id, owner_type, owner_id]
                 if isinstance(time_range, dict):
                     start = time_range.get("start")
                     end = time_range.get("end")
@@ -888,7 +888,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                 """
                 params.append(int(k))
                 rows = self._query_all(conn, sql, params=params, log_context="list_cluster_summaries")
-                out: List[dict] = []
+                out: list[dict] = []
                 for row in rows or []:
                     try:
                         episode_ids = json.loads(row["episode_ids"]) if row.get("episode_ids") else []

@@ -13,7 +13,7 @@ Safety guarantees
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Optional
 
 from uma.common.types import Fact
 from uma.retrieve.user_query_helper import build_fact_embedding_text
@@ -48,7 +48,7 @@ class SemanticIngestor:
         self.threshold = float(salience_threshold)
         logger.debug("SemanticIngestor initialized (threshold=%.2f, decay_days=%.0f).", self.threshold, salience_decay_days)
 
-    async def extract(self, user_id: str, text: str, *, extra_meta: dict | None = None) -> List[Fact]:
+    async def extract(self, user_id: str, text: str, *, extra_meta: dict | None = None) -> list[Fact]:
         if self.extractor is None:
             logger.debug("SemanticIngestor.extract: extractor unavailable; returning [].")
             return []
@@ -71,7 +71,7 @@ class SemanticIngestor:
         *,
         extra_meta: dict | None = None,
         fact_transform: Optional[Callable[[Fact], None]] = None,
-    ) -> List[Fact]:
+    ) -> list[Fact]:
         if self.embedder is None:
             logger.debug("SemanticIngestor.ingest: embedder unavailable; returning [].")
             return []
@@ -105,7 +105,7 @@ class SemanticIngestor:
             )
             return []
 
-        persisted: List[Fact] = []
+        persisted: list[Fact] = []
         for fact, vec in zip(selected, vectors):
             try:
                 if fact_transform is not None:

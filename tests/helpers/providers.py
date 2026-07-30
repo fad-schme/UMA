@@ -4,11 +4,11 @@ import hashlib
 import json
 import random
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 
-def _extract_user_text(messages: List[Dict[str, str]]) -> str:
-    parts: List[str] = []
+def _extract_user_text(messages: list[dict[str, str]]) -> str:
+    parts: list[str] = []
     for m in messages or []:
         if isinstance(m, dict) and m.get("role") == "user":
             parts.append(str(m.get("content") or ""))
@@ -44,17 +44,17 @@ def _stable_uuid_int(s: str) -> int:
 
 async def fake_embed(
     *,
-    texts: Optional[List[str]] = None,
+    texts: Optional[list[str]] = None,
     dimension: int = 64,
     **_kwargs: Any,
-) -> List[List[float]]:
+) -> list[list[float]]:
     """
     Deterministic, offline embedding for tests via seeded PRNG.
 
     Produces stable vectors across runs/CI without external services.
     """
     dim = int(dimension)
-    out: List[List[float]] = []
+    out: list[list[float]] = []
     for t in list(texts or []):
         seed = _stable_uuid_int(f"embed:v1:{dim}:{t}")
         rng = random.Random(seed)
@@ -65,7 +65,7 @@ async def fake_embed(
 
 async def fake_llm(
     *,
-    messages: Optional[List[Dict[str, str]]] = None,
+    messages: Optional[list[dict[str, str]]] = None,
     max_tokens: int = 256,
     temperature: float = 0.0,
     **_kwargs: Any,
@@ -102,7 +102,7 @@ async def fake_llm(
         except Exception:
             payload = {}
         items = payload.get("chunks") if isinstance(payload, dict) else None
-        chunks_out: Dict[str, Any] = {}
+        chunks_out: dict[str, Any] = {}
         if isinstance(items, list):
             for it in items:
                 if not isinstance(it, dict):
@@ -132,7 +132,7 @@ async def fake_llm(
             txt = txt.split("TEXT:", 1)[1]
         txt = " ".join((txt or "").split()).strip()
 
-        facts: List[Dict[str, Any]] = []
+        facts: list[dict[str, Any]] = []
 
         research_match = re.search(r"\bresearch(?:ing)?\b\s+([^.;\n]+)", txt, flags=re.IGNORECASE)
         if research_match:
@@ -167,7 +167,7 @@ async def fake_llm(
             return json.dumps({"facts": facts[:6]})
 
         # Heuristic: pull multiple likes from patterns like "likes sushi and pizza".
-        likes: List[str] = []
+        likes: list[str] = []
         m = re.search(r"\\blikes\\b\\s+([^\\.;\\n]+)", txt, flags=re.IGNORECASE)
         if m:
             tail = m.group(1)

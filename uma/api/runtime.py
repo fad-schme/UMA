@@ -13,7 +13,7 @@ import logging
 import time
 import threading
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Mapping, Optional
 
 if TYPE_CHECKING:
     from uma.common.results import ContextBundle, MemoryResult
@@ -145,7 +145,7 @@ class AnimusProfileProvider:
             loaded_at=now,
             expires_at=now + self.ttl_seconds,
         )
-    
+
 
 class UMARuntime:
     """Shared UMA infrastructure container.
@@ -165,10 +165,10 @@ class UMARuntime:
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self._config = config
-        self._stores: Dict[str, Any] = dict(stores or {})
+        self._stores: dict[str, Any] = dict(stores or {})
         self._llm = llm
         self.memory_bridge = memory_bridge
-        self.metadata: Dict[str, Any] = dict(metadata or {})
+        self.metadata: dict[str, Any] = dict(metadata or {})
 
     @classmethod
     def from_memory(cls, memory: Any) -> "UMARuntime":
@@ -193,7 +193,7 @@ class UMARuntime:
         return self._config
 
     @property
-    def stores(self) -> Dict[str, Any]:
+    def stores(self) -> dict[str, Any]:
         memory = self.memory_bridge
         if memory is not None:
             return dict(getattr(memory, "_stores", None) or {})
@@ -308,7 +308,7 @@ class UMARuntime:
         runtime_context: RuntimeContext,
         query_text: str,
         scan_severity: str,
-        lane_filter: List[str],
+        lane_filter: list[str],
         result: "ContextBundle",
     ) -> None:
         """Append one audit row for this retrieval call.
@@ -355,7 +355,7 @@ class UMARuntime:
                 exc_info=True,
             )
 
-    def _available_retrieval_lanes(self) -> List[str]:
+    def _available_retrieval_lanes(self) -> list[str]:
         """Advertise the retrieval lanes this runtime can execute today.
 
         `wiki` currently means the runtime can participate in the compiled-memory
@@ -367,7 +367,7 @@ class UMARuntime:
         memory = self.memory_bridge
         stores = self.stores or {}
         ctx_cfg = getattr(getattr(memory, "retrieval_cfg", None), "context", None)
-        lanes: List[str] = []
+        lanes: list[str] = []
         if getattr(memory, "chunk_core", None) is not None or stores.get("chunk") is not None:
             lanes.extend([RAW_LANE, WIKI_LANE])
         if getattr(memory, "semantic_core", None) is not None or stores.get("semantic") is not None:
@@ -406,10 +406,10 @@ class UMARuntime:
         return session_scope_from_runtime_context(context)
 
     @staticmethod
-    def _normalize_lane_filter(lane_filter: Optional[List[str]]) -> List[str]:
+    def _normalize_lane_filter(lane_filter: Optional[list[str]]) -> list[str]:
         if lane_filter is None:
             return []
-        normalized: List[str] = []
+        normalized: list[str] = []
         seen: set[str] = set()
         for lane in lane_filter:
             candidate = str(lane or "").strip().lower()
@@ -437,14 +437,14 @@ class UMARuntime:
         return lane or None
 
     @classmethod
-    def _filter_items_by_lanes(cls, items: List[Any], lane_filter: List[str]) -> List[Any]:
+    def _filter_items_by_lanes(cls, items: list[Any], lane_filter: list[str]) -> list[Any]:
         if not lane_filter:
             return list(items or [])
         allowed = set(lane_filter)
         return [item for item in (items or []) if cls._item_lane(item) in allowed]
 
     @staticmethod
-    def _filter_items_by_owner(items: List[Any], requesting_user_id: str) -> List[Any]:
+    def _filter_items_by_owner(items: list[Any], requesting_user_id: str) -> list[Any]:
         """Drop user-owned items whose owner_id does not match the requesting user.
 
         Agent-owned items (shared KB) pass through unconditionally.
@@ -475,7 +475,7 @@ class UMARuntime:
     def _load_working_memory_for_context(
         self,
         runtime_context: RuntimeContext,
-    ) -> List[Any]:
+    ) -> list[Any]:
         memory = self._require_memory_bridge()
         try:
             wm_scope = self._working_memory_scope_set_context(runtime_context)
@@ -499,9 +499,9 @@ class UMARuntime:
         self,
         *,
         query_text: str,
-        lane_filter: List[str],
+        lane_filter: list[str],
         plan: Any,
-        working_memory: List[Any],
+        working_memory: list[Any],
         pack: Any,
         requesting_user_id: str,
     ) -> "ContextBundle":
@@ -555,13 +555,13 @@ class UMARuntime:
             ),
         )
 
-    
+
     async def retrieve_context(
         self,
         runtime_context: RuntimeContext,
         *,
         query_text: str,
-        lane_filter: Optional[List[str]] = None,
+        lane_filter: Optional[list[str]] = None,
     ) -> "ContextBundle":
         """Retrieve curated evidence-oriented UMA context for one explicit request scope.
 
@@ -660,8 +660,8 @@ class UMARuntime:
             return result
 
     @staticmethod
-    def _group_memory_artifacts(chunks: List[Any]) -> List[Dict[str, Any]]:
-        grouped: Dict[str, Dict[str, Any]] = {}
+    def _group_memory_artifacts(chunks: list[Any]) -> list[dict[str, Any]]:
+        grouped: dict[str, dict[str, Any]] = {}
         for chunk in chunks or []:
             chunk_id = getattr(chunk, "id", None)
             doc_id = str(getattr(chunk, "doc_id", None) or chunk_id or "")
@@ -757,21 +757,21 @@ class UMARuntime:
         text: str | None = None,
         summary: str | None = None,
         topic_key: str | None = None,
-        direct_source_chunk_ids: Optional[List[str]] = None,
-        direct_source_document_ids: Optional[List[str]] = None,
-        parent_artifacts: Optional[List[Any]] = None,
-        related_artifact_ids: Optional[List[str]] = None,
-        retrieval_tags: Optional[List[str]] = None,
-        retrieval_path: Optional[List[Mapping[str, Any]]] = None,
+        direct_source_chunk_ids: Optional[list[str]] = None,
+        direct_source_document_ids: Optional[list[str]] = None,
+        parent_artifacts: Optional[list[Any]] = None,
+        related_artifact_ids: Optional[list[str]] = None,
+        retrieval_tags: Optional[list[str]] = None,
+        retrieval_path: Optional[list[Mapping[str, Any]]] = None,
         support_density: float | None = None,
         confidence: float | None = None,
-        conflicts: Optional[List[Mapping[str, Any]]] = None,
+        conflicts: Optional[list[Mapping[str, Any]]] = None,
         existing_artifact: Any | None = None,
         manual: bool = False,
         operation: str = "wiki_artifact_created",
         metadata: Mapping[str, Any] | None = None,
         status: str = "active",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         owner = validate_explicit_owner(
             owner_type=owner_type,
             owner_id=owner_id,
@@ -806,7 +806,7 @@ class UMARuntime:
         self,
         runtime_context: RuntimeContext,
         artifact: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         self.ensure_retrieval_ready()
         request = self._build_retrieval_request(runtime_context)
         memory = self._require_memory_bridge()
@@ -986,7 +986,7 @@ class UMARuntime:
             )
             compiled_answer["memory_intent"] = memory_intent.strip()
             compiled_answer["supporting_evidence"] = supporting_evidence
-        memories: List[Dict[str, Any]] = [compiled_answer] if compiled_answer is not None else []
+        memories: list[dict[str, Any]] = [compiled_answer] if compiled_answer is not None else []
         if fallback_used:
             logger.info(
                 "UMARuntime.retrieve_memory: explicit evidence-only fallback tenant=%s agent=%s user=%s intent=%s chunks=%d",
@@ -1060,7 +1060,7 @@ class UMARuntime:
         )
 
     @staticmethod
-    def _serialize_memory_fact(fact: Any) -> Dict[str, Any]:
+    def _serialize_memory_fact(fact: Any) -> dict[str, Any]:
         provenance = provenance_for_artifact(fact)
         text = ""
         if isinstance(fact, Mapping):
@@ -1084,7 +1084,7 @@ class UMARuntime:
         }
 
     @staticmethod
-    def _serialize_memory_evidence(chunk: Any) -> Dict[str, Any]:
+    def _serialize_memory_evidence(chunk: Any) -> dict[str, Any]:
         if isinstance(chunk, Mapping):
             payload = dict(chunk)
         else:
@@ -1218,7 +1218,7 @@ class UMARuntime:
         *,
         query_text: str,
         render_mode: str = "animus_v1",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Retrieve context formatted as prompt messages."""
         if not isinstance(runtime_context, RuntimeContext):
             raise TypeError("UMARuntime retrieval requires a RuntimeContext instance.")
@@ -1281,7 +1281,7 @@ def _artifact_value(artifact: Any, field_name: str) -> Any:
     return getattr(artifact, field_name, None)
 
 
-def _chunk_payload(chunk: Any) -> Dict[str, Any]:
+def _chunk_payload(chunk: Any) -> dict[str, Any]:
     return {
         "id": getattr(chunk, "id", None),
         "doc_id": getattr(chunk, "doc_id", None),

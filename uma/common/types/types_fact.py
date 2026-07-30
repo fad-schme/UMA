@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from .types_owner import OwnerType
 
@@ -42,9 +42,9 @@ class Fact:
     created_at: datetime
     updated_at: datetime
 
-    source_ids: List[str] = field(default_factory=list)
+    source_ids: list[str] = field(default_factory=list)
     confidence: Optional[float] = None
-    meta: Dict[str, Any] = field(default_factory=dict)
+    meta: dict[str, Any] = field(default_factory=dict)
 
     # Ownership (NEW, safe defaults)
     owner_type: OwnerType = "user"

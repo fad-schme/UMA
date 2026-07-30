@@ -8,7 +8,7 @@ their `from_config` helpers defined in their modules.
 
 from __future__ import annotations
 
-from typing import Callable, Dict, Optional
+from typing import Callable, Optional
 
 from uma.common.config_types import EmbeddingConfig, LLMConfig
 from .base import EmbeddingInterface, LLMInterface
@@ -16,8 +16,8 @@ from .base import EmbeddingInterface, LLMInterface
 LLMFactory = Callable[[LLMConfig], LLMInterface]
 EmbeddingFactory = Callable[[EmbeddingConfig], EmbeddingInterface]
 
-_llm_factories: Dict[str, LLMFactory] = {}
-_embedder_factories: Dict[str, EmbeddingFactory] = {}
+_llm_factories: dict[str, LLMFactory] = {}
+_embedder_factories: dict[str, EmbeddingFactory] = {}
 
 
 def register_llm_provider(name: str, factory: LLMFactory) -> None:

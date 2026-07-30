@@ -12,7 +12,6 @@ from uma.common.config_types import SecurityConfig
 from uma.common.injection_scan import InjectionScanResult, apply_scan, configure_security, normalize_text, scan_content
 import pytest
 import re
-import time
 import yaml
 
 # --- from test_pr3_scanner ---

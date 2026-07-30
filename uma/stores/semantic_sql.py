@@ -35,7 +35,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from typing import List, Optional, Any
+from typing import Optional, Any
 
 from .base_vector_sql_store import BaseVectorSQLStore
 
@@ -271,7 +271,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
         tenant_id: Optional[str],
         owner_type: Optional[str],
         owner_id: Optional[str],
-        params: List[Any],
+        params: list[Any],
     ) -> str:
         if not tenant_id or not owner_type or not owner_id:
             logger.error("SemanticSQLStore requires tenant_id, owner_type and owner_id")
@@ -279,17 +279,8 @@ class SemanticSQLStore(BaseVectorSQLStore):
         params.extend([tenant_id, owner_type, owner_id])
         return "tenant_id=? AND owner_type=? AND owner_id=?"
 
-    async def upsert_fact(self, fact: Fact, embedding: List[float]) -> None:
-        """
-        Insert or update a Fact and its embedding using conflict resolution.
-
-        Steps:
-        1. Fetch existing competing facts via subject + predicate + object.
-        2. Resolve conflicts.
-        3. Upsert canonical fact.
-        4. Upsert embedding into vector index.
-        """
-
+    async def upsert_fact(self, fact: Fact, embedding: list[float]) -> None:
+        """Insert or update a fact and its embedding using conflict resolution."""
         logger.debug(
             "SemanticSQLStore.upsert_fact: id=%s subject=%s pred=%s",
             fact.id,
@@ -300,196 +291,40 @@ class SemanticSQLStore(BaseVectorSQLStore):
         def _sync():
             conn = self._conn()
             try:
-                owner_type_in = getattr(fact, "owner_type", "user") or "user"
-                owner_id_in = getattr(fact, "owner_id", "") or ""
-                tenant_id_in = getattr(fact, "tenant_id", None) or DEFAULT_TENANT_ID
-                session_id_in = getattr(fact, "session_id", None)
-                if not owner_id_in:
-                    raise ValueError("SemanticSQLStore.upsert_fact: owner_id must be set")
-
-                # Idempotency guard: avoid duplicating facts on retries when turn_id is present.
-                try:
-                    meta_in = getattr(fact, "meta", None) or {}
-                    turn_id = meta_in.get("turn_id")
-                    if turn_id:
-                        dup = self._query_one(
-                            conn,
-                            """
-                            SELECT id FROM facts
-                            WHERE tenant_id = ? AND owner_type = ? AND owner_id = ?
-                              AND subject = ? AND predicate = ?
-                              AND object = ?
-                              AND ((session_id IS NULL AND ? IS NULL) OR session_id = ?)
-                              AND json_extract(meta, '$.turn_id') = ?
-                            LIMIT 1
-                            """,
-                            params=[
-                                tenant_id_in,
-                                owner_type_in,
-                                owner_id_in,
-                                fact.subject,
-                                fact.predicate,
-                                json.dumps(fact.object),
-                                session_id_in,
-                                session_id_in,
-                                str(turn_id),
-                            ],
-                            log_context="semantic_idempotency",
-                        )
-                        if dup:
-                            logger.info(
-                                "SemanticSQLStore.upsert_fact: skipping duplicate (turn_id=%s) id=%s",
-                                turn_id,
-                                dup["id"] if hasattr(dup, "__getitem__") else None,
-                            )
-                            return
-                except Exception:
-                    logger.exception("SemanticSQLStore.upsert_fact: idempotency guard failed; continuing.")
-
-                # Fetch competitors: only facts with the SAME (subject, predicate, object) compete.
-                # This avoids dropping distinct objects like:
-                #   user LIKES sushi
-                #   user LIKES pizza
-                # which should coexist as separate facts.
-                object_json = json.dumps(fact.object)
-                rows = self._query_all(
+                owner_type, owner_id, tenant_id, session_id = self._normalize_fact(fact)
+                if self._find_idempotent_duplicate(
                     conn,
-                    """
-                    SELECT * FROM facts
-                    WHERE tenant_id=? AND owner_type=? AND owner_id=? AND subject=? AND predicate=? AND object=?
-                      AND ((session_id IS NULL AND ? IS NULL) OR session_id=?)
-                    """,
-                    params=[
-                        tenant_id_in,
-                        owner_type_in,
-                        owner_id_in,
-                        fact.subject,
-                        fact.predicate,
-                        object_json,
-                        session_id_in,
-                        session_id_in,
-                    ],
-                    log_context="fetch_conflicts",
-                )
-                existing = [self._row_to_object(r) for r in rows]
-
-                canonical, _archived = self.fact_resolver.resolve(existing, fact)
-                normalized_meta = normalize_fact_metadata(
-                    canonical.meta,
-                    fact_id=canonical.id,
-                    owner_type=canonical.owner_type or owner_type_in,
-                    owner_id=canonical.owner_id or owner_id_in,
-                    created_at=canonical.created_at,
-                    updated_at=canonical.updated_at,
-                    source_ids=list(canonical.source_ids or []),
-                    session_id=getattr(canonical, "session_id", None),
-                )
-
-                payload = {
-                    "id": canonical.id,
-                    "tenant_id": getattr(canonical, "tenant_id", None) or tenant_id_in,
-                    "subject": canonical.subject,
-                    "predicate": canonical.predicate,
-                    "owner_type": canonical.owner_type or owner_type_in,
-                    "owner_id": canonical.owner_id or owner_id_in,
-                    "workspace_id": getattr(canonical, "workspace_id", None),
-                    "session_id": getattr(canonical, "session_id", None),
-                    "object": json.dumps(canonical.object),
-                    "created_at": canonical.created_at.isoformat(),
-                    "updated_at": canonical.updated_at.isoformat(),
-                    "source_ids": json.dumps(canonical.source_ids),
-                    "source": getattr(canonical, "source", None),
-                    "origin_agent_id": getattr(canonical, "origin_agent_id", None),
-                    "origin_user_id": getattr(canonical, "origin_user_id", None),
-                    "origin_session_id": getattr(canonical, "origin_session_id", None),
-                    "scope_model_version": getattr(canonical, "scope_model_version", None) or SCOPE_MODEL_VERSION,
-                    "salience": canonical.salience,
-                    "confidence": (
-                        float(canonical.confidence)
-                        if canonical.confidence is not None
-                        else None
-                    ),
-                    "trust_score": float(_ts if (_ts := getattr(canonical, "trust_score", None)) is not None else 0.5),
-                    "content_hash": getattr(canonical, "content_hash", None),
-                    "quarantined_at": (
-                        getattr(canonical, "quarantined_at").isoformat()
-                        if getattr(canonical, "quarantined_at", None) is not None
-                        else None
-                    ),
-                    "meta": json.dumps(normalized_meta),
-                }
-
-                # SQL upsert
-                self._execute(
+                    fact,
+                    tenant_id=tenant_id,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    session_id=session_id,
+                ):
+                    return
+                canonical, normalized_meta = self._resolve_conflict(
                     conn,
-                    """
-                    INSERT INTO facts (
-                        id, tenant_id, subject, predicate, object,
-                        created_at, updated_at, source_ids, source,
-                        confidence, meta, owner_type, owner_id, workspace_id,
-                        session_id, origin_agent_id, origin_user_id,
-                        origin_session_id, scope_model_version, salience,
-                        trust_score, content_hash, quarantined_at
-                    ) VALUES (
-                        :id, :tenant_id, :subject, :predicate, :object,
-                        :created_at, :updated_at, :source_ids, :source,
-                        :confidence, :meta, :owner_type, :owner_id, :workspace_id,
-                        :session_id, :origin_agent_id, :origin_user_id,
-                        :origin_session_id, :scope_model_version, :salience,
-                        :trust_score, :content_hash, :quarantined_at
-                    )
-                    ON CONFLICT(id) DO UPDATE SET
-                        tenant_id=excluded.tenant_id,
-                        subject=excluded.subject,
-                        predicate=excluded.predicate,
-                        object=excluded.object,
-                        owner_type=excluded.owner_type,
-                        owner_id=excluded.owner_id,
-                        workspace_id=excluded.workspace_id,
-                        session_id=excluded.session_id,
-                        source=excluded.source,
-                        origin_agent_id=excluded.origin_agent_id,
-                        origin_user_id=excluded.origin_user_id,
-                        origin_session_id=excluded.origin_session_id,
-                        scope_model_version=excluded.scope_model_version,
-                        salience=excluded.salience,
-                        created_at=excluded.created_at,
-                        updated_at=excluded.updated_at,
-                        source_ids=excluded.source_ids,
-                        confidence=excluded.confidence,
-                        trust_score=excluded.trust_score,
-                        content_hash=excluded.content_hash,
-                        quarantined_at=excluded.quarantined_at,
-                        meta=excluded.meta;
-                    """,
-                    params=payload,
-                    log_context="semantic_upsert",
+                    fact,
+                    tenant_id=tenant_id,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    session_id=session_id,
                 )
-                # Embedding upsert (commit after vector update)
+                self._write_row(
+                    conn,
+                    canonical,
+                    normalized_meta,
+                    tenant_id=tenant_id,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                )
                 try:
-                    meta = normalized_meta
-                    topic = meta.get("topic")
-
-                    owner_type_out = canonical.owner_type or owner_type_in
-                    owner_id_out = canonical.owner_id or owner_id_in
-                    # C1: isolation fields go as explicit parallel-list params.
-                    # extra_metadata carries everything else.
-                    extra_meta = {
-                        "subject": canonical.subject,
-                        "predicate": canonical.predicate,
-                        "kb_lane": meta.get("kb_lane"),
-                        "scope_key": f"{owner_type_out}:{owner_id_out}",
-                    }
-
-                    if topic:
-                        extra_meta["topic"] = topic
-                    self.vector_index.upsert(
-                        ids=[canonical.id],
-                        vectors=[embedding],
-                        tenant_ids=[tenant_id_in],
-                        owner_types=[owner_type_out],
-                        owner_ids=[owner_id_out],
-                        extra_metadata=[extra_meta],
+                    self._update_vector(
+                        canonical,
+                        embedding,
+                        normalized_meta,
+                        tenant_id=tenant_id,
+                        owner_type=owner_type,
+                        owner_id=owner_id,
                     )
                 except Exception:
                     logger.exception(
@@ -513,29 +348,243 @@ class SemanticSQLStore(BaseVectorSQLStore):
                     raise
 
                 logger.info("SemanticSQLStore: upserted fact id=%s", canonical.id)
-
             except Exception:
                 logger.exception("SemanticSQLStore.upsert_fact failed for fact id=%s", fact.id)
                 raise
             finally:
                 conn.close()
 
-
         return await self._run_sync(_sync)
+
+    @staticmethod
+    def _normalize_fact(fact: Fact) -> tuple[str, str, str, str | None]:
+        owner_type = getattr(fact, "owner_type", "user") or "user"
+        owner_id = getattr(fact, "owner_id", "") or ""
+        tenant_id = getattr(fact, "tenant_id", None) or DEFAULT_TENANT_ID
+        session_id = getattr(fact, "session_id", None)
+        if not owner_id:
+            raise ValueError("SemanticSQLStore.upsert_fact: owner_id must be set")
+        return owner_type, owner_id, tenant_id, session_id
+
+    def _find_idempotent_duplicate(
+        self,
+        conn: Any,
+        fact: Fact,
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+        session_id: str | None,
+    ) -> bool:
+        try:
+            turn_id = (getattr(fact, "meta", None) or {}).get("turn_id")
+            if not turn_id:
+                return False
+            duplicate = self._query_one(
+                conn,
+                """
+                SELECT id FROM facts
+                WHERE tenant_id = ? AND owner_type = ? AND owner_id = ?
+                  AND subject = ? AND predicate = ? AND object = ?
+                  AND ((session_id IS NULL AND ? IS NULL) OR session_id = ?)
+                  AND json_extract(meta, '$.turn_id') = ?
+                LIMIT 1
+                """,
+                params=[
+                    tenant_id,
+                    owner_type,
+                    owner_id,
+                    fact.subject,
+                    fact.predicate,
+                    json.dumps(fact.object),
+                    session_id,
+                    session_id,
+                    str(turn_id),
+                ],
+                log_context="semantic_idempotency",
+            )
+            if duplicate:
+                logger.info(
+                    "SemanticSQLStore.upsert_fact: skipping duplicate (turn_id=%s) id=%s",
+                    turn_id,
+                    duplicate["id"] if hasattr(duplicate, "__getitem__") else None,
+                )
+            return bool(duplicate)
+        except Exception:
+            logger.exception("SemanticSQLStore.upsert_fact: idempotency guard failed; continuing.")
+            return False
+
+    def _resolve_conflict(
+        self,
+        conn: Any,
+        fact: Fact,
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+        session_id: str | None,
+    ) -> tuple[Fact, dict[str, Any]]:
+        rows = self._query_all(
+            conn,
+            """
+            SELECT * FROM facts
+            WHERE tenant_id=? AND owner_type=? AND owner_id=? AND subject=? AND predicate=? AND object=?
+              AND ((session_id IS NULL AND ? IS NULL) OR session_id=?)
+            """,
+            params=[
+                tenant_id,
+                owner_type,
+                owner_id,
+                fact.subject,
+                fact.predicate,
+                json.dumps(fact.object),
+                session_id,
+                session_id,
+            ],
+            log_context="fetch_conflicts",
+        )
+        canonical, _archived = self.fact_resolver.resolve(
+            [self._row_to_object(row) for row in rows],
+            fact,
+        )
+        normalized_meta = normalize_fact_metadata(
+            canonical.meta,
+            fact_id=canonical.id,
+            owner_type=canonical.owner_type or owner_type,
+            owner_id=canonical.owner_id or owner_id,
+            created_at=canonical.created_at,
+            updated_at=canonical.updated_at,
+            source_ids=list(canonical.source_ids or []),
+            session_id=getattr(canonical, "session_id", None),
+        )
+        return canonical, normalized_meta
+
+    def _write_row(
+        self,
+        conn: Any,
+        canonical: Fact,
+        normalized_meta: dict[str, Any],
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+    ) -> None:
+        trust_score = getattr(canonical, "trust_score", None)
+        quarantined_at = getattr(canonical, "quarantined_at", None)
+        payload = {
+            "id": canonical.id,
+            "tenant_id": getattr(canonical, "tenant_id", None) or tenant_id,
+            "subject": canonical.subject,
+            "predicate": canonical.predicate,
+            "owner_type": canonical.owner_type or owner_type,
+            "owner_id": canonical.owner_id or owner_id,
+            "workspace_id": getattr(canonical, "workspace_id", None),
+            "session_id": getattr(canonical, "session_id", None),
+            "object": json.dumps(canonical.object),
+            "created_at": canonical.created_at.isoformat(),
+            "updated_at": canonical.updated_at.isoformat(),
+            "source_ids": json.dumps(canonical.source_ids),
+            "source": getattr(canonical, "source", None),
+            "origin_agent_id": getattr(canonical, "origin_agent_id", None),
+            "origin_user_id": getattr(canonical, "origin_user_id", None),
+            "origin_session_id": getattr(canonical, "origin_session_id", None),
+            "scope_model_version": getattr(canonical, "scope_model_version", None) or SCOPE_MODEL_VERSION,
+            "salience": canonical.salience,
+            "confidence": float(canonical.confidence) if canonical.confidence is not None else None,
+            "trust_score": float(trust_score if trust_score is not None else 0.5),
+            "content_hash": getattr(canonical, "content_hash", None),
+            "quarantined_at": quarantined_at.isoformat() if quarantined_at is not None else None,
+            "meta": json.dumps(normalized_meta),
+        }
+        self._execute(
+            conn,
+            """
+            INSERT INTO facts (
+                id, tenant_id, subject, predicate, object,
+                created_at, updated_at, source_ids, source,
+                confidence, meta, owner_type, owner_id, workspace_id,
+                session_id, origin_agent_id, origin_user_id,
+                origin_session_id, scope_model_version, salience,
+                trust_score, content_hash, quarantined_at
+            ) VALUES (
+                :id, :tenant_id, :subject, :predicate, :object,
+                :created_at, :updated_at, :source_ids, :source,
+                :confidence, :meta, :owner_type, :owner_id, :workspace_id,
+                :session_id, :origin_agent_id, :origin_user_id,
+                :origin_session_id, :scope_model_version, :salience,
+                :trust_score, :content_hash, :quarantined_at
+            )
+            ON CONFLICT(id) DO UPDATE SET
+                tenant_id=excluded.tenant_id,
+                subject=excluded.subject,
+                predicate=excluded.predicate,
+                object=excluded.object,
+                owner_type=excluded.owner_type,
+                owner_id=excluded.owner_id,
+                workspace_id=excluded.workspace_id,
+                session_id=excluded.session_id,
+                source=excluded.source,
+                origin_agent_id=excluded.origin_agent_id,
+                origin_user_id=excluded.origin_user_id,
+                origin_session_id=excluded.origin_session_id,
+                scope_model_version=excluded.scope_model_version,
+                salience=excluded.salience,
+                created_at=excluded.created_at,
+                updated_at=excluded.updated_at,
+                source_ids=excluded.source_ids,
+                confidence=excluded.confidence,
+                trust_score=excluded.trust_score,
+                content_hash=excluded.content_hash,
+                quarantined_at=excluded.quarantined_at,
+                meta=excluded.meta;
+            """,
+            params=payload,
+            log_context="semantic_upsert",
+        )
+
+    def _update_vector(
+        self,
+        canonical: Fact,
+        embedding: list[float],
+        normalized_meta: dict[str, Any],
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+    ) -> None:
+        owner_type_out = canonical.owner_type or owner_type
+        owner_id_out = canonical.owner_id or owner_id
+        extra_meta = {
+            "subject": canonical.subject,
+            "predicate": canonical.predicate,
+            "kb_lane": normalized_meta.get("kb_lane"),
+            "scope_key": f"{owner_type_out}:{owner_id_out}",
+        }
+        if normalized_meta.get("topic"):
+            extra_meta["topic"] = normalized_meta["topic"]
+        self.vector_index.upsert(
+            ids=[canonical.id],
+            vectors=[embedding],
+            tenant_ids=[tenant_id],
+            owner_types=[owner_type_out],
+            owner_ids=[owner_id_out],
+            extra_metadata=[extra_meta],
+        )
+
     # ------------------------------------------------------------------ #
     # Semantic Search
     # ------------------------------------------------------------------ #
 
     async def search(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         *,
         tenant_id: Optional[str] = None,
         owner_type: str,
         owner_id: str,
         k: int = 10,
         offset: int = 0,
-    ) -> List[Fact]:
+    ) -> list[Fact]:
         """
         Retrieve top-k matching semantic facts.
 
@@ -617,7 +666,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
         owner_type: str,
         owner_id: str,
         k: int = 5,
-    ) -> List[Fact]:
+    ) -> list[Fact]:
         """
         Fallback lexical search over stored document text.
         """
@@ -643,9 +692,9 @@ class SemanticSQLStore(BaseVectorSQLStore):
         def _sync():
             conn = self._conn()
             try:
-                where: List[str] = []
-                params: List[Any] = []
-                term_clauses: List[str] = []
+                where: list[str] = []
+                params: list[Any] = []
+                term_clauses: list[str] = []
                 for term in terms:
                     term_clauses.append(
                         "(LOWER(subject) LIKE ? OR LOWER(predicate) LIKE ? OR LOWER(object) LIKE ?)"
@@ -683,7 +732,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
         owner_id: str,
         limit: Optional[int] = None,
         include_quarantined: bool = False,
-    ) -> List[Fact]:
+    ) -> list[Fact]:
         """
         Return all facts for a given owner scope, ordered by updated_at DESC.
         Quarantined facts are excluded by default; pass include_quarantined=True for management use.
@@ -714,11 +763,11 @@ class SemanticSQLStore(BaseVectorSQLStore):
     # ------------------------------------------------------------------ #
     async def fetch_facts_by_ids(
         self,
-        ids: List[str],
+        ids: list[str],
         tenant_id: Optional[str] = None,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
-    ) -> List[Fact]:
+    ) -> list[Fact]:
         """
         Fetch Fact objects by ID, preserving requested order.
         """
@@ -732,13 +781,13 @@ class SemanticSQLStore(BaseVectorSQLStore):
 
     async def fetch_by_ids(
         self,
-        ids: List[str],
+        ids: list[str],
         *,
         log_context: str = "",
         tenant_id: Optional[str] = None,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
-    ) -> List[Fact]:
+    ) -> list[Fact]:
         """Bulk-fetch facts by ID list within the ownership scope. Returns only non-quarantined records."""
         return await self._fetch_facts_by_ids_sql(
             ids=ids,
@@ -751,12 +800,12 @@ class SemanticSQLStore(BaseVectorSQLStore):
     async def _fetch_facts_by_ids_sql(
         self,
         *,
-        ids: List[str],
+        ids: list[str],
         tenant_id: Optional[str],
         owner_type: Optional[str],
         owner_id: Optional[str],
         log_context: str,
-    ) -> List[Fact]:
+    ) -> list[Fact]:
         if not ids:
             return []
         if not tenant_id or not owner_type or not owner_id:
@@ -780,7 +829,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
                     log_context=log_context,
                 )
                 row_map = {r["id"]: r for r in rows}
-                ordered: List[Fact] = []
+                ordered: list[Fact] = []
                 for fid in ids:
                     row = row_map.get(fid)
                     if row is None:

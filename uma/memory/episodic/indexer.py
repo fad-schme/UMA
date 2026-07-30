@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, List
+from typing import Any
 
 from uma.common.types import Episode
 from uma.adapters.llm.controller import LLMCallContext, generate_text
@@ -61,8 +61,8 @@ class EpisodeIndexer:
         *,
         owner_type: str,
         owner_id: str,
-        turn_entries: List[Any],
-        wm_context: List[Any] | None = None,
+        turn_entries: list[Any],
+        wm_context: list[Any] | None = None,
     ):
         """
         Build a structured Episode from the current turn.
@@ -160,7 +160,7 @@ class EpisodeIndexer:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _wm_to_transcript(self, entries: List[Any]) -> str:
+    def _wm_to_transcript(self, entries: list[Any]) -> str:
         """
         Convert WM entries (WMEntry objects OR dicts) into a unified transcript.
 

@@ -18,7 +18,7 @@ import hashlib
 import logging
 import re
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Optional
 
 from .types import NormalizedSection, DocumentChunk
 
@@ -36,14 +36,14 @@ _PARA_SPLIT_RE = re.compile(r"\n{2,}")
 _SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
 
 
-def _split_paragraphs(text: str) -> List[str]:
+def _split_paragraphs(text: str) -> list[str]:
     if not text:
         return []
     parts = [p.strip() for p in _PARA_SPLIT_RE.split(text) if p and p.strip()]
     return parts or [text.strip()]
 
 
-def _split_paragraphs_with_indices(text: str) -> List[Tuple[int, str]]:
+def _split_paragraphs_with_indices(text: str) -> list[tuple[int, str]]:
     if not text:
         return []
     parts = [p.strip() for p in _PARA_SPLIT_RE.split(text) if p and p.strip()]
@@ -52,7 +52,7 @@ def _split_paragraphs_with_indices(text: str) -> List[Tuple[int, str]]:
     return [(i, p) for i, p in enumerate(parts)]
 
 
-def _split_sentences(text: str) -> List[str]:
+def _split_sentences(text: str) -> list[str]:
     if not text:
         return []
     parts = [s.strip() for s in _SENT_SPLIT_RE.split(text) if s and s.strip()]
@@ -66,11 +66,11 @@ def _ensure_terminal(text: str) -> str:
     return t if _is_terminal(t) else f"{t}."
 
 
-def _group_sentences(sentences: List[str], *, min_sentences: int = 2) -> List[str]:
+def _group_sentences(sentences: list[str], *, min_sentences: int = 2) -> list[str]:
     if not sentences:
         return []
-    groups: List[str] = []
-    buff: List[str] = []
+    groups: list[str] = []
+    buff: list[str] = []
     for s in sentences:
         buff.append(s)
         if len(buff) >= min_sentences:
@@ -136,10 +136,10 @@ def _is_overlap_worthy(text: str) -> bool:
     return True
 
 
-def _merge_short_chunks(chunks: List[str]) -> List[str]:
+def _merge_short_chunks(chunks: list[str]) -> list[str]:
     if not chunks:
         return []
-    merged: List[str] = []
+    merged: list[str] = []
     for ch in chunks:
         if not merged:
             merged.append(ch)
@@ -183,7 +183,7 @@ def validate_chunk_text(text: str) -> None:
         raise ValueError("chunk must end with terminal punctuation")
 
 
-def validate_chunks(chunks: List[DocumentChunk]) -> None:
+def validate_chunks(chunks: list[DocumentChunk]) -> None:
     """Validate DocumentChunk objects against strict chunker rules."""
     for i, ch in enumerate(chunks or []):
         try:
@@ -194,7 +194,7 @@ def validate_chunks(chunks: List[DocumentChunk]) -> None:
             ) from exc
 
 
-def validate_docchunk_structure(chunks: List[DocumentChunk]) -> None:
+def validate_docchunk_structure(chunks: list[DocumentChunk]) -> None:
     """Validate structural metadata for the document/PDF chunking pipeline.
 
     Policy (doc ingestion only):
@@ -264,7 +264,7 @@ def _stable_chunk_id(
     return f"chunk_{h.hexdigest()[:24]}"
 
 
-def finalize_chunks(chunks: List[DocumentChunk]) -> List[DocumentChunk]:
+def finalize_chunks(chunks: list[DocumentChunk]) -> list[DocumentChunk]:
     """Finalize chunk texts with strict rules.
 
     This runs AFTER initial chunk emission but BEFORE any persistence.
@@ -279,14 +279,14 @@ def finalize_chunks(chunks: List[DocumentChunk]) -> List[DocumentChunk]:
     if not chunks:
         return []
 
-    def _apply_strict_rules_to_chunk_objects(group_chunks: List[DocumentChunk]) -> List[DocumentChunk]:
+    def _apply_strict_rules_to_chunk_objects(group_chunks: list[DocumentChunk]) -> list[DocumentChunk]:
         """Apply strict rules while preserving structural metadata.
 
         Merges are performed on DocumentChunk objects, not just text, so paragraph indices
         remain authoritative.
         """
         # Start with cleaned objects (normalized whitespace, drop empties).
-        cleaned: List[DocumentChunk] = []
+        cleaned: list[DocumentChunk] = []
         for ch in group_chunks:
             t = " ".join((ch.text or "").split()).strip()
             if not t:
@@ -342,7 +342,7 @@ def finalize_chunks(chunks: List[DocumentChunk]) -> List[DocumentChunk]:
             )
 
         # 1) Terminal enforcement: merge forward/backward until each chunk ends terminally.
-        terminal_fixed: List[DocumentChunk] = []
+        terminal_fixed: list[DocumentChunk] = []
         carry: DocumentChunk | None = None
         for ch in cleaned:
             if carry is None:
@@ -364,7 +364,7 @@ def finalize_chunks(chunks: List[DocumentChunk]) -> List[DocumentChunk]:
                 terminal_fixed.append(carry)
 
         # 2) Merge short chunks backward.
-        short_fixed: List[DocumentChunk] = []
+        short_fixed: list[DocumentChunk] = []
         for ch in terminal_fixed:
             if not short_fixed:
                 short_fixed.append(ch)
@@ -378,7 +378,7 @@ def finalize_chunks(chunks: List[DocumentChunk]) -> List[DocumentChunk]:
             short_fixed = short_fixed[1:]
 
         # 3) Final pass: merge fragment-like or non-terminal leftovers backward.
-        final: List[DocumentChunk] = []
+        final: list[DocumentChunk] = []
         for ch in short_fixed:
             t = ch.text.strip()
             if not t:
@@ -396,7 +396,7 @@ def finalize_chunks(chunks: List[DocumentChunk]) -> List[DocumentChunk]:
         # Validate texts after merging; drop chunks that are still too short
         # (degenerate single-item groups such as title pages or TOC headers)
         # rather than hard-failing the whole document.
-        valid: List[DocumentChunk] = []
+        valid: list[DocumentChunk] = []
         for i, ch in enumerate(final):
             try:
                 validate_chunk_text(ch.text or "")
@@ -414,12 +414,12 @@ def finalize_chunks(chunks: List[DocumentChunk]) -> List[DocumentChunk]:
     # - Output order is therefore stable as long as the incoming `chunks` list is emitted
     #   in a stable order (e.g., page order from the parser/normalizer).
     # - Avoid introducing upstream iteration over sets or hash-based random ordering.
-    grouped: dict[tuple[str, tuple[int, int]], List[DocumentChunk]] = {}
+    grouped: dict[tuple[str, tuple[int, int]], list[DocumentChunk]] = {}
     for ch in chunks:
         key = (ch.doc_id, ch.page_range)
         grouped.setdefault(key, []).append(ch)
 
-    out: List[DocumentChunk] = []
+    out: list[DocumentChunk] = []
     position = 0
     for (doc_id, page_range), group in grouped.items():
         fixed_chunks = _apply_strict_rules_to_chunk_objects(group)
@@ -454,7 +454,7 @@ def finalize_chunks(chunks: List[DocumentChunk]) -> List[DocumentChunk]:
 
 def _chunk_text(
     text: str, *, chunk_size_tokens: int, overlap_tokens: int
-) -> List[tuple[str, int, int]]:
+) -> list[tuple[str, int, int]]:
     if not text:
         return []
     if not isinstance(chunk_size_tokens, int):
@@ -476,7 +476,7 @@ def _chunk_text(
         logger.warning("overlap_tokens >= target_tokens; clamped to target_tokens - 1")
 
     paras = _split_paragraphs_with_indices(text)
-    units: List[_ChunkUnit] = []
+    units: list[_ChunkUnit] = []
     for para_index, p in paras:
         p = _ensure_terminal(p)
         if _estimate_tokens(p) <= target_tokens:
@@ -504,12 +504,12 @@ def _chunk_text(
             ]
         )
 
-    chunks: List[tuple[str, int, int]] = []
-    current: List[_ChunkUnit] = []
+    chunks: list[tuple[str, int, int]] = []
+    current: list[_ChunkUnit] = []
     current_tokens = 0
     current_para_count = 0
 
-    def _emit_current(curr: List[_ChunkUnit]) -> None:
+    def _emit_current(curr: list[_ChunkUnit]) -> None:
         if not curr:
             return
         chunk_text = " ".join([u.text for u in curr]).strip()
@@ -529,10 +529,10 @@ def _chunk_text(
         chunks.append((chunk_text, p_start, p_end))
 
     def _overlap_from_current(
-        curr: List[_ChunkUnit],
+        curr: list[_ChunkUnit],
         *,
         overlap_tokens: int,
-    ) -> List[_ChunkUnit]:
+    ) -> list[_ChunkUnit]:
         if overlap_tokens <= 0 or not curr:
             return []
         # Prefer last full paragraph when available.
@@ -540,7 +540,7 @@ def _chunk_text(
             if unit.is_paragraph and _is_overlap_worthy(unit.text):
                 return [unit]
         # Otherwise, include trailing sentence groups until we cross overlap_tokens.
-        picked: List[_ChunkUnit] = []
+        picked: list[_ChunkUnit] = []
         total_tokens = 0
         for unit in reversed(curr):
             if _is_overlap_worthy(unit.text):
@@ -593,11 +593,11 @@ def _chunk_text(
 
 
 def chunk_sections(
-    sections: List[NormalizedSection],
+    sections: list[NormalizedSection],
     *,
     chunk_size_tokens: int,
     overlap_tokens: int,
-) -> List[DocumentChunk]:
+) -> list[DocumentChunk]:
     """
     Split sections into retrieval chunks.
 
@@ -608,7 +608,7 @@ def chunk_sections(
     if not isinstance(chunk_size_tokens, int) or not isinstance(overlap_tokens, int):
         raise ValueError("chunk_sections: chunk_size_tokens/overlap_tokens must be ints")
 
-    chunks: List[DocumentChunk] = []
+    chunks: list[DocumentChunk] = []
     position = 0
 
     for sec in sections:

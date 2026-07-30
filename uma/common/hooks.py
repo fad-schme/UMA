@@ -8,7 +8,7 @@ isolation — a hook error never breaks the agent flow.
 from __future__ import annotations
 
 import logging
-from typing import Awaitable, Callable, List
+from typing import Awaitable, Callable
 
 
 AsyncHook = Callable[..., Awaitable[None]]
@@ -20,10 +20,10 @@ class UMAHooks:
     """Async lifecycle hooks for UMA turn processing."""
 
     def __init__(self):
-        self.before_turn: List[AsyncHook] = []
-        self.after_turn: List[AsyncHook] = []
+        self.before_turn: list[AsyncHook] = []
+        self.after_turn: list[AsyncHook] = []
 
-    async def run_hooks(self, group: List[AsyncHook], *args, **kwargs) -> None:
+    async def run_hooks(self, group: list[AsyncHook], *args, **kwargs) -> None:
         for hook in group:
             try:
                 await hook(*args, **kwargs)

@@ -13,7 +13,7 @@ Modules:
     - summarizer.py    → LLM-based cluster summarization
     - pruner.py        → Forgetting logic
 
-This subsystem is OPTIONAL. UMA runs without it, but consolidation 
+This subsystem is OPTIONAL. UMA runs without it, but consolidation
 improves long-term quality and reduces data bloat.
 """
 

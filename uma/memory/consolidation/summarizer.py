@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import List
 
 from uma.adapters.llm.base import LLMInterface
 
@@ -44,7 +43,7 @@ class ConsolidationSummarizer:
     # ------------------------------------------------------------------
     # PUBLIC API
     # ------------------------------------------------------------------
-    async def summarize_cluster(self, texts: List[str]) -> str:
+    async def summarize_cluster(self, texts: list[str]) -> str:
         """
         Summarize multiple related episodes into a distilled semantic memory.
 
@@ -132,7 +131,7 @@ class ConsolidationSummarizer:
         t = re.sub(r"\s+", " ", t)
         return t
 
-    def _dedupe(self, items: List[str]) -> List[str]:
+    def _dedupe(self, items: list[str]) -> list[str]:
         """Deduplicate while preserving order."""
         seen = set()
         out = []

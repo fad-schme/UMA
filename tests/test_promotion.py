@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from uma.common.types import (
     AgentProfile,
     Fact,
-    QualifierDecision,
     RuntimeContext,
     SCOPE_MODEL_VERSION,
 )

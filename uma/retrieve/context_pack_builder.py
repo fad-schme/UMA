@@ -5,7 +5,7 @@ context_pack_builder.py
 Transforms UMA retrieval output from the bound runtime/request-handle path into a
 RAG-ready structured context pack.
 
-This module does NOT generate prompts. It produces structured, 
+This module does NOT generate prompts. It produces structured,
 machine-readable artifacts for:
     • RAG input pipelines
     • multi-document retrieval re-ranking
@@ -15,7 +15,7 @@ machine-readable artifacts for:
 
 from __future__ import annotations
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 import re
 import logging
 
@@ -39,12 +39,12 @@ from uma.retrieve.user_query_helper import extract_keywords_and_phrases
 class ContextPackBuilder:
     """
     Convert UMA memory into a standardized, RAG-ready context pack.
-    
+
     The output is deterministic, structured, and LLM-agnostic.
     """
 
     @staticmethod
-    def build(query: str, ctx: Dict[str, List[Any]]) -> Dict[str, Any]:
+    def build(query: str, ctx: dict[str, list[Any]]) -> dict[str, Any]:
         """
         Create a structured context pack.
 
@@ -52,7 +52,7 @@ class ContextPackBuilder:
         ----------
         query : str
             The natural-language query used to retrieve memory.
-        
+
         ctx : dict
             Full memory context returned by `UMAMemory.retrieve_context(...)`, e.g.:
 
@@ -118,7 +118,7 @@ class ContextPackBuilder:
 
     @staticmethod
     def render_snippet(
-        pack: Dict[str, Any],
+        pack: dict[str, Any],
         context_cfg: Optional["RetrievalContextConfig"] = None,
     ) -> str:
         """
@@ -135,7 +135,7 @@ class ContextPackBuilder:
 
     @staticmethod
     async def render_snippet_async(
-        pack: Dict[str, Any],
+        pack: dict[str, Any],
         context_cfg: Optional["RetrievalContextConfig"] = None,
         llm: Any = None,
     ) -> str:
@@ -347,8 +347,8 @@ def _pack_skills(pack, ctx, *, owner_type, owner_id, trace_id):
 
 
 def _pack_graph(
-    pack: Dict[str, Any],
-    ctx: Dict[str, Any],
+    pack: dict[str, Any],
+    ctx: dict[str, Any],
     *,
     owner_type: Any,
     owner_id: Any,
@@ -370,8 +370,8 @@ def _pack_graph(
 
 
 def _pack_trace_and_confidence(
-    pack: Dict[str, Any],
-    ctx: Dict[str, Any],
+    pack: dict[str, Any],
+    ctx: dict[str, Any],
     *,
     owner_type: Any,
     owner_id: Any,
@@ -407,7 +407,7 @@ def _basename(path: Any) -> str:
     return ""
 
 
-def _collect_source_filenames(pack: Dict[str, Any], final_snippets: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+def _collect_source_filenames(pack: dict[str, Any], final_snippets: Optional[list[dict[str, Any]]] = None) -> list[str]:
     """
     Collect unique source filenames (basenames only) in stable order.
     Preference:
@@ -415,7 +415,7 @@ def _collect_source_filenames(pack: Dict[str, Any], final_snippets: Optional[Lis
       2) pack chunks (chunks[*].source_path)
     """
     seen: set[str] = set()
-    out: List[str] = []
+    out: list[str] = []
 
     # 1) from refined snippets (most accurate)
     for sn in final_snippets or []:
@@ -451,10 +451,10 @@ def _collect_source_filenames(pack: Dict[str, Any], final_snippets: Optional[Lis
 
 
 def _append_sources(
-    lines: List[str],
-    pack: Dict[str, Any],
+    lines: list[str],
+    pack: dict[str, Any],
     *,
-    final_snippets: Optional[List[Dict[str, Any]]] = None,
+    final_snippets: Optional[list[dict[str, Any]]] = None,
 ) -> None:
     sources = _collect_source_filenames(pack, final_snippets=final_snippets)
     if not sources:
@@ -502,7 +502,7 @@ def _extract_relevant_excerpt(text: str, query_text: str, max_chars: int = 240) 
     return trim_to_sentence_boundary(excerpt, max_chars=max_chars)
 
 
-def _snippet_quality_ok(snippet: str, terms: List[str], *, require_terms: bool) -> bool:
+def _snippet_quality_ok(snippet: str, terms: list[str], *, require_terms: bool) -> bool:
     s = (snippet or "").strip()
     if not s:
         return False
@@ -557,17 +557,17 @@ def _starts_like_fragment(text: str) -> bool:
 
 
 def _collect_chunk_snippets(
-    pack: Dict[str, Any],
+    pack: dict[str, Any],
     cfg: "RetrievalContextConfig",
     query_text: str,
-    facts: List[Dict[str, Any]],
-) -> List[str]:
+    facts: list[dict[str, Any]],
+) -> list[str]:
     chunks = pack.get("chunks", []) or []
     if not chunks:
         return []
 
     chunks = _group_adjacent_chunks(chunks)
-    preferred_ids: List[str] = []
+    preferred_ids: list[str] = []
     for fact in (facts or []):
         src_ids = get_attr_or_key(fact, "source_ids")
         if isinstance(src_ids, list):
@@ -581,7 +581,7 @@ def _collect_chunk_snippets(
         cid = ch.get("id") if isinstance(ch, dict) else None
         if cid:
             chunk_by_id[str(cid)] = ch
-    ordered_chunks: List[dict] = []
+    ordered_chunks: list[dict] = []
     for cid in preferred_ids:
         ch = chunk_by_id.get(cid)
         if ch is not None:
@@ -599,7 +599,7 @@ def _collect_chunk_snippets(
     # Scan up to 2x the budget to find enough quality snippets.
     scan_limit = max(cfg.max_chunks * 2, 10)
     seen_chunk_text = set()
-    snippets: List[str] = []
+    snippets: list[str] = []
     seen_snippets: set[str] = set()
     added = 0
     for ch in ordered_chunks[:scan_limit]:
@@ -644,11 +644,11 @@ def _collect_chunk_snippets(
     return snippets
 
 
-def _collect_raw_chunk_texts(chunks: List[Any], limit: int) -> List[str]:
+def _collect_raw_chunk_texts(chunks: list[Any], limit: int) -> list[str]:
     if not chunks:
         return []
     seen: set[str] = set()
-    out: List[str] = []
+    out: list[str] = []
     for ch in chunks:
         text = get_attr_or_key(ch, "text") or get_attr_or_key(ch, "chunk") or get_attr_or_key(ch, "content")
         if not text:
@@ -665,11 +665,11 @@ def _collect_raw_chunk_texts(chunks: List[Any], limit: int) -> List[str]:
 
 
 def _render_common_sections(
-    pack: Dict[str, Any],
+    pack: dict[str, Any],
     cfg: "RetrievalContextConfig",
     query_text: str,
-) -> tuple[List[str], List[Dict[str, Any]]]:
-    lines: List[str] = []
+) -> tuple[list[str], list[dict[str, Any]]]:
+    lines: list[str] = []
 
     wm = pack.get("working_memory", [])
     lines.append("Working memory:")
@@ -696,7 +696,7 @@ def _render_common_sections(
     facts = pack.get("facts", []) or []
 
     # Normalize facts into dicts (some paths may pass objects)
-    norm_facts: List[Dict[str, Any]] = []
+    norm_facts: list[dict[str, Any]] = []
     for f in facts:
         if not f:
             continue
@@ -749,7 +749,7 @@ def _render_common_sections(
 
             # Final deterministic bullet line.
             # Format: - [src:<chunk_id>] <subject> <predicate> <object> conf=0.xx
-            parts: List[str] = []
+            parts: list[str] = []
             if src:
                 parts.append(f"[src:{src}]")
             if subj:
@@ -768,12 +768,12 @@ def _render_common_sections(
 
 
 def _build_fallback_snippets(
-    pack: Dict[str, Any],
+    pack: dict[str, Any],
     cfg: "RetrievalContextConfig",
     query_text: str,
-    facts: List[Dict[str, Any]],
+    facts: list[dict[str, Any]],
     refiner_failed: bool,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     chunk_snippets = _collect_chunk_snippets(pack, cfg, query_text, facts)
     final_snippets = [{"text": s} for s in chunk_snippets]
     if cfg.snippet_refiner_available and refiner_failed:
@@ -790,17 +790,17 @@ def _build_fallback_snippets(
 
 
 async def _compute_final_snippets(
-    pack: Dict[str, Any],
+    pack: dict[str, Any],
     cfg: "RetrievalContextConfig",
     query_text: str,
-    facts: List[Dict[str, Any]],
+    facts: list[dict[str, Any]],
     *,
     llm: Any,
     owner_type: Any,
     owner_id: Any,
     trace_id: Any,
-) -> List[Dict[str, Any]]:
-    final_snippets: List[Dict[str, Any]] = []
+) -> list[dict[str, Any]]:
+    final_snippets: list[dict[str, Any]] = []
     refiner_failed = False
 
     # CR3: severity gate. A flagged query (medium / high) skips the LLM
@@ -836,7 +836,7 @@ async def _compute_final_snippets(
         )
 
     if final_snippets:
-        bounded: List[Dict[str, Any]] = []
+        bounded: list[dict[str, Any]] = []
         for sn in final_snippets:
             if not isinstance(sn, dict):
                 continue
@@ -853,11 +853,11 @@ async def _compute_final_snippets(
 
 
 def _append_chunk_snippets(
-    lines: List[str],
-    pack: Dict[str, Any],
+    lines: list[str],
+    pack: dict[str, Any],
     cfg: "RetrievalContextConfig",
     query_text: str,
-    facts: List[Dict[str, Any]],
+    facts: list[dict[str, Any]],
     *,
     heading: str,
 ) -> None:
@@ -870,8 +870,8 @@ def _append_chunk_snippets(
 
 
 def _append_skills_and_graph(
-    lines: List[str],
-    pack: Dict[str, Any],
+    lines: list[str],
+    pack: dict[str, Any],
     cfg: "RetrievalContextConfig",
 ) -> None:
     skills = pack.get("skills", [])
@@ -892,7 +892,7 @@ def _append_skills_and_graph(
             lines.append(f"- {node}")
 
 
-def _normalize_chunk(chunk: Any) -> Dict[str, Any]:
+def _normalize_chunk(chunk: Any) -> dict[str, Any]:
     if isinstance(chunk, dict):
         return chunk
     # Internal UMA runtime expects Chunk objects; this is the serialization boundary.
@@ -912,25 +912,26 @@ def _normalize_chunk(chunk: Any) -> Dict[str, Any]:
         }
 
 
-def _group_adjacent_chunks(chunks: List[Any]) -> List[Dict[str, Any]]:
+def _group_adjacent_chunks(chunks: list[Any]) -> list[dict[str, Any]]:
     if not chunks:
         return []
     normalized = [_normalize_chunk(c) for c in chunks]
     # Sort by doc_id then position to enable adjacency grouping.
-    def _pos(ch: Dict[str, Any]) -> int:
+    def _pos(ch: dict[str, Any]) -> int:
         try:
             return int(ch.get("position") or 0)
-        except Exception:
+        except Exception as exc:
+            logger.debug("_group_adjacent_chunks: invalid chunk position: %s", exc, exc_info=True)
             return 0
 
     sorted_chunks = sorted(
         normalized,
         key=lambda c: (str(c.get("doc_id") or ""), _pos(c)),
     )
-    grouped: List[Dict[str, Any]] = []
-    current: Dict[str, Any] | None = None
-    current_ids: List[str] = []
-    current_positions: List[int] = []
+    grouped: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    current_ids: list[str] = []
+    current_positions: list[int] = []
 
     for ch in sorted_chunks:
         doc_id = ch.get("doc_id")
@@ -987,7 +988,7 @@ def _group_adjacent_chunks(chunks: List[Any]) -> List[Dict[str, Any]]:
     return grouped
 
 
-def _fact_topics(fact: Dict[str, Any]) -> List[str]:
+def _fact_topics(fact: dict[str, Any]) -> list[str]:
     meta = get_attr_or_key(fact, "meta") or {}
     if not isinstance(meta, dict):
         return []

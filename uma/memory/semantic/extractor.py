@@ -45,7 +45,7 @@ Implementation notes
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from uma.adapters.llm.base import LLMInterface
 from uma.common.types import Fact
@@ -94,7 +94,7 @@ class FactExtractor:
         max_facts: int = 6,
         max_tokens: int = 450,
         extra_meta: Optional[dict] = None,
-    ) -> List[Fact]:
+    ) -> list[Fact]:
         """
         Extract stable, long-term facts about the user.
 
@@ -173,7 +173,7 @@ class FactExtractor:
             return []
 
         now = datetime.now(timezone.utc)
-        out: List[Fact] = []
+        out: list[Fact] = []
 
         turn_id = None
         if isinstance(extra_meta, dict) and extra_meta.get("turn_id"):
@@ -214,7 +214,7 @@ class FactExtractor:
             if not obj_n:
                 continue
 
-            sid_list: List[str] = []
+            sid_list: list[str] = []
             if isinstance(source_ids, list):
                 sid_list = [str(s) for s in source_ids if s is not None]
 
@@ -259,11 +259,11 @@ class FactExtractor:
     # ---------------------------------------------------------------------
     @staticmethod
     def select_chunks_for_fact_extraction(
-        chunks: List[DocumentChunk],
+        chunks: list[DocumentChunk],
         *,
         max_chunks: Optional[int] = None,
         max_per_page: Optional[int] = None,
-    ) -> List[DocumentChunk]:
+    ) -> list[DocumentChunk]:
         return utils.select_chunks_for_fact_extraction(chunks, max_chunks=max_chunks, max_per_page=max_per_page)
 
     # ---------------------------------------------------------------------
@@ -271,7 +271,7 @@ class FactExtractor:
     # ---------------------------------------------------------------------
     async def extract_chunk_facts_batch(
         self,
-        chunks: List[DocumentChunk],
+        chunks: list[DocumentChunk],
         *,
         owner_type: str,
         owner_id: str,
@@ -284,7 +284,7 @@ class FactExtractor:
         max_facts_per_chunk: int = utils.DEFAULT_MAX_FACTS_PER_CHUNK,
         object_max_words: int = utils.DEFAULT_OBJECT_MAX_WORDS,
         max_fact_tokens: int = utils.DEFAULT_MAX_FACT_TOKENS,
-    ) -> tuple[List[Fact], int]:
+    ) -> tuple[list[Fact], int]:
         """
         Extract KB-grade facts from chunks using batch calls.
 
@@ -319,12 +319,12 @@ class FactExtractor:
         )
 
         now = datetime.now(timezone.utc)
-        out: List[Fact] = []
+        out: list[Fact] = []
         batch_failures = 0
         forced_fallbacks = 0
 
         for batch_idx, batch in enumerate(batches):
-            batch_for_llm: List[DocumentChunk] = []
+            batch_for_llm: list[DocumentChunk] = []
             for c in batch:
                 t = (c.text or "").strip()
                 if not t:
@@ -343,7 +343,7 @@ class FactExtractor:
 
             items = [{"chunk_id": c.chunk_id, "text": (c.text or "")} for c in batch_for_llm]
 
-            data: Optional[Dict[str, Any]] = None
+            data: Optional[dict[str, Any]] = None
             try:
                 if logger.isEnabledFor(logging.DEBUG):
                     approx_chars = sum(len((it.get("text") or "")) for it in items)
@@ -390,7 +390,7 @@ class FactExtractor:
 
             for c in batch_for_llm:
                 payload = chunks_payload.get(c.chunk_id)
-                extracted_for_chunk: List[Fact] = []
+                extracted_for_chunk: list[Fact] = []
 
                 # 1) parse batch payload if present
                 if isinstance(payload, dict):
@@ -480,7 +480,7 @@ class FactExtractor:
         object_max_words: int = utils.DEFAULT_OBJECT_MAX_WORDS,
         max_fact_tokens: int = utils.DEFAULT_MAX_FACT_TOKENS,
         now: Optional[datetime] = None,
-    ) -> List[Fact]:
+    ) -> list[Fact]:
         if chunk is None:
             return []
         if owner_type not in ("user", "agent", "workspace"):
@@ -593,7 +593,7 @@ class FactExtractor:
 
     async def extract_chunk_facts(
         self,
-        chunks: List[DocumentChunk],
+        chunks: list[DocumentChunk],
         *,
         owner_type: str,
         owner_id: str,
@@ -604,7 +604,7 @@ class FactExtractor:
         max_facts_per_chunk: int = utils.DEFAULT_MAX_FACTS_PER_CHUNK,
         object_max_words: int = utils.DEFAULT_OBJECT_MAX_WORDS,
         max_fact_tokens: int = utils.DEFAULT_MAX_FACT_TOKENS,
-    ) -> List[Fact]:
+    ) -> list[Fact]:
         """
         Deterministic per-chunk extraction (no batching).
         Intended primarily for debugging or narrow use cases.
@@ -612,7 +612,7 @@ class FactExtractor:
         if not chunks:
             return []
         now = datetime.now(timezone.utc)
-        out: List[Fact] = []
+        out: list[Fact] = []
         ordered = sorted(chunks, key=lambda c: (int(getattr(c, "position", 0) or 0), getattr(c, "chunk_id", "")))
         for ch in ordered:
             out.extend(

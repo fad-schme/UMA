@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Literal, Optional, Sequence, Tuple
+from typing import Any, Literal, Optional, Sequence
 
 from uma.common.storage_metadata import (
     EPISODIC_LANE,
@@ -54,15 +54,15 @@ class RetrievalPlan:
     query_text: str
     query_intent: str
     memory_intent: Optional[str]
-    requested_lanes: Tuple[str, ...]
-    participating_lanes: Tuple[str, ...]
-    excluded_lanes: Tuple[Dict[str, str], ...]
-    active_domains: Tuple[str, ...]
-    available_lanes: Tuple[str, ...]
+    requested_lanes: tuple[str, ...]
+    participating_lanes: tuple[str, ...]
+    excluded_lanes: tuple[dict[str, str], ...]
+    active_domains: tuple[str, ...]
+    available_lanes: tuple[str, ...]
     requires_compiled_memory: bool
     evidence_expansion: bool
 
-    def to_trace(self) -> Dict[str, Any]:
+    def to_trace(self) -> dict[str, Any]:
         return {
             "event": "lane_plan",
             "product": self.product,
@@ -144,7 +144,7 @@ def _context_requested_lanes(
     query_text: str,
     query_intent: str,
     lane_filter: Optional[Sequence[str]],
-) -> Tuple[str, ...]:
+) -> tuple[str, ...]:
     explicit = _normalize_lanes(lane_filter or ())
     if explicit:
         return explicit
@@ -162,7 +162,7 @@ def _memory_requested_lanes(
     query_text: str,
     query_intent: str,
     memory_intent: Optional[str],
-) -> Tuple[str, ...]:
+) -> tuple[str, ...]:
     requested = [WIKI_LANE, RAW_LANE, SEMANTIC_LANE]
     normalized_memory_intent = str(memory_intent or "").strip().lower()
     if (
@@ -188,7 +188,7 @@ def _build_excluded_lanes(
     participating: Sequence[str],
     supported: Sequence[str],
     lane_filter: Optional[Sequence[str]],
-) -> Tuple[Dict[str, str], ...]:
+) -> tuple[dict[str, str], ...]:
     explicit_filter = bool(_normalize_lanes(lane_filter or ()))
     requested_set = set(requested)
     participating_set = set(participating)
@@ -213,7 +213,7 @@ def _build_excluded_lanes(
     return tuple(excluded)
 
 
-def _domains_for_lanes(lanes: Sequence[str]) -> Tuple[str, ...]:
+def _domains_for_lanes(lanes: Sequence[str]) -> tuple[str, ...]:
     domains = []
     seen = set()
     for lane in lanes:
@@ -225,7 +225,7 @@ def _domains_for_lanes(lanes: Sequence[str]) -> Tuple[str, ...]:
     return tuple(domains)
 
 
-def _normalize_lanes(lanes: Sequence[str]) -> Tuple[str, ...]:
+def _normalize_lanes(lanes: Sequence[str]) -> tuple[str, ...]:
     normalized = []
     seen = set()
     for lane in lanes or ():

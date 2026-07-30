@@ -31,7 +31,7 @@ import asyncio
 from datetime import datetime, timezone
 import logging
 import hashlib
-from typing import Any, Dict, Optional, List, Set
+from typing import Any, Optional
 from uma.memory.promotion import PromotionPolicy
 from uma.adapters.observability.context import request_context
 from uma.adapters.observability.metrics import increment, timed
@@ -43,14 +43,15 @@ from uma.common.injection_scan import scan_artifact_text
 logger = logging.getLogger(__name__)
 
 
-def _get_fact_embedding(fact: Any) -> Optional[List[float]]:
+def _get_fact_embedding(fact: Any) -> Optional[list[float]]:
     """Extract an embedding from fact.meta if present."""
     try:
         meta = getattr(fact, "meta", None) or {}
         emb = meta.get("embedding")
         if isinstance(emb, list) and emb:
             return [float(x) for x in emb]
-    except Exception:
+    except Exception as exc:
+        logger.debug("_get_fact_embedding: invalid fact embedding: %s", exc, exc_info=True)
         return None
     return None
 
@@ -106,7 +107,7 @@ class MemoryPipeline:
         # mid-flight (asyncio quirk) and so tests / shutdown paths can
         # await pending work via ``await_pending_background``. Each task
         # removes itself from the set via done_callback.
-        self._background_tasks: Set[asyncio.Task] = set()
+        self._background_tasks: set[asyncio.Task] = set()
         if promotion_policy is None:
             logger.info("PromotionPolicy disabled (none provided).")
         else:
@@ -129,7 +130,7 @@ class MemoryPipeline:
         session_id: str,
         tenant_id: str = DEFAULT_TENANT_ID,
         workspace_id: Optional[str] = None,
-        extra_meta: Optional[Dict[str, Any]] = None,
+        extra_meta: Optional[dict[str, Any]] = None,
     ) -> None:
         """
         Perform memory updates for a single turn using:
@@ -524,11 +525,11 @@ class MemoryPipeline:
         user_id: str,
         user_msg: str,
         reply: str,
-        extra_meta: Dict[str, Any],
+        extra_meta: dict[str, Any],
     ) -> None:
         if not self.hooks or not hasattr(self.hooks, "run_after_turn"):
             return
-        
+
         try:
             await self.hooks.run_after_turn(
                 user_id=user_id,
@@ -575,7 +576,7 @@ class MemoryPipeline:
             workspace_id=resolved_workspace_id,
             session_id=resolved_session_id,
         )
-    
+
 
     def _resolve_working_memory_scope(
         self,
@@ -644,7 +645,7 @@ class MemoryPipeline:
         turn_id: str,
         working_memory_scope: Optional[SessionScope],
         turn_context: RuntimeContext,
-        extra_meta: Optional[Dict[str, Any]] = None,
+        extra_meta: Optional[dict[str, Any]] = None,
     ) -> Any:
         epi = getattr(self.mem, "episodic_core", None)
         wm = getattr(self.mem, "working_memory", None)
@@ -683,8 +684,8 @@ class MemoryPipeline:
         *,
         turn_id: str,
         turn_context: RuntimeContext,
-        extra_meta: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, List[str]]:
+        extra_meta: Optional[dict[str, Any]] = None,
+    ) -> dict[str, list[str]]:
         chunk_core = getattr(self.mem, "chunk_core", None)
         embedder = getattr(self.mem, "embedder", None)
         if chunk_core is None or embedder is None:
@@ -695,7 +696,7 @@ class MemoryPipeline:
         doc_id = f"turn:{turn_context.session_id}:{turn_id}"
         now = datetime.now(timezone.utc)
         caller_meta = {k: v for k, v in (extra_meta or {}).items() if k not in ("owner_type", "owner_id", "tenant_id", "session_id")} or None
-        rows: List[tuple[str, Chunk]] = []
+        rows: list[tuple[str, Chunk]] = []
         for position, (role, text) in enumerate((("user", user_msg), ("assistant", assistant_reply))):
             if not isinstance(text, str) or not text.strip():
                 continue
@@ -709,7 +710,7 @@ class MemoryPipeline:
                     session_id=turn_context.session_id,
                 )
             )
-            chunk_meta: Dict[str, Any] = {
+            chunk_meta: dict[str, Any] = {
                 "text_hash": text_hash,
                 "source_kind": "turn",
                 "source_role": role,
@@ -759,7 +760,7 @@ class MemoryPipeline:
             logger.exception("MemoryPipeline: turn chunk embedding failed.")
             return {"user_source_ids": [], "assistant_source_ids": []}
 
-        persisted: Dict[str, List[str]] = {"user_source_ids": [], "assistant_source_ids": []}
+        persisted: dict[str, list[str]] = {"user_source_ids": [], "assistant_source_ids": []}
         for (role, chunk), vec in zip(rows, vectors):
             try:
                 ok = await chunk_core.upsert_chunk(chunk, vec)
@@ -784,7 +785,7 @@ class MemoryPipeline:
         *,
         turn_id: Optional[str],
         turn_context: RuntimeContext,
-        source_ids: Optional[List[str]] = None,
+        source_ids: Optional[list[str]] = None,
         source_kind: str = "turn_user",
     ) -> Any:
         sem = getattr(self.mem, "semantic_core", None)

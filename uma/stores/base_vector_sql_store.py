@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Optional, Sequence
 
 from .base_sql_store import BaseSQLStore
 from ..adapters.vector.base import VectorIndex
@@ -129,15 +129,15 @@ class BaseVectorSQLStore(BaseSQLStore):
 
     async def _vector_search_ids(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         k: int,
         *,
         tenant_id: str,
         owner_type: str,
         owner_id: str,
-        extra_filters: Optional[Dict[str, Any]] = None,
+        extra_filters: Optional[dict[str, Any]] = None,
         log_context: str = "",
-    ) -> List[Tuple[str, float]]:
+    ) -> list[tuple[str, float]]:
         """
         Run a vector search and return a ranked list of (id, score).
 
@@ -200,7 +200,7 @@ class BaseVectorSQLStore(BaseSQLStore):
             return []
 
         # Validate format: [(id, score), ...]
-        valid: List[Tuple[str, float]] = []
+        valid: list[tuple[str, float]] = []
         seen: set[str] = set()
         for pair in id_score_pairs:
             try:
@@ -233,7 +233,7 @@ class BaseVectorSQLStore(BaseSQLStore):
 
         return valid
 
-    def _attach_vector_scores(self, items: Sequence[Any], id_score_pairs: Sequence[Tuple[str, float]]) -> None:
+    def _attach_vector_scores(self, items: Sequence[Any], id_score_pairs: Sequence[tuple[str, float]]) -> None:
         """
         Attach vector backend scores to each item's `.meta` dict under `vector_score`.
 
@@ -242,7 +242,7 @@ class BaseVectorSQLStore(BaseSQLStore):
         if not items or not id_score_pairs:
             return
 
-        score_by_id: Dict[str, float] = {sid: float(score) for sid, score in id_score_pairs if sid}
+        score_by_id: dict[str, float] = {sid: float(score) for sid, score in id_score_pairs if sid}
         if not score_by_id:
             return
 
@@ -272,12 +272,12 @@ class BaseVectorSQLStore(BaseSQLStore):
 
     async def _fetch_ranked_rows_by_ids(
         self,
-        ids: List[str],
+        ids: list[str],
         log_context: str = "",
         tenant_id: Optional[str] = None,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """
         Fetch rows by primary key in caller-supplied order, owner- and
         tenant-scoped, excluding quarantined records.
@@ -309,7 +309,7 @@ class BaseVectorSQLStore(BaseSQLStore):
 
         ctx = f" [{log_context}]" if log_context else ""
 
-        def _sync() -> Dict[str, Any]:
+        def _sync() -> dict[str, Any]:
             conn = self._conn()
             try:
                 placeholders = ",".join("?" for _ in ids)
@@ -323,7 +323,7 @@ class BaseVectorSQLStore(BaseSQLStore):
                     f"AND tenant_id=? AND owner_type=? AND owner_id=? "
                     f"AND quarantined_at IS NULL"
                 )
-                params: List[Any] = list(ids) + [tenant_id, owner_type, owner_id]
+                params: list[Any] = list(ids) + [tenant_id, owner_type, owner_id]
                 rows = self._query_all(conn, sql, params, log_context)
                 return {r[id_col]: r for r in rows}
             finally:
@@ -350,15 +350,15 @@ class BaseVectorSQLStore(BaseSQLStore):
 
     async def _semantic_search(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         k: int = 10,
         *,
         tenant_id: str,
         owner_type: str,
         owner_id: str,
-        extra_filters: Optional[Dict[str, Any]] = None,
+        extra_filters: Optional[dict[str, Any]] = None,
         log_context: str = "",
-    ) -> List[Any]:
+    ) -> list[Any]:
         """
         Semantic search pipeline:
 
@@ -414,15 +414,15 @@ class BaseVectorSQLStore(BaseSQLStore):
 
     async def search_ids(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         *,
         tenant_id: str,
         owner_type: str,
         owner_id: str,
         k: int = 10,
-        extra_filters: Optional[Dict[str, Any]] = None,
+        extra_filters: Optional[dict[str, Any]] = None,
         log_context: str = "",
-    ) -> List[Tuple[str, float]]:
+    ) -> list[tuple[str, float]]:
         """
         Return ranked (id, score) pairs for a vector query (no SQL fetch).
 
@@ -453,13 +453,13 @@ class BaseVectorSQLStore(BaseSQLStore):
 
     async def fetch_by_ids(
         self,
-        ids: List[str],
+        ids: list[str],
         *,
         tenant_id: Optional[str] = None,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
         log_context: str = "",
-    ) -> List[Any]:
+    ) -> list[Any]:
         """
         Fetch rows by IDs in ranked order (SQL authoritative payload).
         """
@@ -505,7 +505,7 @@ class BaseVectorSQLStore(BaseSQLStore):
         owner_type: str,
         owner_id: str,
         quarantined_at: str,
-        audit_entry: Dict[str, Any],
+        audit_entry: dict[str, Any],
     ) -> bool:
         """Set quarantined_at and append an audit log entry. Returns True if updated."""
         self._require_scope(tenant_id, owner_type, owner_id)
@@ -554,7 +554,7 @@ class BaseVectorSQLStore(BaseSQLStore):
         tenant_id: Optional[str],
         owner_type: str,
         owner_id: str,
-        audit_entry: Dict[str, Any],
+        audit_entry: dict[str, Any],
     ) -> bool:
         """Clear quarantined_at and append an audit log entry. Returns True if updated."""
         self._require_scope(tenant_id, owner_type, owner_id)

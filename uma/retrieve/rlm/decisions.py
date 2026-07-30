@@ -23,7 +23,7 @@ The controller may:
 """
 
 import logging
-from typing import Annotated, Any, Dict, List, Literal, Optional, Set, Tuple, Union
+from typing import Annotated, Any, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -63,25 +63,25 @@ class _RetrievalActionBase(BaseModel):
 class SearchSemanticAction(_RetrievalActionBase):
     action: Literal["search_semantic"] = "search_semantic"
     k: int = Field(ge=1, le=500)
-    filters: Optional[Dict[str, Any]] = None
+    filters: Optional[dict[str, Any]] = None
 
 
 class FetchMoreFactsAction(_RetrievalActionBase):
     action: Literal["fetch_more_facts"] = "fetch_more_facts"
     k: int = Field(ge=1, le=500)
     predicate: str = Field(min_length=1)
-    filters: Optional[Dict[str, Any]] = None
+    filters: Optional[dict[str, Any]] = None
 
 
 class FetchFactsAction(_RetrievalActionBase):
     action: Literal["fetch_facts"] = "fetch_facts"
-    ids: List[str] = Field(min_length=1, max_length=MAX_FACT_IDS)
+    ids: list[str] = Field(min_length=1, max_length=MAX_FACT_IDS)
 
 
 class SearchEpisodicAction(_RetrievalActionBase):
     action: Literal["search_episodic"] = "search_episodic"
     k: int = Field(ge=1, le=500)
-    filters: Optional[Dict[str, Any]] = None
+    filters: Optional[dict[str, Any]] = None
 
 
 class EpisodicClustersAction(_RetrievalActionBase):
@@ -92,19 +92,19 @@ class EpisodicClustersAction(_RetrievalActionBase):
 class FetchEpisodeClustersAction(_RetrievalActionBase):
     action: Literal["fetch_episode_clusters"] = "fetch_episode_clusters"
     k: int = Field(ge=1, le=500)
-    time_range: Optional[Dict[str, Any]] = None
+    time_range: Optional[dict[str, Any]] = None
     min_salience: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
 
 class SearchProceduralAction(_RetrievalActionBase):
     action: Literal["search_procedural"] = "search_procedural"
     k: int = Field(ge=1, le=500)
-    filters: Optional[Dict[str, Any]] = None
+    filters: Optional[dict[str, Any]] = None
 
 
 class FetchChunksAction(_RetrievalActionBase):
     action: Literal["fetch_chunks"] = "fetch_chunks"
-    ids: List[str] = Field(min_length=1)
+    ids: list[str] = Field(min_length=1)
 
 
 class SearchChunksAction(_RetrievalActionBase):
@@ -117,7 +117,7 @@ class ExpandGraphAction(_RetrievalActionBase):
     k: int = Field(ge=1, le=500)
     subject: str = Field(min_length=1)
     predicate: Optional[str] = None
-    domain_scope: Optional[List[str]] = Field(default=None, max_length=10)
+    domain_scope: Optional[list[str]] = Field(default=None, max_length=10)
     direction: Optional[Literal["inbound", "outbound", "both"]] = None
     hops: int = Field(default=1, ge=1, le=3)
 
@@ -126,8 +126,8 @@ class GraphNeighborsAction(_RetrievalActionBase):
     action: Literal["graph_neighbors"] = "graph_neighbors"
     k: int = Field(ge=1, le=500)
     node_id: str = Field(min_length=1)
-    predicate_scope: Optional[List[str]] = Field(default=None, max_length=20)
-    domain_scope: Optional[List[str]] = Field(default=None, max_length=10)
+    predicate_scope: Optional[list[str]] = Field(default=None, max_length=20)
+    domain_scope: Optional[list[str]] = Field(default=None, max_length=10)
     depth: int = Field(default=1, ge=1, le=3)
 
 
@@ -168,7 +168,7 @@ class ControllerDecision(BaseModel):
     - done: if true, controller terminates immediately
     """
 
-    actions: List[RetrievalAction] = Field(default_factory=list)
+    actions: list[RetrievalAction] = Field(default_factory=list)
     done: bool = False
 
 
@@ -176,7 +176,7 @@ def deterministic_decision(
     pack: Any,
     coverage: Any,
     *,
-    cfg: Dict[str, Any],
+    cfg: dict[str, Any],
 ) -> Optional[ControllerDecision]:
     """
     Deterministic decision policy for RLM retrieval.
@@ -188,7 +188,7 @@ def deterministic_decision(
     if decision is not None:
         return decision
 
-    actions: List[RetrievalAction] = []
+    actions: list[RetrievalAction] = []
     actions.extend(_decide_semantic(pack, coverage, cfg))
     actions.extend(_decide_chunk_fallback(pack, cfg))
     actions.extend(_decide_episodic_clusters(pack, coverage, cfg))
@@ -196,7 +196,7 @@ def deterministic_decision(
     return ControllerDecision(actions=actions) if actions else None
 
 
-def _decide_zero_yield_fallback(pack: Any, cfg: Dict[str, Any]) -> Optional[ControllerDecision]:
+def _decide_zero_yield_fallback(pack: Any, cfg: dict[str, Any]) -> Optional[ControllerDecision]:
     max_items_per_type = int(cfg.get("max_items_per_type", 30))
     chunk_fallback_enabled = bool(cfg.get("chunk_fallback_enabled", True))
     chunk_fallback_k_multiplier = max(1, int(cfg.get("chunk_fallback_k_multiplier", 2)))
@@ -270,7 +270,7 @@ def _decide_zero_yield_fallback(pack: Any, cfg: Dict[str, Any]) -> Optional[Cont
     return None
 
 
-def _decide_semantic(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> List[RetrievalAction]:
+def _decide_semantic(pack: Any, coverage: Any, cfg: dict[str, Any]) -> list[RetrievalAction]:
     if not getattr(coverage, "needs_semantic", False):
         return []
     max_items_per_type = int(cfg.get("max_items_per_type", 30))
@@ -279,7 +279,7 @@ def _decide_semantic(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> List[Retr
     trace_id = (cfg.get("trace_id") if isinstance(cfg, dict) else None) or getattr(pack, "trace_id", None)
     intent = str(getattr(pack, "intent", "") or "").strip().lower()
     active_domains = list(getattr(pack, "active_domains", []) or [])
-    actions: List[RetrievalAction] = []
+    actions: list[RetrievalAction] = []
     facts = getattr(pack, "facts", []) or []
     if facts:
         eligible, best_pred, best_score, reasons = _debug_score_predicates(
@@ -329,7 +329,7 @@ def _decide_semantic(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> List[Retr
     return actions
 
 
-def _decide_chunk_fallback(pack: Any, cfg: Dict[str, Any]) -> List[RetrievalAction]:
+def _decide_chunk_fallback(pack: Any, cfg: dict[str, Any]) -> list[RetrievalAction]:
     if not bool(cfg.get("chunk_fallback_enabled", True)):
         return []
     if bool(getattr(pack, "chunk_fallback_used", False)):
@@ -349,7 +349,7 @@ def _decide_chunk_fallback(pack: Any, cfg: Dict[str, Any]) -> List[RetrievalActi
     )]
 
 
-def _decide_episodic_clusters(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> List[RetrievalAction]:
+def _decide_episodic_clusters(pack: Any, coverage: Any, cfg: dict[str, Any]) -> list[RetrievalAction]:
     if not getattr(coverage, "needs_clusters", False):
         return []
     cluster_k = max(1, int(cfg.get("cluster_k", 3)))
@@ -361,7 +361,7 @@ def _decide_episodic_clusters(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> 
         # Enterprise: compiled cluster summaries are the primary path.
         episodes = getattr(pack, "episodes", []) or []
         has_cluster = any(isinstance(ep, dict) and "episode_ids" in ep for ep in episodes)
-        actions: List[RetrievalAction] = [FetchEpisodeClustersAction(
+        actions: list[RetrievalAction] = [FetchEpisodeClustersAction(
             k=cluster_k,
             time_range=None,
             min_salience=salience_threshold,
@@ -381,7 +381,7 @@ def _decide_episodic_clusters(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> 
     )]
 
 
-def _decide_graph(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> List[RetrievalAction]:
+def _decide_graph(pack: Any, coverage: Any, cfg: dict[str, Any]) -> list[RetrievalAction]:
     if not bool(cfg.get("graph_expansion_available", False)):
         return []
     graph = getattr(pack, "graph", []) or []
@@ -400,7 +400,7 @@ def _decide_graph(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> List[Retriev
     trace_id = (cfg.get("trace_id") if isinstance(cfg, dict) else None) or getattr(pack, "trace_id", None)
     intent = str(getattr(pack, "intent", "") or "").strip().lower()
     active_domains = list(getattr(pack, "active_domains", []) or [])
-    actions: List[RetrievalAction] = []
+    actions: list[RetrievalAction] = []
 
     # PERSONAL intent: user-based expansion (LIKES/PREFERS lane).
     if intent == "personal" and getattr(pack, "owner_type", None) == "user":
@@ -450,7 +450,7 @@ def _decide_graph(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> List[Retriev
         chunks=list(chunks),
         limit=5,
     )
-    excluded_reasons: List[str] = []
+    excluded_reasons: list[str] = []
     if intent in {"topical", "mixed"} and "user_profile" not in set(active_domains or []):
         try:
             observed = _observed_predicates(list(facts))
@@ -459,9 +459,9 @@ def _decide_graph(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> List[Retriev
         except Exception:  # nosec B110
             logger.debug("decisions: intent predicate filter failed", exc_info=True)
             pass
-    combined_reasons: Optional[List[str]] = None
+    combined_reasons: Optional[list[str]] = None
     try:
-        rs: List[str] = []
+        rs: list[str] = []
         if isinstance(reasons_g, list):
             rs.extend([r for r in reasons_g if isinstance(r, str) and r])
         rs.extend([r for r in excluded_reasons if isinstance(r, str) and r])
@@ -487,7 +487,7 @@ def _decide_graph(pack: Any, coverage: Any, cfg: Dict[str, Any]) -> List[Retriev
     return actions
 
 
-def _extract_query_terms(query_text: str) -> List[str]:
+def _extract_query_terms(query_text: str) -> list[str]:
     try:
         extracted = extract_keywords_and_phrases(query_text or "")
     except Exception:
@@ -501,7 +501,7 @@ def _extract_query_terms(query_text: str) -> List[str]:
                     terms.append(v.strip().lower())
     # unique, preserve order
     seen = set()
-    out: List[str] = []
+    out: list[str] = []
     for t in terms:
         if t in seen:
             continue
@@ -511,7 +511,7 @@ def _extract_query_terms(query_text: str) -> List[str]:
 
 
 def _fact_blob(fact: Any) -> str:
-    parts: List[str] = []
+    parts: list[str] = []
     try:
         subj = fact.get("subject") if isinstance(fact, dict) else getattr(fact, "subject", None)
         if subj:
@@ -547,7 +547,7 @@ def _word_root(word: str) -> str:
     return w
 
 
-def _predicate_score(predicate: str, facts: List[Any], terms: List[str]) -> int:
+def _predicate_score(predicate: str, facts: list[Any], terms: list[str]) -> int:
     if not predicate or not terms or not facts:
         return 0
     blob = " ".join(_fact_blob(f) for f in facts if f)[:20000]
@@ -563,10 +563,10 @@ def _predicate_score(predicate: str, facts: List[Any], terms: List[str]) -> int:
 def _select_predicate_for_expansion(
     *,
     pack: Any,
-    facts: List[Any],
+    facts: list[Any],
     graph_predicate_limit: int,
     predicate_allowlist: Any,
-) -> Tuple[Optional[str], int]:
+) -> tuple[Optional[str], int]:
     """
     Select the most query-relevant predicate for semantic expansion.
 
@@ -580,7 +580,7 @@ def _select_predicate_for_expansion(
     active_domains = set(getattr(pack, "active_domains", []) or [])
     candidate_facts = filter_facts_by_domains(list(facts or []), active_domains) if active_domains else list(facts or [])
 
-    pred_to_facts: Dict[str, List[Any]] = {}
+    pred_to_facts: dict[str, list[Any]] = {}
     for f in candidate_facts:
         try:
             pred = f.get("predicate") if isinstance(f, dict) else getattr(f, "predicate", None)
@@ -600,7 +600,7 @@ def _select_predicate_for_expansion(
 
     # Optional domain-aware allowlist: intersect candidates with configured allowlist.
     observed = list(candidates)
-    allowed: Set[str] = set()
+    allowed: set[str] = set()
     if isinstance(predicate_allowlist, dict) and active_domains:
         for dom in active_domains:
             preds = predicate_allowlist.get(dom)
@@ -618,7 +618,7 @@ def _select_predicate_for_expansion(
     if not terms:
         return None, 0
 
-    scored: List[Tuple[str, int]] = []
+    scored: list[tuple[str, int]] = []
     for p in candidates:
         score = _predicate_score(p, pred_to_facts.get(p, []), terms)
         scored.append((p, int(score)))
@@ -631,8 +631,8 @@ def _select_predicate_for_expansion(
     return best_pred, best_score
 
 
-def _observed_predicates(facts: List[Any]) -> Set[str]:
-    out: Set[str] = set()
+def _observed_predicates(facts: list[Any]) -> set[str]:
+    out: set[str] = set()
     for f in facts or []:
         try:
             pred = f.get("predicate") if isinstance(f, dict) else getattr(f, "predicate", None)
@@ -650,11 +650,11 @@ def _observed_predicates(facts: List[Any]) -> Set[str]:
 def _debug_score_predicates(
     *,
     pack: Any,
-    facts: List[Any],
+    facts: list[Any],
     graph_predicate_limit: int,
     predicate_allowlist: Any,
     top_n: int = 8,
-) -> Tuple[List[str], Optional[str], int, Optional[List[str]]]:
+) -> tuple[list[str], Optional[str], int, Optional[list[str]]]:
     """
     Debug-only predicate scoring for observability logs.
 
@@ -664,7 +664,7 @@ def _debug_score_predicates(
     - best_score
     - reasons (optional)
     """
-    reasons: List[str] = []
+    reasons: list[str] = []
     active_domains = set(getattr(pack, "active_domains", []) or [])
     if active_domains and "user_profile" not in active_domains:
         reasons.append("excluded_user_profile_predicates_due_to_domains")
@@ -675,7 +675,7 @@ def _debug_score_predicates(
         else list(facts or [])
     )
 
-    pred_to_facts: Dict[str, List[Any]] = {}
+    pred_to_facts: dict[str, list[Any]] = {}
     for f in candidate_facts:
         try:
             pred = f.get("predicate") if isinstance(f, dict) else getattr(f, "predicate", None)
@@ -694,7 +694,7 @@ def _debug_score_predicates(
         return [], None, 0, reasons or None
 
     observed = list(candidates)
-    allowed: Set[str] = set()
+    allowed: set[str] = set()
     if isinstance(predicate_allowlist, dict) and active_domains:
         for dom in active_domains:
             preds = predicate_allowlist.get(dom)
@@ -713,7 +713,7 @@ def _debug_score_predicates(
     if not terms:
         return sorted(candidates)[: max(1, int(top_n))], None, 0, reasons or None
 
-    scored: List[Tuple[str, int]] = []
+    scored: list[tuple[str, int]] = []
     for p in candidates:
         score = _predicate_score(p, pred_to_facts.get(p, []), terms)
         scored.append((p, int(score)))
@@ -726,14 +726,14 @@ def _debug_score_predicates(
     return eligible_predicates, best_pred, int(best_score), reasons or None
 
 
-def _last_action_result(steps: List[Any]) -> Optional[Dict[str, Any]]:
+def _last_action_result(steps: list[Any]) -> Optional[dict[str, Any]]:
     for s in reversed(steps or []):
         if isinstance(s, dict) and s.get("event") == "action_result":
             return s
     return None
 
 
-def _did_action(steps: List[Any], action_name: str) -> bool:
+def _did_action(steps: list[Any], action_name: str) -> bool:
     name = str(action_name or "").strip()
     if not name:
         return False
@@ -749,22 +749,22 @@ def _did_action(steps: List[Any], action_name: str) -> bool:
 
 def next_predicate_scope(
     *,
-    facts: List[Any],
-    predicate_weights: Optional[Dict[str, float]],
+    facts: list[Any],
+    predicate_weights: Optional[dict[str, float]],
     graph_predicate_limit: int,
-) -> List[str]:
+) -> list[str]:
     """
     Determine a bounded predicate exploration scope based on:
     - configured predicate weights (highest first)
     - observed predicate frequency in current facts
     """
-    ordered: List[str] = []
+    ordered: list[str] = []
 
     if predicate_weights:
         for p, _ in sorted(predicate_weights.items(), key=lambda kv: (-float(kv[1]), str(kv[0]))):
             ordered.append(str(p).upper())
 
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for f in facts or []:
         pred = f.get("predicate") if isinstance(f, dict) else getattr(f, "predicate", None)
         if pred:
@@ -785,14 +785,14 @@ def next_predicate_scope(
     return ordered[:limit]
 
 
-def _top_predicates_from_facts(facts: List[Any], limit: int) -> List[str]:
+def _top_predicates_from_facts(facts: list[Any], limit: int) -> list[str]:
     """
     Deterministic predicate scope derived from the observed facts (no config weights).
 
     Used to ensure topical graph expansion uses kb_doc predicates even when MIXED intent
     includes user_profile facts.
     """
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for f in facts or []:
         try:
             pred = f.get("predicate") if isinstance(f, dict) else getattr(f, "predicate", None)

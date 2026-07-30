@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
 from uma.common.types import Fact
@@ -48,12 +48,12 @@ def _ownership_ref(tenant_id: str, owner_type: str, owner_id: str) -> OwnershipR
     )
 
 
-def _scope_metadata_from_object(object: Any, *, include_session_id: bool) -> Dict[str, Any]:
+def _scope_metadata_from_object(object: Any, *, include_session_id: bool) -> dict[str, Any]:
     owner_type = str(getattr(object, "owner_type", "") or "").strip()
     owner_id = str(getattr(object, "owner_id", "") or "").strip()
     if owner_type == "user":
         owner_id = normalize_user_id(owner_id)
-    metadata: Dict[str, Any] = {
+    metadata: dict[str, Any] = {
         "tenant_id": str(getattr(object, "tenant_id", None) or "default"),
         "owner_type": owner_type,
         "owner_id": owner_id,
@@ -67,8 +67,8 @@ def _scope_metadata_from_object(object: Any, *, include_session_id: bool) -> Dic
 
 
 def _split_isolation_from_metas(
-    metas: List[Dict[str, Any]],
-) -> tuple[List[str], List[str], List[str], List[Dict[str, Any]]]:
+    metas: list[dict[str, Any]],
+) -> tuple[list[str], list[str], list[str], list[dict[str, Any]]]:
     """C1: split a list of pre-contract metadata dicts into the four
     parallel lists the new VectorIndex contract requires.
 
@@ -77,10 +77,10 @@ def _split_isolation_from_metas(
     per-row extra_metadata dict. Used by `rebuild_vector_indexes` which
     aggregates metadata dicts from per-row helpers.
     """
-    tenant_ids: List[str] = []
-    owner_types: List[str] = []
-    owner_ids: List[str] = []
-    extras: List[Dict[str, Any]] = []
+    tenant_ids: list[str] = []
+    owner_types: list[str] = []
+    owner_ids: list[str] = []
+    extras: list[dict[str, Any]] = []
     for m in metas:
         m = dict(m or {})
         tenant_ids.append(str(m.pop("tenant_id", "") or ""))
@@ -90,7 +90,7 @@ def _split_isolation_from_metas(
     return tenant_ids, owner_types, owner_ids, extras
 
 
-def _fact_vector_metadata(fact: Fact) -> Dict[str, Any]:
+def _fact_vector_metadata(fact: Fact) -> dict[str, Any]:
     meta = _scope_metadata_from_object(fact, include_session_id=True)
     meta.update(
         {
@@ -104,18 +104,18 @@ def _fact_vector_metadata(fact: Fact) -> Dict[str, Any]:
     return meta
 
 
-def _skill_vector_metadata(skill: Skill) -> Dict[str, Any]:
+def _skill_vector_metadata(skill: Skill) -> dict[str, Any]:
     meta = _scope_metadata_from_object(skill, include_session_id=False)
     meta["name"] = skill.name
     return meta
 
 
-def _episode_vector_metadata(episode: Any) -> Dict[str, Any]:
+def _episode_vector_metadata(episode: Any) -> dict[str, Any]:
     meta = _scope_metadata_from_object(episode, include_session_id=True)
     meta["user_id"] = getattr(episode, "user_id", None)
     return meta
 
-async def _embed_in_batches(embedder: Any, texts: List[str], batch_size: int) -> List[List[float]]:
+async def _embed_in_batches(embedder: Any, texts: list[str], batch_size: int) -> list[list[float]]:
     if not texts:
         return []
     expected_dim = getattr(embedder, "dimension", None)
@@ -129,7 +129,7 @@ async def _embed_in_batches(embedder: Any, texts: List[str], batch_size: int) ->
             if not isinstance(v, list) or len(v) != expected_dim:
                 raise ValueError("_embed_in_batches: invalid embedding dim")
         return vectors
-    vectors: List[List[float]] = []
+    vectors: list[list[float]] = []
     for i in range(0, len(texts), batch_size):
         batch = texts[i : i + batch_size]
         batch_vectors = await embedder.embed(batch)
@@ -152,7 +152,7 @@ async def rebuild_vector_indexes(
     include_semantic: bool = True,
     include_procedural: bool = True,
     batch_size: int = 32,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Rebuild vector indexes from SQL stores.
 
@@ -186,8 +186,8 @@ async def _rebuild_vector_indexes_unlocked(
     include_semantic: bool = True,
     include_procedural: bool = True,
     batch_size: int = 32,
-) -> Dict[str, Any]:
-    report: Dict[str, Any] = {
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
         "episodic": {"status": "skipped", "count": 0},
         "semantic": {"status": "skipped", "count": 0},
         "procedural": {"status": "skipped", "count": 0},
@@ -233,12 +233,12 @@ async def _rebuild_vector_indexes_unlocked(
         else:
             try:
                 episodes = await memory.episodic_core.list_episodes(tenant_id, owner_type, owner_id)
-                ids: List[str] = []
-                vectors: List[List[float]] = []
-                metas: List[Dict[str, Any]] = []
-                texts: List[str] = []
-                text_ids: List[str] = []
-                text_metas: List[Dict[str, Any]] = []
+                ids: list[str] = []
+                vectors: list[list[float]] = []
+                metas: list[dict[str, Any]] = []
+                texts: list[str] = []
+                text_ids: list[str] = []
+                text_metas: list[dict[str, Any]] = []
 
                 for ep in episodes:
                     if ep.embedding and len(ep.embedding) == dim:
@@ -282,7 +282,7 @@ async def _rebuild_vector_indexes_unlocked(
                 scoped_owner_id = owner_id
                 if owner_type == "user":
                     scoped_owner_id = normalize_user_id(owner_id)
-                facts: List[Fact] = await memory.semantic_core.list_facts_for_owner(
+                facts: list[Fact] = await memory.semantic_core.list_facts_for_owner(
                     tenant_id=tenant_id,
                     owner_type=owner_type,
                     owner_id=scoped_owner_id,
@@ -360,7 +360,7 @@ async def rebuild_derived_indexes(
     include_procedural: bool = True,
     include_graph: bool = True,
     batch_size: int = 32,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     vector_result = await rebuild_vector_indexes(
         memory,
         tenant_id=tenant_id,
@@ -445,7 +445,7 @@ async def _rebuild_graph_from_authoritative_stores(
     owner_type: Optional[str],
     owner_id: Optional[str],
     include_graph: bool,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     lock = _ensure_async_lock(memory, "_graph_rebuild_lock")
     async with lock:
         return await _rebuild_graph_from_authoritative_stores_unlocked(
@@ -464,8 +464,8 @@ async def _rebuild_graph_from_authoritative_stores_unlocked(
     owner_type: Optional[str],
     owner_id: Optional[str],
     include_graph: bool,
-) -> Dict[str, Any]:
-    report: Dict[str, Any] = {
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
         "status": "skipped",
         "episodes": 0,
         "facts": 0,
@@ -493,7 +493,7 @@ async def _rebuild_graph_from_authoritative_stores_unlocked(
             owner_id=scoped_owner_id,
         )
         episodes = await episodic_core.list_episodes(tenant_id, owner_type, scoped_owner_id) if include_graph else []
-        facts: List[Fact] = await semantic_core.list_facts_for_owner(
+        facts: list[Fact] = await semantic_core.list_facts_for_owner(
             tenant_id=tenant_id,
             owner_type=owner_type,
             owner_id=scoped_owner_id,
@@ -505,7 +505,7 @@ async def _rebuild_graph_from_authoritative_stores_unlocked(
         if facts:
             graph.add_facts(list(facts))
 
-        facts_by_turn_id: Dict[str, List[Fact]] = defaultdict(list)
+        facts_by_turn_id: dict[str, list[Fact]] = defaultdict(list)
         for fact in facts or []:
             meta = getattr(fact, "meta", None) or {}
             turn_id = str(meta.get("turn_id") or "").strip() if isinstance(meta, dict) else ""
@@ -525,7 +525,7 @@ async def _rebuild_graph_from_authoritative_stores_unlocked(
             episode_fact_links += len(linked_facts)
 
         temporal_links = 0
-        scoped_sequences: Dict[tuple[str, str], List[Any]] = defaultdict(list)
+        scoped_sequences: dict[tuple[str, str], list[Any]] = defaultdict(list)
         for episode in episodes or []:
             session_id = str(getattr(episode, "session_id", "") or "").strip()
             origin_agent_id = str(getattr(episode, "origin_agent_id", "") or "").strip()

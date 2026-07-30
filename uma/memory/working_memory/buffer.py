@@ -21,7 +21,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 import threading
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Literal, Optional
 
 from uma.common.types import SessionScope
 
@@ -106,7 +106,7 @@ class WorkingMemoryBuffer:
         """
         self._max_tokens = max_tokens
         self._lock = threading.RLock()
-        self._store: Dict[Tuple[str, str, str], List[WorkingMemoryMessage]] = {}
+        self._store: dict[tuple[str, str, str], list[WorkingMemoryMessage]] = {}
         logger.debug("Initialized WorkingMemoryBuffer with max_tokens=%d", max_tokens)
 
     @property
@@ -133,7 +133,7 @@ class WorkingMemoryBuffer:
         word_count = len(text.split())
         return max(1, int(word_count * 1.3))
 
-    def _key_for_scope(self, scope: SessionScope) -> Tuple[str, str, str]:
+    def _key_for_scope(self, scope: SessionScope) -> tuple[str, str, str]:
         if not isinstance(scope, SessionScope):
             raise TypeError("WorkingMemoryBuffer requires a SessionScope.")
         return (scope.tenant_id, scope.agent_id, scope.session_id)
@@ -218,7 +218,7 @@ class WorkingMemoryBuffer:
         scope: SessionScope,
         *,
         include_quarantined: bool = False,
-    ) -> List[WorkingMemoryMessage]:
+    ) -> list[WorkingMemoryMessage]:
         """
         Return the current working memory messages for a session scope.
 
@@ -283,7 +283,7 @@ class WorkingMemoryBuffer:
     def replace_messages(
         self,
         scope: SessionScope,
-        new_messages: List[WorkingMemoryMessage],
+        new_messages: list[WorkingMemoryMessage],
     ) -> None:
         """
         Replace the entire message list for a session scope.

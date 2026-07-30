@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import abc
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +45,8 @@ class GraphAdapter(abc.ABC):
     def run_query(
         self,
         cypher: str,
-        params: Optional[Dict[str, Any]] = None,
-    ) -> List[Dict[str, Any]]:
+        params: Optional[dict[str, Any]] = None,
+    ) -> list[dict[str, Any]]:
         """
         Execute a graph query and return a list of result rows as dicts.
 

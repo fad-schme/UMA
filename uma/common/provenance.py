@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 from typing import Any, Mapping, Sequence
+
+
+logger = logging.getLogger(__name__)
 
 
 def build_provenance(
@@ -214,7 +218,8 @@ def _clamp01(value: Any) -> float | None:
         return None
     try:
         num = float(value)
-    except Exception:
+    except Exception as exc:
+        logger.debug("_clamp01: numeric coercion failed: %s", exc, exc_info=True)
         return None
     if num < 0.0:
         return 0.0

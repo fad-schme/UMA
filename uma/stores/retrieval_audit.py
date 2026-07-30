@@ -53,7 +53,7 @@ import os
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,7 @@ class RetrievalAuditRow:
     query_hash: str
     query_preview: str
     scan_severity: str
-    lanes: List[str] = field(default_factory=list)
+    lanes: list[str] = field(default_factory=list)
     result_count: int = 0
     refined_via_llm: bool = False
     pruned_via_llm: bool = False
@@ -180,7 +180,7 @@ class RetrievalAuditStore:
         user_id: Optional[str] = None,
         severity_min: Optional[str] = None,
         limit: int = 100,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Query audit rows. Used by `uma.api.management.list_retrieval_audit`.
 
         - tenant_id / user_id filter exact match if provided.
@@ -199,8 +199,8 @@ class RetrievalAuditStore:
             "tenant_id": "tenant_id = ?",
             "user_id": "user_id = ?",
         }
-        where: List[str] = []
-        params: List[Any] = []
+        where: list[str] = []
+        params: list[Any] = []
         if tenant_id:
             where.append(_AUDIT_FILTER_COLS["tenant_id"])
             params.append(tenant_id)
@@ -229,7 +229,7 @@ class RetrievalAuditStore:
             )
             return []
 
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for r in rows:
             sev = (r["scan_severity"] or "").lower()
             if severity_order.get(sev, 0) < severity_floor:

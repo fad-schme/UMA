@@ -37,7 +37,12 @@ def should_retry_network_only(exc: Exception) -> bool:
             if exc.status in (408, 429) or 500 <= exc.status < 600:
                 return True
             return False
-    except Exception:
+    except Exception as import_exc:
+        logger.debug(
+            "should_retry_network_only: aiohttp classification unavailable: %s",
+            import_exc,
+            exc_info=True,
+        )
         return False
 
     status = getattr(exc, "status", None) or getattr(exc, "status_code", None)
@@ -77,7 +82,12 @@ def should_retry_openai(exc: Exception) -> bool:
             status = getattr(exc, "status_code", None)
             if isinstance(status, int):
                 return status in (408, 429) or 500 <= status < 600
-    except Exception:
+    except Exception as import_exc:
+        logger.debug(
+            "should_retry_openai: provider classification unavailable: %s",
+            import_exc,
+            exc_info=True,
+        )
         return should_retry_network_only(exc)
 
     # Fallback to generic network-only predicate
@@ -115,7 +125,12 @@ def should_retry_anthropic(exc: Exception) -> bool:
             status = getattr(exc, "status_code", None)
             if isinstance(status, int):
                 return status in (408, 429) or 500 <= status < 600
-    except Exception:
+    except Exception as import_exc:
+        logger.debug(
+            "should_retry_anthropic: provider classification unavailable: %s",
+            import_exc,
+            exc_info=True,
+        )
         return should_retry_network_only(exc)
 
     return should_retry_network_only(exc)

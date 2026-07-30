@@ -7,33 +7,33 @@ from __future__ import annotations
 import threading
 import time
 from contextlib import contextmanager
-from typing import Dict, Iterator, Tuple
+from typing import Iterator
 
 _lock = threading.Lock()
-_counters: Dict[Tuple[str, Tuple[Tuple[str, str], ...]], int] = {}
-_timers: Dict[Tuple[str, Tuple[Tuple[str, str], ...]], list] = {}
+_counters: dict[tuple[str, tuple[tuple[str, str], ...]], int] = {}
+_timers: dict[tuple[str, tuple[tuple[str, str], ...]], list] = {}
 
 
-def _norm_tags(tags: Dict[str, str] | None) -> Tuple[Tuple[str, str], ...]:
+def _norm_tags(tags: dict[str, str] | None) -> tuple[tuple[str, str], ...]:
     if not tags:
         return ()
     return tuple(sorted((str(k), str(v)) for k, v in tags.items()))
 
 
-def increment(name: str, value: int = 1, tags: Dict[str, str] | None = None) -> None:
+def increment(name: str, value: int = 1, tags: dict[str, str] | None = None) -> None:
     key = (name, _norm_tags(tags))
     with _lock:
         _counters[key] = _counters.get(key, 0) + int(value)
 
 
-def observe(name: str, value: float, tags: Dict[str, str] | None = None) -> None:
+def observe(name: str, value: float, tags: dict[str, str] | None = None) -> None:
     key = (name, _norm_tags(tags))
     with _lock:
         _timers.setdefault(key, []).append(float(value))
 
 
 @contextmanager
-def timed(name: str, tags: Dict[str, str] | None = None) -> Iterator[None]:
+def timed(name: str, tags: dict[str, str] | None = None) -> Iterator[None]:
     start = time.time()
     try:
         yield
@@ -41,11 +41,11 @@ def timed(name: str, tags: Dict[str, str] | None = None) -> Iterator[None]:
         observe(name, time.time() - start, tags=tags)
 
 
-def snapshot() -> Dict[str, Dict[str, float]]:
+def snapshot() -> dict[str, dict[str, float]]:
     """
     Return a snapshot of counters and timers (avg).
     """
-    out: Dict[str, Dict[str, float]] = {"counters": {}, "timers_avg": {}}
+    out: dict[str, dict[str, float]] = {"counters": {}, "timers_avg": {}}
     with _lock:
         for (name, tags), value in _counters.items():
             tag_key = ",".join(f"{k}={v}" for k, v in tags)

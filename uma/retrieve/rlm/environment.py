@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import inspect
 import logging
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Literal, Optional, Union
 
 from uma.common.types import OwnershipRef
 from .request import RetrievalRequest, ScopedOwnerType
 
 logger = logging.getLogger(__name__)
 
-NumericVector = List[Union[int, float]]
+NumericVector = list[Union[int, float]]
 
 
 async def _maybe_await(result: Any) -> Any:
@@ -85,11 +85,11 @@ class UMAMemoryEnvironment:
         return max(0, min(off, 100000))
 
     @staticmethod
-    def _sanitize_time_range(time_range: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def _sanitize_time_range(time_range: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
         if not isinstance(time_range, dict):
             return None
 
-        sanitized: Dict[str, Any] = {}
+        sanitized: dict[str, Any] = {}
         start = time_range.get("start")
         end = time_range.get("end")
         offset = time_range.get("offset")
@@ -129,8 +129,8 @@ class UMAMemoryEnvironment:
         return normalized_owner_type, resolved_owner_id  # type: ignore[return-value]
 
     @staticmethod
-    def _filter_session_local_items(request: RetrievalRequest, items: List[Any]) -> List[Any]:
-        filtered: List[Any] = []
+    def _filter_session_local_items(request: RetrievalRequest, items: list[Any]) -> list[Any]:
+        filtered: list[Any] = []
         request_session_id = getattr(request.context, "session_id", None)
         request_runtime_agent = getattr(request.context, "agent_id", None)
         request_tenant_id = getattr(request.context, "tenant_id", None)
@@ -181,10 +181,10 @@ class UMAMemoryEnvironment:
         self,
         request: RetrievalRequest,
         *,
-        ids: List[str],
+        ids: list[str],
         owner_type: str = "agent",
         owner_id: Optional[str] = None,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """
         Fetch chunks by IDs (bounded, owner-scoped).
         """
@@ -232,11 +232,11 @@ class UMAMemoryEnvironment:
     async def fetch_facts_by_ids(
         self,
         request: RetrievalRequest,
-        ids: List[str],
+        ids: list[str],
         *,
         owner_type: str = "agent",
         owner_id: Optional[str] = None,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """
         Fetch semantic facts by IDs (bounded by the controller).
 
@@ -278,7 +278,7 @@ class UMAMemoryEnvironment:
         offset: int = 0,
         owner_type: str = "agent",
         owner_id: Optional[str] = None,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """
         Fetch additional semantic facts for a specific predicate, paginating from ``offset``.
 
@@ -323,10 +323,10 @@ class UMAMemoryEnvironment:
         request: RetrievalRequest,
         k: int = 5,
         max_episodes: int = 50,
-        time_range: Optional[Dict[str, Any]] = None,
+        time_range: Optional[dict[str, Any]] = None,
         owner_type: str = "agent",
         owner_id: Optional[str] = None,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """
         Retrieve episodic clusters via EpisodicCore (NOT the SQL store).
 
@@ -368,11 +368,11 @@ class UMAMemoryEnvironment:
         request: RetrievalRequest,
         k: int = 5,
         max_episodes: int = 50,
-        time_range: Optional[Dict[str, Any]] = None,
+        time_range: Optional[dict[str, Any]] = None,
         min_salience: Optional[float] = None,
         owner_type: str = "agent",
         owner_id: Optional[str] = None,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """
         Fetch episodic clusters with optional salience filtering.
         """
@@ -394,7 +394,7 @@ class UMAMemoryEnvironment:
             return clusters
 
         min_salience = max(0.0, min(1.0, float(min_salience)))
-        filtered: List[Dict[str, Any]] = []
+        filtered: list[dict[str, Any]] = []
         for cluster in clusters:
             sal = self._cluster_salience(cluster)
             if sal is None or sal >= min_salience:
@@ -410,12 +410,12 @@ class UMAMemoryEnvironment:
         self,
         request: RetrievalRequest,
         *,
-        names: List[str],
-        domain_scope: Optional[List[str]] = None,
+        names: list[str],
+        domain_scope: Optional[list[str]] = None,
         owner_type: str = "agent",
         owner_id: Optional[str] = None,
         limit: int = 8,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Best-effort node resolution: map human strings -> graph node ids.
 
@@ -436,7 +436,7 @@ class UMAMemoryEnvironment:
             context_label="Environment.graph_resolve_nodes",
         )
 
-        cleaned: List[str] = []
+        cleaned: list[str] = []
         seen = set()
         for n in names or []:
             s = str(n or "").strip().lower()
@@ -474,13 +474,13 @@ class UMAMemoryEnvironment:
         self,
         request: RetrievalRequest,
         node_id: str,
-        predicate_scope: Optional[List[str]] = None,
-        domain_scope: Optional[List[str]] = None,
+        predicate_scope: Optional[list[str]] = None,
+        domain_scope: Optional[list[str]] = None,
         depth: int = 1,
         k: int = 10,
         owner_type: str = "agent",
         owner_id: Optional[str] = None,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """
         Safe bounded graph expansion (DAT-safe).
 
@@ -526,7 +526,7 @@ class UMAMemoryEnvironment:
         except Exception:
             logger.exception("Environment.graph_neighbors failed")
             raise
-        
+
 
     async def expand_graph(
         self,
@@ -537,10 +537,10 @@ class UMAMemoryEnvironment:
         direction: Optional[Literal["inbound", "outbound", "both"]] = None,
         k: int = 10,
         *,
-        domain_scope: Optional[List[str]] = None,
+        domain_scope: Optional[list[str]] = None,
         owner_type: str = "agent",
         owner_id: Optional[str] = None,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """
         Expand the graph from seed entities extracted from current facts.
 
@@ -594,7 +594,7 @@ class UMAMemoryEnvironment:
             )
             node_ids = resolved or [subject]
 
-            merged: List[Any] = []
+            merged: list[Any] = []
             seen = set()
             for node_id in node_ids[:4]:
                 items = await self.graph_neighbors(
@@ -627,7 +627,7 @@ class UMAMemoryEnvironment:
             logger.exception("Environment.expand_graph failed")
             raise
 
-    def _cluster_salience(self, cluster: Dict[str, Any]) -> Optional[float]:
+    def _cluster_salience(self, cluster: dict[str, Any]) -> Optional[float]:
         if not isinstance(cluster, dict):
             return None
 
@@ -658,7 +658,7 @@ class UMAMemoryEnvironment:
         owner_type: str,
         owner_id: Optional[str],
         default_k: int,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """
         Execute a single RetrievalAction via the environment.
 

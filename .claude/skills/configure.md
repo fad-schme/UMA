@@ -7,7 +7,7 @@ description: Complete configuration reference for UMA — runtime profiles (Lite
 
 ## Runtime Profile
 
-UMA Lite uses a single embedded profile: SQLite (authoritative) + LanceDB (vector index). No external services required. Initialize through `UMAMemory.from_yaml(path)`.
+UMA Lite embeds SQLite (authoritative) and LanceDB (vector index), so it requires no external storage service. An LLM and embedding provider must still be configured; these may run locally or remotely. Initialize through `UMAMemory.from_yaml(path)`.
 
 | Config file | Use |
 |---|---|
@@ -21,7 +21,7 @@ LLM and embedding values are user-customizable baselines — set provider, model
 
 ## UMA Lite — Embedded Profile
 
-No external services required. SQLite and LanceDB run in-process.
+No external storage service is required: SQLite and LanceDB run in-process. The configured LLM and embedding provider may be a local service such as Ollama or a remote API.
 
 ```bash
 pip install -e .
@@ -299,7 +299,7 @@ await memory.rebuild_vector_indexes(tenant_id="default")
 ## Install Surfaces
 
 ```bash
-# Minimal (Lite profile — embedded SQLite + LanceDB, no separate services)
+# Minimal (Lite profile — embedded SQLite + LanceDB, no separate storage services)
 # Uses Ollama for LLM and embeddings by default
 pip install -e .
 

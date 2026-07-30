@@ -19,7 +19,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
-from typing import Iterable, List, Optional, Set
+from typing import Iterable, Optional
 
 from uma.common.accessors import get_attr_or_key
 from uma.common.ownership import validate_explicit_owner
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 SCOPE_COSINE_THRESHOLD: float = 0.6
 
 
-def _cosine(a: List[float], b: List[float]) -> float:
+def _cosine(a: list[float], b: list[float]) -> float:
     """Cosine similarity between two float vectors.
 
     Returns 0.0 on shape mismatch (defensive — a mismatch means the
@@ -89,7 +89,7 @@ class PromotionPolicy:
         self.agent_id = agent_id
         self.min_salience = float(min_salience)
         self.min_confidence = float(min_confidence)
-        self.blocked_predicates: Set[str] = {
+        self.blocked_predicates: set[str] = {
             p.lower() for p in (blocked_predicates or [])
         }
 
@@ -157,7 +157,12 @@ class PromotionPolicy:
         # Validate object length bounds to avoid promoting trivial or huge blobs
         try:
             obj_text = str(get_attr_or_key(fact, "object") or "").strip()
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "PromotionPolicy.is_eligible: object coercion failed: %s",
+                exc,
+                exc_info=True,
+            )
             return False
         if not obj_text or len(obj_text) < self.min_object_chars or len(obj_text) > self.max_object_chars:
             return False
@@ -188,7 +193,12 @@ class PromotionPolicy:
         # Object must be serializable / stable
         try:
             _ = str(fact.object)
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "PromotionPolicy.is_eligible: object stability check failed: %s",
+                exc,
+                exc_info=True,
+            )
             return False
 
         return True
@@ -201,7 +211,7 @@ class PromotionPolicy:
         self,
         fact: Fact,
         agent_profile: AgentProfile,
-        fact_embedding: List[float],
+        fact_embedding: list[float],
     ) -> QualifierDecision:
         """Composite gate for agent-KB promotion.
 
@@ -241,7 +251,7 @@ class PromotionPolicy:
             (facts without one cannot be promoted regardless — the
             agent KB needs the vector to search them later).
         """
-        reasons: List[str] = []
+        reasons: list[str] = []
 
         # Gate 1: quarantine
         quarantine_ok = getattr(fact, "quarantined_at", None) is None
@@ -292,7 +302,7 @@ class PromotionPolicy:
     def _scope_matches(
         fact: Fact,
         agent_profile: AgentProfile,
-        fact_embedding: List[float],
+        fact_embedding: list[float],
     ) -> bool:
         """Return True if the fact is in-scope for the agent's profile.
 
@@ -523,4 +533,3 @@ class PromotionPolicy:
         )
 
         return promoted
-

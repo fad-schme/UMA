@@ -27,7 +27,7 @@ Production Guarantees:
 from __future__ import annotations
 
 import logging
-from typing import List, Any
+from typing import Any
 
 from uma.common.types import Episode
 from uma.common.types import Fact
@@ -76,7 +76,7 @@ class Consolidator:
     # PUBLIC ENTRYPOINT
     # ------------------------------------------------------------------
 
-    async def run_once(self, user_id: str) -> List[Fact]:
+    async def run_once(self, user_id: str) -> list[Fact]:
         """
         Run one full consolidation cycle:
             1. Fetch episodes
@@ -102,7 +102,7 @@ class Consolidator:
             logger.exception("Consolidator: clustering failed for user=%s", user_id)
             return []
 
-        distilled_facts: List[Fact] = []
+        distilled_facts: list[Fact] = []
 
         # STEP 3: Summarize each cluster & extract facts
         for cluster in clusters:
@@ -163,7 +163,7 @@ class Consolidator:
     # INTERNAL HELPERS
     # ------------------------------------------------------------------
 
-    async def _fetch_recent_episodes(self, user_id: str) -> List[Episode]:
+    async def _fetch_recent_episodes(self, user_id: str) -> list[Episode]:
         """
         Fetch recent episodes deterministically using timestamp ordering.
         Replaces embedding-based episode search.
@@ -186,7 +186,7 @@ class Consolidator:
             )
             return []
 
-    def _cluster_text(self, cluster: List[Episode]) -> List[str]:
+    def _cluster_text(self, cluster: list[Episode]) -> list[str]:
         """
         Build text input for cluster summarization:
             • Prefer episode.summary
@@ -199,7 +199,7 @@ class Consolidator:
     # ------------------------------------------------------------------
     # Persist distilled facts (production-grade)
     # ------------------------------------------------------------------
-    async def _persist_facts(self, facts: List[Fact]) -> None:
+    async def _persist_facts(self, facts: list[Fact]) -> None:
         """
         Embed & upsert facts in a production-grade way.
 

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal, Optional
 
 from .types_owner import OwnerType
 
@@ -62,24 +62,24 @@ class Skill:
     quarantined_at: Optional[datetime] = None
 
     salience: float = 0.0
-    tags: Dict[str, Any] = field(default_factory=dict)
+    tags: dict[str, Any] = field(default_factory=dict)
     source: Optional[str] = None
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
     # Older fields for procedural memory (keep as-is)
-    trigger_phrases: List[str] = field(default_factory=list)
-    trigger_patterns: List[str] = field(default_factory=list)
-    plan: Dict[str, Any] = field(default_factory=dict)
-    tools: List[str] = field(default_factory=list)
+    trigger_phrases: list[str] = field(default_factory=list)
+    trigger_patterns: list[str] = field(default_factory=list)
+    plan: dict[str, Any] = field(default_factory=dict)
+    tools: list[str] = field(default_factory=list)
     example: str = ""
-    embedding: Optional[List[float]] = None
-    meta: Dict[str, Any] = field(default_factory=dict)
+    embedding: Optional[list[float]] = None
+    meta: dict[str, Any] = field(default_factory=dict)
 
     # Agent-profile-only field (NEW):
     #   Populated on rows with kind="agent_profile". Empty list on
     #   procedural rows. Used by the promotion qualifier's deterministic
     #   scope-match layer (keyword hit against fact text).
-    focus_areas: List[str] = field(default_factory=list)
+    focus_areas: list[str] = field(default_factory=list)
 
     def validate(self) -> None:
         if not self.id or not isinstance(self.id, str):

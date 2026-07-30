@@ -13,7 +13,7 @@ Coding agent instructions
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Iterable, List
+from typing import Any, Iterable
 
 
 class LLMInterface(ABC):
@@ -29,7 +29,7 @@ class LLMInterface(ABC):
     @abstractmethod
     async def generate(
         self,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         max_tokens: int = 256,
         temperature: float = 0.0,
         **kwargs: Any,
@@ -69,7 +69,7 @@ class EmbeddingInterface(ABC):
         """Return the embedding vector dimension."""
 
     @abstractmethod
-    async def embed(self, texts: Iterable[str]) -> List[List[float]]:
+    async def embed(self, texts: Iterable[str]) -> list[list[float]]:
         """
         Compute vector embeddings for a list of texts.
 

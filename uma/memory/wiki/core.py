@@ -208,7 +208,7 @@ async def lint_wiki_page(
     """Check one wiki page for structural drift without rewriting canonical state."""
     if memory is None:
         raise ValueError("lint_wiki_page: memory is required")
-    
+
     runtime_context = memory._resolve_runtime_context(
         user_id=user_id,
         tenant_id=tenant_id,

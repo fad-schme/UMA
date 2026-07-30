@@ -17,7 +17,7 @@ Coding Agent Instructions
 
 from __future__ import annotations
 import logging
-from typing import Any, List, Dict
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class EpisodeMapper:
     # PUBLIC API
     # ------------------------------------------------------------------
 
-    def map_entries(self, entries: List[Any]) -> List[Dict[str, Any]]:
+    def map_entries(self, entries: list[Any]) -> list[dict[str, Any]]:
         """
         Convert WMEntry objects into dicts expected by EpisodeIndexer.
         """

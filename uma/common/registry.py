@@ -24,7 +24,7 @@ from importlib import import_module
 from importlib import metadata
 import inspect
 import logging
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Type, Union
+from typing import Any, Iterable, Optional, Union
 
 
 # ======================================================================
@@ -70,14 +70,14 @@ class UMAFeature(ABC):
         raise NotImplementedError
 
     @classmethod
-    def validate_config(cls, config: Dict[str, Any]) -> None:
+    def validate_config(cls, config: dict[str, Any]) -> None:
         """Validate feature config (override in subclasses if needed)."""
 
 
 @dataclass(frozen=True)
 class FeatureHandle:
     name: str
-    methods: Tuple[str, ...] = ()
+    methods: tuple[str, ...] = ()
     version: Optional[str] = None
 
 
@@ -85,23 +85,23 @@ class FeatureHandle:
 class FeatureResult:
     ok: bool
     data: Any = None
-    warnings: Tuple[str, ...] = ()
-    errors: Tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+    errors: tuple[str, ...] = ()
 
     @classmethod
-    def success(cls, data: Any = None, warnings: Optional[List[str]] = None) -> "FeatureResult":
+    def success(cls, data: Any = None, warnings: Optional[list[str]] = None) -> "FeatureResult":
         return cls(ok=True, data=data, warnings=tuple(warnings or ()))
 
     @classmethod
-    def failure(cls, errors: Optional[List[str]] = None, data: Any = None) -> "FeatureResult":
+    def failure(cls, errors: Optional[list[str]] = None, data: Any = None) -> "FeatureResult":
         return cls(ok=False, data=data, errors=tuple(errors or ()))
 
 
 @dataclass(frozen=True)
 class FeatureSpec:
     name: str
-    provider: Union[str, Type[UMAFeature]]
-    default_config: Dict[str, Any] = field(default_factory=dict)
+    provider: Union[str, type[UMAFeature]]
+    default_config: dict[str, Any] = field(default_factory=dict)
     required: bool = False
 
 
@@ -114,8 +114,8 @@ class FeaturePolicy:
 @dataclass(frozen=True)
 class FeatureContext:
     memory: Any
-    config: Dict[str, Any]
-    services: Dict[str, Any]
+    config: dict[str, Any]
+    services: dict[str, Any]
     logger: logging.Logger
 
 
@@ -123,7 +123,7 @@ class FeatureRegistry:
     """Central registry for UMAFeature providers."""
 
     def __init__(self) -> None:
-        self._specs: Dict[str, FeatureSpec] = {}
+        self._specs: dict[str, FeatureSpec] = {}
 
     def register(self, spec: FeatureSpec) -> None:
         if not spec.name or not isinstance(spec.name, str):
@@ -164,10 +164,10 @@ class FeatureLoader:
     def load_from_config(
         self,
         memory_client: Any,
-        feature_cfgs: List[Dict[str, Any]],
-        services: Dict[str, Any],
-    ) -> Dict[str, UMAFeature]:
-        loaded: Dict[str, UMAFeature] = {}
+        feature_cfgs: list[dict[str, Any]],
+        services: dict[str, Any],
+    ) -> dict[str, UMAFeature]:
+        loaded: dict[str, UMAFeature] = {}
 
         for cfg in feature_cfgs:
             if not isinstance(cfg, dict):
@@ -233,7 +233,7 @@ class FeatureLoader:
 
         return loaded
 
-    def _resolve_provider(self, provider: Union[str, Type[UMAFeature]]) -> Type[UMAFeature]:
+    def _resolve_provider(self, provider: Union[str, type[UMAFeature]]) -> type[UMAFeature]:
         if inspect.isclass(provider):
             return provider
         if not isinstance(provider, str):
@@ -249,9 +249,9 @@ class FeatureLoader:
 
     def _construct_feature(
         self,
-        feature_cls: Type[UMAFeature],
-        config: Dict[str, Any],
-        services: Dict[str, Any],
+        feature_cls: type[UMAFeature],
+        config: dict[str, Any],
+        services: dict[str, Any],
     ) -> UMAFeature:
         kwargs = self._filter_kwargs(feature_cls, {**services, **config})
         return feature_cls(**kwargs)
@@ -260,8 +260,8 @@ class FeatureLoader:
         self,
         feature: UMAFeature,
         memory_client: Any,
-        config: Dict[str, Any],
-        services: Dict[str, Any],
+        config: dict[str, Any],
+        services: dict[str, Any],
     ) -> Optional[FeatureHandle]:
         context = FeatureContext(
             memory=memory_client,
@@ -276,7 +276,7 @@ class FeatureLoader:
             return feature.attach(context.memory)  # type: ignore[misc]
         return feature.attach(context)  # type: ignore[misc]
 
-    def _filter_kwargs(self, feature_cls: Type[UMAFeature], payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _filter_kwargs(self, feature_cls: type[UMAFeature], payload: dict[str, Any]) -> dict[str, Any]:
         sig = inspect.signature(feature_cls.__init__)
         params = set(sig.parameters)
         params.discard("self")

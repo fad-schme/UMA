@@ -18,7 +18,6 @@ Design Goals:
 from __future__ import annotations
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import List
 
 from uma.common.types import Fact
 from uma.common.types import Episode
@@ -66,7 +65,7 @@ class Pruner:
     # ------------------------------------------------------------------
     # Episodic Filtering
     # ------------------------------------------------------------------
-    def filter_episodes(self, episodes: List[Episode]) -> List[Episode]:
+    def filter_episodes(self, episodes: list[Episode]) -> list[Episode]:
         """
         Return episodes to KEEP.
 
@@ -76,7 +75,7 @@ class Pruner:
         3. Prune episodes older than max_episode_age.
         """
         now = datetime.now(timezone.utc)
-        keep: List[Episode] = []
+        keep: list[Episode] = []
         pruned = 0
 
         for ep in episodes:
@@ -111,7 +110,7 @@ class Pruner:
     # ------------------------------------------------------------------
     # Semantic Filtering
     # ------------------------------------------------------------------
-    def filter_facts(self, facts: List[Fact]) -> List[Fact]:
+    def filter_facts(self, facts: list[Fact]) -> list[Fact]:
         """
         Return facts to KEEP.
 
@@ -121,7 +120,7 @@ class Pruner:
         3. Do not prune very recent facts (safety window).
         """
         now = datetime.now(timezone.utc)
-        keep: List[Fact] = []
+        keep: list[Fact] = []
         pruned = 0
 
         for fact in facts:

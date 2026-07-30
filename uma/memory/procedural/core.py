@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timezone
 import logging
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 from uma.stores.base_sql_store import DEFAULT_TENANT_ID
 from uma.common.types import AgentProfile, OwnershipRef, Skill
@@ -61,7 +61,7 @@ class ProceduralCore:
     async def add_skill_for_owner(
         self,
         skill: Skill,
-        embedding: List[float],
+        embedding: list[float],
         *,
         owner_type: str,
         owner_id: str,
@@ -92,7 +92,7 @@ class ProceduralCore:
             logger.exception("ProceduralCore.add_skill failed for id=%s", getattr(skill, "id", None))
             return None
 
-    async def add_skill(self, skill: Skill, embedding: List[float]) -> Optional[Skill]:
+    async def add_skill(self, skill: Skill, embedding: list[float]) -> Optional[Skill]:
         """Add a skill to the procedural store, generating an embedding from its content."""
         if self.store is None:
             return None
@@ -151,13 +151,13 @@ class ProceduralCore:
 
     async def fetch_by_ids(
         self,
-        ids: List[str],
+        ids: list[str],
         *,
         tenant_id: str | None = None,
         owner: OwnershipRef | None = None,
         owner_type: str | None = None,
         owner_id: str | None = None,
-    ) -> List[Skill]:
+    ) -> list[Skill]:
         """Bulk-fetch skills by ID list within the ownership scope."""
         if self.store is None or not ids:
             return []
@@ -196,7 +196,7 @@ class ProceduralCore:
         owner_type: str | None = None,
         owner_id: str | None = None,
         limit: Optional[int] = None,
-    ) -> List[Skill]:
+    ) -> list[Skill]:
         """List all skills for the ownership scope, optionally including quarantined records."""
         if self.store is None:
             return []
@@ -270,8 +270,8 @@ class ProceduralCore:
         *,
         agent_id: str,
         description: str,
-        focus_areas: List[str],
-        embedding: List[float],
+        focus_areas: list[str],
+        embedding: list[float],
         tenant_id: str = DEFAULT_TENANT_ID,
     ) -> AgentProfile:
         """Insert-or-overwrite the agent's profile row.
@@ -384,18 +384,18 @@ class ProceduralCore:
 
     async def search(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         *,
         tenant_id: str | None = None,
         owner: OwnershipRef | None = None,
         owner_type: str | None = None,
         owner_id: str | None = None,
         k: int = 5,
-    ) -> List[Skill]:
+    ) -> list[Skill]:
         """Vector-search skills for the given query embedding within the ownership scope."""
         if self.store is None:
             return []
-        skills: List[Skill] = []
+        skills: list[Skill] = []
         try:
             normalized_owner = validate_explicit_owner(
                 tenant_id=(owner.tenant_id if owner is not None else tenant_id or DEFAULT_TENANT_ID),

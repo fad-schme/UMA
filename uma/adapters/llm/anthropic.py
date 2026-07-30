@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from uma.common.config_types import LLMConfig
 
@@ -49,7 +49,7 @@ def _coerce_text_content(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts: List[str] = []
+        parts: list[str] = []
         for item in content:
             text = getattr(item, "text", None)
             if isinstance(text, str):
@@ -92,13 +92,13 @@ class AnthropicLLM(LLMInterface):
     @retryable(should_retry=should_retry_anthropic)
     async def generate(
         self,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         max_tokens: int = 256,
         temperature: float = 0.0,
         **kwargs: Any,
     ) -> str:
-        system_parts: List[str] = []
-        anthropic_messages: List[Dict[str, str]] = []
+        system_parts: list[str] = []
+        anthropic_messages: list[dict[str, str]] = []
         for message in messages or []:
             if not isinstance(message, dict):
                 continue
@@ -119,7 +119,7 @@ class AnthropicLLM(LLMInterface):
         if not anthropic_messages:
             anthropic_messages = [{"role": "user", "content": ""}]
 
-        request_kwargs: Dict[str, Any] = {
+        request_kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": anthropic_messages,
             "max_tokens": max_tokens,

@@ -15,7 +15,7 @@ Design principles
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -52,19 +52,19 @@ class Provenance(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    source_chunk_ids: List[str]
-    source_document_ids: List[str]
+    source_chunk_ids: list[str]
+    source_document_ids: list[str]
     derived_at: Optional[str] = None
     derivation_type: str
-    retrieval_path: List[dict]
-    parent_artifact_ids: List[str]
+    retrieval_path: list[dict]
+    parent_artifact_ids: list[str]
     support_density: Optional[float] = None
     confidence: Optional[float] = None
-    conflicts: List[dict]
-    evidence_scopes: List[dict]
+    conflicts: list[dict]
+    evidence_scopes: list[dict]
     manual: bool
     valid: bool
-    invalid_reasons: List[str]
+    invalid_reasons: list[str]
 
 
 class DebugInfo(BaseModel):
@@ -91,9 +91,9 @@ class DebugInfo(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    lane_filter: List[str]
-    active_lanes: List[str]
-    trace: List[dict]
+    lane_filter: list[str]
+    active_lanes: list[str]
+    trace: list[dict]
     pruned_via_llm: bool
 
 
@@ -110,13 +110,13 @@ class ContextBundle(BaseModel):
     product: Literal["context"] = "context"
     query: str
 
-    working_memory: List[Any]
-    episodic: List[Episode]
-    facts: List[Fact]
-    chunks: List[Chunk]
-    documents: List[dict]
-    skills: List[Skill]
-    graph: List[Any]
+    working_memory: list[Any]
+    episodic: list[Episode]
+    facts: list[Fact]
+    chunks: list[Chunk]
+    documents: list[dict]
+    skills: list[Skill]
+    graph: list[Any]
 
     confidence: Optional[Confidence] = None
     provenance: Provenance
@@ -137,7 +137,7 @@ class HealthStatus(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     status: Literal["ok", "degraded", "error"]
-    checks: Dict[str, HealthCheck]
+    checks: dict[str, HealthCheck]
 
 
 class CompiledMemory(BaseModel):
@@ -178,8 +178,8 @@ class MemoryResult(BaseModel):
     product: Literal["memory"] = "memory"
     query: str
     compiled_memory: Optional[CompiledMemory]
-    facts: List[dict]
-    evidence: List[dict]
+    facts: list[dict]
+    evidence: list[dict]
     provenance_valid: bool
     provenance_error: Optional[str] = None
     debug: Optional[dict] = None

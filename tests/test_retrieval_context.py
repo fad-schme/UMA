@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from tests.helpers.context_bundle import make_context_bundle
 from tests.helpers.graph_adapter import RecordingGraphAdapter
 from tests.helpers.runtime import init_uma_for_tests
-from typing import Any, Dict, List
+from typing import Any
 from uma.api.memory import UMAMemory
 from uma.api.runtime import UMARuntime
 from uma.common.results import Confidence, MemoryResult, Provenance
@@ -21,7 +21,6 @@ from uma.retrieve.rlm.context_pack import ContextPack
 from uma.retrieve.rlm.controller import RLMController
 from uma.retrieve.rlm.decisions import (
     ControllerDecision,
-    RetrievalAction,
     SearchSemanticAction,
     deterministic_decision,
 )
@@ -53,7 +52,7 @@ async def test_runtime_retrieval_delegates_directly(uma_memory) -> None:
         workspace_id="workspace:alpha",
         session_id="session-1",
     )
-    seen: List[tuple[str, RuntimeContext, str]] = []
+    seen: list[tuple[str, RuntimeContext, str]] = []
 
     async def fake_context(
         bound_context: RuntimeContext,
@@ -89,7 +88,7 @@ async def test_runtime_retrieval_delegates_directly(uma_memory) -> None:
         *,
         query_text: str,
         render_mode: str = "openclaw_v1",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         seen.append(("messages", bound_context, f"{query_text}:{render_mode}"))
         return {"messages": [{"role": "system", "content": "rendered context"}], "meta": {"render_mode": render_mode}}
 
@@ -130,7 +129,7 @@ async def test_runtime_retrieval_requires_user_id(uma_memory) -> None:
 @pytest.mark.asyncio
 async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory) -> None:
     memory = uma_memory
-    seen: List[tuple[str, RuntimeContext, str]] = []
+    seen: list[tuple[str, RuntimeContext, str]] = []
 
     async def fake_context(
         bound_context: RuntimeContext,

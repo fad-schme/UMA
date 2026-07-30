@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from .context_pack import ContextPack
 from .decisions import (
@@ -41,7 +41,7 @@ from .evidence import expand_evidence_chunks_from_facts
 _LLM_HOP_SKIP_SEVERITIES = frozenset({"medium", "high"})
 
 
-def _hash_and_preview(text: str) -> Tuple[str, str]:
+def _hash_and_preview(text: str) -> tuple[str, str]:
     """Return (stable_hash_16hex, preview_first_80_chars) for logging.
 
     M1: replace full-payload INFO logs of query text with a hash for
@@ -66,7 +66,7 @@ from uma.memory.working_memory.core import session_scope_from_runtime_context
 
 logger = logging.getLogger(__name__)
 
-def _filter_predicates_for_domains(predicates: List[str], *, active_domains: set[str]) -> List[str]:
+def _filter_predicates_for_domains(predicates: list[str], *, active_domains: set[str]) -> list[str]:
     """
     Deterministically filter predicate candidates based on active domains.
 
@@ -230,54 +230,10 @@ class RLMController:
         )
         logger.info("RLM_INTENT trace_id=%s intent=%s", trace_id, intent.value)
 
-        plan = getattr(request, "plan", None)
-        if plan is None:
-            raise ValueError("RLMController.retrieve_context requires request.plan")
+        plan, scopes = self._plan_lanes(request, policy)
         active_lanes = list(plan.participating_lanes)
-        active_domains = list(plan.active_domains)
-        pack = ContextPack(
-            user_id=normalized_user_id,
-            query_text=query_text,
-            owner_type=None,
-            owner_id=None,
-            agent_id=request.context.agent_id,
-            intent=intent.value,
-            active_lanes=list(active_lanes),
-            active_domains=list(active_domains),
-            lane_plan=plan.to_trace(),
-            query_scan_severity=request.query_scan_severity,
-        )
-        pack.steps.append(
-            {
-                "step": 0,
-                "phase": "plan",
-                **plan.to_trace(),
-            }
-        )
+        pack = self._build_bundle(request, query_text, intent, plan)
 
-        pack.working_memory = []
-        if hasattr(self.env, "_memory"):
-            wm = getattr(getattr(self.env, "_memory", None), "working_memory", None)
-            if wm is not None:
-                session_scope = session_scope_from_runtime_context(request.context)
-                if session_scope is not None:
-                    pack.working_memory = wm.get_context(session_scope)
-        query_embedding = await self.env.get_query_embedding(query_text)
-
-        # Owner scopes and lane participation are separate. Recall narrows owner
-        # scopes; the retrieval plan still controls which canonical lanes run.
-        is_recall = policy.recall_score >= 0.75
-
-        if is_recall:
-            scopes = list(request.scopes_for_owner_type("user"))
-        else:
-            scopes = list(request.scopes)
-        if not scopes:
-            logger.error("RLMController.retrieve_context: no retrieval scopes available")
-            raise ValueError("RLMController.retrieve_context: no retrieval scopes available")
-
-        # Keep these fields for telemetry; primary execution uses `scopes`.
-        pack.owner_type, pack.owner_id = scopes[0].owner_type, scopes[0].owner_id
         logger.info("RLM_LANE scopes=%s", [(scope.owner_type, scope.owner_id) for scope in scopes])
         logger.info(
             "RLM_PLAN trace_id=%s product=%s lanes=%s excluded=%s",
@@ -288,78 +244,17 @@ class RLMController:
         )
         logger.info("RLM_DOMAINS trace_id=%s active_domains=%s", trace_id, pack.active_domains)
 
-        # Baseline retrieval per-scope, then merge into the pack.
-        for idx, scope in enumerate(scopes):
-            await self._baseline_retrieval(
-                request=request,
-                pack=pack,
-                query_embedding=query_embedding,
-                trace_id=f"{trace_id}:{idx}",
-                owner_type=scope.owner_type,
-                owner_id=scope.owner_id,
-            )
-            if idx == 0:
-                # Preserve first-scope telemetry for tests and downstream expectations.
-                pack.owner_type, pack.owner_id = scope.owner_type, scope.owner_id
-
-        # Deterministic merge cleanup after multi-scope baseline.
-        pack.facts = dedupe_by_id(getattr(pack, "facts", []) or [])
-        pack.chunks = dedupe_by_id(getattr(pack, "chunks", []) or [])
-        pack.episodes = dedupe_by_id(getattr(pack, "episodes", []) or [])
-        pack.graph = dedupe_by_id(getattr(pack, "graph", []) or [])
-
-        # Phase 0: default domain when missing (metadata-only; no migrations).
-        ensure_domains_for_facts(getattr(pack, "facts", []) or [])
-        ensure_domains_for_chunks(getattr(pack, "chunks", []) or [])
-        ensure_domains_for_skills(getattr(pack, "skills", []) or [])
-
-        # Apply domain routing: filter out disallowed fact domains for this query intent.
-        allowed_fact_domains = set(pack.active_domains or [])
-        pack.facts = filter_facts_by_domains(getattr(pack, "facts", []) or [], allowed_fact_domains)
-
-
-        # Finalize evidence: prune, expand cited chunks, rebuild buckets.
-        await self._post_retrieval_finalize(pack, request)
-        pack.record_seen()
-        logger.debug(
-            "RLMController: baseline counts facts=%d chunks=%d episodes=%d graph=%d",
-            len(pack.facts),
-            len(getattr(pack, "chunks", [])),
-            len(pack.episodes),
-            len(pack.graph),
-        )
-        logger.debug(
-            "RLMController: step=0 facts preview=%s",
-            [describe_fact(f)[:180] for f in pack.facts[:5]],
-        )
-
-        coverage = self._assess_coverage(pack)
-        pack.coverage = coverage
-        pack.steps.append(
-            {
-                "step": 0,
-                "phase": "baseline",
-                "event": "coverage",
-                "counts": {
-                    "facts": len(pack.facts),
-                    "episodes": len(pack.episodes),
-                    "graph": len(pack.graph),
-                },
-                "coverage": coverage.to_dict(),
-            }
-        )
-
-        stop, reason = self._evaluate_coverage_and_stop(
+        query_embedding, stop_reason = await self._execute_baseline(
+            request=request,
+            query_text=query_text,
             pack=pack,
             policy=policy,
+            scopes=scopes,
             trace_id=trace_id,
-            step=0,
-            calls_made=0,
-            tokens_used=0,
         )
-        if stop:
-            pack.warnings.append(f"stop:{reason}")
-            logger.info("RLMController: stop after baseline reason=%s", reason)
+        if stop_reason:
+            pack.warnings.append(f"stop:{stop_reason}")
+            logger.info("RLMController: stop after baseline reason=%s", stop_reason)
             logger.info(
                 "RLM_END trace_id=%s total_steps=%d total_calls=%d facts=%d episodes=%d graph=%d warnings=%s",
                 trace_id,
@@ -372,157 +267,15 @@ class RLMController:
             )
             return pack
 
-        total_env_calls = 0
-
-        for step in range(1, self.max_steps + 1):
-            if (time.time() - start) > self.timeout_s:
-                pack.warnings.append("stop:timeout")
-                break
-            if total_env_calls >= self.max_env_calls:
-                pack.warnings.append("stop:max_env_calls")
-                break
-
-            coverage = self._assess_coverage(pack)
-            pack.coverage = coverage
-            pack.steps.append(
-                {
-                    "step": step,
-                    "phase": "loop",
-                    "event": "coverage",
-                    "counts": {
-                        "facts": len(pack.facts),
-                        "episodes": len(pack.episodes),
-                        "graph": len(pack.graph),
-                    },
-                    "coverage": coverage.to_dict(),
-                }
-            )
-            logger.debug(
-                "RLMController: step=%d coverage=%s",
-                step,
-                coverage.to_dict(),
-            )
-
-            stop, reason = self._evaluate_coverage_and_stop(
-                pack=pack,
-                policy=policy,
-                trace_id=trace_id,
-                step=step,
-                calls_made=total_env_calls,
-                tokens_used=len(json.dumps(pack.snapshot())),
-            )
-            if stop:
-                pack.warnings.append(f"stop:{reason}")
-                logger.info("RLMController: stop step=%d reason=%s", step, reason)
-                break
-
-            if coverage.diminishing_returns:
-                if _two_distinct_zero_yield_lanes(getattr(pack, "steps", []) or []):
-                    pack.warnings.append("stop:diminishing_returns")
-                    logger.info(
-                        "RLMController: stop step=%d reason=diminishing_returns novelty_recent_sum=%d window=%d",
-                        step,
-                        coverage.novelty_recent_sum,
-                        self.novelty_window,
-                    )
-                    break
-                logger.info(
-                    "RLMController: diminishing_returns at step=%d but continuing (fallback ladder not exhausted)",
-                    step,
-                )
-
-            decision = decisions.deterministic_decision(
-                pack,
-                coverage,
-                cfg={
-                    "trace_id": trace_id,
-                    "max_items_per_type": self.max_items_per_type,
-                    "cluster_k": self.cluster_k,
-                    "salience_threshold": self.salience_threshold,
-                    "graph_predicate_limit": self.graph_predicate_limit,
-                    "chunk_fallback_enabled": self.chunk_fallback_enabled,
-                    "chunk_fallback_k_multiplier": self.chunk_fallback_k_multiplier,
-                    "predicate_allowlist": self.predicate_allowlist,
-                    "episodic_clustering_available": self.episodic_clustering_available,
-                    "graph_expansion_available": self.graph_expansion_available,
-                    "next_predicate_scope": lambda p, limit: _filter_predicates_for_domains(
-                        decisions.next_predicate_scope(
-                            facts=getattr(p, "facts", []) or [],
-                            predicate_weights=getattr(self, "predicate_weights", None),
-                            graph_predicate_limit=getattr(self, "graph_predicate_limit", 2),
-                        ),
-                        active_domains=set(getattr(p, "active_domains", []) or []),
-                    ),
-                },
-            )
-            if not decision or not decision.actions:
-                logger.info("RLMController: no actions at step=%d; stopping", step)
-                break
-            logger.debug(
-                "RLMController: step=%d actions=%s",
-                step,
-                [a.action for a in decision.actions],
-            )
-
-            hard_budget_hit = False
-            step_new_facts = 0
-            step_new_chunks = 0
-            step_graph_expansions = 0
-            for action in decision.actions[: self.max_actions_per_step]:
-                new_facts, new_chunks, new_graph = await self._execute_action(
-                    action=action,
-                    request=request,
-                    pack=pack,
-                    query_embedding=query_embedding,
-                    scopes=scopes,
-                    trace_id=trace_id,
-                    step=step,
-                )
-                step_new_facts += new_facts
-                step_new_chunks += new_chunks
-                step_graph_expansions += new_graph
-
-                total_env_calls += 1
-                if total_env_calls >= self.max_env_calls:
-                    pack.warnings.append("stop:max_env_calls")
-                    hard_budget_hit = True
-                    break
-
-                if self.max_new_facts_per_step and step_new_facts >= self.max_new_facts_per_step:
-                    pack.warnings.append("stop:max_new_facts_per_step")
-                    logger.info(
-                        "RLMController: step=%d hit max_new_facts_per_step=%d",
-                        step,
-                        self.max_new_facts_per_step,
-                    )
-                    hard_budget_hit = True
-                    break
-                if self.max_new_chunks_per_step and step_new_chunks >= self.max_new_chunks_per_step:
-                    pack.warnings.append("stop:max_new_chunks_per_step")
-                    logger.info(
-                        "RLMController: step=%d hit max_new_chunks_per_step=%d",
-                        step,
-                        self.max_new_chunks_per_step,
-                    )
-                    hard_budget_hit = True
-                    break
-                if self.max_graph_expansions_per_step and step_graph_expansions >= self.max_graph_expansions_per_step:
-                    pack.warnings.append("stop:max_graph_expansions_per_step")
-                    logger.info(
-                        "RLMController: step=%d hit max_graph_expansions_per_step=%d",
-                        step,
-                        self.max_graph_expansions_per_step,
-                    )
-                    hard_budget_hit = True
-                    break
-
-            if hard_budget_hit:
-                break
-            logger.debug(
-                "RLMController: step=%d facts preview=%s",
-                step,
-                [describe_fact(f)[:180] for f in pack.facts[:5]],
-            )
+        total_env_calls = await self._execute_actions(
+            request=request,
+            pack=pack,
+            policy=policy,
+            query_embedding=query_embedding,
+            scopes=scopes,
+            trace_id=trace_id,
+            start=start,
+        )
 
         # Final prune + evidence expansion after the navigation loop.
         await self._post_retrieval_finalize(pack, request)
@@ -546,6 +299,284 @@ class RLMController:
         )
         return pack
 
+    async def _execute_baseline(
+        self,
+        *,
+        request: RetrievalRequest,
+        query_text: str,
+        pack: ContextPack,
+        policy: RetrievalPolicy,
+        scopes: list[RetrievalScope],
+        trace_id: str,
+    ) -> tuple[list[float], str | None]:
+        """Populate working memory and execute the initial scoped retrieval."""
+        pack.working_memory = []
+        memory = getattr(self.env, "_memory", None)
+        working_memory = getattr(memory, "working_memory", None)
+        if working_memory is not None:
+            session_scope = session_scope_from_runtime_context(request.context)
+            if session_scope is not None:
+                pack.working_memory = working_memory.get_context(session_scope)
+
+        query_embedding = await self.env.get_query_embedding(query_text)
+        pack.owner_type, pack.owner_id = scopes[0].owner_type, scopes[0].owner_id
+        for index, scope in enumerate(scopes):
+            await self._baseline_retrieval(
+                request=request,
+                pack=pack,
+                query_embedding=query_embedding,
+                trace_id=f"{trace_id}:{index}",
+                owner_type=scope.owner_type,
+                owner_id=scope.owner_id,
+            )
+
+        await self._fuse_and_rank(pack, request)
+        pack.record_seen()
+        coverage = self._assess_coverage(pack)
+        pack.coverage = coverage
+        pack.steps.append(
+            {
+                "step": 0,
+                "phase": "baseline",
+                "event": "coverage",
+                "counts": {
+                    "facts": len(pack.facts),
+                    "episodes": len(pack.episodes),
+                    "graph": len(pack.graph),
+                },
+                "coverage": coverage.to_dict(),
+            }
+        )
+        stop, reason = self._evaluate_coverage_and_stop(
+            pack=pack,
+            policy=policy,
+            trace_id=trace_id,
+            step=0,
+            calls_made=0,
+            tokens_used=0,
+        )
+        return query_embedding, reason if stop else None
+
+    def _plan_lanes(
+        self,
+        request: RetrievalRequest,
+        policy: RetrievalPolicy,
+    ) -> tuple[Any, list[RetrievalScope]]:
+        """Resolve the immutable lane plan and owner scopes for this request."""
+        plan = getattr(request, "plan", None)
+        if plan is None:
+            raise ValueError("RLMController.retrieve_context requires request.plan")
+        scopes = (
+            list(request.scopes_for_owner_type("user"))
+            if policy.recall_score >= 0.75
+            else list(request.scopes)
+        )
+        if not scopes:
+            logger.error("RLMController.retrieve_context: no retrieval scopes available")
+            raise ValueError("RLMController.retrieve_context: no retrieval scopes available")
+        return plan, scopes
+
+    @staticmethod
+    def _build_bundle(
+        request: RetrievalRequest,
+        query_text: str,
+        intent: Any,
+        plan: Any,
+    ) -> ContextPack:
+        """Build the canonical context bundle before any store calls."""
+        pack = ContextPack(
+            user_id=request.normalized_user_id,
+            query_text=query_text,
+            owner_type=None,
+            owner_id=None,
+            agent_id=request.context.agent_id,
+            intent=intent.value,
+            active_lanes=list(plan.participating_lanes),
+            active_domains=list(plan.active_domains),
+            lane_plan=plan.to_trace(),
+            query_scan_severity=request.query_scan_severity,
+        )
+        pack.steps.append({"step": 0, "phase": "plan", **plan.to_trace()})
+        return pack
+
+    async def _fuse_and_rank(
+        self,
+        pack: ContextPack,
+        request: RetrievalRequest,
+    ) -> None:
+        """Dedupe multi-scope results, apply domain routing, and finalize evidence."""
+        pack.facts = dedupe_by_id(getattr(pack, "facts", []) or [])
+        pack.chunks = dedupe_by_id(getattr(pack, "chunks", []) or [])
+        pack.episodes = dedupe_by_id(getattr(pack, "episodes", []) or [])
+        pack.graph = dedupe_by_id(getattr(pack, "graph", []) or [])
+        ensure_domains_for_facts(pack.facts)
+        ensure_domains_for_chunks(pack.chunks)
+        ensure_domains_for_skills(getattr(pack, "skills", []) or [])
+        pack.facts = filter_facts_by_domains(
+            pack.facts,
+            set(pack.active_domains or []),
+        )
+        await self._post_retrieval_finalize(pack, request)
+
+    async def _execute_actions(
+        self,
+        *,
+        request: RetrievalRequest,
+        pack: ContextPack,
+        policy: RetrievalPolicy,
+        query_embedding: list[float],
+        scopes: list[RetrievalScope],
+        trace_id: str,
+        start: float,
+    ) -> int:
+        """Run the bounded deterministic navigation loop."""
+        total_env_calls = 0
+        for step in range(1, self.max_steps + 1):
+            if (time.time() - start) > self.timeout_s:
+                pack.warnings.append("stop:timeout")
+                break
+            if total_env_calls >= self.max_env_calls:
+                pack.warnings.append("stop:max_env_calls")
+                break
+
+            coverage = self._assess_coverage(pack)
+            pack.coverage = coverage
+            pack.steps.append(
+                {
+                    "step": step,
+                    "phase": "loop",
+                    "event": "coverage",
+                    "counts": {
+                        "facts": len(pack.facts),
+                        "episodes": len(pack.episodes),
+                        "graph": len(pack.graph),
+                    },
+                    "coverage": coverage.to_dict(),
+                }
+            )
+            stop, reason = self._evaluate_coverage_and_stop(
+                pack=pack,
+                policy=policy,
+                trace_id=trace_id,
+                step=step,
+                calls_made=total_env_calls,
+                tokens_used=len(json.dumps(pack.snapshot())),
+            )
+            if stop:
+                pack.warnings.append(f"stop:{reason}")
+                logger.info("RLMController: stop step=%d reason=%s", step, reason)
+                break
+            if coverage.diminishing_returns:
+                if _two_distinct_zero_yield_lanes(pack.steps):
+                    pack.warnings.append("stop:diminishing_returns")
+                    logger.info(
+                        "RLMController: stop step=%d reason=diminishing_returns novelty_recent_sum=%d window=%d",
+                        step,
+                        coverage.novelty_recent_sum,
+                        self.novelty_window,
+                    )
+                    break
+                logger.info(
+                    "RLMController: diminishing_returns at step=%d but continuing "
+                    "(fallback ladder not exhausted)",
+                    step,
+                )
+
+            decision = decisions.deterministic_decision(
+                pack,
+                coverage,
+                cfg=self._decision_config(trace_id),
+            )
+            if not decision or not decision.actions:
+                logger.info("RLMController: no actions at step=%d; stopping", step)
+                break
+            calls_made, hard_budget_hit = await self._execute_decision_actions(
+                decision.actions,
+                request=request,
+                pack=pack,
+                query_embedding=query_embedding,
+                scopes=scopes,
+                trace_id=trace_id,
+                step=step,
+                total_env_calls=total_env_calls,
+            )
+            total_env_calls += calls_made
+            if hard_budget_hit:
+                break
+            logger.debug(
+                "RLMController: step=%d facts preview=%s",
+                step,
+                [describe_fact(f)[:180] for f in pack.facts[:5]],
+            )
+        return total_env_calls
+
+    def _decision_config(self, trace_id: str) -> dict[str, Any]:
+        return {
+            "trace_id": trace_id,
+            "max_items_per_type": self.max_items_per_type,
+            "cluster_k": self.cluster_k,
+            "salience_threshold": self.salience_threshold,
+            "graph_predicate_limit": self.graph_predicate_limit,
+            "chunk_fallback_enabled": self.chunk_fallback_enabled,
+            "chunk_fallback_k_multiplier": self.chunk_fallback_k_multiplier,
+            "predicate_allowlist": self.predicate_allowlist,
+            "episodic_clustering_available": self.episodic_clustering_available,
+            "graph_expansion_available": self.graph_expansion_available,
+            "next_predicate_scope": lambda pack, limit: _filter_predicates_for_domains(
+                decisions.next_predicate_scope(
+                    facts=getattr(pack, "facts", []) or [],
+                    predicate_weights=self.predicate_weights,
+                    graph_predicate_limit=self.graph_predicate_limit,
+                ),
+                active_domains=set(getattr(pack, "active_domains", []) or []),
+            ),
+        }
+
+    async def _execute_decision_actions(
+        self,
+        actions: list[RetrievalAction],
+        *,
+        request: RetrievalRequest,
+        pack: ContextPack,
+        query_embedding: list[float],
+        scopes: list[RetrievalScope],
+        trace_id: str,
+        step: int,
+        total_env_calls: int,
+    ) -> tuple[int, bool]:
+        step_counts = [0, 0, 0]
+        calls_made = 0
+        for action in actions[: self.max_actions_per_step]:
+            new_counts = await self._execute_action(
+                action=action,
+                request=request,
+                pack=pack,
+                query_embedding=query_embedding,
+                scopes=scopes,
+                trace_id=trace_id,
+                step=step,
+            )
+            step_counts = [current + new for current, new in zip(step_counts, new_counts)]
+            calls_made += 1
+            limits = (
+                ("max_new_facts_per_step", self.max_new_facts_per_step, step_counts[0]),
+                ("max_new_chunks_per_step", self.max_new_chunks_per_step, step_counts[1]),
+                (
+                    "max_graph_expansions_per_step",
+                    self.max_graph_expansions_per_step,
+                    step_counts[2],
+                ),
+            )
+            if total_env_calls + calls_made >= self.max_env_calls:
+                pack.warnings.append("stop:max_env_calls")
+                return calls_made, True
+            for name, limit, count in limits:
+                if limit and count >= limit:
+                    pack.warnings.append(f"stop:{name}")
+                    logger.info("RLMController: step=%d hit %s=%d", step, name, limit)
+                    return calls_made, True
+        return calls_made, False
+
     # ------------------------------------------------------------------
     # BASELINE RETRIEVAL
     # ------------------------------------------------------------------
@@ -554,7 +585,7 @@ class RLMController:
         self,
         request: RetrievalRequest,
         pack: ContextPack,
-        query_embedding: List[float],
+        query_embedding: list[float],
         trace_id: str = None,
         owner_type: str = "agent",
         owner_id: Optional[str] = None,
@@ -742,7 +773,7 @@ class RLMController:
         step: int,
         calls_made: int,
         tokens_used: int,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """Compute coverage confidence and decide whether to stop.
 
         Called once after the baseline (step=0, calls_made=0, tokens_used=0)
@@ -800,11 +831,11 @@ class RLMController:
         action: RetrievalAction,
         request: RetrievalRequest,
         pack: ContextPack,
-        query_embedding: List[float],
-        scopes: List[RetrievalScope],
+        query_embedding: list[float],
+        scopes: list[RetrievalScope],
         trace_id: str,
         step: int,
-    ) -> Tuple[int, int, int]:
+    ) -> tuple[int, int, int]:
         """Execute one retrieval action, merge results into pack, emit telemetry.
 
         Lane-gates the action, executes it across all relevant scopes, ranks
@@ -847,7 +878,7 @@ class RLMController:
 
         # Execute across all relevant scopes, collect raw results.
         action_scopes = self._scopes_for_action(scopes, action)
-        scope_results: List[Any] = []
+        scope_results: list[Any] = []
         for scope in action_scopes:
             scope_items = await self.env.execute_action(
                 request=request,
@@ -861,7 +892,7 @@ class RLMController:
             scope_results.extend(list(scope_items or []))
 
         # Rank by action type.
-        items: List[Any] = scope_results
+        items: list[Any] = scope_results
         if a in {"search_semantic", "fetch_more_facts", "fetch_facts"}:
             items = self.ranker.rank_facts(items or [], query_text=pack.query_text)
         elif a in {"fetch_chunks", "search_chunks"}:
@@ -988,7 +1019,7 @@ class RLMController:
     # HELPERS
     # ------------------------------------------------------------------
 
-    def _normalize_predicate_weights(self, weights: Optional[Dict[str, float]]) -> Dict[str, float]:
+    def _normalize_predicate_weights(self, weights: Optional[dict[str, float]]) -> dict[str, float]:
         if not weights:
             return {}
         return {str(k).upper(): float(v) for k, v in weights.items() if isinstance(v, (int, float))}
@@ -1003,11 +1034,11 @@ class RLMController:
         return cls._lane_active(pack, "semantic") or cls._lane_active(pack, "profile")
 
     @classmethod
-    def _filter_items_by_active_lanes(cls, items: List[Any], pack: ContextPack) -> List[Any]:
+    def _filter_items_by_active_lanes(cls, items: list[Any], pack: ContextPack) -> list[Any]:
         active_lanes = set(getattr(pack, "active_lanes", []) or [])
         if not active_lanes:
             return list(items or [])
-        filtered: List[Any] = []
+        filtered: list[Any] = []
         for item in items or []:
             lane = cls._item_lane(item)
             if lane is None or lane in active_lanes:
@@ -1022,7 +1053,7 @@ class RLMController:
         lane = str(meta.get("kb_lane") or "").strip().lower()
         return lane or None
 
-    def _truncate_items(self, items: List[Any]) -> List[Any]:
+    def _truncate_items(self, items: list[Any]) -> list[Any]:
         if not items:
             return items
         return [
@@ -1066,7 +1097,7 @@ class RLMController:
         logger.info("RLMController: prune kept %d facts", len(pack.facts))
 
     @staticmethod
-    def _dedupe_facts_by_signature(facts: List[Any]) -> List[Any]:
+    def _dedupe_facts_by_signature(facts: list[Any]) -> list[Any]:
         """
         Deduplicate Fact-like objects by semantic signature while preserving grounding.
 
@@ -1104,13 +1135,13 @@ class RLMController:
                     return str(obj)
             return str(obj or "")
 
-        def _get_source_ids(f: Any) -> List[str]:
+        def _get_source_ids(f: Any) -> list[str]:
             src = get_attr_or_key(f, "source_ids", []) or []
             if isinstance(src, list):
                 return [str(x) for x in src if x]
             return []
 
-        def _set_source_ids(f: Any, ids: List[str]) -> None:
+        def _set_source_ids(f: Any, ids: list[str]) -> None:
             if isinstance(f, dict):
                 f["source_ids"] = ids
             else:
@@ -1146,7 +1177,7 @@ class RLMController:
             return []
 
         seen: dict[tuple[str, str, str, str, str], Any] = {}
-        out: List[Any] = []
+        out: list[Any] = []
         for f in list(facts or []):
             owner_type = _norm_text(get_attr_or_key(f, "owner_type", "") or "")
             owner_id = _norm_text(get_attr_or_key(f, "owner_id", "") or "")
@@ -1161,7 +1192,7 @@ class RLMController:
                 continue
 
             keep = seen[key]
-            merged_ids: List[str] = []
+            merged_ids: list[str] = []
             seen_ids: set[str] = set()
             for sid in _get_source_ids(keep) + _get_source_ids(f):
                 if sid and sid not in seen_ids:
@@ -1191,9 +1222,9 @@ class RLMController:
 
     @staticmethod
     def _scopes_for_action(
-        scopes: List[RetrievalScope],
+        scopes: list[RetrievalScope],
         action: RetrievalAction,
-    ) -> List[RetrievalScope]:
+    ) -> list[RetrievalScope]:
         requested_owner_type = getattr(action, "owner_type", None)
         if not requested_owner_type:
             return list(scopes)
@@ -1225,7 +1256,7 @@ class RLMController:
     # Fact description / parsing helpers live in semantic.query_pruner.
 
 
-def _merge_unique(existing: List[Any], research: List[Any], limit: int) -> List[Any]:
+def _merge_unique(existing: list[Any], research: list[Any], limit: int) -> list[Any]:
     from uma.common.dedupe import dedupe_by_id
 
     merged = dedupe_by_id(list(existing or []) + list(research or []))
@@ -1259,11 +1290,11 @@ def _store_for_action(action_name: str) -> Optional[str]:
     return None
 
 
-def _two_distinct_zero_yield_lanes(steps: List[Dict[str, Any]]) -> bool:
+def _two_distinct_zero_yield_lanes(steps: list[dict[str, Any]]) -> bool:
     """
     Only stop when two distinct stores have yielded 0 novelty consecutively.
     """
-    last: List[tuple[str, int]] = []
+    last: list[tuple[str, int]] = []
     for s in reversed(steps or []):
         if not isinstance(s, dict) or s.get("event") != "action_result":
             continue

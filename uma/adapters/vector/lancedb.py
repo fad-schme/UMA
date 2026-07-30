@@ -4,7 +4,7 @@ import json
 import logging
 import math
 import threading
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from .base import VectorIndex
 
@@ -74,13 +74,13 @@ class LanceDBIndex(VectorIndex):
 
     def upsert(
         self,
-        ids: List[str],
-        vectors: List[List[float]],
+        ids: list[str],
+        vectors: list[list[float]],
         *,
-        tenant_ids: List[str],
-        owner_types: List[str],
-        owner_ids: List[str],
-        extra_metadata: Optional[List[Dict]] = None,
+        tenant_ids: list[str],
+        owner_types: list[str],
+        owner_ids: list[str],
+        extra_metadata: Optional[list[dict]] = None,
     ) -> None:
         """
         Insert or update vectors in the LanceDB table.
@@ -173,14 +173,14 @@ class LanceDBIndex(VectorIndex):
 
     def query(
         self,
-        vector: List[float],
+        vector: list[float],
         *,
         tenant_id: str,
         owner_type: str,
         owner_id: str,
         k: int = 10,
-        extra_filters: Optional[Dict[str, Any]] = None,
-    ) -> List[Tuple[str, float]]:
+        extra_filters: Optional[dict[str, Any]] = None,
+    ) -> list[tuple[str, float]]:
         """
         Nearest-neighbour search scoped to ``(tenant_id, owner_type, owner_id)``.
 
@@ -235,7 +235,7 @@ class LanceDBIndex(VectorIndex):
             logger.exception("LanceDBIndex.query failed table=%s", self.table_name)
             raise
 
-        results: List[Tuple[str, float]] = []
+        results: list[tuple[str, float]] = []
         for row in rows:
             sid = row.get("id")
             if not isinstance(sid, str) or not sid:
@@ -273,7 +273,7 @@ class LanceDBIndex(VectorIndex):
 
         return results
 
-    def delete(self, ids: List[str]) -> None:
+    def delete(self, ids: list[str]) -> None:
         """Delete vectors by ID. Scoped deletes are unnecessary because UMA generates globally unique IDs."""
         if not ids:
             return
@@ -292,13 +292,13 @@ class LanceDBIndex(VectorIndex):
             logger.debug("LanceDBIndex._open_table: table=%s not found or unavailable", self.table_name, exc_info=True)
             return None
 
-    def _get_or_create_table(self, seed_rows: List[Dict[str, Any]]):
+    def _get_or_create_table(self, seed_rows: list[dict[str, Any]]):
         table = self._open_table()
         if table is not None:
             return table
         return self._db.create_table(self.table_name, data=seed_rows)
 
-    def _delete_from_table(self, table: Any, ids: List[str]) -> None:
+    def _delete_from_table(self, table: Any, ids: list[str]) -> None:
         escaped = [sid.replace("'", "''") for sid in ids if isinstance(sid, str) and sid]
         if not escaped:
             return
@@ -306,7 +306,7 @@ class LanceDBIndex(VectorIndex):
         table.delete(predicate)
 
     @staticmethod
-    def _parse_metadata(raw: Any) -> Dict[str, Any]:
+    def _parse_metadata(raw: Any) -> dict[str, Any]:
         if not isinstance(raw, str) or not raw.strip():
             return {}
         try:
@@ -316,7 +316,7 @@ class LanceDBIndex(VectorIndex):
             return {}
         return value if isinstance(value, dict) else {}
 
-    def _validate_upsert_inputs(self, ids: List[str], vectors: List[List[float]]) -> None:
+    def _validate_upsert_inputs(self, ids: list[str], vectors: list[list[float]]) -> None:
         if len(ids) != len(vectors):
             raise ValueError("LanceDBIndex.upsert: ids and vectors length mismatch.")
         for sid in ids:

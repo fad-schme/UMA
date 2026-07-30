@@ -23,7 +23,7 @@ Coding agent instructions:
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+from typing import Optional
 
 import numpy as np
 
@@ -70,7 +70,7 @@ class EpisodeClusterer:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def cluster(self, episodes: List[Episode]) -> List[List[Episode]]:
+    def cluster(self, episodes: list[Episode]) -> list[list[Episode]]:
         """
         Cluster episodes into groups based on embedding cosine similarity.
 
@@ -89,9 +89,9 @@ class EpisodeClusterer:
         if not episodes:
             return []
 
-        clusters: List[List[Episode]] = []
-        cluster_centroids: List[Optional[np.ndarray]] = []
-        cluster_sizes: List[int] = []
+        clusters: list[list[Episode]] = []
+        cluster_centroids: list[Optional[np.ndarray]] = []
+        cluster_sizes: list[int] = []
 
         embedded_count = 0
         no_embedding_count = 0

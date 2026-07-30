@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Any
+from typing import Any
 
 from uma.adapters.llm.retry_utils import retryable, should_retry_network_only
 from .types import DocumentChunk
@@ -9,13 +9,13 @@ from .types import DocumentChunk
 logger = logging.getLogger(__name__)
 
 
-def _batched(items: List[Any], batch_size: int) -> List[List[Any]]:
+def _batched(items: list[Any], batch_size: int) -> list[list[Any]]:
     if batch_size <= 0:
         return [items]
     return [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
 
 
-def _validate_embedding(vec: List[float], expected_dim: int | None = None) -> None:
+def _validate_embedding(vec: list[float], expected_dim: int | None = None) -> None:
     if not isinstance(vec, list) or not vec:
         raise ValueError("embedder: embedding is empty")
     if not all(isinstance(x, (float, int)) for x in vec):
@@ -27,7 +27,7 @@ def _validate_embedding(vec: List[float], expected_dim: int | None = None) -> No
 
 
 async def embed_chunks(
-    chunks: List[DocumentChunk],
+    chunks: list[DocumentChunk],
     *,
     embedder: Any,
     batch_size: int = 16,
@@ -37,7 +37,7 @@ async def embed_chunks(
     backoff_factor: float = 2.0,
     max_delay: float = 8.0,
     strict: bool = True,
-) -> Dict[str, List[float]]:
+) -> dict[str, list[float]]:
     """
     Batch-embed chunk texts with retries.
 
@@ -48,7 +48,7 @@ async def embed_chunks(
     if embedder is None or not hasattr(embedder, "embed"):
         raise ValueError("embed_chunks: embedder with .embed() required")
 
-    results: Dict[str, List[float]] = {}
+    results: dict[str, list[float]] = {}
 
     @retryable(
         max_attempts=max_attempts,
@@ -57,7 +57,7 @@ async def embed_chunks(
         max_delay=max_delay,
         should_retry=should_retry_network_only,
     )
-    async def _embed_batch(texts: List[str]) -> List[List[float]]:
+    async def _embed_batch(texts: list[str]) -> list[list[float]]:
         return await embedder.embed(texts)
 
     max_chars = max(0, int(getattr(embedder, "max_input_chars", 0) or 0))

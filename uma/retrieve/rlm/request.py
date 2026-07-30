@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Optional, Tuple
+from typing import Literal, Optional
 
 from uma.common.types import RuntimeContext
 from uma.common.identity import normalize_user_id
@@ -42,7 +42,7 @@ VALID_SCAN_SEVERITIES = frozenset({None, "none", "low", "medium", "high"})
 class RetrievalRequest:
     context: RuntimeContext
     normalized_user_id: str
-    scopes: Tuple[RetrievalScope, ...]
+    scopes: tuple[RetrievalScope, ...]
     trace_id: Optional[str] = None
     plan: Optional[RetrievalPlan] = None
     # CR3: result of scanning the query_text at the runtime boundary.
@@ -97,7 +97,7 @@ class RetrievalRequest:
             query_scan_severity=query_scan_severity,
         )
 
-    def scopes_for_owner_type(self, owner_type: Optional[str] = None) -> Tuple[RetrievalScope, ...]:
+    def scopes_for_owner_type(self, owner_type: Optional[str] = None) -> tuple[RetrievalScope, ...]:
         """Return the list of ownership scopes visible to the given owner type."""
         if owner_type is None:
             return self.scopes

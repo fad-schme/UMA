@@ -30,6 +30,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **`uma/common/rule_functions.py` patterns precompiled at module load**
   instead of recompiled on every scorer call. Behaviour identical; removes
   per-call `re.compile` overhead on the write-time hot path.
+- **Packaging consolidated into `pyproject.toml`.** `setup.py` deleted;
+  every field (runtime dependencies, optional-dependencies, project
+  metadata, package-data, dynamic version) now lives in `pyproject.toml`
+  as the single source of truth. All existing extras preserved
+  (`llm`, `openai`, `ollama`, `vector`, `graph`, `postgres`, `security`,
+  `parsers`, `dev`). Build with `python -m build`; install with
+  `pip install .` or `pip install -e '.[dev]'`. Anyone invoking
+  `python setup.py <cmd>` directly will need to switch to `pip` or
+  `python -m build` — the file is gone.
 - **OWASP LLM10 posture corrected from "In scope" to "Partial"** across
   `README.md`, `ARCHITECTURE.md`, `.claude/skills/overview.md`, and
   `.claude/skills/security.md` (row + frontmatter description). UMA-owned
@@ -39,6 +48,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   throttling policy — accounting, storage, timeouts, and refusal semantics
   are the caller's. No code changes; documentation now reflects what the
   code actually does.
+
+### Removed
+- **`setup.py`** — merged into `pyproject.toml` (see above). The custom
+  `build_py` cmdclass that cleared stale generated package trees is not
+  ported: `python -m build` runs in an isolated environment where the
+  stale-tree problem does not occur. If you hit it, `git clean -fdx`
+  before building.
 
 ---
 
@@ -106,25 +122,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   explanatory comment.
 - **SHA-256 in snippet refiner** — replaced `hashlib.sha1` with
   `hashlib.sha256` (B324 fix).
-- **OWASP coverage table** added to `uma-security.md` — full 10-row table
+- **OWASP coverage table** added to `security.md` — full 10-row table
   with explicit in-scope / out-of-scope statements for all LLM Top 10 2025
   categories.
 - **ASI mapping** added to `ARCHITECTURE.md` — ASI06 (Memory Poisoning
   primary), ASI03 (Identity & Privilege Abuse), ASI05 (Unexpected Code
   Execution, ingest path).
 - **Seven security primitives** named and described consistently across
-  `uma-overview.md`, `uma-security.md`, README, and ARCHITECTURE:
+  `overview.md`, `security.md`, README, and ARCHITECTURE:
   Provenance, Write-time trust scoring, Cryptographic integrity, Injection
   pattern detection, Two-layer injection gate, Quarantine, Ingest boundary
   hardening.
 
 ### Changed
-- **`LatestWinsFactResolver` description corrected** in `uma-lanes.md`. The
+- **`LatestWinsFactResolver` description corrected** in `lanes.md`. The
   resolver picks by `max(updated_at)` across all facts including quarantined
   ones; quarantine exclusion is at the SQL retrieval layer
   (`AND quarantined_at IS NULL`), not in the resolver.
 - **Dead code removed** — `defer_post_turn` queue drainer, consolidation
-  hardcoded-off wrapper, `CoTMemoryBuilder`, orphaned `GraphUpdater` class,
+  hardcoded-off wrapper, `CoTMemoryBuilder`, orphaned legacy graph-update path,
   13 confirmed-dead functions, 34 unused imports.
 - **`M5` store deduplication** — `quarantine_record` and
   `reinstate_quarantined_record` lifted into `BaseVectorSQLStore`; scope-
@@ -132,7 +148,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **ARCHITECTURE.md lane table** corrected to match `planner.py` (PERSONAL
   intent activates profile + procedural + semantic + episodic; MIXED activates
   five lanes).
-- **`set_context` ambient-scope warning** documented in `uma-overview.md`
+- **`set_context` ambient-scope warning** documented in `overview.md`
   (L3).
 
 ---
@@ -177,7 +193,8 @@ Initial public beta release.
 - Six typed memory lanes: working memory, semantic facts, raw chunks,
   episodic, procedural, compiled wiki.
 - SQLite (authoritative) + LanceDB (rebuildable vector accelerator) embedded
-  profile. No external services required.
+  profile. No external storage service required; model providers are configured
+  separately and may run locally or remotely.
 - Ownership-scoped retrieval: `tenant_id / owner_type / owner_id` enforced at
   every SQL and vector read boundary.
 - `UMAMemory` public API: `retrieve_context`, `retrieve_memory`,

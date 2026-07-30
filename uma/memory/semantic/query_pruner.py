@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, List, Sequence
+from typing import Any, Sequence
 
 from pydantic import BaseModel, Field
 
@@ -24,7 +24,7 @@ from uma.retrieve.user_query_helper import build_fact_embedding_text, extract_ke
 logger = logging.getLogger(__name__)
 
 class _ScoresPayload(BaseModel):
-    scores: List[float] = Field(default_factory=list)
+    scores: list[float] = Field(default_factory=list)
 
 
 def describe_fact(fact: Any) -> str:
@@ -49,11 +49,12 @@ def describe_fact(fact: Any) -> str:
         sub = fact.get("subject") if isinstance(fact, dict) else getattr(fact, "subject", "user")
         pred = fact.get("predicate") if isinstance(fact, dict) else getattr(fact, "predicate", "related_to")
         return f"{sub} {pred}"
-    except Exception:
+    except Exception as exc:
+        logger.debug("describe_fact: fallback description failed: %s", exc, exc_info=True)
         return ""
 
 
-def fallback_keep_by_query(query: str, facts: Sequence[Any]) -> List[int]:
+def fallback_keep_by_query(query: str, facts: Sequence[Any]) -> list[int]:
     """Keep facts whose text overlaps with query terms when the LLM pruner is unavailable."""
     stop = set()
     if get_stopwords:
@@ -62,7 +63,7 @@ def fallback_keep_by_query(query: str, facts: Sequence[Any]) -> List[int]:
         except Exception:
             stop = set()
 
-    terms: List[str] = []
+    terms: list[str] = []
     if extract_keywords_and_phrases:
         try:
             extracted = extract_keywords_and_phrases(query)
@@ -76,7 +77,7 @@ def fallback_keep_by_query(query: str, facts: Sequence[Any]) -> List[int]:
     if not terms:
         return []
 
-    scored: List[tuple[int, int, int]] = []
+    scored: list[tuple[int, int, int]] = []
     for idx, fact in enumerate(facts, start=1):
         text = describe_fact(fact).lower()
         if not text:
@@ -93,11 +94,11 @@ async def prune_facts_for_query(
     *,
     llm: Any,
     query_text: str,
-    facts: List[Any],
+    facts: list[Any],
     threshold: float = 0.6,
     max_keep: int = 12,
     max_candidates: int = 20,
-) -> List[Any]:
+) -> list[Any]:
     """
     Use the LLM to remove facts not relevant to the query.
 

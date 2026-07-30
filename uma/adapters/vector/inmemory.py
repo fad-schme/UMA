@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from .base import VectorIndex
 
@@ -54,9 +54,9 @@ class InMemoryVectorIndex(VectorIndex):
 
         # C1: storage now keeps isolation fields as first-class entries.
         # extra metadata stays in a parallel dict for non-isolation keys.
-        self._vectors: Dict[str, List[float]] = {}
-        self._scopes: Dict[str, Tuple[str, str, str]] = {}  # id -> (tenant_id, owner_type, owner_id)
-        self._extra: Dict[str, Dict[str, Any]] = {}
+        self._vectors: dict[str, list[float]] = {}
+        self._scopes: dict[str, tuple[str, str, str]] = {}  # id -> (tenant_id, owner_type, owner_id)
+        self._extra: dict[str, dict[str, Any]] = {}
 
         logger.info(
             "InMemoryVectorIndex initialized (dim=%d). Intended for development, CI, or fallback only.",
@@ -67,7 +67,7 @@ class InMemoryVectorIndex(VectorIndex):
     # Utility
     # ---------------------------------------------------------
 
-    def _cosine(self, a: List[float], b: List[float]) -> float:
+    def _cosine(self, a: list[float], b: list[float]) -> float:
         dot = sum(x * y for x, y in zip(a, b))
         na = math.sqrt(sum(x * x for x in a)) + 1e-8
         nb = math.sqrt(sum(y * y for y in b)) + 1e-8
@@ -79,13 +79,13 @@ class InMemoryVectorIndex(VectorIndex):
 
     def upsert(
         self,
-        ids: List[str],
-        vectors: List[List[float]],
+        ids: list[str],
+        vectors: list[list[float]],
         *,
-        tenant_ids: List[str],
-        owner_types: List[str],
-        owner_ids: List[str],
-        extra_metadata: Optional[List[Dict]] = None,
+        tenant_ids: list[str],
+        owner_types: list[str],
+        owner_ids: list[str],
+        extra_metadata: Optional[list[dict]] = None,
     ) -> None:
         """Insert or update vectors in the in-memory store. Intended for testing and CI only."""
         n = len(ids)
@@ -115,7 +115,7 @@ class InMemoryVectorIndex(VectorIndex):
         # interleaved with per-row validation would leak partial state on
         # a bad input — earlier rows in the batch would be visible but
         # later ones would not, leaving an inconsistent index.
-        prepared: List[tuple] = []  # (sid, vec, (tid, ot, oid), extras_dict)
+        prepared: list[tuple] = []  # (sid, vec, (tid, ot, oid), extras_dict)
         for sid, vec, tid, ot, oid, extra in zip(
             ids, vectors, tenant_ids, owner_types, owner_ids, extra_list,
         ):
@@ -153,7 +153,7 @@ class InMemoryVectorIndex(VectorIndex):
             self._scopes[sid] = scope
             self._extra[sid] = extra
 
-    def delete(self, ids: List[str]) -> None:
+    def delete(self, ids: list[str]) -> None:
         """Remove vectors from the in-memory store."""
         for _id in ids:
             self._vectors.pop(_id, None)
@@ -162,14 +162,14 @@ class InMemoryVectorIndex(VectorIndex):
 
     def query(
         self,
-        vector: List[float],
+        vector: list[float],
         *,
         tenant_id: str,
         owner_type: str,
         owner_id: str,
         k: int = 10,
-        extra_filters: Optional[Dict[str, Any]] = None,
-    ) -> List[Tuple[str, float]]:
+        extra_filters: Optional[dict[str, Any]] = None,
+    ) -> list[tuple[str, float]]:
         """
         Returns:
             List of (id, score) pairs sorted by cosine similarity DESC,

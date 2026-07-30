@@ -18,7 +18,7 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Iterable, Optional, Sequence
 
 from uma.common.accessors import get_attr_or_key
 from uma.retrieve.user_query_helper import extract_keywords_and_phrases, build_fact_embedding_text
@@ -33,7 +33,7 @@ def _safe_float(val: Any, *, default: float = 0.0) -> float:
         return float(default)
 
 
-def _meta(obj: Any) -> Dict[str, Any]:
+def _meta(obj: Any) -> dict[str, Any]:
     m = get_attr_or_key(obj, "meta") or {}
     return m if isinstance(m, dict) else {}
 
@@ -61,7 +61,7 @@ def _position(obj: Any) -> int:
     return int(_safe_float(get_attr_or_key(obj, "position", 0) or 0, default=0.0))
 
 
-def extract_terms(query_text: str) -> List[str]:
+def extract_terms(query_text: str) -> list[str]:
     """Extract normalised keyword terms from a query string for lexical scoring."""
     extracted = extract_keywords_and_phrases(query_text or "")
     terms = (extracted.get("keywords") or []) + (extracted.get("keyphrases") or [])
@@ -76,7 +76,7 @@ def extract_terms(query_text: str) -> List[str]:
     return out
 
 
-def _update_meta(obj: Any, updates: Dict[str, Any]) -> None:
+def _update_meta(obj: Any, updates: dict[str, Any]) -> None:
     if not updates:
         return
     try:
@@ -105,7 +105,7 @@ def _candidate_text_for_rerank(obj: Any) -> str:
         return f"{subj} {pred} {objv}".strip()
 
 
-def _tokenize_text(text: str) -> List[str]:
+def _tokenize_text(text: str) -> list[str]:
     if not text or not isinstance(text, str):
         return []
     return [tok for tok in re.findall(r"[a-z0-9]+", text.lower()) if len(tok) >= 3]
@@ -188,7 +188,7 @@ def compute_rerank_score(*, query_text: str, candidate: Any, terms: Optional[Seq
     )
 
 
-def rerank_candidates(query_text: str, candidates: Sequence[Any]) -> List[Any]:
+def rerank_candidates(query_text: str, candidates: Sequence[Any]) -> list[Any]:
     """
     Canonical rerank API.
 
@@ -205,8 +205,8 @@ def rerank_candidates(query_text: str, candidates: Sequence[Any]) -> List[Any]:
 
     terms = extract_terms(query_text or "")
 
-    groups: List[Tuple[str, str]] = []
-    bucket: Dict[Tuple[str, str], List[Tuple[float, str, int, Any]]] = {}
+    groups: list[tuple[str, str]] = []
+    bucket: dict[tuple[str, str], list[tuple[float, str, int, Any]]] = {}
 
     for idx, it in enumerate(items):
         key = (_owner_type(it), _owner_id(it))
@@ -217,7 +217,7 @@ def rerank_candidates(query_text: str, candidates: Sequence[Any]) -> List[Any]:
         _update_meta(it, {"rerank_score": float(score)})
         bucket[key].append((float(score), _id(it), idx, it))
 
-    out: List[Any] = []
+    out: list[Any] = []
     for key in groups:
         scored = bucket.get(key) or []
         scored.sort(key=lambda x: (-x[0], x[1], x[2]))
@@ -231,7 +231,7 @@ def fuse_candidates(
     sparse: Sequence[Any],
     strategy: str = "rrf",
     rrf_k: int = 60,
-) -> List[Any]:
+) -> list[Any]:
     """
     Deterministically fuse dense + lexical candidate pools into a single union list.
 
@@ -256,10 +256,10 @@ def fuse_candidates(
     dense_list = list(dense or [])
     sparse_list = list(sparse or [])
 
-    dense_rank: Dict[str, int] = {}
-    sparse_rank: Dict[str, int] = {}
-    dense_item: Dict[str, Any] = {}
-    sparse_item: Dict[str, Any] = {}
+    dense_rank: dict[str, int] = {}
+    sparse_rank: dict[str, int] = {}
+    dense_item: dict[str, Any] = {}
+    sparse_item: dict[str, Any] = {}
 
     for i, it in enumerate(dense_list, start=1):
         sid = _id(it)
@@ -298,9 +298,9 @@ def fuse_candidates(
 
     score_fn = _rrf_score if strat == "rrf" else _overlap_score
 
-    scored: List[Tuple[float, str]] = [(score_fn(sid), sid) for sid in ids]
+    scored: list[tuple[float, str]] = [(score_fn(sid), sid) for sid in ids]
 
-    def _tie_key(pair: Tuple[float, str]) -> Tuple[float, int, int, int, int, str]:
+    def _tie_key(pair: tuple[float, str]) -> tuple[float, int, int, int, int, str]:
         score, sid = pair
         dr = dense_rank.get(sid)
         sr = sparse_rank.get(sid)
@@ -314,7 +314,7 @@ def fuse_candidates(
 
     scored.sort(key=_tie_key)
 
-    out: List[Any] = []
+    out: list[Any] = []
     for score, sid in scored:
         d_it = dense_item.get(sid)
         s_it = sparse_item.get(sid)
@@ -396,7 +396,7 @@ class Ranker:
 
     # ----------------------------- Public -----------------------------
 
-    def truncate(self, items: Sequence[Any], k: int) -> List[Any]:
+    def truncate(self, items: Sequence[Any], k: int) -> list[Any]:
         """Truncate a ranked candidate list to ``max_items``, preserving order."""
         try:
             k_i = max(0, int(k))
@@ -404,7 +404,7 @@ class Ranker:
             k_i = 0
         return list(items or [])[:k_i] if k_i else []
 
-    def rank_facts(self, items: Sequence[Any], *, query_text: str = "") -> List[Any]:
+    def rank_facts(self, items: Sequence[Any], *, query_text: str = "") -> list[Any]:
         """Rank semantic facts by the trust-weighted blend of similarity and trust score."""
         items = list(items or [])
         if not items:
@@ -412,7 +412,7 @@ class Ranker:
 
         terms = extract_terms(query_text or "")
 
-        scored: List[Tuple[float, str, Any]] = []
+        scored: list[tuple[float, str, Any]] = []
         for f in items:
             rerank = compute_rerank_score(query_text=query_text or "", candidate=f, terms=terms)
             sal = _safe_float(get_attr_or_key(f, "salience", 0.0) or 0.0, default=0.0)
@@ -428,7 +428,7 @@ class Ranker:
         self._emit_scorecards("facts", scored)
         return self._filter_by_trust([f for _s, _sid, f in scored])
 
-    def rank_chunks(self, items: Sequence[Any], *, query_text: str = "") -> List[Any]:
+    def rank_chunks(self, items: Sequence[Any], *, query_text: str = "") -> list[Any]:
         """Rank document chunks by the trust-weighted blend of similarity and trust score."""
         items = list(items or [])
         if not items:
@@ -436,7 +436,7 @@ class Ranker:
 
         terms = extract_terms(query_text or "")
 
-        scored: List[Tuple[int, float, str, int, str, Any]] = []
+        scored: list[tuple[int, float, str, int, str, Any]] = []
         for ch in items:
             m = _meta(ch)
             route = str(m.get("retrieval_route") or "")
@@ -455,14 +455,14 @@ class Ranker:
         self._emit_scorecards("chunks", [(s, sid, it) for (_rp, s, _d, _p, sid, it) in scored])
         return self._filter_by_trust([ch for _rp, _s, _d, _p, _sid, ch in scored])
 
-    def rank_episodes(self, items: Sequence[Any], *, query_text: str = "") -> List[Any]:
+    def rank_episodes(self, items: Sequence[Any], *, query_text: str = "") -> list[Any]:
         """Rank episodic memories by the trust-weighted blend of similarity and trust score."""
         items = list(items or [])
         if not items:
             return []
         now = datetime.now(timezone.utc)
         terms = extract_terms(query_text or "")
-        scored: List[Tuple[float, str, Any]] = []
+        scored: list[tuple[float, str, Any]] = []
         for ep in items:
             sid = _id(ep)
             rerank = compute_rerank_score(query_text=query_text or "", candidate=ep, terms=terms)
@@ -486,13 +486,13 @@ class Ranker:
         self._emit_scorecards("episodes", scored)
         return self._filter_by_trust([ep for _s, _sid, ep in scored])
 
-    def rank_skills(self, items: Sequence[Any], *, query_text: str = "") -> List[Any]:
+    def rank_skills(self, items: Sequence[Any], *, query_text: str = "") -> list[Any]:
         """Rank procedural skills by the trust-weighted blend of similarity and trust score."""
         items = list(items or [])
         if not items:
             return []
         terms = extract_terms(query_text or "")
-        scored: List[Tuple[float, str, Any]] = []
+        scored: list[tuple[float, str, Any]] = []
         for sk in items:
             sid = _id(sk)
             rerank = compute_rerank_score(query_text=query_text or "", candidate=sk, terms=terms)
@@ -538,8 +538,8 @@ class Ranker:
         return 0.0
 
     def _apply_trust_weight(
-        self, scored: List[Tuple[float, str, Any]]
-    ) -> List[Tuple[float, str, Any]]:
+        self, scored: list[tuple[float, str, Any]]
+    ) -> list[tuple[float, str, Any]]:
         """Blend existing final_score with trust_score and return re-sorted list.
 
         formula: final_with_trust = (1 - trust_weight) * existing + trust_weight * trust_score
@@ -554,7 +554,7 @@ class Ranker:
         result.sort(key=lambda x: (-x[0], x[1]))
         return result
 
-    def _filter_by_trust(self, items: List[Any]) -> List[Any]:
+    def _filter_by_trust(self, items: list[Any]) -> list[Any]:
         """Drop candidates whose trust_score is below the configured threshold (inclusive)."""
         if self._min_trust_score <= 0.0:
             return items
@@ -566,10 +566,10 @@ class Ranker:
                 out.append(it)
         return out
 
-    def _emit_scorecards(self, lane: str, scored: Iterable[Tuple[float, str, Any]]) -> None:
+    def _emit_scorecards(self, lane: str, scored: Iterable[tuple[float, str, Any]]) -> None:
         if not self._debug:
             return
-        cards: List[ScoreCard] = []
+        cards: list[ScoreCard] = []
         for final, sid, obj in scored:
             m = _meta(obj)
             trust_raw = getattr(obj, "trust_score", None)

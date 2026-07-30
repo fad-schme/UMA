@@ -60,7 +60,7 @@ import importlib
 import inspect
 import logging
 import threading
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Union
 
 if TYPE_CHECKING:
     from uma.common.results import ContextBundle, HealthStatus, MemoryResult
@@ -216,11 +216,11 @@ class UMAMemory:
         self.animus_profile_provider = AnimusProfileProvider()
 
         # Internal store registry (core-only access; no direct store usage outside cores)
-        self._stores: Dict[str, Any] = {}
+        self._stores: dict[str, Any] = {}
 
         # Hooks + Feature attachment registry
         self.hooks = UMAHooks()
-        self.features: Dict[str, Any] = {}
+        self.features: dict[str, Any] = {}
         self._feature_policy = FeaturePolicy()
 
         # M6: optional SDK-level rate-limit hook. See module-level
@@ -310,7 +310,7 @@ class UMAMemory:
             ) from exc
 
         return provider
-    
+
     def _resolve_runtime_context(
         self,
         *,
@@ -586,7 +586,7 @@ class UMAMemory:
             memory_intent=memory_intent,
             include_debug=include_debug,
         )
-    
+
     # ----------------------------------------------------------------------
     # Core API: Data Ingestion
     # ----------------------------------------------------------------------
@@ -613,7 +613,7 @@ class UMAMemory:
         session_id: Optional[str] = None,
         tenant_id: str = "default",
         workspace_id: Optional[str] = None,
-        extra_meta: Optional[Dict[str, Any]] = None,
+        extra_meta: Optional[dict[str, Any]] = None,
         skip_scan: bool = False,
     ) -> None:
         """Public turn-ingest entrypoint.
@@ -755,7 +755,7 @@ class UMAMemory:
         workspace_id: Optional[str] = None,
         session_id: Optional[str] = None,
         config: Optional[Any] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Bootstrap long-term memory facts from MEMORY.md through the ingest layer."""
         runtime_context = self._resolve_runtime_context(
             user_id=user_id,
@@ -785,7 +785,7 @@ class UMAMemory:
         workspace_id: Optional[str] = None,
         session_id: Optional[str] = None,
         config: Optional[Any] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Bootstrap a daily diary file through the ingest layer.
 
         Pass an IngestConfig via `config` to override defaults like
@@ -846,7 +846,7 @@ class UMAMemory:
         include_semantic: bool = True,
         include_procedural: bool = True,
         batch_size: int = 32,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Rebuild vector indexes from SQL-backed data."""
         from uma.common.maintenance import rebuild_vector_indexes
 
@@ -872,7 +872,7 @@ class UMAMemory:
         include_procedural: bool = True,
         include_graph: bool = True,
         batch_size: int = 32,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Rebuild derived vector and graph indexes from authoritative SQL-backed data."""
         from uma.common.maintenance import rebuild_derived_indexes
 
@@ -1114,7 +1114,7 @@ class UMAMemory:
     def register_methods(
         self,
         feature_name: str,
-        methods: Dict[str, Any],
+        methods: dict[str, Any],
         allow_override: Optional[bool] = None,
     ) -> None:
         """Attach feature methods to UMAMemory with collision checks."""

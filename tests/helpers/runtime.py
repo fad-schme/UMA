@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import yaml
 
@@ -45,8 +45,8 @@ def build_test_config(
     db_root: Path,
     embedding_dim: int = 64,
     graph_backend: str = "disabled",
-    graph_config: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    graph_config: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
     """
     Build a minimal UMA config suitable for deterministic, offline CI tests.
 
@@ -61,7 +61,7 @@ def build_test_config(
     _TEST_EMBED_DIM = int(embedding_dim)
     shared_llm_module.AsyncOpenAI = _FakeAsyncOpenAI  # type: ignore[assignment]
 
-    cfg: Dict[str, Any] = {
+    cfg: dict[str, Any] = {
         "storage": {
             "db_root": str(db_root) + "/",
             "sql_backend": "sqlite",
@@ -139,7 +139,7 @@ async def init_uma_for_tests(
     agent_id: str = "agent-default",
     embedding_dim: int = 64,
     graph_backend: str = "disabled",
-    graph_config: Optional[Dict[str, Any]] = None,
+    graph_config: Optional[dict[str, Any]] = None,
 ) -> UMAMemory:
     """
     Initialize a fully bootstrapped UMAMemory instance for tests.

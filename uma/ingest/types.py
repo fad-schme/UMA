@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Optional
 
 from uma.common.types import Chunk, Fact
 
@@ -12,9 +12,9 @@ class ParsedDocument:
     doc_id: str
     source_path: str
     source_hash: str
-    pages: List[Tuple[int, str]]  # (page_num, text)
+    pages: list[tuple[int, str]]  # (page_num, text)
     extracted_at: datetime
-    sanitization_counts: Optional[Dict[str, int]] = None
+    sanitization_counts: Optional[dict[str, int]] = None
 
 
 @dataclass(frozen=True)
@@ -22,7 +22,7 @@ class NormalizedSection:
     section_id: str
     doc_id: str
     text: str
-    page_range: Tuple[int, int]
+    page_range: tuple[int, int]
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,7 @@ class DocumentChunk:
     chunk_id: str
     doc_id: str
     text: str
-    page_range: Tuple[int, int]
+    page_range: tuple[int, int]
     position: int
     char_start: Optional[int] = None
     char_end: Optional[int] = None
@@ -44,22 +44,22 @@ class IngestReport:
     chunks_created: int
     facts_created: int
     graph_edges_created: int
-    warnings: List[str]
+    warnings: list[str]
     chunks_failed: int = 0
-    fact_ids: List[str] = field(default_factory=list)
+    fact_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class CaptureSourceResult:
     parsed: ParsedDocument
     ingest_signature: dict[str, Any]
-    captured_chunk_inputs: List[DocumentChunk]
-    captured_chunks: List[Chunk]
+    captured_chunk_inputs: list[DocumentChunk]
+    captured_chunks: list[Chunk]
     owner_type: str
     owner_id: str
     tenant_id: str
     workspace_id: Optional[str]
-    warnings: List[str]
+    warnings: list[str]
     skipped: bool = False
     early_report: Optional[IngestReport] = None
 
@@ -67,30 +67,30 @@ class CaptureSourceResult:
 @dataclass(frozen=True)
 class DeriveMemoryArtifactsResult:
     parsed: ParsedDocument
-    captured_chunk_inputs: List[DocumentChunk]
-    captured_chunks: List[Chunk]
-    derived_facts: List[Fact]
+    captured_chunk_inputs: list[DocumentChunk]
+    captured_chunks: list[Chunk]
+    derived_facts: list[Fact]
     facts_created: int
     graph_edges_created: int
     owner_type: str
     owner_id: str
     tenant_id: str
     workspace_id: Optional[str]
-    warnings: List[str]
-    fact_ids: List[str] = field(default_factory=list)
+    warnings: list[str]
+    fact_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class CurateCompiledMemoryResult:
     parsed: ParsedDocument
-    compiled_artifacts: List[dict[str, Any]]
-    index_entries: List[dict[str, Any]]
-    log_events: List[dict[str, Any]]
+    compiled_artifacts: list[dict[str, Any]]
+    index_entries: list[dict[str, Any]]
+    log_events: list[dict[str, Any]]
     owner_type: str
     owner_id: str
     tenant_id: str
     workspace_id: Optional[str]
-    warnings: List[str]
+    warnings: list[str]
 
 
 @dataclass(frozen=True)

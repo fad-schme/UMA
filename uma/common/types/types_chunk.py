@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 from .types_owner import OwnerType
 
@@ -17,7 +17,7 @@ class Chunk:
     id: str
     doc_id: str
     text: str
-    page_range: Tuple[int, int]
+    page_range: tuple[int, int]
     position: int
     source_path: str
     source_hash: str
@@ -37,7 +37,7 @@ class Chunk:
     trust_score: float = 0.5
     quarantined_at: Optional[datetime] = None
 
-    meta: Dict[str, Any] = field(default_factory=dict)
+    meta: dict[str, Any] = field(default_factory=dict)
 
     def validate(self) -> None:
         if not self.id:

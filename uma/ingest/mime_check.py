@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Sequence, Tuple
+from typing import Sequence
 
 
 @dataclass(frozen=True)
@@ -45,7 +45,7 @@ class FileSizeRejection(ValueError):
 
 
 # (magic_bytes, offset, content_type, is_binary)
-_BYTE_SIGNATURES: Sequence[Tuple[bytes, int, str, bool]] = [
+_BYTE_SIGNATURES: Sequence[tuple[bytes, int, str, bool]] = [
     (b"%PDF-",                0, "application/pdf",            False),
     (b"PK\x03\x04",          0, "application/zip",            True),
     (b"MZ",                   0, "application/x-dosexec",      True),   # PE / Windows EXE

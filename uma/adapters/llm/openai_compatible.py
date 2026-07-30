@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Iterable, Optional
 
 from uma.common.config_types import EmbeddingConfig, LLMConfig
 
@@ -62,7 +62,7 @@ def _coerce_text_content(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts: List[str] = []
+        parts: list[str] = []
         for item in content:
             text = getattr(item, "text", None)
             if isinstance(text, str):
@@ -109,7 +109,7 @@ class OpenAICompatibleLLM(LLMInterface):
     @retryable(should_retry=should_retry_openai)
     async def generate(
         self,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         max_tokens: int = 256,
         temperature: float = 0.0,
         **kwargs: Any,
@@ -214,7 +214,7 @@ class OpenAICompatibleEmbedder(EmbeddingInterface):
         return self._dimension
 
     @retryable(should_retry=should_retry_openai)
-    async def embed(self, texts: Iterable[str]) -> List[List[float]]:
+    async def embed(self, texts: Iterable[str]) -> list[list[float]]:
         if isinstance(texts, str):
             raise TypeError(
                 "OpenAICompatibleEmbedder.embed expects Iterable[str], not a single string."
@@ -227,7 +227,7 @@ class OpenAICompatibleEmbedder(EmbeddingInterface):
             model=self.model,
             input=normalized,
         )
-        vectors: List[List[float]] = []
+        vectors: list[list[float]] = []
         for item in getattr(response, "data", []) or []:
             vectors.append([float(value) for value in getattr(item, "embedding", [])])
         return vectors

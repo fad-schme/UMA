@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import re
 import logging
-from typing import List
 
 from uma.common.types import Skill
 
@@ -41,9 +40,9 @@ class SkillMatcher:
     def match_skills(
         self,
         query: str,
-        candidate_skills: List[Skill],
+        candidate_skills: list[Skill],
         min_phrase_score: float = 0.5,
-    ) -> List[Skill]:
+    ) -> list[Skill]:
         """
         Determine which skills match the query.
 
@@ -61,7 +60,7 @@ class SkillMatcher:
         List[Skill]
             Filtered skills that match the query.
         """
-        matched: List[Skill] = []
+        matched: list[Skill] = []
         query_lower = (query or "").lower()
 
         for skill in candidate_skills:
@@ -81,7 +80,7 @@ class SkillMatcher:
     # Internal scoring helpers
     # ------------------------------------------------------------------
 
-    def _score_phrases(self, query: str, phrases: List[str]) -> float:
+    def _score_phrases(self, query: str, phrases: list[str]) -> float:
         """
         Return a simple phrase-matching score.
 
@@ -98,7 +97,7 @@ class SkillMatcher:
                 score = max(score, 1.0)
         return score
 
-    def _score_patterns(self, query: str, patterns: List[str]) -> float:
+    def _score_patterns(self, query: str, patterns: list[str]) -> float:
         """
         Return 1.0 if any regex matches, otherwise 0.0.
 

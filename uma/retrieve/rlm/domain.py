@@ -20,15 +20,15 @@ as specified in the Phase 0 plan.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
 
-DOMAIN_VALUES: Set[str] = {"kb_doc", "user_profile", "procedural", "system"}
+DOMAIN_VALUES: set[str] = {"kb_doc", "user_profile", "procedural", "system"}
 
 # Preference-like predicates for user_profile facts.
-PREFERENCE_PREDICATES: Set[str] = {
+PREFERENCE_PREDICATES: set[str] = {
     "LIKES",
     "PREFERS",
     "DISLIKES",
@@ -39,7 +39,7 @@ PREFERENCE_PREDICATES: Set[str] = {
 }
 
 
-def _get_meta(item: Any) -> Dict[str, Any]:
+def _get_meta(item: Any) -> dict[str, Any]:
     if isinstance(item, dict):
         meta = item.get("meta")
         if isinstance(meta, dict):
@@ -193,7 +193,7 @@ def ensure_domains_for_skills(skills: Iterable[Any]) -> None:
             continue
 
 
-def filter_facts_by_domains(facts: List[Any], allowed_domains: Set[str]) -> List[Any]:
+def filter_facts_by_domains(facts: list[Any], allowed_domains: set[str]) -> list[Any]:
     """
     Filter facts by retrieval-domain metadata.
 
@@ -204,7 +204,7 @@ def filter_facts_by_domains(facts: List[Any], allowed_domains: Set[str]) -> List
     allowed = {d for d in (allowed_domains or set()) if d in DOMAIN_VALUES}
     if not allowed:
         return []
-    out: List[Any] = []
+    out: list[Any] = []
     for f in facts:
         d = ensure_fact_domain(f)
         if d in allowed:

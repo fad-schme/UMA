@@ -27,7 +27,7 @@ Coding agent instructions
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 import numpy as np
 
@@ -69,13 +69,13 @@ class FaissIndex(VectorIndex):
         base = faiss.IndexFlatIP(dim)
         # ID map allows delete/update by integer IDs.
         self.index = faiss.IndexIDMap2(base)
-        self._id_map: Dict[str, int] = {}
-        self._rev_map: Dict[int, str] = {}
+        self._id_map: dict[str, int] = {}
+        self._rev_map: dict[int, str] = {}
         self._next_id = 1
         # C1: isolation kept separate from extras so the filter is
         # explicit and side-channel-free.
-        self._scopes: Dict[str, Tuple[str, str, str]] = {}
-        self._extra: Dict[str, Dict[str, Any]] = {}
+        self._scopes: dict[str, tuple[str, str, str]] = {}
+        self._extra: dict[str, dict[str, Any]] = {}
         logger.debug("Initialized FaissIndex with dimension=%d", dim)
 
     def _get_or_create_id(self, sid: str) -> int:
@@ -94,13 +94,13 @@ class FaissIndex(VectorIndex):
 
     def upsert(
         self,
-        ids: List[str],
-        vectors: List[List[float]],
+        ids: list[str],
+        vectors: list[list[float]],
         *,
-        tenant_ids: List[str],
-        owner_types: List[str],
-        owner_ids: List[str],
-        extra_metadata: Optional[List[Dict]] = None,
+        tenant_ids: list[str],
+        owner_types: list[str],
+        owner_ids: list[str],
+        extra_metadata: Optional[list[dict]] = None,
     ) -> None:
         """
         Insert or update vectors in the FAISS index.
@@ -152,8 +152,8 @@ class FaissIndex(VectorIndex):
         # `add_with_ids` would leave the index in a corrupted state on a
         # bad input — vector present, scope dict missing — which would
         # then surface as cross-scope leaks or silent retrieval misses.
-        prepared_scopes: List[Tuple[str, str, str]] = []
-        prepared_extras: List[Dict[str, Any]] = []
+        prepared_scopes: list[tuple[str, str, str]] = []
+        prepared_extras: list[dict[str, Any]] = []
         for sid, tid, ot, oid, extra in zip(
             ids, tenant_ids, owner_types, owner_ids, extra_list,
         ):
@@ -208,14 +208,14 @@ class FaissIndex(VectorIndex):
 
     def query(
         self,
-        vector: List[float],
+        vector: list[float],
         *,
         tenant_id: str,
         owner_type: str,
         owner_id: str,
         k: int = 10,
-        extra_filters: Optional[Dict[str, Any]] = None,
-    ) -> List[Tuple[str, float]]:
+        extra_filters: Optional[dict[str, Any]] = None,
+    ) -> list[tuple[str, float]]:
         """
         Nearest-neighbour search scoped to ``(tenant_id, owner_type, owner_id)``.
 
@@ -253,7 +253,7 @@ class FaissIndex(VectorIndex):
         scores = scores[0]
         idxs = idxs[0]
         scope_key = (tenant_id.strip(), owner_type.strip(), owner_id.strip())
-        results: List[Tuple[str, float]] = []
+        results: list[tuple[str, float]] = []
 
         for idx, score in zip(idxs, scores):
             if idx < 0:
@@ -276,7 +276,7 @@ class FaissIndex(VectorIndex):
         logger.debug("FaissIndex.query: returning %d results", len(results))
         return results
 
-    def delete(self, ids: List[str]) -> None:
+    def delete(self, ids: list[str]) -> None:
         """Remove vectors from the FAISS index and clear their scope and metadata entries."""
         if not ids:
             return

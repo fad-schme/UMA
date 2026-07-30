@@ -40,7 +40,7 @@ Coding agent instructions
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 
 class VectorIndex(ABC):
@@ -57,13 +57,13 @@ class VectorIndex(ABC):
     @abstractmethod
     def upsert(
         self,
-        ids: List[str],
-        vectors: List[List[float]],
+        ids: list[str],
+        vectors: list[list[float]],
         *,
-        tenant_ids: List[str],
-        owner_types: List[str],
-        owner_ids: List[str],
-        extra_metadata: Optional[List[Dict]] = None,
+        tenant_ids: list[str],
+        owner_types: list[str],
+        owner_ids: list[str],
+        extra_metadata: Optional[list[dict]] = None,
     ) -> None:
         """
         Insert or update vectors in the index.
@@ -94,14 +94,14 @@ class VectorIndex(ABC):
     @abstractmethod
     def query(
         self,
-        vector: List[float],
+        vector: list[float],
         *,
         tenant_id: str,
         owner_type: str,
         owner_id: str,
         k: int = 10,
-        extra_filters: Optional[Dict[str, Any]] = None,
-    ) -> List[Tuple[str, float]]:
+        extra_filters: Optional[dict[str, Any]] = None,
+    ) -> list[tuple[str, float]]:
         """
         Perform a nearest-neighbor search within the isolation scope.
 
@@ -127,7 +127,7 @@ class VectorIndex(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def delete(self, ids: List[str]) -> None:
+    def delete(self, ids: list[str]) -> None:
         """
         Delete vectors from the index.
 

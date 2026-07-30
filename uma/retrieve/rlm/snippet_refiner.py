@@ -7,7 +7,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from uma.common.accessors import get_attr_or_key
 from uma.common.text_bounds import trim_to_sentence_boundary
@@ -60,9 +60,9 @@ class SnippetRefiner:
         self,
         *,
         query_text: str,
-        facts: List[Any],
-        chunks: List[Any],
-    ) -> List[Dict[str, Any]]:
+        facts: list[Any],
+        chunks: list[Any],
+    ) -> list[dict[str, Any]]:
         """
         Produce final evidence snippets.
 
@@ -96,7 +96,7 @@ class SnippetRefiner:
         max_chars = int(getattr(self.cfg, "snippet_max_chars", 240) or 240)
         max_chars = max(1, max_chars)
 
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         seen_text: set[str] = set()
         for cand in grouped:
             if max_out and len(out) >= max_out:
@@ -124,7 +124,7 @@ class SnippetRefiner:
     # Step 1 — group adjacent chunks
     # ------------------------------------------------------------------
 
-    def _group_chunks(self, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _group_chunks(self, chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         Presentation-only grouping for snippet coherence.
 
@@ -136,8 +136,8 @@ class SnippetRefiner:
 
         Groups by doc_id and adjacency (position ±1) among the provided chunks.
         """
-        groups: List[List[Dict[str, Any]]] = []
-        current: List[Dict[str, Any]] = []
+        groups: list[list[dict[str, Any]]] = []
+        current: list[dict[str, Any]] = []
 
         for ch in chunks:
             if not current:
@@ -159,7 +159,7 @@ class SnippetRefiner:
 
         return [self._merge_group(g) for g in groups]
 
-    def _merge_group(self, group: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _merge_group(self, group: list[dict[str, Any]]) -> dict[str, Any]:
         group = sorted(group, key=lambda g: int(g.get("position", 0) or 0))
         texts = [g.get("text", "").strip() for g in group if g.get("text")]
         merged_text = " ".join(texts)
@@ -174,7 +174,7 @@ class SnippetRefiner:
         merged_severity = max_severity(
             *[severity_from_meta(g.get("meta")) for g in group]
         )
-        merged_meta: Dict[str, Any] = {}
+        merged_meta: dict[str, Any] = {}
         if merged_severity != "none":
             merged_meta = {
                 "security": {
@@ -206,7 +206,7 @@ class SnippetRefiner:
             "meta": merged_meta,
         }
 
-    def _normalize_chunk(self, chunk: Any) -> Dict[str, Any]:
+    def _normalize_chunk(self, chunk: Any) -> dict[str, Any]:
         if isinstance(chunk, dict):
             return chunk
         return {
@@ -230,10 +230,10 @@ class SnippetRefiner:
     async def _refine_single(
         self,
         query_text: str,
-        candidate: Dict[str, Any],
+        candidate: dict[str, Any],
         *,
         max_chars: int,
-    ) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
+    ) -> tuple[Optional[dict[str, Any]], Optional[float]]:
         text = trim_to_sentence_boundary(str(candidate.get("text") or ""), max_chars=max_chars)
         if not self.llm:
             return self._build_snippet(candidate, text), 1.0
@@ -288,7 +288,7 @@ class SnippetRefiner:
     # Snippet construction
     # ------------------------------------------------------------------
 
-    def _build_snippet(self, candidate: Dict[str, Any], text: str) -> Dict[str, Any]:
+    def _build_snippet(self, candidate: dict[str, Any], text: str) -> dict[str, Any]:
         sid = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
         source_path = candidate.get("source_path")
         file_name = ""
@@ -312,7 +312,7 @@ class SnippetRefiner:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _merge_page_ranges(self, group: List[Dict[str, Any]]) -> Optional[str]:
+    def _merge_page_ranges(self, group: list[dict[str, Any]]) -> Optional[str]:
         pages = [g.get("page_range") for g in group if g.get("page_range")]
         return pages[0] if pages else None
 
@@ -332,7 +332,7 @@ class SnippetRefiner:
 
         You are a retrieval assistant that scores excerpt relevance.
         Given a user question and excerpts, evaluate how relevant this excerpt is to the user question.
-        
+
         Relevance definition:
         An excerpt is relevant if it directly helps answer the question or provides essential context needed to interpret or extend another relevant excerpts.
 
@@ -350,7 +350,7 @@ class SnippetRefiner:
 
         """
 
-    def _parse_single_response(self, raw: str) -> Dict[str, Any]:
+    def _parse_single_response(self, raw: str) -> dict[str, Any]:
         raw = (raw or "").strip()
         if not raw:
             logger.debug("SnippetRefiner._parse_single_response: raw is empty")

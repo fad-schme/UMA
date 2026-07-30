@@ -32,7 +32,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import Any, Callable, List, Optional, Sequence, TypeVar
+from typing import Any, Callable, Optional, Sequence, TypeVar
 
 from ..adapters.db.base import DBAdapter, DBConnection
 
@@ -253,7 +253,7 @@ class BaseSQLStore:
         sql: str,
         params: Optional[Sequence[Any]] = None,
         log_context: str = "",
-    ) -> List[Any]:
+    ) -> list[Any]:
         """
         Execute a SELECT statement and return all rows.
 

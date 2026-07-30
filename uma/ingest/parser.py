@@ -8,7 +8,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 
 from .types import ParsedDocument
 
@@ -32,7 +32,7 @@ _DATA_URI_RE = re.compile(r'data\s*:', re.IGNORECASE)
 _COND_COMMENT_RE = re.compile(r'<!--\[if.*?<!\[endif\]-->', re.DOTALL | re.IGNORECASE)
 
 
-def _sanitize_html(html_text: str) -> tuple[str, Dict[str, int]]:
+def _sanitize_html(html_text: str) -> tuple[str, dict[str, int]]:
     """
     Strip dangerous content from HTML and return (sanitized_text, counts).
     counts keys: scripts, iframes, event_handlers, js_urls, data_urls, cond_comments, svg
@@ -44,7 +44,7 @@ def _sanitize_html(html_text: str) -> tuple[str, Dict[str, int]]:
             "HTML sanitization requires beautifulsoup4: pip install beautifulsoup4"
         ) from exc
 
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
 
     # Strip conditional comments before parsing
     cond_hits = _COND_COMMENT_RE.findall(html_text)
@@ -93,7 +93,7 @@ class ParserStrategy:
     def read(self, file_path: str) -> str:
         raise NotImplementedError
 
-    def read_pages(self, file_path: str) -> List[Tuple[int, str]]:
+    def read_pages(self, file_path: str) -> list[tuple[int, str]]:
         """Return per-page text. Default is a single page from read()."""
         return [(1, self.read(file_path))]
 
@@ -185,10 +185,10 @@ class PDFParser(ParserStrategy):
             logger.error("PDFParser failed for '%s': %s", file_path, exc)
             raise
 
-    def read_pages(self, file_path: str) -> List[Tuple[int, str]]:
+    def read_pages(self, file_path: str) -> list[tuple[int, str]]:
         try:
             reader = self._open_reader(file_path)
-            pages: List[Tuple[int, str]] = []
+            pages: list[tuple[int, str]] = []
             for i, page in enumerate(reader.pages, start=1):
                 pages.append((i, page.extract_text() or ""))
             return pages
@@ -232,7 +232,7 @@ class YAMLParser(ParserStrategy):
 class HTMLParser(ParserStrategy):
     """Sanitize and return visible text; record per-category removal counts."""
 
-    _last_sanitization_counts: Optional[Dict[str, int]] = None
+    _last_sanitization_counts: Optional[dict[str, int]] = None
 
     def read(self, file_path: str) -> str:
         try:
@@ -266,7 +266,7 @@ class CSVParser(ParserStrategy):
 
 
 class MarkdownParser(ParserStrategy):
-    _last_sanitization_counts: Optional[Dict[str, int]] = None
+    _last_sanitization_counts: Optional[dict[str, int]] = None
 
     def read(self, file_path: str) -> str:
         try:
@@ -318,8 +318,8 @@ class FileContentParser:
     constructs. None means use PDFParser.DEFAULT_MAX_PAGES.
     """
 
-    _by_ext: Dict[str, ParserStrategy] = None
-    _by_mime: Dict[str, ParserStrategy] = None
+    _by_ext: dict[str, ParserStrategy] = None
+    _by_mime: dict[str, ParserStrategy] = None
     pdf_max_pages: Optional[int] = None
 
     def __post_init__(self) -> None:
@@ -365,10 +365,10 @@ class FileContentParser:
         key = (mime or "").strip().lower()
         self._by_mime[key] = impl
 
-    def supported_ext(self) -> Tuple[str, ...]:
+    def supported_ext(self) -> tuple[str, ...]:
         return tuple(sorted(self._by_ext.keys()))
 
-    def supported_mime(self) -> Tuple[str, ...]:
+    def supported_mime(self) -> tuple[str, ...]:
         return tuple(sorted(self._by_mime.keys()))
 
     def read(self, file_path: str, *, content_type: Optional[str] = None) -> str:

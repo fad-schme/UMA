@@ -19,7 +19,7 @@ Coding Agent Instructions
 
 from __future__ import annotations
 from datetime import datetime, timedelta, timezone
-from typing import Any, List
+from typing import Any
 
 import logging
 
@@ -92,7 +92,7 @@ class EpisodicRetentionPolicy:
     # PUBLIC API
     # ------------------------------------------------------------------
 
-    def select_prunable(self, episodes: List[Any]) -> List[Any]:
+    def select_prunable(self, episodes: list[Any]) -> list[Any]:
         """
         Determine which episodes to prune.
 

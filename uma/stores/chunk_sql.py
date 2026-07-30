@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from .base_vector_sql_store import BaseVectorSQLStore
 
@@ -187,7 +187,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
         tenant_id: Optional[str],
         owner_type: Optional[str],
         owner_id: Optional[str],
-        params: List[Any],
+        params: list[Any],
     ) -> str:
         if tenant_id:
             params.append(tenant_id)
@@ -200,7 +200,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
         params.extend([owner_type, owner_id])
         return "tenant_id=? AND owner_type=? AND owner_id=?"
 
-    async def upsert_chunk(self, chunk: Chunk, embedding: List[float]) -> None:
+    async def upsert_chunk(self, chunk: Chunk, embedding: list[float]) -> None:
         """Insert or update a document chunk. Embeds the chunk and persists to SQL then vector store."""
         def _sync():
             conn = self._conn()
@@ -339,14 +339,14 @@ class ChunkSQLStore(BaseVectorSQLStore):
         return await self._run_sync(_sync)
     async def search(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         *,
         doc_id: Optional[str] = None,
         tenant_id: Optional[str] = None,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
         k: int = 10,
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         """Vector-search chunks within the ownership scope. Returns ranked ``Chunk`` objects."""
         if not tenant_id:
             logger.error("ChunkSQLStore.search requires tenant_id")
@@ -357,7 +357,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
         # C1: doc_id (when set) is a non-isolation filter — goes through
         # extra_filters. The three isolation keys go as explicit
         # parameters so the vector index pushes them into the backend.
-        extra_filters: Dict[str, Any] = {}
+        extra_filters: dict[str, Any] = {}
         if doc_id:
             extra_filters["doc_id"] = doc_id
         try:
@@ -413,7 +413,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
         k: int = 10,
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         """
         Lightweight lexical fallback for chunk retrieval.
         Uses SQL LIKE against chunk text (case-insensitive).
@@ -487,13 +487,13 @@ class ChunkSQLStore(BaseVectorSQLStore):
                 min_score,
             )
 
-        phrase_terms: List[str] = []
+        phrase_terms: list[str] = []
         for i, phrase in enumerate(phrases):
             key = f"p{i}"
             phrase_terms.append(f"CASE WHEN LOWER(text) LIKE :{key} THEN :phrase_weight ELSE 0.0 END")
             params[key] = f"%{_escape_like(phrase.lower())}%"
 
-        keyword_terms: List[str] = []
+        keyword_terms: list[str] = []
         for i, term in enumerate(terms):
             key = f"t{i}"
             keyword_terms.append(f"CASE WHEN LOWER(text) LIKE :{key} THEN :keyword_weight ELSE 0.0 END")
@@ -573,14 +573,19 @@ class ChunkSQLStore(BaseVectorSQLStore):
         pos_start: int,
         pos_end: int,
         log_context: str = "chunk_fetch_by_doc_pos_range",
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         """Fetch chunks belonging to a document within a position range, for neighbour-expansion."""
         if not doc_id or not isinstance(doc_id, str):
             return []
         try:
             pos_start_i = int(pos_start)
             pos_end_i = int(pos_end)
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "ChunkSQLStore.fetch_by_doc_and_position_range: invalid position range: %s",
+                exc,
+                exc_info=True,
+            )
             return []
         if pos_end_i < pos_start_i:
             return []
@@ -622,13 +627,13 @@ class ChunkSQLStore(BaseVectorSQLStore):
         return await self._run_sync(_sync)
     async def fetch_by_ids(
         self,
-        ids: List[str],
+        ids: list[str],
         *,
         tenant_id: Optional[str] = None,
         owner_type: str,
         owner_id: str,
         log_context: str = "",
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         """
         Fetch Chunk objects by ID, owner-scoped.
         """
@@ -649,14 +654,14 @@ class ChunkSQLStore(BaseVectorSQLStore):
             try:
                 # B608: placeholders is "?,?,?" — safe parameterized, no user data interpolated.
                 placeholders = ",".join("?" for _ in ids)
-                params: List[Any] = list(ids)
+                params: list[Any] = list(ids)
                 scope_clause = self._scope_where(tenant_id, owner_type, owner_id, params)
                 # nosec B608 — placeholders is "?,?,?" only; scope_clause is the fixed
                 # string "tenant_id=? AND owner_type=? AND owner_id=?" from _scope_where().
                 sql = f"SELECT * FROM chunks WHERE id IN ({placeholders}) AND {scope_clause} AND quarantined_at IS NULL"
                 rows = self._query_all(conn, sql, params=params, log_context="fetch_by_ids")
                 row_map = {r["id"]: r for r in rows}
-                ordered: List[Chunk] = []
+                ordered: list[Chunk] = []
                 for cid in ids:
                     row = row_map.get(cid)
                     if row is None:
@@ -686,7 +691,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
         owner_id: str,
         include_quarantined: bool = False,
         limit: Optional[int] = None,
-    ) -> List[Chunk]:
+    ) -> list[Chunk]:
         """List chunks for an owner scope. Quarantined excluded by default."""
         if not tenant_id or not owner_type or not owner_id:
             raise ValueError("ChunkSQLStore.list_chunks_for_owner requires scope")

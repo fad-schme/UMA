@@ -15,10 +15,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import importlib
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Optional, Union
 
 
-def parse_plugin_spec(spec: Union[str, Dict[str, Any]]):
+def parse_plugin_spec(spec: Union[str, dict[str, Any]]):
     """
     Parse a plugin specification from configuration.
 
@@ -63,10 +63,10 @@ class LLMConfig:
     provider: str
     model: Optional[str]
     ollama_model: Optional[str] = None
-    config: Dict[str, Any] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "LLMConfig":
+    def from_dict(cls, d: dict[str, Any]) -> "LLMConfig":
         return cls(
             provider=d["provider"],
             model=d.get("model"),
@@ -81,7 +81,7 @@ class LLMsConfig:
     uma: LLMConfig
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "LLMsConfig":
+    def from_dict(cls, d: dict[str, Any]) -> "LLMsConfig":
         # If explicit llms section exists, use it.
         if "llms" in d and isinstance(d["llms"], dict):
             llms = d["llms"]
@@ -102,10 +102,10 @@ class EmbeddingConfig:
     provider: str
     model: Optional[str]
     dimension: int
-    config: Dict[str, Any] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "EmbeddingConfig":
+    def from_dict(cls, d: dict[str, Any]) -> "EmbeddingConfig":
         return cls(
             provider=d["provider"],
             model=d.get("model"),
@@ -121,10 +121,10 @@ class EmbeddingConfig:
 @dataclass(frozen=True)
 class SecretsProviderConfig:
     provider: str
-    options: Dict[str, Any] = field(default_factory=dict)
+    options: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, d: Optional[Dict[str, Any]]) -> Optional["SecretsProviderConfig"]:
+    def from_dict(cls, d: Optional[dict[str, Any]]) -> Optional["SecretsProviderConfig"]:
         if d is None:
             return None
         return cls(
@@ -142,12 +142,12 @@ class StorageConfig:
     db_root: str
     sql_backend: str
     vector_backend: str
-    vector_config: Dict[str, Any] = field(default_factory=dict)
+    vector_config: dict[str, Any] = field(default_factory=dict)
     graph_backend: str = "disabled"
-    graph_config: Dict[str, Any] = field(default_factory=dict)
+    graph_config: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "StorageConfig":
+    def from_dict(cls, d: dict[str, Any]) -> "StorageConfig":
         return cls(
             db_root=d["db_root"],
             sql_backend=d["sql_backend"],
@@ -168,7 +168,7 @@ class EpisodicConfig:
     vector_dim: int
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "EpisodicConfig":
+    def from_dict(cls, d: dict[str, Any]) -> "EpisodicConfig":
         return cls(
             db_path=d["db_path"],
             vector_dim=d["vector_dim"],
@@ -182,7 +182,7 @@ class SemanticConfig:
     salience_threshold: float
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "SemanticConfig":
+    def from_dict(cls, d: dict[str, Any]) -> "SemanticConfig":
         return cls(
             db_path=d["db_path"],
             vector_dim=d["vector_dim"],
@@ -196,7 +196,7 @@ class ProceduralConfig:
     vector_dim: int
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "ProceduralConfig":
+    def from_dict(cls, d: dict[str, Any]) -> "ProceduralConfig":
         return cls(
             db_path=d["db_path"],
             vector_dim=d["vector_dim"],
@@ -212,7 +212,7 @@ class WorkingMemorySettings:
     max_tokens: int
     warning_ratio: float
     hard_limit_ratio: float
-    chunk_size: int = 20        
+    chunk_size: int = 20
     # How many recent messages to preserve at minimum during compaction
     keep_recent_messages: int = 4
     # Fraction of `max_tokens` that recent messages should cover before
@@ -222,7 +222,7 @@ class WorkingMemorySettings:
     keep_recent_token_fraction: float = 0.1
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "WorkingMemorySettings":
+    def from_dict(cls, d: dict[str, Any]) -> "WorkingMemorySettings":
         return cls(
             max_tokens=d["max_tokens"],
             warning_ratio=d["warning_ratio"],
@@ -252,7 +252,7 @@ class HybridRetrievalConfig:
     fusion_strategy: str = "rrf"
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any] | None) -> "HybridRetrievalConfig":
+    def from_dict(cls, d: dict[str, Any] | None) -> "HybridRetrievalConfig":
         d = d or {}
         enabled = bool(d.get("enabled", True))
         top_k_dense = int(d.get("top_k_dense", 0))
@@ -303,7 +303,7 @@ class RetrievalConfig:
     min_trust_score: float = 0.5
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any], *, profile: str = "lite") -> "RetrievalConfig":
+    def from_dict(cls, d: dict[str, Any], *, profile: str = "lite") -> "RetrievalConfig":
         strict_mode = bool(d.get("strict", True))
         debug_scores = bool(d.get("debug_scores", False))
         max_evidence_chunks = int(d.get("max_evidence_chunks", 6))
@@ -382,7 +382,7 @@ class RetrievalConfig:
             min_trust_score=min_trust_score,
         )
 
-    
+
 @dataclass
 class RLMConfig:
     enabled: bool = False
@@ -400,8 +400,8 @@ class RLMConfig:
     min_cluster_summaries: int = 1
     cluster_k: int = 3
     graph_predicate_limit: int = 2
-    predicate_weights: Optional[Dict[str, float]] = None
-    predicate_allowlist: Optional[Dict[str, List[str]]] = None
+    predicate_weights: Optional[dict[str, float]] = None
+    predicate_allowlist: Optional[dict[str, list[str]]] = None
     novelty_window: int = 2
     min_recent_novelty: int = 1
 
@@ -430,7 +430,7 @@ class RetrievalContextConfig:
     episodic_clustering_available: bool = False
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any], *, profile: str = "lite") -> "RetrievalContextConfig":
+    def from_dict(cls, d: dict[str, Any], *, profile: str = "lite") -> "RetrievalContextConfig":
         is_enterprise = profile == "enterprise"
         return cls(
             max_working_messages=int(d.get("max_working_messages", 4)),
@@ -461,7 +461,7 @@ class SecurityConfig:
     quarantine_enabled: bool = True
 
     @classmethod
-    def from_dict(cls, d: Optional[Dict[str, Any]]) -> "SecurityConfig":
+    def from_dict(cls, d: Optional[dict[str, Any]]) -> "SecurityConfig":
         d = d or {}
         return cls(
             scan_enabled=bool(d.get("scan_enabled", True)),
@@ -477,13 +477,13 @@ class SecurityConfig:
 
 @dataclass(frozen=True)
 class FeaturesConfig:
-    load: List[Dict[str, Any]]
-    policy: Dict[str, Any]
+    load: list[dict[str, Any]]
+    policy: dict[str, Any]
     procedural_enabled: bool
     consolidation_enabled: bool
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]):
+    def from_dict(cls, d: dict[str, Any]):
         load_cfg = d.get("load")
         policy_cfg = d.get("policy") or {}
         procedural_enabled = d.get("procedural_enabled", True)
@@ -497,7 +497,7 @@ class FeaturesConfig:
                 consolidation_enabled=consolidation_enabled,
             )
 
-        load: List[Dict[str, Any]] = []
+        load: list[dict[str, Any]] = []
         if procedural_enabled:
             load.append(
                 {
@@ -536,7 +536,7 @@ class ConsolidationConfig:
     prune_min_fact_salience: float    # ← REQUIRED FIELD
 
     @classmethod
-    def from_dict(cls, d: Optional[Dict[str, Any]]) -> "ConsolidationConfig":
+    def from_dict(cls, d: Optional[dict[str, Any]]) -> "ConsolidationConfig":
         d = d or {}
         return cls(
             enabled=d.get("enabled", False),
@@ -567,7 +567,7 @@ class RuntimeConfig:
     profile: str = "lite"
 
     @classmethod
-    def from_uma_config(cls, cfg: Dict[str, Any]) -> "RuntimeConfig":
+    def from_uma_config(cls, cfg: dict[str, Any]) -> "RuntimeConfig":
         profile = str(cfg.get("profile", "lite")) if isinstance(cfg, dict) else "lite"
 
         llms_cfg = LLMsConfig.from_dict(cfg) if isinstance(cfg, dict) else None
