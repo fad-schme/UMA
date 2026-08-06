@@ -80,7 +80,7 @@ postgres = ["psycopg2-binary>=2.9"]
 
 # Security: enable the google-re2 backend for ReDoS-proof injection scanning.
 # See uma/common/_regex_backend.py.
-security = ["google-re2>=1.1"]
+security = ["google-re2>=1.1.20251105"]
 
 # Document parsers used by the ingest pipeline.
 parsers  = ["PyPDF2", "beautifulsoup4", "markdown", "pandas"]
