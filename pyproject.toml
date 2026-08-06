@@ -76,7 +76,7 @@ e2e      = ["openai>=1.0.0"]
 # Storage backends
 vector   = ["faiss-cpu", "weaviate-client", "pinecone-client", "fastembed"]
 graph    = ["neo4j"]
-postgres = ["psycopg2-binary>=2.9"]
+postgres = ["psycopg2-binary>=2.9.12"]
 
 # Security: enable the google-re2 backend for ReDoS-proof injection scanning.
 # See uma/common/_regex_backend.py.
