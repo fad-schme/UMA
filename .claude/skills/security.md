@@ -91,7 +91,7 @@ await memory.process_turn(..., skip_scan=True)
 
 ## Pattern Catalog
 
-The scanner compiles both `uma/common/injection_patterns.yaml` and `uma/common/injection_patterns.l10n.yaml`. The localized catalog covers French, Spanish, German, and Simplified Chinese. Bundled English rule families:
+The scanner compiles `uma/adapters/scanner/injection_patterns.yaml`, `uma/adapters/scanner/injection_patterns.l10n.yaml`, and `uma/adapters/scanner/sqli_patterns.yaml`. The localized catalog covers French, Spanish, German, and Simplified Chinese; the SQLi catalog adds compound SQL and NoSQL rules with proximity constraints. Bundled English prompt-injection rule families:
 
 | Rule | Severity | Category | What it detects |
 |---|---|---|---|

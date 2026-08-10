@@ -34,7 +34,7 @@ import time
 import pytest
 
 from uma.common import _regex_backend
-from uma.common.injection_scan import scan_content
+from uma.adapters.scanner.injection_scan import scan_content
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +139,7 @@ def test_scan_content_bounded_on_realistic_input(caplog):
         + (
             "This usually means a pathological regex has been added to the "
             "injection catalog — check recent changes to "
-            "uma/common/injection_patterns*.yaml and uma/common/rule_functions.py. "
+            "uma/adapters/scanner/*_patterns.yaml and uma/common/rule_functions.py. "
             "RE2 gives linear-time execution and should never blow this budget."
             if _regex_backend.USING_RE2 else
             "Under the Python `re` fallback, either a pathological pattern was "

@@ -775,7 +775,7 @@ async def test_rebuild_vector_indexes(uma_memory):
     memory.procedural_core.vector_index().delete([skill.id])
 
     result = await memory.rebuild_vector_indexes(owner_type="user", owner_id=owner_id)
-    assert result["status"] in ("ok", "degraded")
+    assert result.status in ("ok", "degraded")
     assert episode.id in memory.episodic_core.vector_index()._vectors
     assert fact.id in memory.semantic_core.vector_index()._vectors
     assert skill.id in memory.procedural_core.vector_index()._vectors
@@ -878,12 +878,12 @@ async def test_rebuild_derived_indexes_replays_graph_from_authoritative_scope(um
         include_procedural=False,
     )
 
-    assert result["status"] in ("ok", "degraded")
-    assert result["graph"]["status"] == "ok"
-    assert result["graph"]["episodes"] == 2
-    assert result["graph"]["facts"] == 2
-    assert result["graph"]["episode_fact_links"] == 2
-    assert result["graph"]["temporal_links"] == 1
+    assert result.status in ("ok", "degraded")
+    assert result.graph.status == "ok"
+    assert result.graph.episodes == 2
+    assert result.graph.facts == 2
+    assert result.graph.episode_fact_links == 2
+    assert result.graph.temporal_links == 1
 
     assert memory.episodic_core.vector_index()._scopes[episode_1.id] == ("tenant-a", "user", owner_id)
     assert memory.semantic_core.vector_index()._scopes[fact_1.id] == ("tenant-a", "user", owner_id)
@@ -904,8 +904,8 @@ async def test_rebuild_derived_indexes_replays_graph_from_authoritative_scope(um
         include_procedural=False,
     )
 
-    assert result_again["status"] in ("ok", "degraded")
-    assert result_again["graph"] == result["graph"]
+    assert result_again.status in ("ok", "degraded")
+    assert result_again.graph == result.graph
     assert memory.semantic_core.vector_index()._extra[fact_1.id] == first_semantic_meta
     assert len(adapter.queries) == first_query_count * 2
 
@@ -945,7 +945,7 @@ async def test_rebuild_vector_indexes_preserves_promoted_workspace_fact_scope(um
         include_procedural=False,
     )
 
-    assert result["status"] in ("ok", "degraded")
+    assert result.status in ("ok", "degraded")
     assert memory.semantic_core.vector_index()._scopes[fact.id] == ("tenant-w", "workspace", "workspace:alpha")
     metadata = memory.semantic_core.vector_index()._extra[fact.id]
     assert metadata["subject"] == "workspace:alpha"
@@ -1087,12 +1087,12 @@ async def test_rebuild_derived_indexes_is_tenant_scoped_for_identical_owner_tupl
         owner_id=owner_id,
     )
 
-    assert result["status"] in ("ok", "degraded")
-    assert result["vector"]["report"]["episodic"]["count"] == 1
-    assert result["vector"]["report"]["semantic"]["count"] == 1
-    assert result["vector"]["report"]["procedural"]["count"] == 1
-    assert result["graph"]["episodes"] == 1
-    assert result["graph"]["facts"] == 1
+    assert result.status in ("ok", "degraded")
+    assert result.vector.report["episodic"].count == 1
+    assert result.vector.report["semantic"].count == 1
+    assert result.vector.report["procedural"].count == 1
+    assert result.graph.episodes == 1
+    assert result.graph.facts == 1
 
     assert "ep-tenant-a" in memory.episodic_core.vector_index()._vectors
     assert "ep-tenant-b" not in memory.episodic_core.vector_index()._vectors
@@ -1238,7 +1238,7 @@ async def test_graph_rebuild_clears_scoped_materialization_before_replay(uma_mem
         include_procedural=False,
     )
 
-    assert result["status"] in ("ok", "degraded")
+    assert result.status in ("ok", "degraded")
     assert len(adapter.queries) >= 3
     clear_queries = adapter.queries[:3]
     clear_params = [params or {} for _cypher, params in clear_queries]
@@ -1457,7 +1457,7 @@ async def test_live_write_overlap_with_vector_rebuild_keeps_retrieval_scoped(uma
     release.set()
     rebuild_result = await rebuild_task
 
-    assert rebuild_result["status"] in ("ok", "degraded")
+    assert rebuild_result.status in ("ok", "degraded")
 
     tenant_a_results = await memory.semantic_core.search(
         query_embedding=live_embedding,
@@ -1580,7 +1580,7 @@ async def test_deferred_graph_update_overlap_with_graph_rebuild_keeps_scope_isol
     release.set()
     rebuild_result = await rebuild_task
 
-    assert rebuild_result["status"] in ("ok", "degraded")
+    assert rebuild_result.status in ("ok", "degraded")
     clear_queries = [
         (cypher, params or {})
         for cypher, params in adapter.queries

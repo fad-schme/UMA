@@ -12,6 +12,7 @@ from uma.adapters.db.sqlite_adapter import SQLiteAdapter
 from uma.adapters.vector.base import VectorIndex
 from uma.adapters.vector.inmemory import InMemoryVectorIndex
 from uma.adapters.vector.lancedb import LanceDBIndex
+from uma.adapters.vector import qdrant as qdrant_module
 from uma.api.memory import UMAMemory
 from uma.common.initializers import providers as provider_initializers
 from uma.common.dedupe import dedupe_by_id
@@ -244,6 +245,139 @@ def test_lancedb_index_upsert_query_and_filters(tmp_path) -> None:
     index.delete(["doc-a"])
     remaining = index.query([1.0, 0.0, 0.0], tenant_id="default", owner_type="user", owner_id="user:u1", k=2)
     assert all(item_id != "doc-a" for item_id, _ in remaining)
+
+
+class _FakeQdrantClient:
+    def __init__(self, **kwargs) -> None:
+        self.init_kwargs = kwargs
+        self.created = []
+        self.upserts = []
+        self.queries = []
+        self.deletes = []
+
+    def collection_exists(self, collection: str) -> bool:
+        return False
+
+    def create_collection(self, **kwargs) -> None:
+        self.created.append(kwargs)
+
+    def upsert(self, collection: str, **kwargs) -> None:
+        self.upserts.append((collection, kwargs))
+
+    def query_points(self, **kwargs):
+        self.queries.append(kwargs)
+        return SimpleNamespace(
+            points=[
+                SimpleNamespace(
+                    id="point-id",
+                    payload={"uma_id": "fact-a"},
+                    score=0.91,
+                )
+            ]
+        )
+
+    def delete(self, **kwargs) -> None:
+        self.deletes.append(kwargs)
+
+
+class _FakeQdrantModels:
+    class Distance:
+        COSINE = "cosine"
+        DOT = "dot"
+        EUCLID = "euclid"
+
+    @staticmethod
+    def VectorParams(**kwargs):
+        return SimpleNamespace(**kwargs)
+
+    @staticmethod
+    def PointStruct(**kwargs):
+        return SimpleNamespace(**kwargs)
+
+    @staticmethod
+    def MatchValue(**kwargs):
+        return SimpleNamespace(**kwargs)
+
+    @staticmethod
+    def FieldCondition(**kwargs):
+        return SimpleNamespace(**kwargs)
+
+    @staticmethod
+    def Filter(**kwargs):
+        return SimpleNamespace(**kwargs)
+
+    @staticmethod
+    def PointIdsList(**kwargs):
+        return SimpleNamespace(**kwargs)
+
+
+def _qdrant_index(monkeypatch) -> qdrant_module.QdrantIndex:
+    monkeypatch.setattr(qdrant_module, "QdrantClient", _FakeQdrantClient)
+    monkeypatch.setattr(qdrant_module, "qmodels", _FakeQdrantModels)
+    return qdrant_module.QdrantIndex(
+        3,
+        url="http://qdrant.test",
+        table_name="vectors_semantic",
+    )
+
+
+def test_qdrant_adapter_enforces_scope_in_native_payload_and_filter(
+    monkeypatch,
+) -> None:
+    index = _qdrant_index(monkeypatch)
+
+    index.upsert(
+        ["fact-a"],
+        [[1.0, 0.0, 0.0]],
+        tenant_ids=["tenant-a"],
+        owner_types=["user"],
+        owner_ids=["user-a"],
+        extra_metadata=[{"kb_lane": "semantic"}],
+    )
+    point = index._client.upserts[0][1]["points"][0]
+    assert point.payload == {
+        "uma_id": "fact-a",
+        "tenant_id": "tenant-a",
+        "owner_type": "user",
+        "owner_id": "user-a",
+        "kb_lane": "semantic",
+    }
+
+    assert index.query(
+        [1.0, 0.0, 0.0],
+        tenant_id="tenant-a",
+        owner_type="user",
+        owner_id="user-a",
+        extra_filters={"kb_lane": "semantic"},
+    ) == [("fact-a", 0.91)]
+    conditions = index._client.queries[0]["query_filter"].must
+    assert {
+        condition.key: condition.match.value
+        for condition in conditions
+    } == {
+        "tenant_id": "tenant-a",
+        "owner_type": "user",
+        "owner_id": "user-a",
+        "kb_lane": "semantic",
+    }
+
+
+def test_qdrant_adapter_validates_complete_batch_before_write(
+    monkeypatch,
+) -> None:
+    index = _qdrant_index(monkeypatch)
+
+    with pytest.raises(ValueError, match="reserved isolation key"):
+        index.upsert(
+            ["fact-a"],
+            [[1.0, 0.0, 0.0]],
+            tenant_ids=["tenant-a"],
+            owner_types=["user"],
+            owner_ids=["user-a"],
+            extra_metadata=[{"tenant_id": "other"}],
+        )
+
+    assert index._client.upserts == []
 
 
 @pytest.mark.asyncio

@@ -761,24 +761,6 @@ class SemanticSQLStore(BaseVectorSQLStore):
     # ------------------------------------------------------------------ #
     # Fetch Facts by IDs (snippet-first helpers)
     # ------------------------------------------------------------------ #
-    async def fetch_facts_by_ids(
-        self,
-        ids: list[str],
-        tenant_id: Optional[str] = None,
-        owner_type: Optional[str] = None,
-        owner_id: Optional[str] = None,
-    ) -> list[Fact]:
-        """
-        Fetch Fact objects by ID, preserving requested order.
-        """
-        return await self._fetch_facts_by_ids_sql(
-            ids=ids,
-            tenant_id=tenant_id,
-            owner_type=owner_type,
-            owner_id=owner_id,
-            log_context="fetch_facts_by_ids",
-        )
-
     async def fetch_by_ids(
         self,
         ids: list[str],
@@ -789,7 +771,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
         owner_id: Optional[str] = None,
     ) -> list[Fact]:
         """Bulk-fetch facts by ID list within the ownership scope. Returns only non-quarantined records."""
-        return await self._fetch_facts_by_ids_sql(
+        return await self._fetch_by_ids_sql(
             ids=ids,
             tenant_id=tenant_id,
             owner_type=owner_type,
@@ -797,7 +779,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
             log_context=log_context or "fetch_by_ids",
         )
 
-    async def _fetch_facts_by_ids_sql(
+    async def _fetch_by_ids_sql(
         self,
         *,
         ids: list[str],
@@ -809,8 +791,8 @@ class SemanticSQLStore(BaseVectorSQLStore):
         if not ids:
             return []
         if not tenant_id or not owner_type or not owner_id:
-            logger.error("SemanticSQLStore.fetch_facts_by_ids requires tenant_id, owner_type and owner_id")
-            raise ValueError("SemanticSQLStore.fetch_facts_by_ids requires tenant_id, owner_type and owner_id")
+            logger.error("SemanticSQLStore.fetch_by_ids requires tenant_id, owner_type and owner_id")
+            raise ValueError("SemanticSQLStore.fetch_by_ids requires tenant_id, owner_type and owner_id")
 
         def _sync():
             conn = self._conn()
@@ -837,7 +819,7 @@ class SemanticSQLStore(BaseVectorSQLStore):
                     ordered.append(self._row_to_object(row))
                 return ordered
             except Exception:
-                logger.exception("SemanticSQLStore.fetch_facts_by_ids failed.")
+                logger.exception("SemanticSQLStore.fetch_by_ids failed.")
                 raise
             finally:
                 conn.close()

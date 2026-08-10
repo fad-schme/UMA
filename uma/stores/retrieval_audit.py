@@ -41,8 +41,15 @@ log is observability, not a correctness dependency.
 
 Read API
 --------
-The management module exposes `list_retrieval_audit(memory, ...)` for
-operators to query this log; see `uma.api.management`.
+The management module exposes `async def list_retrieval_audit(memory, ...)`
+for operators to query this log; see `uma.api.management`. `list_rows` is
+async for the same reason every other store's read path is: the query runs
+on a worker thread via `BaseSQLStore._run_sync`, off the event loop.
+
+`tenant_id` is required unless the caller explicitly passes
+`all_tenants=True` — the one deliberate exception to UMA's isolation
+invariant, gated the same way `include_quarantined` gates its own
+narrower-by-default read paths elsewhere in the codebase.
 """
 
 from __future__ import annotations
@@ -54,6 +61,8 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
+
+from uma.stores.base_sql_store import BaseSQLStore
 
 logger = logging.getLogger(__name__)
 
@@ -173,13 +182,14 @@ class RetrievalAuditStore:
             )
             return False
 
-    def list_rows(
+    async def list_rows(
         self,
         *,
         tenant_id: Optional[str] = None,
         user_id: Optional[str] = None,
         severity_min: Optional[str] = None,
         limit: int = 100,
+        all_tenants: bool = False,
     ) -> list[dict[str, Any]]:
         """Query audit rows. Used by `uma.api.management.list_retrieval_audit`.
 
@@ -187,7 +197,37 @@ class RetrievalAuditStore:
         - severity_min returns rows at or above the given severity tier
           (ordering: none < low < medium < high). None or "none" returns all.
         - limit is capped at 1000 to keep the response bounded.
+        - tenant_id is required unless all_tenants=True is passed explicitly.
+          The audit log is the one read path in UMA where a cross-tenant
+          view is a legitimate operator capability, but it must be an
+          affirmative choice at the call site, not the default outcome of
+          omitting a parameter.
+
+        Offloaded via `BaseSQLStore._run_sync` — sqlite3 is a synchronous
+        C API; this keeps the read off the event loop the same way every
+        other store's query path does.
         """
+        if not tenant_id and not all_tenants:
+            raise ValueError(
+                "RetrievalAuditStore.list_rows requires tenant_id, or "
+                "all_tenants=True for an explicit cross-tenant admin view."
+            )
+        return await BaseSQLStore._run_sync(
+            self._list_rows_sync,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            severity_min=severity_min,
+            limit=limit,
+        )
+
+    def _list_rows_sync(
+        self,
+        *,
+        tenant_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        severity_min: Optional[str] = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit or 100), 1000))
         severity_order = {"none": 0, "low": 1, "medium": 2, "high": 3}
         severity_floor = severity_order.get((severity_min or "").lower(), 0)

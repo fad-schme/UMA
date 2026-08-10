@@ -22,7 +22,7 @@ Three paths set `quarantined_at`:
 Every storage write boundary scans the artifact text against the injection pattern catalog. High-severity hits trigger quarantine:
 
 ```python
-# uma/common/injection_scan.py::scan_artifact_text
+# uma/adapters/scanner/injection_scan.py::scan_artifact_text
 def scan_artifact_text(text, trust, meta, *, log_context, now=None):
     result = scan_content(text)
     if result.severity == "high" and quarantine_enabled():

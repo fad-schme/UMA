@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import math
 import os
 import sys
 from pathlib import Path
@@ -11,10 +13,105 @@ from typing import Any, Optional, Sequence
 
 import yaml
 
+from uma.cli.scopes import (
+    add_audit_scope_arguments,
+    add_owner_scope_arguments,
+    add_record_scope_arguments,
+    add_request_scope_arguments,
+    non_empty_value,
+)
 from uma.version import __version__
 
 
-_SECRET_KEYS = ("api_key", "apikey", "secret", "token", "password", "passwd", "pwd", "credential")
+logger = logging.getLogger(__name__)
+
+_SECRET_KEYS = {
+    "api_key",
+    "apikey",
+    "credential",
+    "credentials",
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "token",
+}
+_SECRET_PREFIXES = (
+    "credential_",
+    "credentials_",
+    "password_",
+    "secret_",
+    "token_",
+)
+_SECRET_SUFFIXES = (
+    "_api_key",
+    "_apikey",
+    "_credential",
+    "_credentials",
+    "_password",
+    "_passwd",
+    "_pwd",
+    "_secret",
+    "_token",
+)
+
+
+def _positive_seconds(value: str) -> float:
+    try:
+        seconds = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a number") from exc
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError("must be a finite number greater than zero")
+    return seconds
+
+
+def _add_runtime_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--agent",
+        dest="agent_id",
+        help="Run the diagnostic through an agent-scoped runtime view.",
+    )
+    parser.add_argument(
+        "--timeout",
+        dest="timeout_seconds",
+        type=_positive_seconds,
+        default=30.0,
+        metavar="SECONDS",
+        help="Runtime initialization and health timeout (default: 30).",
+    )
+
+
+def _positive_int(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if number <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return number
+
+
+def _add_yes_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm the exact resolved target without an interactive prompt.",
+    )
+
+
+def _add_index_target_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    include_graph: bool,
+) -> None:
+    add_owner_scope_arguments(parser)
+    lanes = ["episodic", "semantic", "procedural"]
+    if include_graph:
+        lanes.append("graph")
+    parser.add_argument("--lane", choices=tuple(lanes))
+    parser.add_argument("--batch-size", type=_positive_int, default=32)
+    _add_yes_argument(parser)
 
 
 def _resolve_config_path(explicit_path: Optional[str]) -> Path:
@@ -37,16 +134,20 @@ def _resolve_config_path(explicit_path: Optional[str]) -> Path:
     )
 
 
+def _is_secret_key(key: Any) -> bool:
+    normalized = str(key).strip().lower().replace("-", "_")
+    return (
+        normalized in _SECRET_KEYS
+        or normalized.startswith(_SECRET_PREFIXES)
+        or normalized.endswith(_SECRET_SUFFIXES)
+    )
+
+
 def _redact(value: Any) -> Any:
     if isinstance(value, dict):
         redacted = {}
         for key, item in value.items():
-            sensitive = any(marker in str(key).lower() for marker in _SECRET_KEYS)
-            redacted[key] = (
-                "<redacted>"
-                if sensitive and not isinstance(item, (dict, list))
-                else _redact(item)
-            )
+            redacted[key] = "<redacted>" if _is_secret_key(key) else _redact(item)
         return redacted
     if isinstance(value, list):
         return [_redact(item) for item in value]
@@ -76,7 +177,52 @@ def _emit(
     print(text)
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def _emit_error(
+    command: str,
+    message: str,
+    output_format: str,
+) -> None:
+    if output_format == "json":
+        print(
+            json.dumps(
+                {
+                    "schema_version": "1",
+                    "command": command,
+                    "status": "error",
+                    "data": None,
+                    "errors": [{"message": message}],
+                },
+                sort_keys=True,
+            )
+        )
+        return
+    print(f"error: {message}", file=sys.stderr)
+
+
+def _read_security_input(args: argparse.Namespace) -> str:
+    sources = sum(
+        (
+            args.text is not None,
+            args.input_file is not None,
+            args.stdin,
+        )
+    )
+    if sources != 1:
+        raise ValueError(
+            "security scan requires exactly one of TEXT, --file, or --stdin"
+        )
+    if args.text is not None:
+        return args.text
+    if args.input_file is not None:
+        if not args.input_file.is_file():
+            raise ValueError(
+                f"security scan input file not found: {args.input_file}"
+            )
+        return args.input_file.read_text(encoding="utf-8")
+    return sys.stdin.read()
+
+
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="uma",
         description="Developer companion for the UMA memory runtime.",
@@ -102,9 +248,161 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     doctor_parser.add_argument(
         "--offline",
         action="store_true",
-        required=True,
         help="Check configuration and local dependencies without initializing UMA.",
     )
+    _add_runtime_options(doctor_parser)
+
+    health_parser = commands.add_parser(
+        "health",
+        help="Initialize UMA and check runtime dependency health.",
+    )
+    _add_runtime_options(health_parser)
+
+    retrieve_parser = commands.add_parser(
+        "retrieve",
+        help="Run scoped UMA retrieval.",
+    )
+    retrieve_commands = retrieve_parser.add_subparsers(
+        dest="operation",
+        required=True,
+    )
+    for name, help_text in (
+        ("context", "Retrieve curated context."),
+        ("memory", "Retrieve compiled memory."),
+    ):
+        operation_parser = retrieve_commands.add_parser(name, help=help_text)
+        operation_parser.add_argument("query", help="Retrieval query text.")
+        add_request_scope_arguments(operation_parser)
+
+    ingest_parser = commands.add_parser(
+        "ingest",
+        help="Ingest scoped content into UMA.",
+    )
+    ingest_commands = ingest_parser.add_subparsers(
+        dest="operation",
+        required=True,
+    )
+    document_parser = ingest_commands.add_parser(
+        "document",
+        help="Ingest one document for an explicit durable owner.",
+    )
+    document_parser.add_argument("file", type=Path)
+    add_owner_scope_arguments(document_parser)
+
+    turn_parser = ingest_commands.add_parser(
+        "turn",
+        help="Ingest one conversation turn.",
+    )
+    turn_parser.add_argument(
+        "--user-message",
+        "--user-msg",
+        required=True,
+        dest="user_message",
+    )
+    turn_parser.add_argument("--assistant-reply", required=True)
+    add_request_scope_arguments(turn_parser)
+
+    for name, help_text in (
+        ("memory-bootstrap", "Ingest a MEMORY.md bootstrap."),
+        ("diary-bootstrap", "Ingest a daily diary bootstrap."),
+    ):
+        bootstrap_parser = ingest_commands.add_parser(name, help=help_text)
+        bootstrap_parser.add_argument("file", type=Path)
+        add_request_scope_arguments(bootstrap_parser)
+
+    audit_parser = commands.add_parser(
+        "audit",
+        help="Inspect tenant-scoped retrieval audit records.",
+    )
+    audit_commands = audit_parser.add_subparsers(
+        dest="operation",
+        required=True,
+    )
+    audit_list_parser = audit_commands.add_parser(
+        "list",
+        help="List retrieval audit records for one tenant.",
+    )
+    add_audit_scope_arguments(audit_list_parser)
+    audit_list_parser.add_argument(
+        "--severity-min",
+        choices=("none", "low", "medium", "high"),
+    )
+    audit_list_parser.add_argument("--limit", type=_positive_int, default=100)
+
+    quarantine_parser = commands.add_parser(
+        "quarantine",
+        help="Inspect owner-scoped quarantined records.",
+    )
+    quarantine_commands = quarantine_parser.add_subparsers(
+        dest="operation",
+        required=True,
+    )
+    quarantine_list_parser = quarantine_commands.add_parser(
+        "list",
+        help="List quarantined records for one durable owner.",
+    )
+    add_owner_scope_arguments(quarantine_list_parser)
+    quarantine_list_parser.add_argument(
+        "--lane",
+        choices=("semantic", "episodic", "procedural", "raw"),
+    )
+    quarantine_list_parser.add_argument(
+        "--limit",
+        type=_positive_int,
+        default=100,
+    )
+    for name, help_text in (
+        ("reinstate", "Reinstate one exact quarantined record."),
+        ("purge", "Permanently purge one exact quarantined record."),
+    ):
+        mutation_parser = quarantine_commands.add_parser(name, help=help_text)
+        add_record_scope_arguments(mutation_parser)
+        mutation_parser.add_argument(
+            "--reason",
+            type=non_empty_value,
+            default=("CLI reinstatement" if name == "reinstate" else None),
+        )
+        _add_yes_argument(mutation_parser)
+
+    index_parser = commands.add_parser(
+        "index",
+        help="Rebuild one exact owner/lane index scope.",
+    )
+    index_commands = index_parser.add_subparsers(
+        dest="operation",
+        required=True,
+    )
+    rebuild_vectors_parser = index_commands.add_parser(
+        "rebuild-vectors",
+        help="Rebuild one vector lane for one exact owner.",
+    )
+    _add_index_target_arguments(
+        rebuild_vectors_parser,
+        include_graph=False,
+    )
+    rebuild_derived_parser = index_commands.add_parser(
+        "rebuild-derived",
+        help="Rebuild one derived lane for one exact owner.",
+    )
+    _add_index_target_arguments(
+        rebuild_derived_parser,
+        include_graph=True,
+    )
+
+    integrity_parser = commands.add_parser(
+        "integrity",
+        help="Enforce integrity for one exact stored record.",
+    )
+    integrity_commands = integrity_parser.add_subparsers(
+        dest="operation",
+        required=True,
+    )
+    integrity_enforce_parser = integrity_commands.add_parser(
+        "enforce",
+        help="Verify and quarantine one record if its hash mismatches.",
+    )
+    add_record_scope_arguments(integrity_enforce_parser)
+    _add_yes_argument(integrity_enforce_parser)
 
     security_parser = commands.add_parser("security", help="Run UMA security tools.")
     security_commands = security_parser.add_subparsers(dest="security_command", required=True)
@@ -132,6 +430,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     check_parser.add_argument("--list", action="store_true", help="List available checks.")
     check_parser.add_argument("--fail-fast", action="store_true", help="Stop after the first failure.")
 
+    return parser
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = _build_parser()
     args = parser.parse_args(argv)
     command_name = args.command
     if args.command == "config":
@@ -140,6 +443,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         command_name = f"security.{args.security_command}"
     elif args.command == "dev":
         command_name = f"dev.{args.dev_command}"
+    elif args.command in {
+        "retrieve",
+        "ingest",
+        "audit",
+        "quarantine",
+        "index",
+        "integrity",
+    }:
+        command_name = f"{args.command}.{args.operation}"
 
     try:
         if args.command == "version":
@@ -163,6 +475,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             )
             _emit("dev.check", data, args.output_format, text, status)
             return exit_code
+
+        security_input = (
+            _read_security_input(args)
+            if args.command == "security"
+            else None
+        )
 
         from uma.common.config import UMAConfig
 
@@ -189,54 +507,69 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             )
             return 0
 
-        if args.command == "doctor":
-            from .diagnostics import doctor_offline
+        if args.command in {"doctor", "health"}:
+            from .diagnostics import (
+                doctor_offline,
+                doctor_runtime,
+                runtime_health,
+            )
 
-            data, text, status, exit_code = doctor_offline(config, config_path)
-            _emit("doctor", data, args.output_format, text, status)
+            if args.command == "health":
+                data, text, status, exit_code = runtime_health(
+                    config_path,
+                    agent_id=args.agent_id,
+                    timeout_seconds=args.timeout_seconds,
+                )
+            elif args.offline:
+                data, text, status, exit_code = doctor_offline(
+                    config,
+                    config_path,
+                )
+            else:
+                data, text, status, exit_code = doctor_runtime(
+                    config,
+                    config_path,
+                    agent_id=args.agent_id,
+                    timeout_seconds=args.timeout_seconds,
+                )
+            _emit(args.command, data, args.output_format, text, status)
             return exit_code
 
-        sources = sum(
-            (
-                args.text is not None,
-                args.input_file is not None,
-                args.stdin,
-            )
-        )
-        if sources != 1:
-            raise ValueError("security scan requires exactly one of TEXT, --file, or --stdin")
+        if args.command in {
+            "retrieve",
+            "ingest",
+            "audit",
+            "quarantine",
+            "index",
+            "integrity",
+        }:
+            from .operations import run_scoped_operation
 
-        if args.text is not None:
-            text_to_scan = args.text
-        elif args.input_file is not None:
-            text_to_scan = args.input_file.read_text(encoding="utf-8")
-        else:
-            text_to_scan = sys.stdin.read()
+            data, text, status, exit_code = run_scoped_operation(
+                config_path,
+                args,
+            )
+            _emit(command_name, data, args.output_format, text, status)
+            return exit_code
 
         from .security import scan_input
 
+        if security_input is None:
+            raise RuntimeError("security input was not resolved")
         data, text, status, exit_code = scan_input(
             config,
             config_path,
-            text_to_scan,
+            security_input,
             args.fail_on,
         )
         _emit("security.scan", data, args.output_format, text, status)
         return exit_code
+    except BrokenPipeError:
+        return 1
+    except KeyboardInterrupt:
+        _emit_error(command_name, "interrupted", args.output_format)
+        return 130
     except Exception as exc:
-        if args.output_format == "json":
-            print(
-                json.dumps(
-                    {
-                        "schema_version": "1",
-                        "command": command_name,
-                        "status": "error",
-                        "data": None,
-                        "errors": [{"message": str(exc)}],
-                    },
-                    sort_keys=True,
-                )
-            )
-        else:
-            print(f"error: {exc}", file=sys.stderr)
+        logger.debug("CLI command %s failed", command_name, exc_info=True)
+        _emit_error(command_name, str(exc), args.output_format)
         return 2

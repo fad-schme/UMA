@@ -117,7 +117,7 @@ OWASP Agentic Security Initiative mapping: **ASI06 (Memory Poisoning)** is the p
 
 ### Injection Scanning
 
-At every write boundary, `uma.common.injection_scan.scan_artifact_text` checks incoming text against both bundled YAML catalogs: the English rules in `uma/common/injection_patterns.yaml` and French, Spanish, German, and Simplified Chinese rules in `uma/common/injection_patterns.l10n.yaml`:
+At every write boundary, `uma.adapters.scanner.injection_scan.scan_artifact_text` checks incoming text against three bundled YAML catalogs: the English prompt-injection rules in `uma/adapters/scanner/injection_patterns.yaml`, French, Spanish, German, and Simplified Chinese variants in `uma/adapters/scanner/injection_patterns.l10n.yaml`, and compound SQL/NoSQL injection rules in `uma/adapters/scanner/sqli_patterns.yaml`:
 
 | Severity | Action | Trust effect |
 |---|---|---|

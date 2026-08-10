@@ -6,7 +6,7 @@ uma/retrieve/                         @aimemlabs/repo-maintainers
 uma/memory/                           @aimemlabs/repo-maintainers
 uma/common/                           @aimemlabs/repo-maintainers
 uma/runtime/                          @aimemlabs/repo-maintainers
-uma/common/injection_patterns.yaml    @aimemlabs/repo-maintainers
+uma/adapters/scanner/injection_patterns.yaml    @aimemlabs/repo-maintainers
 
 # Governance, licensing, and repository control
 .github/                              @aimemlabs/repo-maintainers

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import io
+import importlib.util
 import json
 from pathlib import Path
+import subprocess
+import sys
+from types import SimpleNamespace
 
 import yaml
 
@@ -14,6 +18,10 @@ from uma.version import __version__
 def _config_path(tmp_path: Path) -> Path:
     config = build_test_config(db_root=tmp_path / "db")
     config["llms"]["uma"]["config"]["api_key"] = "llm-secret"
+    config["llms"]["uma"]["config"]["credentials"] = {
+        "value": "nested-secret",
+    }
+    config["llms"]["uma"]["config"]["api_key_env"] = "UMA_TEST_API_KEY"
     config["embedding"]["config"]["token"] = "embedding-secret"
     path = tmp_path / "uma.yaml"
     path.write_text(yaml.safe_dump(config), encoding="utf-8")
@@ -65,8 +73,18 @@ def test_config_show_redacts_secrets(tmp_path: Path, capsys) -> None:
     output = capsys.readouterr().out
     result = json.loads(output)
     assert result["data"]["config"]["llms"]["uma"]["config"]["api_key"] == "<redacted>"
+    assert (
+        result["data"]["config"]["llms"]["uma"]["config"]["credentials"]
+        == "<redacted>"
+    )
+    assert (
+        result["data"]["config"]["llms"]["uma"]["config"]["api_key_env"]
+        == "UMA_TEST_API_KEY"
+    )
     assert result["data"]["config"]["embedding"]["config"]["token"] == "<redacted>"
+    assert result["data"]["config"]["working_memory"]["max_tokens"] == 512
     assert "llm-secret" not in output
+    assert "nested-secret" not in output
     assert "embedding-secret" not in output
 
 
@@ -116,6 +134,55 @@ def test_doctor_offline_fails_for_missing_provider_dependency(
     )
 
 
+def test_doctor_offline_checks_qdrant_client_dependency(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    path = _config_path(tmp_path)
+    config = yaml.safe_load(path.read_text(encoding="utf-8"))
+    config["storage"]["vector_backend"] = (
+        "uma.adapters.vector.qdrant:QdrantIndex"
+    )
+    config["storage"]["vector_config"] = {
+        "url": "http://qdrant.test",
+    }
+    path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    checked_modules: list[str] = []
+
+    def available(module_name: str) -> bool:
+        checked_modules.append(module_name)
+        return module_name != "qdrant_client"
+
+    monkeypatch.setattr(
+        "uma.cli.diagnostics._module_available",
+        available,
+    )
+
+    assert (
+        main(
+            [
+                "--config",
+                str(path),
+                "--format",
+                "json",
+                "doctor",
+                "--offline",
+            ]
+        )
+        == 1
+    )
+
+    result = json.loads(capsys.readouterr().out)
+    vector_check = next(
+        check
+        for check in result["data"]["checks"]
+        if check["name"] == "storage:vector"
+    )
+    assert vector_check["status"] == "error"
+    assert "qdrant_client" in checked_modules
+
+
 def test_security_scan_safe_text(tmp_path: Path, capsys) -> None:
     path = _config_path(tmp_path)
 
@@ -162,3 +229,114 @@ def test_security_scan_requires_one_input_source(tmp_path: Path, capsys) -> None
     assert main(["--config", str(path), "security", "scan"]) == 2
 
     assert "requires exactly one" in capsys.readouterr().err
+
+
+def test_security_scan_runtime_failure_is_exit_one_and_shuts_down(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    path = _config_path(tmp_path)
+    shutdown_called = False
+
+    class FailingScanner:
+        cfg = SimpleNamespace(
+            security=SimpleNamespace(scan_severity_threshold="medium")
+        )
+
+        def scan_user_input(self, text: str) -> dict:
+            raise RuntimeError(f"scanner failed for {len(text)} bytes")
+
+        def shutdown(self) -> None:
+            nonlocal shutdown_called
+            shutdown_called = True
+
+    monkeypatch.setattr(
+        "uma.cli.security.UMAMemory",
+        lambda config, config_path: FailingScanner(),
+    )
+
+    assert (
+        main(
+            [
+                "--config",
+                str(path),
+                "--format",
+                "json",
+                "security",
+                "scan",
+                "safe input",
+            ]
+        )
+        == 1
+    )
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "error"
+    assert "scanner failed" in result["data"]["error"]
+    assert shutdown_called is True
+
+
+def test_installed_version_is_quiet_and_module_entrypoint_matches(
+    tmp_path: Path,
+) -> None:
+    executable = Path(sys.executable).with_name("uma")
+    assert executable.is_file()
+    config_path = _config_path(tmp_path)
+
+    installed = subprocess.run(
+        [str(executable), "--format", "json", "version"],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    module = subprocess.run(
+        [sys.executable, "-m", "uma.cli", "--format", "json", "version"],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert installed.returncode == module.returncode == 0
+    assert json.loads(installed.stdout) == json.loads(module.stdout)
+    assert installed.stderr == module.stderr == ""
+
+    offline = subprocess.run(
+        [
+            str(executable),
+            "--config",
+            str(config_path),
+            "--format",
+            "json",
+            "doctor",
+            "--offline",
+        ],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert offline.returncode == 0
+    assert json.loads(offline.stdout)["data"]["mode"] == "offline"
+    assert offline.stderr == ""
+    assert "llm-secret" not in offline.stdout + offline.stderr
+    assert "nested-secret" not in offline.stdout + offline.stderr
+    assert "embedding-secret" not in offline.stdout + offline.stderr
+    assert not (tmp_path / "db").exists()
+
+
+def test_cli_has_one_canonical_import_and_packaging_surface() -> None:
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.find_spec("uma.cli")
+
+    assert spec is not None
+    assert spec.submodule_search_locations is not None
+    assert Path(spec.origin or "").name == "__init__.py"
+    assert not (root / "uma" / "cli.py").exists()
+    assert not (root / "setup.py").exists()

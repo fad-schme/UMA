@@ -138,11 +138,51 @@ If a storage adapter needs credentials, `uma.yaml` also accepts an optional `sec
 
 ---
 
+## Command-line interface
+
+Installing UMA provides both the `uma` executable and the equivalent
+`python -m uma.cli` entry point. Global options precede the command:
+
+```bash
+uma --config /path/to/uma.yaml --format json config validate
+```
+
+`--config` falls back to `UMA_CONFIG`, then `./uma.yaml` and
+`./config/uma.yaml`. `--format` accepts `text` (default) or `json`.
+
+| Command | Purpose |
+| --- | --- |
+| `uma version` | Show the installed UMA version without loading a runtime. |
+| `uma config validate` / `config show` | Validate configuration or show it with secret values redacted. |
+| `uma doctor --offline` | Check configuration and local dependencies without creating databases or initializing providers. |
+| `uma doctor` / `uma health` | Initialize UMA and call `health_check()`. This verifies initialization, dimensions, stores, vectors, and graph state; it does not make a paid provider-generation request. |
+| `uma security scan TEXT` | Run the injection scanner. Use exactly one of `TEXT`, `--file`, or `--stdin`. |
+| `uma dev check` | Run predefined `quick` or `full` development checks without installing tools or applying fixes. |
+| `uma retrieve context` / `retrieve memory` | Run agent/user-scoped retrieval and report the retrieval-audit write effect. |
+| `uma ingest document` / `turn` / `memory-bootstrap` / `diary-bootstrap` | Run the corresponding scoped public ingestion API. |
+| `uma audit list` / `quarantine list` | List records within one resolved tenant or durable-owner scope. |
+| `uma quarantine reinstate` / `purge` | Mutate exactly one tenant/owner/lane/record target. Purge requires `--reason`. |
+| `uma index rebuild-vectors` / `rebuild-derived` | Rebuild all records in one exact tenant/owner/lane scope. |
+| `uma integrity enforce` | Verify one exact record and quarantine it if its stored hash mismatches. |
+
+Request scope uses `--tenant`, `--agent`, `--user`, `--session`,
+`--workspace`, and `--request-id`. Durable owner scope is independent and
+uses `--tenant`, `--owner-type`, and `--owner-id`. Tenant defaults to
+`UMA_TENANT_ID`, then `default`; administrative owner scope is never inferred
+from request scope.
+
+Reinstate, purge, index rebuilds, and integrity enforcement print the exact
+resolved target to stderr and require confirmation. Non-interactive use must
+pass `--yes`. Their JSON results include an `effects` list describing possible
+writes.
+
+---
+
 ## Testing and coverage
 
 The default suite is hermetic. The CI matrix runs it with `pytest-cov`, reports
 line coverage, and preserves `coverage.xml` as a workflow artifact. The measured
-baseline on 2026-07-30 is **71%** across `uma/` (691 passed, 2 opt-in skips).
+baseline on 2026-07-31 is **71%** across `uma/` (754 passed, 2 opt-in skips).
 
 Real-model fact-extraction precision and recall are measured separately against
 local Ollama so CI does not depend on a model service. See

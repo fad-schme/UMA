@@ -1,8 +1,9 @@
 """Typed response models for UMA's public retrieval API.
 
 Every model is strict (`extra="forbid"`): unknown keys raise. UMA is
-v0.1.0 — there is no legacy dict compatibility. Callers use attribute
-access; there is no `.to_dict()` shim.
+beta software with no backward-compatibility guarantee — there is no
+legacy dict compatibility. Callers use attribute access; there is no
+`.to_dict()` shim.
 
 Design principles
 -----------------
@@ -140,6 +141,53 @@ class HealthStatus(BaseModel):
     checks: dict[str, HealthCheck]
 
 
+class LaneRebuildStatus(BaseModel):
+    """Per-lane outcome of a vector-index rebuild.
+
+    Keyed by lane name (`episodic` / `semantic` / `procedural`) in the
+    parent `VectorRebuildReport.report` mapping — kept as a dict rather
+    than three named fields because callers (the CLI, in particular)
+    look this up dynamically by the lane the operator requested.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["ok", "skipped", "error"]
+    count: int
+
+
+class VectorRebuildReport(BaseModel):
+    """Return type of `UMAMemory.rebuild_vector_indexes`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["ok", "degraded", "error"]
+    report: dict[str, LaneRebuildStatus]
+    error: Optional[str] = None
+
+
+class GraphRebuildReport(BaseModel):
+    """Outcome of the graph-rebuild sub-step within a derived-index rebuild."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["ok", "skipped", "error"]
+    episodes: int
+    facts: int
+    episode_fact_links: int
+    temporal_links: int
+
+
+class DerivedRebuildReport(BaseModel):
+    """Return type of `UMAMemory.rebuild_derived_indexes`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["ok", "degraded", "error"]
+    vector: VectorRebuildReport
+    graph: GraphRebuildReport
+
+
 class CompiledMemory(BaseModel):
     """The compiled-answer summary attached to a `MemoryResult`.
 
@@ -190,7 +238,11 @@ __all__ = [
     "Confidence",
     "ContextBundle",
     "DebugInfo",
+    "DerivedRebuildReport",
+    "GraphRebuildReport",
     "HealthStatus",
+    "LaneRebuildStatus",
     "MemoryResult",
     "Provenance",
+    "VectorRebuildReport",
 ]

@@ -57,6 +57,9 @@ dynamic = ["version"]
 Homepage      = "https://uma.ai-mem-engineering.com"
 Documentation = "https://uma.ai-mem-engineering.com/docs.html"
 
+[project.scripts]
+uma = "uma.cli:main"
+
 # -----------------------------------------------------------------------------
 # Optional dependencies — install with `pip install -e '.[<name>]'`
 #
@@ -75,6 +78,7 @@ e2e      = ["openai>=1.0.0"]
 
 # Storage backends
 vector   = ["faiss-cpu"]
+qdrant   = ["qdrant-client"]
 graph    = ["neo4j"]
 
 # Security: enable the google-re2 backend for ReDoS-proof injection scanning.
@@ -112,7 +116,7 @@ include = ["uma", "uma.*"]
 namespaces = true
 
 [tool.setuptools.package-data]
-"uma.common" = ["injection_patterns*.yaml"]
+"uma.adapters.scanner" = ["injection_patterns*.yaml", "sqli_patterns.yaml"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"

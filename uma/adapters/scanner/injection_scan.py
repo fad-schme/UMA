@@ -1,7 +1,8 @@
 """
 injection_scan.py — injection-pattern scanner for UMA memory-write boundaries.
 
-Scans text against the bundled English and localized YAML catalogs at write time.
+Scans text against the bundled prompt-injection and SQL-injection YAML catalogs
+at write time.
 High-severity hits set trust_score to 0.0. Lower-severity hits reduce it.
 No quarantine logic (that is PR4). This module produces a signal only.
 
@@ -31,6 +32,7 @@ logger = logging.getLogger(__name__)
 _CATALOG_PATHS = (
     Path(__file__).parent / "injection_patterns.yaml",
     Path(__file__).parent / "injection_patterns.l10n.yaml",
+    Path(__file__).parent / "sqli_patterns.yaml",
 )
 
 
@@ -49,6 +51,8 @@ class _CompiledRule:
     threat_level: int
     patterns: tuple    # tuple of _CompiledPattern
     function_names: tuple  # tuple of str
+    match_all: tuple[tuple[str, ...], ...]
+    within_chars: Optional[int]
 
 
 def _compile_catalog(extra_path: Optional[str] = None) -> list[_CompiledRule]:
@@ -70,7 +74,8 @@ def _compile_catalog(extra_path: Optional[str] = None) -> list[_CompiledRule]:
     for rule in raw_rules:
         meta = rule.get("meta", {})
         patterns: list[_CompiledPattern] = []
-        for key, pat in rule.get("strings", {}).items():
+        raw_patterns = rule.get("strings", {})
+        for key, pat in raw_patterns.items():
             if isinstance(pat, str) and pat.startswith("{") and pat.endswith("}"):
                 hex_str = pat.strip("{} ").replace(" ", "").lower()
                 patterns.append(_CompiledPattern(key=key, kind="hex", value=hex_str))
@@ -80,6 +85,41 @@ def _compile_catalog(extra_path: Optional[str] = None) -> list[_CompiledRule]:
                     patterns.append(_CompiledPattern(key=key, kind="regex", value=rx))
                 except _regex_backend.error:
                     logger.warning("injection_scan: bad pattern in rule %s key %s", rule.get("name"), key)
+
+        match_spec = rule.get("match")
+        match_all: tuple[tuple[str, ...], ...] = ()
+        within_chars: Optional[int] = None
+        if isinstance(match_spec, dict):
+            match_all = tuple(
+                tuple(str(key) for key in group.get("any", ()))
+                for group in match_spec.get("all", ())
+                if isinstance(group, dict)
+            )
+            unknown_keys = {
+                key
+                for group in match_all
+                for key in group
+                if key not in raw_patterns
+            }
+            if unknown_keys:
+                logger.warning(
+                    "injection_scan: rule %s match references unknown patterns: %s",
+                    rule.get("name"),
+                    sorted(unknown_keys),
+                )
+            try:
+                raw_within_chars = match_spec.get("within_chars")
+                if raw_within_chars is not None:
+                    within_chars = int(raw_within_chars)
+                    if within_chars < 0:
+                        raise ValueError("within_chars must be non-negative")
+            except (TypeError, ValueError):
+                logger.warning(
+                    "injection_scan: invalid within_chars for rule %s",
+                    rule.get("name"),
+                )
+                within_chars = None
+
         compiled.append(_CompiledRule(
             name=rule["name"],
             severity=str(meta.get("severity", "medium")),
@@ -87,6 +127,8 @@ def _compile_catalog(extra_path: Optional[str] = None) -> list[_CompiledRule]:
             threat_level=int(meta.get("threat_level", 1)),
             patterns=tuple(patterns),
             function_names=tuple(rule.get("functions", [])),
+            match_all=match_all,
+            within_chars=within_chars,
         ))
     return compiled
 
@@ -197,6 +239,53 @@ def normalize_text(text: str) -> str:
 # Core scanner — hot path; no I/O, no re-compilation
 # ---------------------------------------------------------------------------
 
+def _match_groups_within(
+    positions_by_pattern: dict[str, list[int]],
+    groups: tuple[tuple[str, ...], ...],
+    within_chars: Optional[int],
+) -> bool:
+    """Return whether every match group occurs inside the configured window."""
+    positions_by_group: list[list[int]] = []
+    for group in groups:
+        positions = sorted({
+            position
+            for pattern_key in group
+            for position in positions_by_pattern.get(pattern_key, ())
+        })
+        if not positions:
+            return False
+        positions_by_group.append(positions)
+
+    if within_chars is None or len(positions_by_group) == 1:
+        return True
+
+    events = sorted(
+        (position, group_index)
+        for group_index, positions in enumerate(positions_by_group)
+        for position in positions
+    )
+    counts = [0] * len(positions_by_group)
+    covered_groups = 0
+    left = 0
+
+    for right, (right_position, right_group) in enumerate(events):
+        if counts[right_group] == 0:
+            covered_groups += 1
+        counts[right_group] += 1
+
+        while right_position - events[left][0] > within_chars:
+            left_group = events[left][1]
+            counts[left_group] -= 1
+            if counts[left_group] == 0:
+                covered_groups -= 1
+            left += 1
+
+        if covered_groups == len(positions_by_group):
+            return True
+
+    return False
+
+
 def scan_content(text: str) -> InjectionScanResult:
     """
     Scan text for injection patterns. Returns InjectionScanResult.
@@ -227,19 +316,33 @@ def scan_content(text: str) -> InjectionScanResult:
             continue
         # Count how many patterns in this rule match
         n_matched = 0
+        positions_by_pattern: dict[str, list[int]] = {}
         for cp in rule.patterns:
             try:
                 if cp.kind == "hex":
                     if cp.value in text_bytes_hex:
                         n_matched += 1
+                        positions_by_pattern[cp.key] = [0]
                 else:
-                    if cp.value.search(normalized):
+                    if rule.match_all:
+                        positions = [match.start() for match in cp.value.finditer(normalized)]
+                        if positions:
+                            positions_by_pattern[cp.key] = positions
+                            n_matched += 1
+                    elif cp.value.search(normalized):
                         n_matched += 1
             except Exception:  # nosec B112
-                logger.debug("injection_scan: pattern match failed for rule %s", rule.rule_id, exc_info=True)
+                logger.debug("injection_scan: pattern match failed for rule %s", rule.name, exc_info=True)
                 continue
 
-        if n_matched == 0:
+        if n_matched == 0 or (
+            rule.match_all
+            and not _match_groups_within(
+                positions_by_pattern,
+                rule.match_all,
+                rule.within_chars,
+            )
+        ):
             continue
 
         regex_score += 2.0 * n_matched

@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 from uma.common.accessors import get_attr_or_key
 from uma.common.text_bounds import trim_to_sentence_boundary
-from uma.common.injection_scan import severity_from_meta, max_severity
+from uma.adapters.scanner.injection_scan import max_severity, severity_from_meta
 from uma.adapters.llm.controller import LLMCallContext, generate_text
 
 logger = logging.getLogger(__name__)

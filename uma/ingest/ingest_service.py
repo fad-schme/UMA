@@ -29,7 +29,7 @@ from uma.common.ownership import validate_explicit_owner
 from uma.common.storage_metadata import normalize_document_metadata
 from uma.common.integrity import hash_fact_content
 from uma.common.trust import SourceDescriptor, score_source
-from uma.common.injection_scan import scan_artifact_text
+from uma.adapters.scanner.injection_scan import scan_artifact_text
 from uma.retrieve.user_query_helper import build_fact_embedding_text
 logger = logging.getLogger(__name__)
 

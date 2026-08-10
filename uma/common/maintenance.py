@@ -15,6 +15,12 @@ from uma.stores.base_sql_store import DEFAULT_TENANT_ID
 from uma.common.types import Fact
 from uma.common.types import OwnershipRef, Skill
 from uma.common.identity import normalize_user_id
+from uma.common.results import (
+    DerivedRebuildReport,
+    GraphRebuildReport,
+    LaneRebuildStatus,
+    VectorRebuildReport,
+)
 from uma.retrieve.user_query_helper import build_fact_embedding_text
 
 logger = logging.getLogger(__name__)
@@ -152,7 +158,7 @@ async def rebuild_vector_indexes(
     include_semantic: bool = True,
     include_procedural: bool = True,
     batch_size: int = 32,
-) -> dict[str, Any]:
+) -> VectorRebuildReport:
     """
     Rebuild vector indexes from SQL stores.
 
@@ -186,7 +192,7 @@ async def _rebuild_vector_indexes_unlocked(
     include_semantic: bool = True,
     include_procedural: bool = True,
     batch_size: int = 32,
-) -> dict[str, Any]:
+) -> VectorRebuildReport:
     report: dict[str, Any] = {
         "episodic": {"status": "skipped", "count": 0},
         "semantic": {"status": "skipped", "count": 0},
@@ -219,11 +225,11 @@ async def _rebuild_vector_indexes_unlocked(
     if not getattr(agent_llm_cfg, "model", None):
         raise ValueError("rebuild_vector_indexes: agent_llm_cfg.model is required")
     if embedder is None:
-        return {
-            "status": "error",
-            "error": "embedder not initialized",
-            "report": report,
-        }
+        return VectorRebuildReport(
+            status="error",
+            error="embedder not initialized",
+            report={k: LaneRebuildStatus(**v) for k, v in report.items()},
+        )
 
     tenant_id = tenant_id or getattr(memory, "tenant_id", None) or DEFAULT_TENANT_ID
 
@@ -346,7 +352,10 @@ async def _rebuild_vector_indexes_unlocked(
     elif any(section["status"] == "skipped" for section in report.values()):
         overall = "degraded"
 
-    return {"status": overall, "report": report}
+    return VectorRebuildReport(
+        status=overall,
+        report={k: LaneRebuildStatus(**v) for k, v in report.items()},
+    )
 
 
 async def rebuild_derived_indexes(
@@ -360,7 +369,7 @@ async def rebuild_derived_indexes(
     include_procedural: bool = True,
     include_graph: bool = True,
     batch_size: int = 32,
-) -> dict[str, Any]:
+) -> DerivedRebuildReport:
     vector_result = await rebuild_vector_indexes(
         memory,
         tenant_id=tenant_id,
@@ -379,15 +388,15 @@ async def rebuild_derived_indexes(
         include_graph=include_graph,
     )
     overall = "ok"
-    if vector_result.get("status") == "error" or graph_report.get("status") == "error":
+    if vector_result.status == "error" or graph_report.status == "error":
         overall = "error"
-    elif vector_result.get("status") != "ok" or graph_report.get("status") != "ok":
+    elif vector_result.status != "ok" or graph_report.status != "ok":
         overall = "degraded"
-    return {
-        "status": overall,
-        "vector": vector_result,
-        "graph": graph_report,
-    }
+    return DerivedRebuildReport(
+        status=overall,
+        vector=vector_result,
+        graph=graph_report,
+    )
 
 
 def _clear_scoped_graph_materialization(
@@ -445,7 +454,7 @@ async def _rebuild_graph_from_authoritative_stores(
     owner_type: Optional[str],
     owner_id: Optional[str],
     include_graph: bool,
-) -> dict[str, Any]:
+) -> GraphRebuildReport:
     lock = _ensure_async_lock(memory, "_graph_rebuild_lock")
     async with lock:
         return await _rebuild_graph_from_authoritative_stores_unlocked(
@@ -464,7 +473,7 @@ async def _rebuild_graph_from_authoritative_stores_unlocked(
     owner_type: Optional[str],
     owner_id: Optional[str],
     include_graph: bool,
-) -> dict[str, Any]:
+) -> GraphRebuildReport:
     report: dict[str, Any] = {
         "status": "skipped",
         "episodes": 0,
@@ -473,16 +482,16 @@ async def _rebuild_graph_from_authoritative_stores_unlocked(
         "temporal_links": 0,
     }
     if not include_graph:
-        return report
+        return GraphRebuildReport(**report)
     tenant_id = tenant_id or getattr(memory, "tenant_id", None) or DEFAULT_TENANT_ID
     if not owner_type or not owner_id:
-        return report
+        return GraphRebuildReport(**report)
 
     graph = getattr(memory, "graph_core", None)
     episodic_core = getattr(memory, "episodic_core", None)
     semantic_core = getattr(memory, "semantic_core", None)
     if graph is None or episodic_core is None or semantic_core is None:
-        return report
+        return GraphRebuildReport(**report)
 
     try:
         scoped_owner_id = normalize_user_id(owner_id) if owner_type == "user" else owner_id
@@ -547,11 +556,11 @@ async def _rebuild_graph_from_authoritative_stores_unlocked(
                 "temporal_links": temporal_links,
             }
         )
-        return report
+        return GraphRebuildReport(**report)
     except Exception:
         logger.exception("rebuild_derived_indexes: graph rebuild failed.")
         report["status"] = "error"
-        return report
+        return GraphRebuildReport(**report)
 
 
 def _skill_embedding_text(skill: Skill) -> str:

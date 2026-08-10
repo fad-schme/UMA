@@ -39,7 +39,7 @@ from uma.stores.base_sql_store import DEFAULT_TENANT_ID
 from uma.common.types import RuntimeContext, SessionScope, Chunk
 from uma.common.identity import normalize_user_id
 from uma.common.trust import SourceDescriptor, score_source
-from uma.common.injection_scan import scan_artifact_text
+from uma.adapters.scanner.injection_scan import scan_artifact_text
 logger = logging.getLogger(__name__)
 
 

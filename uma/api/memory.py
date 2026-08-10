@@ -63,7 +63,13 @@ import threading
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Union
 
 if TYPE_CHECKING:
-    from uma.common.results import ContextBundle, HealthStatus, MemoryResult
+    from uma.common.results import (
+        ContextBundle,
+        DerivedRebuildReport,
+        HealthStatus,
+        MemoryResult,
+        VectorRebuildReport,
+    )
     from uma.ingest.types import IngestReport
 
 from uma.common.config import UMAConfig
@@ -87,7 +93,7 @@ from uma.common.initializers.runtime import (
 from uma.common.registry import FeatureLoader, FeaturePolicy, default_feature_registry
 from .runtime import AnimusProfileProvider, UMARuntime
 from uma.common.types import AgentProfile, RuntimeContext
-from uma.common.injection_scan import scan_content, InjectionDetectedError
+from uma.adapters.scanner.injection_scan import scan_content, InjectionDetectedError
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +205,7 @@ class UMAMemory:
 
         # Unified runtime config
         self.cfg = RuntimeConfig.from_uma_config(config)
-        from uma.common.injection_scan import configure_security
+        from uma.adapters.scanner.injection_scan import configure_security
         configure_security(self.cfg.security)
         self.llm_cfg = self.cfg.llm
         self.agent_llm_cfg = self.cfg.agent_llm
@@ -849,7 +855,7 @@ class UMAMemory:
         include_semantic: bool = True,
         include_procedural: bool = True,
         batch_size: int = 32,
-    ) -> dict[str, Any]:
+    ) -> "VectorRebuildReport":
         """Rebuild vector indexes from SQL-backed data."""
         from uma.common.maintenance import rebuild_vector_indexes
 
@@ -875,7 +881,7 @@ class UMAMemory:
         include_procedural: bool = True,
         include_graph: bool = True,
         batch_size: int = 32,
-    ) -> dict[str, Any]:
+    ) -> "DerivedRebuildReport":
         """Rebuild derived vector and graph indexes from authoritative SQL-backed data."""
         from uma.common.maintenance import rebuild_derived_indexes
 

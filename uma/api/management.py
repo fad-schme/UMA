@@ -162,10 +162,13 @@ async def lint_memory_drift(
     workspace_id: str | None = None,
     stale_after_seconds: int | None = None,
 ) -> dict[str, Any]:
-    """Lint compiled memory artifacts for provenance drift without mutating them.
+    """Lint compiled memory artifacts for provenance and integrity drift.
 
-    For typed lane artifacts (Fact, Episode, Skill, Chunk), also runs verify_integrity.
-    Integrity failures are included as findings with category "integrity_failure".
+    Wiki/compiled artifacts are inspected without mutation. For typed lane
+    artifacts (Fact, Episode, Skill, Chunk), this function calls
+    ``verify_integrity``; a hash mismatch quarantines the record and appends a
+    security audit entry. This typed-record path is intentionally mutating.
+    Integrity failures are returned with category ``integrity_failure``.
     """
     items = (
         list(artifacts)
@@ -448,7 +451,13 @@ async def list_quarantined(
                         content_preview=(r.text or "")[:200],
                     ))
         except Exception:
-            logger.exception("list_quarantined: failed to query lane=%s owner=%s:%s", ln, owner_type, owner_id)
+            logger.exception(
+                "list_quarantined: failed to query lane=%s owner=%s:%s",
+                ln,
+                owner_type,
+                owner_id,
+            )
+            raise
 
     results.sort(key=lambda r: r.quarantined_at, reverse=True)
     return results[:limit]
@@ -569,13 +578,14 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
-def list_retrieval_audit(
+async def list_retrieval_audit(
     memory: "UMAMemory",
     *,
     tenant_id: Optional[str] = None,
     user_id: Optional[str] = None,
     severity_min: Optional[str] = None,
     limit: int = 100,
+    all_tenants: bool = False,
 ) -> list[dict]:
     """Read recent retrieval-audit rows.
 
@@ -594,14 +604,21 @@ def list_retrieval_audit(
     memory : UMAMemory
         The UMAMemory whose runtime owns the audit store.
     tenant_id : Optional[str]
-        Exact-match filter on tenant. If None, returns all tenants.
+        Exact-match filter on tenant. Required unless all_tenants=True.
     user_id : Optional[str]
-        Exact-match filter on user. If None, returns all users.
+        Exact-match filter on user. If None, returns all users within
+        the resolved tenant scope.
     severity_min : Optional[str]
         Returns rows at or above this severity tier. Values:
         "none" / "low" / "medium" / "high". None means no floor.
     limit : int
         Max rows returned (capped at 1000 internally).
+    all_tenants : bool
+        Explicit opt-in for a cross-tenant admin view. Raises
+        ValueError if False and tenant_id is not provided — the audit
+        log is the one read path in UMA where cross-tenant visibility
+        is a legitimate operator capability, but it must be requested
+        deliberately rather than fall out of an omitted parameter.
 
     Returns
     -------
@@ -610,6 +627,11 @@ def list_retrieval_audit(
         agent_id, query_hash, query_preview, scan_severity, lanes,
         result_count, refined_via_llm, pruned_via_llm, created_at.
         Empty list if audit is disabled or the store can't be read.
+
+    Raises
+    ------
+    ValueError
+        If tenant_id is None and all_tenants is not True.
     """
     runtime = getattr(memory, "runtime", None)
     if runtime is None:
@@ -619,9 +641,10 @@ def list_retrieval_audit(
     if store is None:
         logger.debug("list_retrieval_audit: audit store unavailable (disabled or failed)")
         return []
-    return store.list_rows(
+    return await store.list_rows(
         tenant_id=tenant_id,
         user_id=user_id,
         severity_min=severity_min,
         limit=limit,
+        all_tenants=all_tenants,
     )

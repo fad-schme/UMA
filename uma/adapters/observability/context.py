@@ -23,14 +23,6 @@ def get_trace_id() -> str:
     return _trace_id_var.get()
 
 
-def set_request_id(request_id: Optional[str]) -> None:
-    _request_id_var.set(request_id or "-")
-
-
-def set_trace_id(trace_id: Optional[str]) -> None:
-    _trace_id_var.set(trace_id or "-")
-
-
 @contextmanager
 def request_context(
     request_id: Optional[str] = None,

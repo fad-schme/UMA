@@ -320,7 +320,12 @@ class PromotionPolicy:
             fact_text = (
                 f"{fact.subject} {fact.predicate} {str(fact.object)}"
             ).lower()
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "PromotionPolicy._scope_matches: fact_text construction failed: %s",
+                exc,
+                exc_info=True,
+            )
             fact_text = ""
         if fact_text:
             for focus_area in agent_profile.focus_areas:

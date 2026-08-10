@@ -11,7 +11,7 @@ from uma.adapters.db.sqlite_adapter import SQLiteAdapter
 from uma.adapters.vector.base import VectorIndex
 from uma.api.management import list_quarantined, reinstate_quarantined, purge_quarantined
 from uma.common.config_types import SecurityConfig
-from uma.common.injection_scan import configure_security, quarantine_enabled, scan_content, apply_scan
+from uma.adapters.scanner.injection_scan import apply_scan, configure_security, quarantine_enabled, scan_content
 from uma.common.types import Fact, Episode, Skill, Chunk
 from uma.stores.chunk_sql import ChunkSQLStore
 from uma.stores.episodic_sql import EpisodicSQLStore
@@ -815,7 +815,7 @@ async def test_poisoned_reply_episode_absent_from_normal_retrieval(tmp_path):
 @pytest.mark.asyncio
 async def test_poisoned_user_msg_facts_quarantined(tmp_path):
     memory = await init_uma_for_tests(tmp_path)
-    from uma.common.injection_scan import InjectionDetectedError
+    from uma.adapters.scanner.injection_scan import InjectionDetectedError
 
     with pytest.raises(InjectionDetectedError):
         await memory.process_turn(

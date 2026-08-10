@@ -582,7 +582,7 @@ class UMARuntime:
           right to handle false positives.
         """
         from uma.adapters.observability.metrics import increment, timed
-        from uma.common.injection_scan import scan_content
+        from uma.adapters.scanner.injection_scan import scan_content
 
         if not isinstance(runtime_context, RuntimeContext):
             raise TypeError("UMARuntime retrieval requires a RuntimeContext instance.")

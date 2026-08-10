@@ -229,7 +229,12 @@ class GraphUpdater:
                 source_ids = getattr(fact, "source_ids", None)
                 if isinstance(source_ids, list) and source_ids:
                     source_chunk_id = str(source_ids[0] or "")
-            except Exception:
+            except Exception as exc:
+                logger.debug(
+                    "GraphUpdater.add_fact: source_chunk_id extraction failed: %s",
+                    exc,
+                    exc_info=True,
+                )
                 source_chunk_id = ""
 
             # Timestamps must be strings (GraphCore.insert_fact_triplet expects str).
@@ -252,7 +257,12 @@ class GraphUpdater:
             if isinstance(meta, dict) and meta:
                 try:
                     meta_json = json.dumps(meta, ensure_ascii=False)[:4000]
-                except Exception:
+                except Exception as exc:
+                    logger.debug(
+                        "GraphUpdater.add_fact: meta_json serialization failed: %s",
+                        exc,
+                        exc_info=True,
+                    )
                     meta_json = None
 
             domain = None
@@ -261,7 +271,12 @@ class GraphUpdater:
                     d = meta.get("domain")
                     if isinstance(d, str) and d.strip():
                         domain = d.strip().lower()
-            except Exception:
+            except Exception as exc:
+                logger.debug(
+                    "GraphUpdater.add_fact: domain extraction failed: %s",
+                    exc,
+                    exc_info=True,
+                )
                 domain = None
 
             insert(

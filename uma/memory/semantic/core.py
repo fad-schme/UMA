@@ -33,7 +33,7 @@ from uma.retrieve.ranking import fuse_candidates
 from uma.common.identity import normalize_user_id
 from uma.common.dedupe import dedupe_by_id
 from uma.common.trust import SourceDescriptor, score_source
-from uma.common.injection_scan import scan_content, apply_scan, quarantine_enabled
+from uma.adapters.scanner.injection_scan import apply_scan, quarantine_enabled, scan_content
 from .ingestor import SemanticIngestor
 
 logger = logging.getLogger(__name__)

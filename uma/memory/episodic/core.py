@@ -36,7 +36,7 @@ from uma.common.types import Episode
 from uma.common.types import RuntimeContext, SCOPE_MODEL_VERSION
 from uma.common.dedupe import dedupe_by_id
 from uma.common.integrity import hash_episode_content
-from uma.common.injection_scan import scan_artifact_text
+from uma.adapters.scanner.injection_scan import scan_artifact_text
 
 logger = logging.getLogger(__name__)
 

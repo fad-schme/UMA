@@ -8,6 +8,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [unreleased]
 
 ### Added
+- **Operational CLI** with stable `uma` and `python -m uma.cli` entry points,
+  text/JSON output, secret-redacted configuration inspection, offline and
+  runtime diagnostics, injection scanning, CI-aligned development checks,
+  scoped retrieval and ingestion, audit/quarantine listing, and guarded
+  quarantine, index, and integrity administration. Destructive operations
+  require an exact resolved target and interactive confirmation or `--yes`.
+- **Qdrant vector adapter restored to Lite** with mandatory tenant and owner
+  filtering in native Qdrant queries. Install its optional client dependency
+  with `pip install 'uma[qdrant]'`.
 - **`google-re2` regex backend for the injection scanner** via a new
   `pip install uma[security]` install extra. When installed, `scan_content`
   and every rule-function scorer compile their patterns through RE2, which
@@ -46,10 +55,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Packaging consolidated into `pyproject.toml`.** `setup.py` deleted;
   every field (runtime dependencies, optional-dependencies, project
   metadata, package-data, dynamic version) now lives in `pyproject.toml`
-  as the single source of truth. Supported extras remain
-  (`llm`, `openai`, `ollama`, `vector`, `graph`, `security`, `parsers`,
-  `dev`); the `vector` extra now installs only the implemented FAISS
-  backend. Build with `python -m build`; install with
+  as the single source of truth. Supported extras are
+  (`llm`, `openai`, `ollama`, `vector`, `qdrant`, `graph`, `security`,
+  `parsers`, `dev`); the `vector` extra installs FAISS and the separate
+  `qdrant` extra installs the Qdrant client. Build with `python -m build`; install with
   `pip install .` or `pip install -e '.[dev]'`. Anyone invoking
   `python setup.py <cmd>` directly will need to switch to `pip` or
   `python -m build` — the file is gone.

@@ -352,7 +352,7 @@ _POISONED_USER = (
 async def test_poisoned_reply_episode_trust_zero(tmp_path):
     """Poisoned assistant_reply → episode trust_score == 0.0, scan result in meta."""
     from uma.common.config_types import SecurityConfig
-    from uma.common.injection_scan import configure_security
+    from uma.adapters.scanner.injection_scan import configure_security
     mem = await init_uma_for_tests(tmp_path)
     # Disable quarantine so the episode remains visible in list_episodes for trust_score inspection.
     configure_security(SecurityConfig(scan_enabled=True, quarantine_enabled=False))
@@ -391,7 +391,7 @@ async def test_poisoned_user_msg_facts_trust_zero(tmp_path):
     """Poisoned user_msg is rejected before semantic ingestion runs."""
     mem = await init_uma_for_tests(tmp_path)
     try:
-        from uma.common.injection_scan import InjectionDetectedError
+        from uma.adapters.scanner.injection_scan import InjectionDetectedError
 
         with pytest.raises(InjectionDetectedError):
             await mem.process_turn(
@@ -583,7 +583,7 @@ async def test_process_turn_poisoned_reply_quarantined_not_ranked(tmp_path):
     must not be returned by the store list and must not appear in ranked results.
     """
     from uma.common.config_types import SecurityConfig
-    from uma.common.injection_scan import configure_security
+    from uma.adapters.scanner.injection_scan import configure_security
 
     configure_security(SecurityConfig(scan_enabled=True, quarantine_enabled=True))
     memory = await init_uma_for_tests(tmp_path)
