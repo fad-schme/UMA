@@ -32,8 +32,8 @@ from typing import Any
 from uma.common.types import Episode
 from uma.common.types import Fact
 from uma.adapters.llm.base import LLMInterface, EmbeddingInterface
-from ...core.semantic.extractor import FactExtractor
-from ...core.semantic.scorer import SalienceScorer
+from uma.memory.semantic.extractor import FactExtractor
+from uma.memory.semantic.scorer import SalienceScorer
 from uma.common.identity import normalize_user_id
 
 from .clusterer import EpisodeClusterer

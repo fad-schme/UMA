@@ -35,7 +35,7 @@ class QdrantIndex(VectorIndex):
         if QdrantClient is None or qmodels is None:
             raise RuntimeError(
                 "QdrantIndex requires qdrant-client. Install it with "
-                "`python -m pip install 'uma[qdrant]'`."
+                "`python -m pip install 'uma-mem[qdrant]'`."
             )
         if not isinstance(dim, int) or dim <= 0:
             raise ValueError("QdrantIndex: dim must be a positive integer.")

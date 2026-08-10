@@ -144,7 +144,7 @@ def test_scan_content_bounded_on_realistic_input(caplog):
             if _regex_backend.USING_RE2 else
             "Under the Python `re` fallback, either a pathological pattern was "
             "added or the CI runner is severely loaded. Install "
-            "`pip install uma[security]` for the RE2 backend, which is roughly "
+            "`pip install uma-mem[security]` for the RE2 backend, which is roughly "
             "5-10x faster on this catalog."
         )
     )
@@ -189,7 +189,7 @@ def test_scan_content_backtracking_defense():
 
 @pytest.mark.skipif(
     not _regex_backend.USING_RE2,
-    reason="google-re2 not installed — install with `pip install uma[security]` to run this test",
+    reason="google-re2 not installed — install with `pip install uma-mem[security]` to run this test",
 )
 def test_regex_backend_matches_expected_posture():
     """

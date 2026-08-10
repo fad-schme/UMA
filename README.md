@@ -95,6 +95,14 @@ For the full security model — including the injection pattern catalog, severit
 
 ## Quickstart
 
+The distribution is `uma-mem`; the import package and CLI are `uma`.
+
+```bash
+pip install uma-mem
+```
+
+From a source checkout:
+
 ```bash
 pip install -e .
 ```

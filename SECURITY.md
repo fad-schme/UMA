@@ -39,8 +39,8 @@ schema or API between betas — see `ARCHITECTURE.md § Status`.
 
 | Version           | Status              | Security fixes  |
 |-------------------|---------------------|-----------------|
-| 0.1.5-beta        | Current             | ✅ Yes          |
-| < 0.1.5-beta      | Superseded          | ❌ Please upgrade |
+| 0.2.0             | Current             | ✅ Yes          |
+| < 0.2.0           | Superseded          | ❌ Please upgrade |
 
 Once UMA reaches 1.0, this table will grow into a proper support matrix
 with a defined maintenance window per minor release.
@@ -280,7 +280,7 @@ a different layer of the stack.
   jailbreak wording can slip past the injection scanner. Layer a
   model-based classifier or allow-listing above UMA for high-risk
   deployments. When compiled through the `google-re2` backend
-  (`pip install uma[security]`), the scanner is at least immune to
+  (`pip install uma-mem[security]`), the scanner is at least immune to
   ReDoS in its own execution path.
 
   *Evaluation scope.* The catalog is currently regression-tested

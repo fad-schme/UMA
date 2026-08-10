@@ -29,7 +29,7 @@ from uma.common.types import Skill
 from .matcher import SkillMatcher
 
 if TYPE_CHECKING:
-    from ...core.procedural.core import ProceduralCore
+    from uma.memory.procedural.core import ProceduralCore
     from uma.adapters.llm.base import EmbeddingInterface
 
 logger = logging.getLogger(__name__)

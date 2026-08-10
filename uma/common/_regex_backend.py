@@ -7,7 +7,7 @@ import.
 
 Install the RE2 backend for production::
 
-    pip install uma[security]
+    pip install uma-mem[security]
 
 Only used by security-critical scan paths (``injection_scan``,
 ``rule_functions``). Other UMA code that uses regex is not affected — this
@@ -49,7 +49,7 @@ except ImportError:
         "uma.common._regex_backend: google-re2 not installed; falling back "
         "to Python `re`. Functionally correct for the shipped pattern "
         "catalog, but future patterns are not protected against ReDoS. "
-        "Install `pip install uma[security]` for the linear-time RE2 "
+        "Install `pip install uma-mem[security]` for the linear-time RE2 "
         "backend in production."
     )
 

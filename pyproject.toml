@@ -15,7 +15,9 @@ build-backend = "setuptools.build_meta"
 # -----------------------------------------------------------------------------
 
 [project]
-name = "uma"
+# Distribution name only. The import package stays `uma` (`import uma`,
+# `uma` CLI); `uma` was already taken on PyPI by an unrelated project.
+name = "uma-mem"
 description = "UMA: modular memory and context manager for AI agents"
 readme = "README.md"
 license = "Apache-2.0"

@@ -26,8 +26,8 @@ from uma.common.registry import FeatureContext, FeatureHandle, FeatureResult, UM
 from .consolidator import Consolidator
 
 if TYPE_CHECKING:
-    from ...core.episodic.core import EpisodicCore
-    from ...core.semantic.core import SemanticCore
+    from uma.memory.episodic.core import EpisodicCore
+    from uma.memory.semantic.core import SemanticCore
     from uma.adapters.llm.base import LLMInterface, EmbeddingInterface
 
 logger = logging.getLogger(__name__)

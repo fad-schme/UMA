@@ -7,7 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased]
 
+---
+
+## [0.2.0] — 2026-08-10
+
+First release published to PyPI.
+
 ### Added
+- **`.github/workflows/publish.yml`** — tag-triggered release pipeline. One
+  build feeds both indexes: TestPyPI first as a rehearsal, then PyPI behind
+  the `pypi` environment's approval gate. Uploads use PyPI Trusted Publishing
+  (OIDC), so no API tokens are stored in the repository. A guard fails the
+  build when the pushed `v*` tag disagrees with `uma/version.py`.
 - **Operational CLI** with stable `uma` and `python -m uma.cli` entry points,
   text/JSON output, secret-redacted configuration inspection, offline and
   runtime diagnostics, injection scanning, CI-aligned development checks,
@@ -16,9 +27,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   require an exact resolved target and interactive confirmation or `--yes`.
 - **Qdrant vector adapter restored to Lite** with mandatory tenant and owner
   filtering in native Qdrant queries. Install its optional client dependency
-  with `pip install 'uma[qdrant]'`.
+  with `pip install 'uma-mem[qdrant]'`.
 - **`google-re2` regex backend for the injection scanner** via a new
-  `pip install uma[security]` install extra. When installed, `scan_content`
+  `pip install uma-mem[security]` install extra. When installed, `scan_content`
   and every rule-function scorer compile their patterns through RE2, which
   is linear-time by construction — ReDoS is impossible regardless of what
   patterns future contributors add. Base install falls back to Python's
@@ -35,7 +46,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   input with repeated tokens must scan under 50 ms. CI ratchet against
   future pathological patterns.
 
+### Fixed
+- **`import uma.memory` no longer fails in a fresh interpreter.** The
+  re-exports in `uma/retrieve/rlm/__init__.py` turned any leaf import into a
+  whole-subsystem import, closing two cycles: `uma.memory.chunk.core` →
+  `uma.retrieve.ranking` → (rlm package) → `controller` →
+  `uma.memory.chunk.core`, and `planner` → `rlm.intent` → (rlm package) →
+  `controller` → `evidence` → `request` → `planner`. Either one raised
+  ImportError whenever `uma.memory` (or `uma.memory.chunk.core`, or
+  `uma.retrieve.planner`) was the first UMA import; the SDK entry points
+  happened to import in an order that hid it. The package initializer is now
+  import-free — every caller already imported the submodules directly, so no
+  call site changed.
+- **Stale `uma.core.*` imports in the consolidation and procedural features**
+  (`from ...core.semantic.extractor import FactExtractor` and four siblings)
+  pointed at a package layout that no longer exists, so
+  `import uma.memory.consolidation` raised
+  `ModuleNotFoundError: No module named 'uma.core'`. Repointed at
+  `uma.memory.*`.
+- **`tests/test_package_imports.py`** — new guard importing every shipped
+  subpackage in its own subprocess. The rest of the suite imports `uma.api`
+  first via conftest, which masks this entire class of bug.
+
 ### Changed
+- **Distribution renamed to `uma-mem`.** `pip install uma` installs an
+  unrelated project that already owns that name on PyPI; install UMA with
+  `pip install uma-mem` (extras: `pip install 'uma-mem[security]'`). Only the
+  distribution name changed — the import package is still `uma`
+  (`import uma`, `from uma import UMAMemory`) and the CLI is still `uma`, so
+  no source change is required in dependent code.
+- **Version is now plain PEP 440 without a pre-release suffix** (`0.2.0`,
+  previously `0.1.5-beta`). `uma version`, the wheel filename, and PyPI now
+  all report the same string; `0.1.5-beta` normalized to `0.1.5b0` in
+  packaging tools while the CLI printed the unnormalized form. UMA remains
+  beta-quality software — see `SECURITY.md § Supported Versions`.
 - **Agent identity binding is immutable.** `set_context(agent_id=...)` now
   returns a distinct per-agent `ScopedUMAMemory` view and never mutates the
   source runtime. Each scoped instance owns its turn pipeline and promotion
