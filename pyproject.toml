@@ -94,6 +94,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
+    "pytest-timeout",
     "bandit[toml]",
     "pip-audit",
     "ruff",
@@ -122,6 +123,13 @@ namespaces = true
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "--basetemp=.pytest_tmp"
+# No test in this suite legitimately runs near a minute (the slowest is ~2s).
+# The cap exists so a deadlock fails the run instead of wedging it: threads
+# blocked in `asyncio.to_thread` are non-daemon, so the interpreter joins them
+# at shutdown and a stuck one hangs pytest forever with no output.
+# "thread" method is required on Windows (signal-based timeouts are POSIX-only).
+timeout = 60
+timeout_method = "thread"
 
 [tool.bandit]
 skips = ["B608", "B105"]

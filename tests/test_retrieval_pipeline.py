@@ -206,6 +206,52 @@ def test_fuse_candidates_sparse_precedes_and_dedupes_with_rrf() -> None:
     assert [x["id"] for x in out] == ["b", "a", "c"]
 
 
+def test_score_card_emission_follows_request_debug_flag() -> None:
+    """`score_card` is opt-in per request and must not leak by default.
+
+    The Ranker is shared across concurrent requests, so the debug flag is
+    passed per call rather than held on the instance. Both the per-request
+    flag and the global `retrieval.debug_scores` config default enable it.
+    """
+    now = datetime.now(timezone.utc)
+
+    def _fact(fact_id: str) -> Fact:
+        return Fact(
+            id=fact_id,
+            subject="user",
+            predicate="LIKES",
+            object="sushi",
+            created_at=now,
+            updated_at=now,
+            meta={"vector_score": 0.5},
+            owner_type="user",
+            owner_id="user:u1",
+        )
+
+    # Default: no emission — score cards stay out of the normal product.
+    ranked = Ranker().rank_facts([_fact("f1")], query_text="sushi")
+    assert "score_card" not in (ranked[0].meta or {})
+
+    # Per-request opt-in.
+    ranked = Ranker().rank_facts([_fact("f1")], query_text="sushi", debug=True)
+    card = (ranked[0].meta or {}).get("score_card")
+    assert card is not None
+    assert card["id"] == "f1"
+    assert set(card) >= {
+        "vector_score",
+        "lexical_score",
+        "rerank_score",
+        "route",
+        "final_score",
+        "trust_score",
+        "final_score_with_trust",
+    }
+
+    # Global config default still emits without a per-request flag.
+    ranked = Ranker(debug_scores=True).rank_facts([_fact("f1")], query_text="sushi")
+    assert "score_card" in (ranked[0].meta or {})
+
+
 def test_rank_facts_reranks_by_query_overlap_without_dropping() -> None:
     now = datetime.now(timezone.utc)
     f_sushi = Fact(

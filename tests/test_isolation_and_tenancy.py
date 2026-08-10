@@ -28,6 +28,14 @@ import pytest
 import threading
 import yaml
 
+# Barrier waits run inside `asyncio.to_thread`, i.e. on non-daemon pool threads
+# that asyncio cannot cancel. Without a timeout, one party failing before it
+# reaches the barrier leaves the other blocked forever and the interpreter
+# hangs at shutdown joining it. A bounded wait turns that into a
+# BrokenBarrierError and an honest test failure.
+_BARRIER_TIMEOUT_S = 10.0
+
+
 # ── test_isolation_matrix ──────────────────────────────────────────
 
 
@@ -381,8 +389,9 @@ async def test_retrieval_remains_isolated_under_concurrent_requests(uma_memory, 
         *,
         query_text: str,
         lane_filter=None,
+        include_debug: bool = False,
     ):
-        await asyncio.to_thread(barrier.wait)
+        await asyncio.to_thread(barrier.wait, _BARRIER_TIMEOUT_S)
         seen_contexts.append((query_text, runtime_context.user_id or "", runtime_context.session_id or ""))
         return make_context_bundle(query=query_text)
 

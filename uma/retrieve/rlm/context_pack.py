@@ -54,6 +54,11 @@ class ContextPack:
     refined_via_llm: bool = False
     pruned_via_llm: bool = False
 
+    # Request-scoped debug flag, mirrored from RetrievalRequest.debug. When
+    # True the ranker attaches a per-candidate `score_card` to each artifact's
+    # meta (vector/lexical/rerank/route/method/final/trust attribution).
+    debug: bool = False
+
 
     # Memory layers
     working_memory: list[Any] = field(default_factory=list)

@@ -31,6 +31,14 @@ import time
 import uma.api.memory as memory_module
 import yaml
 
+# Barrier waits run inside `asyncio.to_thread`, i.e. on non-daemon pool threads
+# that asyncio cannot cancel. Without a timeout, one party failing before it
+# reaches the barrier leaves the other blocked forever and the interpreter
+# hangs at shutdown joining it. A bounded wait turns that into a
+# BrokenBarrierError and an honest test failure.
+_BARRIER_TIMEOUT_S = 10.0
+
+
 # ── test_runtime_concurrency ──────────────────────────────────────────
 
 
@@ -499,7 +507,7 @@ async def test_retrieve_context_passes_explicit_request_scope_through(uma_memory
     memory = uma_memory
     seen: list[tuple[str, str, str, str]] = []
 
-    async def fake_retrieve_context(bound_context, *, query_text: str, lane_filter=None):
+    async def fake_retrieve_context(bound_context, *, query_text: str, lane_filter=None, include_debug: bool = False):
         del lane_filter
         seen.append(
             (
@@ -534,9 +542,9 @@ async def test_concurrent_retrieve_context_calls_keep_request_scope_isolated(
     barrier = threading.Barrier(2)
     seen: list[tuple[str, str, str, str]] = []
 
-    async def fake_retrieve_context(bound_context, *, query_text: str, lane_filter=None):
+    async def fake_retrieve_context(bound_context, *, query_text: str, lane_filter=None, include_debug: bool = False):
         del lane_filter
-        await asyncio.to_thread(barrier.wait)
+        await asyncio.to_thread(barrier.wait, _BARRIER_TIMEOUT_S)
         seen.append(
             (
                 query_text,
@@ -584,9 +592,9 @@ async def test_retrieve_context_overlap_with_process_turn_keeps_each_call_scope(
     seen_contexts: list[tuple[str, str, str, str]] = []
     seen_turns: list[tuple[str, str, str, str]] = []
 
-    async def fake_retrieve_context(bound_context, *, query_text: str, lane_filter=None):
+    async def fake_retrieve_context(bound_context, *, query_text: str, lane_filter=None, include_debug: bool = False):
         del lane_filter
-        await asyncio.to_thread(barrier.wait)
+        await asyncio.to_thread(barrier.wait, _BARRIER_TIMEOUT_S)
         seen_contexts.append(
             (
                 query_text,
@@ -611,7 +619,7 @@ async def test_retrieve_context_overlap_with_process_turn_keeps_each_call_scope(
         ) -> None:
             del user_msg, assistant_reply
             extra_meta = dict(extra_meta or {})
-            await asyncio.to_thread(barrier.wait)
+            await asyncio.to_thread(barrier.wait, _BARRIER_TIMEOUT_S)
             seen_turns.append(
                 (
                     user_id,
@@ -664,7 +672,7 @@ async def test_bootstrap_overlap_with_retrieval_keeps_explicit_request_scope(
 
     async def fake_ingest_memory_bootstrap(file_path, *, memory, runtime_context, config=None):
         del file_path, memory, config
-        await asyncio.to_thread(barrier.wait)
+        await asyncio.to_thread(barrier.wait, _BARRIER_TIMEOUT_S)
         seen_bootstrap.append(
             (
                 runtime_context.user_id or "",
@@ -674,9 +682,9 @@ async def test_bootstrap_overlap_with_retrieval_keeps_explicit_request_scope(
         )
         return {"status": "ingested", "facts_created": 1}
 
-    async def fake_retrieve_context(bound_context, *, query_text: str, lane_filter=None):
+    async def fake_retrieve_context(bound_context, *, query_text: str, lane_filter=None, include_debug: bool = False):
         del query_text, lane_filter
-        await asyncio.to_thread(barrier.wait)
+        await asyncio.to_thread(barrier.wait, _BARRIER_TIMEOUT_S)
         seen_contexts.append(
             (
                 bound_context.user_id or "",

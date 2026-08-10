@@ -531,6 +531,7 @@ class UMAMemory:
         workspace_id: Optional[str] = None,
         session_id: Optional[str] = None,
         lane_filter: Optional[list[str]] = None,
+        include_debug: bool = False,
     ) -> "ContextBundle":
         """Return the curated LLM context bundle for the explicit request scope.
 
@@ -540,6 +541,11 @@ class UMAMemory:
         - chunks/documents remain the primary retrieval product
         - optional `lane_filter` narrows persisted retrieval lanes without requiring wiki state
         - observability lives on `bundle.debug` (lane plan, trace, pruned_via_llm)
+        - `include_debug=True` additionally attaches a per-candidate
+          `score_card` to each artifact's `meta`, exposing the score
+          attribution (vector, lexical, rerank, route, method, final, trust)
+          behind its ranking. Off by default — it is diagnostic detail, not
+          part of the normal retrieval product.
         """
         runtime_context = self._resolve_runtime_context(
             user_id=user_id,
@@ -553,6 +559,7 @@ class UMAMemory:
             runtime_context,
             query_text=query_text,
             lane_filter=lane_filter,
+            include_debug=include_debug,
         )
 
     async def retrieve_memory(

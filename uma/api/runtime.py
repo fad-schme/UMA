@@ -391,6 +391,7 @@ class UMARuntime:
         *,
         plan: Optional[Any] = None,
         query_scan_severity: Optional[str] = None,
+        debug: bool = False,
     ) -> RetrievalRequest:
         """Convert a RuntimeContext into a RetrievalRequest."""
         return RetrievalRequest.from_runtime_context(
@@ -398,6 +399,7 @@ class UMARuntime:
             trace_id=context.request_id,
             plan=plan,
             query_scan_severity=query_scan_severity,
+            debug=debug,
         )
 
     @staticmethod
@@ -562,6 +564,7 @@ class UMARuntime:
         *,
         query_text: str,
         lane_filter: Optional[list[str]] = None,
+        include_debug: bool = False,
     ) -> "ContextBundle":
         """Retrieve curated evidence-oriented UMA context for one explicit request scope.
 
@@ -571,6 +574,9 @@ class UMARuntime:
         - chunks/documents remain the primary evidence product
         - wiki/compiled memory state is not required by default
         - `lane_filter` applies only to persisted retrieval lanes, not working memory
+        - `include_debug` attaches a per-candidate `score_card` to each
+          artifact's `meta` (vector/lexical/rerank/route/method/final/trust)
+          so callers can see why an artifact ranked where it did
 
         Security:
         - The query text is scanned for injection patterns at the runtime
@@ -631,6 +637,7 @@ class UMARuntime:
                     runtime_context,
                     plan=plan,
                     query_scan_severity=query_scan_severity,
+                    debug=include_debug,
                 ),
                 query_text=normalized_query_text,
             )
@@ -941,6 +948,7 @@ class UMARuntime:
             runtime_context,
             query_text=query_text,
             lane_filter=list(plan.participating_lanes),
+            include_debug=include_debug,
         )
         chunks = list(context.chunks)
         memory_sources = self._group_memory_artifacts(chunks)

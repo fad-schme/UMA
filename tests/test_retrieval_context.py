@@ -59,6 +59,7 @@ async def test_runtime_retrieval_delegates_directly(uma_memory) -> None:
         *,
         query_text: str,
         lane_filter=None,
+        include_debug: bool = False,
     ):
         seen.append(("context", bound_context, query_text))
         return make_context_bundle(
@@ -136,6 +137,7 @@ async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory
         *,
         query_text: str,
         lane_filter=None,
+        include_debug: bool = False,
     ):
         seen.append(("context", bound_context, query_text))
         return make_context_bundle(
@@ -227,6 +229,7 @@ async def test_runtime_memory_retrieval_surfaces_explicit_evidence_only_fallback
         *,
         query_text: str,
         lane_filter=None,
+        include_debug: bool = False,
     ):
         assert lane_filter == ["wiki", "raw", "semantic", "episodic"]
         return make_context_bundle(
@@ -280,6 +283,7 @@ async def test_runtime_memory_retrieval_can_expose_debug_payload(uma_memory) -> 
         *,
         query_text: str,
         lane_filter=None,
+        include_debug: bool = False,
     ):
         return make_context_bundle(
             query=query_text,
@@ -341,6 +345,7 @@ async def test_runtime_memory_zero_evidence_returns_honest_fallback_debug_shape(
         *,
         query_text: str,
         lane_filter=None,
+        include_debug: bool = False,
     ):
         _now = datetime.now(timezone.utc)
         return make_context_bundle(

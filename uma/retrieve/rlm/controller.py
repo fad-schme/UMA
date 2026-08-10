@@ -395,6 +395,7 @@ class RLMController:
             active_domains=list(plan.active_domains),
             lane_plan=plan.to_trace(),
             query_scan_severity=request.query_scan_severity,
+            debug=request.debug,
         )
         pack.steps.append({"step": 0, "phase": "plan", **plan.to_trace()})
         return pack
@@ -605,7 +606,7 @@ class RLMController:
                     owner_id=owner_id,
                     default_k=self.max_items_per_type,
                 )
-                results = self.ranker.rank_facts(results or [], query_text=pack.query_text)
+                results = self.ranker.rank_facts(results or [], query_text=pack.query_text, debug=pack.debug)
                 # Ensure + filter by active domains (defaults domain for older data).
                 try:
                     ensure_domains_for_facts(list(results or []))
@@ -639,7 +640,7 @@ class RLMController:
                     owner_id=owner_id,
                     default_k=self.max_items_per_type,
                 )
-                chunks = self.ranker.rank_chunks(chunks or [], query_text=pack.query_text)
+                chunks = self.ranker.rank_chunks(chunks or [], query_text=pack.query_text, debug=pack.debug)
                 try:
                     ensure_domains_for_chunks(list(chunks or []))
                     chunks = self._filter_items_by_active_lanes(list(chunks or []), pack)
@@ -672,7 +673,7 @@ class RLMController:
                 owner_id=owner_id,
                 default_k=self.max_items_per_type,
             )
-        skills = self.ranker.rank_skills(skills or [], query_text=pack.query_text)
+        skills = self.ranker.rank_skills(skills or [], query_text=pack.query_text, debug=pack.debug)
         try:
             ensure_domains_for_skills(list(skills or []))
             skills = self._filter_items_by_active_lanes(list(skills or []), pack)
@@ -704,7 +705,7 @@ class RLMController:
                     owner_id=owner_id,
                     default_k=self.max_items_per_type,
                 )
-        episodes = self.ranker.rank_episodes(episodes or [], query_text=pack.query_text)
+        episodes = self.ranker.rank_episodes(episodes or [], query_text=pack.query_text, debug=pack.debug)
         episodes = self._filter_items_by_active_lanes(list(episodes or []), pack)
         pack.episodes = _merge_unique(
             pack.episodes,
@@ -894,13 +895,13 @@ class RLMController:
         # Rank by action type.
         items: list[Any] = scope_results
         if a in {"search_semantic", "fetch_more_facts", "fetch_facts"}:
-            items = self.ranker.rank_facts(items or [], query_text=pack.query_text)
+            items = self.ranker.rank_facts(items or [], query_text=pack.query_text, debug=pack.debug)
         elif a in {"fetch_chunks", "search_chunks"}:
-            items = self.ranker.rank_chunks(items or [], query_text=pack.query_text)
+            items = self.ranker.rank_chunks(items or [], query_text=pack.query_text, debug=pack.debug)
         elif a in {"episodic_clusters", "search_episodic", "fetch_episode_clusters"}:
-            items = self.ranker.rank_episodes(items or [], query_text=pack.query_text)
+            items = self.ranker.rank_episodes(items or [], query_text=pack.query_text, debug=pack.debug)
         elif a in {"search_procedural"}:
-            items = self.ranker.rank_skills(items or [], query_text=pack.query_text)
+            items = self.ranker.rank_skills(items or [], query_text=pack.query_text, debug=pack.debug)
 
         elapsed_ms = int((time.time() - action_start) * 1000)
         items = self._truncate_items(items)

@@ -53,6 +53,10 @@ class RetrievalRequest:
     # "medium" or "high" to prevent malicious queries from amplifying
     # through downstream LLM calls.
     query_scan_severity: Optional[str] = None
+    # Request-scoped debug flag. When True the ranker attaches a per-candidate
+    # `score_card` to each artifact's meta so callers can see why it ranked
+    # where it did. Carried per request because the Ranker is shared.
+    debug: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.context, RuntimeContext):
@@ -82,6 +86,7 @@ class RetrievalRequest:
         trace_id: Optional[str] = None,
         plan: Optional[RetrievalPlan] = None,
         query_scan_severity: Optional[str] = None,
+        debug: bool = False,
     ) -> "RetrievalRequest":
         """Build a ``RetrievalRequest`` from a ``RuntimeContext`` and a retrieval plan."""
         normalized_user_id = normalize_user_id(context.user_id or "")
@@ -95,6 +100,7 @@ class RetrievalRequest:
             trace_id=trace_id or context.request_id,
             plan=plan,
             query_scan_severity=query_scan_severity,
+            debug=debug,
         )
 
     def scopes_for_owner_type(self, owner_type: Optional[str] = None) -> tuple[RetrievalScope, ...]:

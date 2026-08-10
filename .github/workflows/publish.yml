@@ -1,0 +1,165 @@
+name: Publish
+
+# Build once, then publish the same artifacts to TestPyPI and PyPI.
+#
+# Triggers:
+#   * push of a `v*` tag  -> build, TestPyPI, then PyPI (PyPI gated by the
+#     `pypi` environment so a human approves the irreversible upload).
+#   * workflow_dispatch   -> build, and optionally TestPyPI only, for dry runs
+#     from any branch without cutting a real release.
+#
+# Uploads use PyPI Trusted Publishing (OIDC), so no API tokens are stored.
+# Configure the publishers once per index for repository `UMA`, workflow
+# `publish.yml`, environments `pypi` and `testpypi`.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish-testpypi:
+        description: "Upload the built artifacts to TestPyPI"
+        type: boolean
+        default: false
+
+# Never run two publishes for the same ref concurrently, and never cancel one
+# mid-upload: a partially uploaded release cannot be replaced on PyPI.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  # Single build for both indexes. Publishing the exact artifacts that were
+  # verified here keeps TestPyPI and PyPI bit-identical.
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install build tooling
+        run: python -m pip install build twine packaging
+
+      - name: Build source distribution and wheel
+        run: python -m build
+
+      - name: Validate package metadata
+        run: python -m twine check --strict dist/*
+
+      # A tag that disagrees with uma/version.py would publish a release under
+      # the wrong number, which PyPI will not let us take back. Compare PEP 440
+      # normalized forms so `v0.1.5-beta` and `0.1.5b0` are accepted as equal.
+      - name: Verify tag matches the packaged version
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GIT_TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import sys
+
+          from packaging.utils import parse_sdist_filename
+          from packaging.version import InvalidVersion, Version
+
+          sdists = sorted(pathlib.Path("dist").glob("*.tar.gz"))
+          if len(sdists) != 1:
+              sys.exit(f"expected exactly one sdist in dist/, found {sdists}")
+
+          _, packaged = parse_sdist_filename(sdists[0].name)
+          raw_tag = os.environ["GIT_TAG"].removeprefix("v")
+
+          try:
+              tagged = Version(raw_tag)
+          except InvalidVersion:
+              sys.exit(f"tag {raw_tag!r} is not a valid PEP 440 version")
+
+          if tagged != packaged:
+              sys.exit(f"tag {tagged} does not match packaged version {packaged}")
+
+          print(f"tag and package agree on version {packaged}")
+          PY
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # TestPyPI is the rehearsal: it proves the metadata and Trusted Publishing
+  # configuration work before the release becomes permanent on PyPI.
+  testpypi:
+    name: Publish to TestPyPI
+    needs: build
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      inputs.publish-testpypi
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/uma/
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v6
+        with:
+          name: dist
+          path: dist/
+
+      - name: Upload to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          # Re-running a dispatch build for an unchanged version would otherwise
+          # fail on an already-present file. Only tolerated on the rehearsal index.
+          skip-existing: true
+
+  # PyPI is irreversible: a version number can never be reused. The `pypi`
+  # environment should carry a required reviewer so the upload is deliberate.
+  pypi:
+    name: Publish to PyPI
+    needs: [build, testpypi]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    environment:
+      name: pypi
+      url: https://pypi.org/project/uma/
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v6
+        with:
+          name: dist
+          path: dist/
+
+      - name: Upload to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

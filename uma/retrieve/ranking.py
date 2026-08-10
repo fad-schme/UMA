@@ -404,7 +404,7 @@ class Ranker:
             k_i = 0
         return list(items or [])[:k_i] if k_i else []
 
-    def rank_facts(self, items: Sequence[Any], *, query_text: str = "") -> list[Any]:
+    def rank_facts(self, items: Sequence[Any], *, query_text: str = "", debug: bool = False) -> list[Any]:
         """Rank semantic facts by the trust-weighted blend of similarity and trust score."""
         items = list(items or [])
         if not items:
@@ -425,10 +425,10 @@ class Ranker:
 
         scored.sort(key=lambda x: (-x[0], x[1]))
         scored = self._apply_trust_weight(scored)
-        self._emit_scorecards("facts", scored)
+        self._emit_scorecards("facts", scored, debug=debug)
         return self._filter_by_trust([f for _s, _sid, f in scored])
 
-    def rank_chunks(self, items: Sequence[Any], *, query_text: str = "") -> list[Any]:
+    def rank_chunks(self, items: Sequence[Any], *, query_text: str = "", debug: bool = False) -> list[Any]:
         """Rank document chunks by the trust-weighted blend of similarity and trust score."""
         items = list(items or [])
         if not items:
@@ -452,10 +452,10 @@ class Ranker:
             scored.append((route_pri, float(final_with_trust), _doc_id(ch), _position(ch), _id(ch), ch))
 
         scored.sort(key=lambda x: (x[0], -x[1], x[2], x[3], x[4]))
-        self._emit_scorecards("chunks", [(s, sid, it) for (_rp, s, _d, _p, sid, it) in scored])
+        self._emit_scorecards("chunks", [(s, sid, it) for (_rp, s, _d, _p, sid, it) in scored], debug=debug)
         return self._filter_by_trust([ch for _rp, _s, _d, _p, _sid, ch in scored])
 
-    def rank_episodes(self, items: Sequence[Any], *, query_text: str = "") -> list[Any]:
+    def rank_episodes(self, items: Sequence[Any], *, query_text: str = "", debug: bool = False) -> list[Any]:
         """Rank episodic memories by the trust-weighted blend of similarity and trust score."""
         items = list(items or [])
         if not items:
@@ -483,10 +483,10 @@ class Ranker:
             scored.append((final, sid, ep))
         scored.sort(key=lambda x: (-x[0], x[1]))
         scored = self._apply_trust_weight(scored)
-        self._emit_scorecards("episodes", scored)
+        self._emit_scorecards("episodes", scored, debug=debug)
         return self._filter_by_trust([ep for _s, _sid, ep in scored])
 
-    def rank_skills(self, items: Sequence[Any], *, query_text: str = "") -> list[Any]:
+    def rank_skills(self, items: Sequence[Any], *, query_text: str = "", debug: bool = False) -> list[Any]:
         """Rank procedural skills by the trust-weighted blend of similarity and trust score."""
         items = list(items or [])
         if not items:
@@ -504,7 +504,7 @@ class Ranker:
             scored.append((final, sid, sk))
         scored.sort(key=lambda x: (-x[0], x[1]))
         scored = self._apply_trust_weight(scored)
-        self._emit_scorecards("skills", scored)
+        self._emit_scorecards("skills", scored, debug=debug)
         return self._filter_by_trust([sk for _s, _sid, sk in scored])
 
     # ----------------------------- Internals -----------------------------
@@ -566,8 +566,18 @@ class Ranker:
                 out.append(it)
         return out
 
-    def _emit_scorecards(self, lane: str, scored: Iterable[tuple[float, str, Any]]) -> None:
-        if not self._debug:
+    def _emit_scorecards(
+        self, lane: str, scored: Iterable[tuple[float, str, Any]], *, debug: bool = False
+    ) -> None:
+        """Attach a per-candidate ``score_card`` to each object's meta.
+
+        Emission is opt-in per request. ``debug`` is the request-scoped flag
+        (``include_debug`` at the public API); ``self._debug`` is the global
+        ``retrieval.debug_scores`` config default. Either enables emission.
+        The flag is passed per call rather than held on the Ranker because a
+        single Ranker instance is shared across concurrent requests.
+        """
+        if not (self._debug or debug):
             return
         cards: list[ScoreCard] = []
         for final, sid, obj in scored:
