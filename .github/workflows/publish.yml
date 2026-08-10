@@ -1,12 +1,19 @@
 name: Publish
 
-# Build once, then publish the same artifacts to TestPyPI and PyPI.
+# Build once, then publish the same artifacts to TestPyPI and/or PyPI.
 #
 # Triggers:
-#   * push of a `v*` tag  -> build, TestPyPI, then PyPI (PyPI gated by the
-#     `pypi` environment so a human approves the irreversible upload).
-#   * workflow_dispatch   -> build, and optionally TestPyPI only, for dry runs
-#     from any branch without cutting a real release.
+#   * push of a `v*` tag        -> build, TestPyPI, then PyPI. The full release
+#     path: TestPyPI is the rehearsal and PyPI only runs if it succeeded.
+#   * dispatch, target testpypi -> build, TestPyPI only (the default).
+#   * dispatch, target pypi     -> build, PyPI only, without going through
+#     TestPyPI. For re-uploading a release whose PyPI step failed after the
+#     rehearsal already passed, or for publishing without pushing a tag.
+#
+# Each index is reachable on its own, so a failure on one never blocks the
+# other. Both upload jobs sit behind their own environment; keep a required
+# reviewer on `pypi` — a dispatch to PyPI has no tag/version guard to fall
+# back on (see the build job), and a version number can never be reused.
 #
 # Uploads use PyPI Trusted Publishing (OIDC), so no API tokens are stored.
 # Configure the publishers once per index for project `uma-mem`, repository
@@ -16,10 +23,13 @@ on:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
-      publish-testpypi:
-        description: "Upload the built artifacts to TestPyPI"
-        type: boolean
-        default: false
+      target:
+        description: "Index to publish the build to"
+        type: choice
+        default: testpypi
+        options:
+          - testpypi
+          - pypi
 
 # Never run two publishes for the same ref concurrently, and never cancel one
 # mid-upload: a partially uploaded release cannot be replaced on PyPI.
@@ -66,6 +76,10 @@ jobs:
       # the wrong number, which PyPI will not let us take back. Comparison is on
       # PEP 440 normalized forms, so a tag stays valid if the version ever grows
       # a pre-release suffix again (`v0.3.0-beta` == packaged `0.3.0b0`).
+      #
+      # A dispatch has no tag to check against, so on that path the only
+      # protections are the environment's reviewer and PyPI rejecting a version
+      # it already holds. Bump uma/version.py before dispatching to PyPI.
       - name: Verify tag matches the packaged version
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -105,13 +119,14 @@ jobs:
           if-no-files-found: error
 
   # TestPyPI is the rehearsal: it proves the metadata and Trusted Publishing
-  # configuration work before the release becomes permanent on PyPI.
+  # configuration work before the release becomes permanent on PyPI. Skipped
+  # when a dispatch targets PyPI directly.
   testpypi:
     name: Publish to TestPyPI
     needs: build
     if: >-
       startsWith(github.ref, 'refs/tags/v') ||
-      inputs.publish-testpypi
+      inputs.target == 'testpypi'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -140,10 +155,20 @@ jobs:
 
   # PyPI is irreversible: a version number can never be reused. The `pypi`
   # environment should carry a required reviewer so the upload is deliberate.
+  #
+  # `needs` keeps the tag path ordered (rehearse, then release) without making
+  # TestPyPI a precondition for a direct dispatch. The leading `!cancelled()`
+  # is what allows this job to be reached at all when `testpypi` is skipped —
+  # a plain `if` would inherit the default "skip when a dependency skipped".
+  # A *failed* rehearsal still stops the release.
   pypi:
     name: Publish to PyPI
     needs: [build, testpypi]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      !cancelled()
+      && needs.build.result == 'success'
+      && (needs.testpypi.result == 'success' || needs.testpypi.result == 'skipped')
+      && (startsWith(github.ref, 'refs/tags/v') || inputs.target == 'pypi')
     runs-on: ubuntu-latest
     timeout-minutes: 15
 

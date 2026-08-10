@@ -14,11 +14,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 First release published to PyPI.
 
 ### Added
-- **`.github/workflows/publish.yml`** — tag-triggered release pipeline. One
-  build feeds both indexes: TestPyPI first as a rehearsal, then PyPI behind
-  the `pypi` environment's approval gate. Uploads use PyPI Trusted Publishing
-  (OIDC), so no API tokens are stored in the repository. A guard fails the
-  build when the pushed `v*` tag disagrees with `uma/version.py`.
+- **`.github/workflows/publish.yml`** — release pipeline. One build feeds both
+  indexes, and each index is reachable on its own: pushing a `v*` tag runs
+  TestPyPI as a rehearsal and then PyPI, while a manual dispatch publishes to
+  whichever index its `target` input names (`testpypi` by default, or `pypi`
+  directly, skipping the rehearsal). PyPI uploads sit behind the `pypi`
+  environment's approval gate. Uploads use PyPI Trusted Publishing (OIDC), so
+  no API tokens are stored in the repository. On the tag path a guard fails
+  the build when the tag disagrees with `uma/version.py`; a dispatch has no
+  tag to check, so bump the version before dispatching to PyPI.
 - **Operational CLI** with stable `uma` and `python -m uma.cli` entry points,
   text/JSON output, secret-redacted configuration inspection, offline and
   runtime diagnostics, injection scanning, CI-aligned development checks,
