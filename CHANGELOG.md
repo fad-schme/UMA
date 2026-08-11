@@ -29,6 +29,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   absolute GitHub URLs — the diagram via `raw.githubusercontent.com` so it
   actually renders. Added `Source` and `Changelog` project URLs, which the
   package page previously lacked entirely.
+- **`pip install -e '.[dev]'` could not run the test suite.** The parser tests
+  need beautifulsoup4/markdown and `tests/test_cli.py` runs `doctor` against an
+  ollama-provider config, but neither was reachable from `dev`. It now pulls
+  `uma-mem[parsers]` plus `openai`, so a single `[dev]` install is sufficient.
+  Parser libraries stay in the `parsers` extra rather than the base install —
+  `uma/ingest/parser.py` guards those imports with install hints, which only
+  holds if they remain optional.
 
 ---
 
