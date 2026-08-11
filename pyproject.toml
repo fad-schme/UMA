@@ -20,7 +20,7 @@ description = "UMA: modular memory and context manager SDK for AI agents"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     { name = "A Diaz-Schmeier", email = "ad-schme@aibestlabs.com" },
 ]
@@ -30,7 +30,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",

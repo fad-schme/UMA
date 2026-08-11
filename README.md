@@ -186,16 +186,69 @@ writes.
 
 ---
 
-## Testing and coverage
+## MCP client support
 
-The default suite is hermetic. The CI matrix runs it with `pytest-cov`, reports
-line coverage, and preserves `coverage.xml` as a workflow artifact. The measured
-baseline on 2026-07-31 is **71%** across `uma/` (754 passed, 2 opt-in skips).
+UMA ships an MCP server so any MCP-compatible AI client — coding agents, chat
+clients, and cloud connectors — can talk to your memory layer. The server is a
+thin adapter over UMA's public API; every tool call goes through the same
+`(tenant_id, user_id)` scope resolution as any other caller.
 
-Real-model fact-extraction precision and recall are measured separately against
-local Ollama so CI does not depend on a model service. See
-[`tests/e2e/README.md`](https://github.com/fad-schme/UMA/blob/main/tests/e2e/README.md) for the held-out corpus, published
-baseline, thresholds, and run command.
+Install with the `mcp` optional extra:
+
+```bash
+pip install 'uma-mem[mcp]'                # stdio + HTTP with bearer tokens
+pip install 'uma-mem[mcp,oauth]'          # + OAuth 2.1 for ChatGPT
+```
+
+The `uma-mcp` binary is now on PATH. Point it at your `uma.yaml`:
+
+```bash
+uma-mcp                                    # stdio (Claude Code, Codex, ...)
+uma-mcp --http --port 3131                 # HTTP + opaque bearer tokens
+uma-mcp --http --port 3131 \
+        --oauth-issuer https://your-idp/   # HTTP + OAuth 2.1 JWT (ChatGPT)
+        --oauth-audience https://your-brain/mcp
+```
+
+Tools exposed: `retrieve_context`, `retrieve_memory`, `process_turn`,
+`ingest_document`, `health_check`. Every response is well-formed JSON matching
+the corresponding `uma.common.results` model.
+
+### Supported clients
+
+| Client                              | Transport             | Doc |
+| ----------------------------------- | --------------------- | --- |
+| Claude Code                         | stdio                 | [`STDIO_CLIENTS.md`](docs/mcp/STDIO_CLIENTS.md) |
+| Codex                               | stdio                 | [`STDIO_CLIENTS.md`](docs/mcp/STDIO_CLIENTS.md) |
+| Cursor                              | stdio                 | [`STDIO_CLIENTS.md`](docs/mcp/STDIO_CLIENTS.md) |
+| Windsurf                            | stdio                 | [`STDIO_CLIENTS.md`](docs/mcp/STDIO_CLIENTS.md) |
+| Claude Desktop (local bridge)       | stdio                 | [`STDIO_CLIENTS.md`](docs/mcp/STDIO_CLIENTS.md) |
+| Claude Desktop (remote connector)   | HTTP + bearer         | [`DEPLOY.md`](docs/mcp/DEPLOY.md) |
+| Claude Cowork                       | HTTP + bearer         | [`DEPLOY.md`](docs/mcp/DEPLOY.md) |
+| Perplexity                          | HTTP + bearer / OAuth | [`DEPLOY.md`](docs/mcp/DEPLOY.md) / [`CHATGPT.md`](docs/mcp/CHATGPT.md) |
+| ChatGPT                             | HTTP + OAuth 2.1      | [`CHATGPT.md`](docs/mcp/CHATGPT.md) |
+
+Bearer tokens are opaque, SHA-256-hashed in a local SQLite store, and issued
+via `uma auth create <label> --user USER [--tenant TENANT]`. OAuth 2.1 mode
+points UMA at any RFC 8414-compliant IdP (Auth0, Microsoft Entra ID, Google,
+Okta, Keycloak, Authentik) — UMA acts as a pure resource server per the
+current MCP spec direction and never issues tokens itself.
+
+### Security posture
+
+Every HTTP request resolves to an explicit `(tenant_id, user_id)` before it
+touches the memory layer — the same DAT invariant every other UMA call
+enforces. Tokens are never logged; only their short `token_id` handle appears
+in server logs. Bearer plaintext is shown exactly once at issue time by
+`uma auth create` and is not recoverable from the store. JWT verification
+uses PyJWT with an explicit RS256/ES256 algorithm allowlist — HS256 is
+rejected to close the algorithm-confusion attack.
+
+Full model in [`docs/mcp/DEPLOY.md`](docs/mcp/DEPLOY.md) (bearer / cloud
+clients) and [`docs/mcp/CHATGPT.md`](docs/mcp/CHATGPT.md) (OAuth 2.1 recipe
+with per-IdP flag sets).
+
+-
 
 ---
 
@@ -227,15 +280,15 @@ UMA ships nine Agent Skills under `.claude/skills/`. They're structured markdown
 
 | Skill | Covers |
 | --- | --- |
-| [`overview.md`](https://github.com/fad-schme/UMA/blob/main/.claude/skills/overview.md) | What UMA is, design philosophy, DAT invariants, security primitives at a glance |
-| [`api.md`](https://github.com/fad-schme/UMA/blob/main/.claude/skills/api.md) | Full public API — every method, every management function, scope fields |
-| [`lanes.md`](https://github.com/fad-schme/UMA/blob/main/.claude/skills/lanes.md) | Six public filter lanes plus the profile and optional graph planner/plugin views |
-| [`configure.md`](https://github.com/fad-schme/UMA/blob/main/.claude/skills/configure.md) | YAML reference, LLM/embedding providers, security configuration, install surfaces |
-| [`security.md`](https://github.com/fad-schme/UMA/blob/main/.claude/skills/security.md) | Two-layer scanning, pattern catalog, severity behavior, integrity verification |
-| [`agent-loop.md`](https://github.com/fad-schme/UMA/blob/main/.claude/skills/agent-loop.md) | End-to-end integration: scan → retrieve → LLM → process_turn |
-| [`promotion.md`](https://github.com/fad-schme/UMA/blob/main/.claude/skills/promotion.md) | Public agent-profile API, promotion gates, ownership changes, and provenance |
-| [`vector-contract.md`](https://github.com/fad-schme/UMA/blob/main/.claude/skills/vector-contract.md) | Vector isolation contract, push-down filters, custom backend authoring |
-| [`quarantine.md`](https://github.com/fad-schme/UMA/blob/main/.claude/skills/quarantine.md) | Quarantine lifecycle, management API, composition with trust scoring |
+| [`overview.md`](.claude/skills/overview.md) | What UMA is, design philosophy, DAT invariants, security primitives at a glance |
+| [`api.md`](.claude/skills/api.md) | Full public API — every method, every management function, scope fields |
+| [`lanes.md`](.claude/skills/lanes.md) | Six public filter lanes plus the profile and optional graph planner/plugin views |
+| [`configure.md`](.claude/skills/configure.md) | YAML reference, LLM/embedding providers, security configuration, install surfaces |
+| [`security.md`](.claude/skills/security.md) | Two-layer scanning, pattern catalog, severity behavior, integrity verification |
+| [`agent-loop.md`](.claude/skills/agent-loop.md) | End-to-end integration: scan → retrieve → LLM → process_turn |
+| [`promotion.md`](.claude/skills/promotion.md) | Public agent-profile API, promotion gates, ownership changes, and provenance |
+| [`vector-contract.md`](.claude/skills/vector-contract.md) | Vector isolation contract, push-down filters, custom backend authoring |
+| [`quarantine.md`](.claude/skills/quarantine.md) | Quarantine lifecycle, management API, composition with trust scoring |
 
 Each skill is under 500 lines, follows the Agent Skills specification (third-person `description` field for discovery), and is verified against the patched codebase — no phantom APIs.
 
@@ -246,9 +299,9 @@ Assistants that don't follow `.claude/skills/` can read the same files directly,
 ### Other docs:
 
 - [**UMA Documentation**](https://uma.ai-mem-engineering.com/docs.html)
-- [**Contributing**](https://github.com/fad-schme/UMA/blob/main/CONTRIBUTING.md)
+- [**Contributing**](CONTRIBUTING.md)
 
 
-For the architectural deep dive, see [`ARCHITECTURE.md`](https://github.com/fad-schme/UMA/blob/main/ARCHITECTURE.md). For everything else, ask your assistant.
+For the architectural deep dive, see [`ARCHITECTURE.md`](ARCHITECTURE.md). For everything else, ask your assistant.
 
-This repository is licensed under the [Apache-2.0 License](https://github.com/fad-schme/UMA/blob/main/LICENSE).
+This repository is licensed under the [Apache-2.0 License](LICENSE).

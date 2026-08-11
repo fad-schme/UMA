@@ -329,6 +329,49 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     audit_list_parser.add_argument("--limit", type=_positive_int, default=100)
 
+    auth_parser = commands.add_parser(
+        "auth",
+        help="Manage bearer tokens for `uma-mcp --http`.",
+    )
+    auth_commands = auth_parser.add_subparsers(
+        dest="operation",
+        required=True,
+    )
+    auth_create_parser = auth_commands.add_parser(
+        "create",
+        help="Issue a new bearer token for a (tenant, user) pair.",
+    )
+    auth_create_parser.add_argument(
+        "label",
+        help="Human-readable label (e.g. 'perplexity', 'claude-desktop').",
+    )
+    auth_create_parser.add_argument("--tenant", dest="tenant_id")
+    auth_create_parser.add_argument(
+        "--user",
+        dest="user_id",
+        required=True,
+    )
+    auth_create_parser.add_argument("--tokens-db", type=Path, default=None)
+
+    auth_list_parser = auth_commands.add_parser(
+        "list",
+        help="List issued tokens.",
+    )
+    auth_list_parser.add_argument("--tenant", dest="tenant_id")
+    auth_list_parser.add_argument(
+        "--include-revoked",
+        action="store_true",
+        help="Include revoked tokens in the output.",
+    )
+    auth_list_parser.add_argument("--tokens-db", type=Path, default=None)
+
+    auth_revoke_parser = auth_commands.add_parser(
+        "revoke",
+        help="Revoke a bearer token by its token_id.",
+    )
+    auth_revoke_parser.add_argument("token_id")
+    auth_revoke_parser.add_argument("--tokens-db", type=Path, default=None)
+
     quarantine_parser = commands.add_parser(
         "quarantine",
         help="Inspect owner-scoped quarantined records.",
@@ -447,6 +490,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "retrieve",
         "ingest",
         "audit",
+        "auth",
         "quarantine",
         "index",
         "integrity",
@@ -474,6 +518,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 fail_fast=args.fail_fast,
             )
             _emit("dev.check", data, args.output_format, text, status)
+            return exit_code
+
+        if args.command == "auth":
+            # Auth ops don't need uma.yaml — the token store is standalone
+            # so operators can issue tokens before configuring UMA.
+            from . import auth as auth_cli
+
+            handler = {
+                "create": auth_cli.handle_create,
+                "list": auth_cli.handle_list,
+                "revoke": auth_cli.handle_revoke,
+            }[args.operation]
+            data, text, status, exit_code = handler(args)
+            _emit(command_name, data, args.output_format, text, status)
             return exit_code
 
         security_input = (

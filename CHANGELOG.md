@@ -7,6 +7,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased]
 
+### Added
+- **MCP server** (`uma-mcp` console script) exposes UMA's public API as MCP
+  tools. Install with `pip install 'uma-mem[mcp]'`. Stdio mode wires Claude
+  Code, Codex, Cursor, Windsurf, and Claude Desktop (local bridge) via a
+  single JSON snippet or one `mcp add` command per client. Five tools
+  exposed: `retrieve_context`, `retrieve_memory`, `process_turn`,
+  `ingest_document`, `health_check`. Every response is a well-formed JSON
+  string matching the corresponding `uma.common.results` model
+  (`.model_dump_json()`); `IngestReport` (frozen dataclass) serializes via
+  `dataclasses.asdict`. See [`docs/mcp/STDIO_CLIENTS.md`](docs/mcp/STDIO_CLIENTS.md).
+- **HTTP transport for `uma-mcp`** with opaque bearer-token auth via
+  `--http --port --bind --public-url` flags. Unlocks Claude Desktop
+  (remote connector), Claude Cowork, and Perplexity. SQLite-backed token
+  store at `.uma/db/mcp_tokens.db` (override with `--tokens-db`); tokens
+  are SHA-256 hashed and the raw token is shown exactly once at issue
+  time. Managed via new `uma auth create/list/revoke` CLI subcommands.
+  `UMATokenVerifier` (`uma.mcp.auth`) is the `mcp.server.auth.provider.TokenVerifier`
+  subclass that consults the store. See [`docs/mcp/DEPLOY.md`](docs/mcp/DEPLOY.md).
+- **OAuth 2.1 JWT verification for `uma-mcp --http`** via `--oauth-issuer`,
+  `--oauth-audience`, `--oauth-jwks-uri`, `--oauth-tenant`,
+  `--oauth-required-scope` flags. Enables ChatGPT as a remote MCP client.
+  UMA acts as a pure OAuth 2.1 resource server per the current MCP spec —
+  the authorization server is any RFC 8414-compliant IdP (Auth0, Microsoft
+  Entra ID, Google, Okta, Keycloak, Authentik). UMA never issues JWTs.
+  Requires the new `oauth` extra (`pip install 'uma-mem[mcp,oauth]'`)
+  which pins `PyJWT>=2.10.0` for RFC 7519 §4.1.2 strict-`sub` validation.
+  `UMAJWTVerifier` uses an explicit `["RS256", "ES256"]` algorithm
+  allowlist; HS256 rejected to close the algorithm-confusion attack. See
+  [`docs/mcp/CHATGPT.md`](docs/mcp/CHATGPT.md).
+- **`mcp` and `oauth` optional install extras** in `pyproject.toml`.
+  Base install stays lean; only stdio/HTTP mode pulls the MCP SDK, only
+  OAuth mode pulls PyJWT + cryptography. Bearer verifier and JWT verifier
+  are mutually exclusive at CLI level (`--oauth-issuer` conflicts with
+  `--tokens-db`).
+- **`scripts/cleandir.py --verify`** pre-release / CI gate. Fails with a
+  listed diff if `__MACOSX/`, `.DS_Store`, orphaned `.pyc`, `*.egg-info/`,
+  `build/`, `dist/`, `.coverage`, `htmlcov/`, `.tox/`, or macOS AppleDouble
+  files (`._*`) exist in the tree. Auto-detects repo root via `.git` /
+  `pyproject.toml` / `setup.py` markers and refuses to run outside a
+  project root.
+
 ### Fixed
 - **`[ollama]` install extra pulled the wrong package.** It declared the
   `ollama` client, which UMA never imports. Ollama is reached over its
