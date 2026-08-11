@@ -117,6 +117,40 @@ class SemanticCore:
             logger.exception("SemanticCore.upsert_fact failed")
             raise
 
+    async def durable_fact_exists(
+        self,
+        fact: Fact,
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+    ) -> bool:
+        """Return True if an equivalent fact already exists in the target scope.
+
+        Used by the promotion path to avoid minting a second durable copy of
+        content that is already in the agent KB. Fails **open** (returns
+        False) when the store cannot answer: promotion is best-effort, and a
+        guard failure must not silently stop legitimate promotions.
+        """
+        if not hasattr(self.store, "durable_fact_exists"):
+            logger.debug(
+                "SemanticCore.durable_fact_exists: store does not implement the guard; treating as novel."
+            )
+            return False
+        try:
+            return await self.store.durable_fact_exists(
+                fact,
+                tenant_id=tenant_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+            )
+        except Exception:
+            logger.exception(
+                "SemanticCore.durable_fact_exists failed for fact id=%r; treating as novel.",
+                getattr(fact, "id", None),
+            )
+            return False
+
     def vector_index(self):
         """Return the underlying ``VectorIndex`` instance for this store."""
         return getattr(self.store, "vector_index", None)

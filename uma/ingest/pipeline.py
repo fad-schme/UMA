@@ -344,6 +344,11 @@ class MemoryPipeline:
         # Snapshot — the done_callback mutates the set during gather.
         pending = list(self._background_tasks)
         await asyncio.gather(*pending, return_exceptions=True)
+        # `add_done_callback` fires via `call_soon`, so the discards are not
+        # guaranteed to have run by the time gather returns. Drop the drained
+        # tasks here so the postcondition — nothing pending after a drain —
+        # holds regardless of callback scheduling.
+        self._background_tasks.difference_update(pending)
 
     async def _maybe_promote_facts(
         self,
@@ -477,6 +482,25 @@ class MemoryPipeline:
                     continue
             except Exception:
                 logger.exception("PromotionPolicy target selection failed; skipping fact.")
+                continue
+
+            # Duplicate guard. The store's own idempotency check keys on
+            # turn_id, so it only catches a replay of the same turn; the same
+            # statement extracted in a later turn would mint a second durable
+            # row. Check content identity in the target scope before minting.
+            if await sem_core.durable_fact_exists(
+                fact,
+                tenant_id=target[0],
+                owner_type=target[1],
+                owner_id=target[2],
+            ):
+                logger.debug(
+                    "Promotion: skipped fact id=%r — equivalent fact already in %s:%s",
+                    getattr(fact, "id", None),
+                    target[1],
+                    target[2],
+                )
+                increment("pipeline.promotion.duplicate_skipped")
                 continue
 
             try:

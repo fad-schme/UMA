@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from uma.common.health import HealthCheck
 from uma.common.types import Chunk, Episode, Fact, Skill
@@ -230,6 +230,11 @@ class MemoryResult(BaseModel):
     evidence: list[dict]
     provenance_valid: bool
     provenance_error: Optional[str] = None
+    # Facts whose supporting evidence is stale or thin. Reporting only: a
+    # flagged fact is still present in `facts`, unfiltered and unreranked.
+    # Each entry carries `fact_id`, `text`, and a `reason`
+    # (`stale_support` | `weak_support`) plus the numbers behind it.
+    gaps: list[dict] = Field(default_factory=list)
     debug: Optional[dict] = None
 
 

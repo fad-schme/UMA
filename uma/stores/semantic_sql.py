@@ -157,6 +157,12 @@ class SemanticSQLStore(BaseVectorSQLStore):
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_facts_tenant_owner ON facts(tenant_id, owner_type, owner_id);")
+            # Backs durable_fact_exists: the promotion dedup guard runs once per
+            # candidate fact, so this must not scan the owner's whole KB.
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_facts_owner_sub_pred "
+                "ON facts(tenant_id, owner_type, owner_id, subject, predicate);"
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_facts_tenant_sub_pred ON facts(tenant_id, subject, predicate);")
             ensure_store_metadata(self, conn, store_name="semantic")
             conn.commit()
@@ -758,6 +764,66 @@ class SemanticSQLStore(BaseVectorSQLStore):
                 conn.close()
 
         return await self._run_sync(_sync)
+
+    async def durable_fact_exists(
+        self,
+        fact: Fact,
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+    ) -> bool:
+        """Return True if an equivalent fact already exists in the target scope.
+
+        Equivalence is exact content identity on ``(subject, predicate,
+        object)`` — the same tuple ``content_hash`` is derived from, and the
+        same comparison ``_resolve_conflict`` uses. Matching the tuple rather
+        than the stored hash keeps the guard correct for rows written before
+        ``content_hash`` was populated, where the column is NULL.
+
+        Content identity is scope-independent, so the same statement extracted
+        in two different turns is recognised as the same durable fact. This is
+        deliberately a binary exists/novel verdict with no similarity
+        threshold. The ``upsert_fact`` idempotency guard keys on ``turn_id``
+        and therefore only catches a replay of the *same* turn; this catches
+        the same content arriving from any turn, which is what durable
+        promotion needs.
+
+        Quarantined rows count as existing — a quarantined duplicate must not
+        be silently re-minted as a clean one.
+        """
+        if not tenant_id or not owner_type or not owner_id:
+            raise ValueError(
+                "SemanticSQLStore.durable_fact_exists requires tenant_id, owner_type and owner_id"
+            )
+
+        def _sync():
+            conn = self._conn()
+            try:
+                row = self._query_one(
+                    conn,
+                    """
+                    SELECT id FROM facts
+                    WHERE tenant_id=? AND owner_type=? AND owner_id=?
+                      AND subject=? AND predicate=? AND object=?
+                    LIMIT 1
+                    """,
+                    params=[
+                        tenant_id,
+                        owner_type,
+                        owner_id,
+                        fact.subject,
+                        fact.predicate,
+                        json.dumps(fact.object),
+                    ],
+                    log_context="durable_fact_exists",
+                )
+                return row is not None
+            finally:
+                conn.close()
+
+        return await self._run_sync(_sync)
+
     # ------------------------------------------------------------------ #
     # Fetch Facts by IDs (snippet-first helpers)
     # ------------------------------------------------------------------ #

@@ -252,6 +252,48 @@ with per-IdP flag sets).
 
 ---
 
+## Testing and quality gates
+
+The default suite is hermetic: it uses fake LLM and embedding providers, never
+contacts a model service, and is safe to run anywhere.
+
+```bash
+pip install -e '.[dev]'
+python -m pytest -q
+```
+
+Model-dependent quality is measured separately by two opt-in gates, so CI never
+depends on a model being available. Both require a local Ollama and are skipped
+unless `RUN_E2E=1` is set.
+
+| Gate | Measures | Published baseline |
+| --- | --- | --- |
+| [`test_fact_extraction_quality.py`](tests/e2e/test_fact_extraction_quality.py) | How much the extractor gets out of a passage | micro precision **0.2500**, micro recall **0.3333** |
+| [`test_retrieval_quality.py`](tests/e2e/test_retrieval_quality.py) | Whether `retrieve_context` returns the right source pages | r-precision **0.7353**, recall@3 **0.9118** |
+
+```bash
+pip install -e '.[dev,e2e]'
+RUN_E2E=1 python -m pytest tests/e2e -q -s
+```
+
+Each gate publishes a machine-readable metrics line and enforces thresholds
+pinned just below its measured baseline, so a regression fails the run without
+the threshold implying the current number is good. The extraction baseline in
+particular is low, and it is published as-is.
+
+**These numbers are narrow claims.** Each covers one small corpus against one
+small model — `qwen2.5:3b`, plus `nomic-embed-text` for retrieval. Read
+[`tests/e2e/README.md`](tests/e2e/README.md) before citing either — it records
+the corpora, the gold methodology, and specifically what each metric does and
+does not show, including why retrieval recall is near-saturated on a corpus this
+size and why fixed-cutoff precision is not reported.
+
+Retrieval and extraction quality are separate from the injection scanner's
+evaluation status, described under Security by Design above. Neither gate
+retires that claim.
+
+---
+
 ## 🤖 Living Docs for AI Assistants
 
 **You shouldn't have to read tons of documentation to use UMA.** Ask your coding agent instead.

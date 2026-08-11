@@ -1,0 +1,91 @@
+{
+  "corpus": "retrieval_corpus",
+  "notes": "Hand-authored gold. relevant_pages names the corpus file(s) that actually contain the answer. Not derived from any retrieval run.",
+  "queries": [
+    {
+      "id": "cash_fare",
+      "text": "How much is a single adult journey if I pay cash instead of using a card?",
+      "relevant_pages": ["fare-policy.md"]
+    },
+    {
+      "id": "refund_at_depot",
+      "text": "Can I get money refunded in person at a depot?",
+      "relevant_pages": ["fare-policy.md", "ticketing-system.md"]
+    },
+    {
+      "id": "validator_clock_drift",
+      "text": "What happens when a validator's clock drifts out of synchronisation?",
+      "relevant_pages": ["ticketing-system.md"]
+    },
+    {
+      "id": "c_service_depot",
+      "text": "Which depot is equipped to carry out a full C-service?",
+      "relevant_pages": ["depot-locations.md", "fleet-maintenance.md"]
+    },
+    {
+      "id": "night_duty_hours",
+      "text": "What is the maximum driving time allowed on a night duty?",
+      "relevant_pages": ["staff-rostering.md"]
+    },
+    {
+      "id": "night_service_hours",
+      "text": "Between what times does the night service run?",
+      "relevant_pages": ["night-network.md"]
+    },
+    {
+      "id": "companion_free_travel",
+      "text": "Does someone travelling with a mobility pass holder pay a fare?",
+      "relevant_pages": ["accessibility.md", "fare-policy.md"]
+    },
+    {
+      "id": "who_declares_incident",
+      "text": "Who has the authority to declare a service incident?",
+      "relevant_pages": ["incident-response.md"]
+    },
+    {
+      "id": "depot_unavailable_overflow",
+      "text": "Where are buses sent when their depot becomes unavailable?",
+      "relevant_pages": ["incident-response.md", "depot-locations.md"]
+    },
+    {
+      "id": "wheelchair_bays",
+      "text": "How many wheelchair spaces are there on a vehicle?",
+      "relevant_pages": ["accessibility.md"]
+    },
+    {
+      "id": "depot_rotation",
+      "text": "How often are vehicles moved between depots?",
+      "relevant_pages": ["fleet-maintenance.md"]
+    },
+    {
+      "id": "daily_cap_adult",
+      "text": "What is the most an adult can be charged in one day?",
+      "relevant_pages": ["fare-policy.md"]
+    },
+    {
+      "id": "card_dormancy",
+      "text": "How long can a card go unused before it stops working?",
+      "relevant_pages": ["ticketing-system.md"]
+    },
+    {
+      "id": "roster_notice",
+      "text": "How far ahead is a driver told what shifts they are working?",
+      "relevant_pages": ["staff-rostering.md"]
+    },
+    {
+      "id": "depots_open_overnight",
+      "text": "Which depots have staff present through the night?",
+      "relevant_pages": ["depot-locations.md"]
+    },
+    {
+      "id": "night_units_wear",
+      "text": "Why do buses used on night routes need servicing sooner?",
+      "relevant_pages": ["fleet-maintenance.md"]
+    },
+    {
+      "id": "double_charge_reroute",
+      "text": "If my journey is diverted during a disruption, will I be charged a second time?",
+      "relevant_pages": ["incident-response.md", "fare-policy.md"]
+    }
+  ]
+}

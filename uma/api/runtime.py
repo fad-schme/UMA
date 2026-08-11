@@ -33,6 +33,7 @@ from uma.common.provenance import (
     provenance_for_artifact,
 )
 from uma.common.dedupe import dedupe_evidence_by_text
+from uma.retrieve.gaps import assess_gaps, gap_thresholds
 from uma.common.identity import normalize_user_id
 from uma.common.types import RuntimeContext
 from uma.common.storage_metadata import (
@@ -1004,6 +1005,27 @@ class UMARuntime:
                 memory_intent,
                 len(chunks),
             )
+        # Gap analysis runs on the raw domain objects, not the serialized
+        # projections: `_chunk_payload` drops `created_at` and `trust_score`,
+        # which are exactly the two signals this needs.
+        max_support_age_days, min_support_trust = gap_thresholds(
+            getattr(self._require_memory_bridge(), "retrieval_cfg", None)
+        )
+        gaps = assess_gaps(
+            facts=context.facts,
+            chunks=chunks,
+            max_support_age_days=max_support_age_days,
+            min_support_trust=min_support_trust,
+        )
+        if gaps:
+            logger.info(
+                "UMARuntime.retrieve_memory: %d gap(s) flagged tenant=%s user=%s intent=%s",
+                len(gaps),
+                runtime_context.tenant_id,
+                runtime_context.user_id,
+                memory_intent,
+            )
+
         semantic_retrieved_event = build_compiled_memory_log_event(
             event_type="semantic_retrieved",
             artifact=compiled_answer,
@@ -1027,6 +1049,7 @@ class UMARuntime:
             "evidence": chunks,
             "supporting_evidence": supporting_evidence,
             "supporting_facts": list(context.facts),
+            "gaps": gaps,
             "supporting_skills": list(context.skills),
             "conflicts": [],
             "support_density": support_density,
@@ -1151,6 +1174,7 @@ class UMARuntime:
             evidence=evidence,
             provenance_valid=bool(provenance.get("valid")),
             provenance_error=provenance_error,
+            gaps=[dict(item) for item in (detailed_result.get("gaps") or []) if isinstance(item, Mapping)],
             debug=debug,
         )
 

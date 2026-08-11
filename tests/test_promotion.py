@@ -60,6 +60,120 @@ def _build_fact(
 
 
 @pytest.mark.asyncio
+async def test_promotion_duplicate_guard_blocks_same_content_from_a_later_turn(uma_memory) -> None:
+    """The same statement extracted in two different turns promotes once.
+
+    The store's own idempotency guard keys on ``meta.turn_id``, so it only
+    catches a replay of the *same* turn. Two distinct turns yielding identical
+    (subject, predicate, object) previously minted two durable agent rows.
+    """
+    memory = uma_memory
+    assert memory.agent_id
+    await memory.set_agent_profile(
+        description="kubernetes cluster orchestration expertise",
+        focus_areas=["kubernetes"],
+    )
+
+    embedding = (await memory.embedder.embed(["kubernetes cluster orchestration for production workloads"]))[0]
+
+    def _candidate(fact_id: str, turn_id: str) -> Fact:
+        fact = _build_fact(
+            fact_id=fact_id,
+            owner_type="user",
+            owner_id="user:u1",
+            session_id="session-dup",
+            agent_id=memory.agent_id,
+        )
+        # Same content, different turn — exactly what the turn_id guard misses.
+        fact.meta = {**fact.meta, "embedding": list(embedding), "turn_id": turn_id}
+        return fact
+
+    # A session-scoped user fact promotes session -> user (durable), so the
+    # promotion target is the user scope, not the agent KB.
+    async def _durable_facts() -> list[Fact]:
+        return await memory.semantic_core.list_facts_for_owner(
+            tenant_id=DEFAULT_TENANT_ID,
+            owner_type="user",
+            owner_id="user:u1",
+        )
+
+    # `pipeline` is built lazily on the first process_turn; materialise it
+    # with unrelated content, then measure from that baseline.
+    await memory.process_turn(
+        user_id="user:u1",
+        user_msg="hello",
+        assistant_reply="unrelated bootstrap reply about postgres replication tuning.",
+        session_id="session-bootstrap",
+    )
+    await memory.pipeline.await_pending_background()
+    baseline = len(await _durable_facts())
+
+    await memory.pipeline._maybe_promote_facts(
+        user_id="user:u1",
+        facts=[_candidate("fact_dup_turn_one", "turn-1")],
+        tenant_id=DEFAULT_TENANT_ID,
+    )
+    after_first = await _durable_facts()
+    if len(after_first) == baseline:
+        pytest.skip("promotion did not admit the candidate; guard is not exercised")
+
+    await memory.pipeline._maybe_promote_facts(
+        user_id="user:u1",
+        facts=[_candidate("fact_dup_turn_two", "turn-2")],
+        tenant_id=DEFAULT_TENANT_ID,
+    )
+    after_second = await _durable_facts()
+
+    assert len(after_second) == len(after_first), (
+        "second turn with identical content must not mint another durable fact"
+    )
+
+
+@pytest.mark.asyncio
+async def test_durable_fact_exists_is_scoped_and_content_keyed(uma_memory) -> None:
+    """The guard matches on content identity, and only within the owner scope."""
+    memory = uma_memory
+    store = memory.semantic_core.store
+
+    stored = _build_fact(
+        fact_id="fact_guard_stored",
+        owner_type="user",
+        owner_id="user:u1",
+        agent_id=memory.agent_id,
+    )
+    embedding = (await memory.embedder.embed([str(stored.object)]))[0]
+    await memory.semantic_core.upsert_fact(stored, embedding)
+
+    # Same content, different id: recognised as already present.
+    twin = _build_fact(
+        fact_id="fact_guard_twin",
+        owner_type="user",
+        owner_id="user:u1",
+        agent_id=memory.agent_id,
+    )
+    assert await store.durable_fact_exists(
+        twin, tenant_id=DEFAULT_TENANT_ID, owner_type="user", owner_id="user:u1"
+    ) is True
+
+    # Same content, different owner: a separate scope, so still novel.
+    assert await store.durable_fact_exists(
+        twin, tenant_id=DEFAULT_TENANT_ID, owner_type="user", owner_id="user:u2"
+    ) is False
+
+    # Different content in the same scope: novel.
+    other = _build_fact(
+        fact_id="fact_guard_other",
+        owner_type="user",
+        owner_id="user:u1",
+        object_text="a completely unrelated statement about postgres replication",
+        agent_id=memory.agent_id,
+    )
+    assert await store.durable_fact_exists(
+        other, tenant_id=DEFAULT_TENANT_ID, owner_type="user", owner_id="user:u1"
+    ) is False
+
+
+@pytest.mark.asyncio
 async def test_session_to_user_promotion_creates_new_fact_and_preserves_original(uma_memory) -> None:
     memory = uma_memory
     assert memory.agent_id

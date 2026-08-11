@@ -1019,8 +1019,11 @@ def test_extract_facts_batch_salvages_missing_chunks() -> None:
 
 
 @pytest.mark.asyncio
-async def test_episodic_fetch_summaries_owner_scoped():
-    db = SQLiteAdapter("/tmp/uma_test_episodic_scoping.sqlite")
+async def test_episodic_fetch_summaries_owner_scoped(tmp_path):
+    # Per-test DB. A fixed path outside the test tree survives between runs, so
+    # a store written by an older build keeps its old `uma_store_meta` and later
+    # trips the format check on a DB the test never meant to reuse.
+    db = SQLiteAdapter(str(tmp_path / "episodic_scoping.sqlite"))
     vec = InMemoryVectorIndex(dim=3)
     store = EpisodicSQLStore(db_adapter=db, vector_index=vec)
 
