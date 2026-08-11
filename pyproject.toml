@@ -64,6 +64,7 @@ Changelog     = "https://github.com/fad-schme/UMA/blob/main/CHANGELOG.md"
 
 [project.scripts]
 uma = "uma.cli:main"
+uma-mcp = "uma.mcp.server:main"
 
 # -----------------------------------------------------------------------------
 # Optional dependencies — install with `pip install -e '.[<name>]'`
@@ -84,6 +85,9 @@ openai   = ["openai>=1.0.0"]
 # imported; the `openai` client is what the adapter actually needs.
 ollama   = ["openai>=1.0.0"]
 e2e      = ["openai>=1.0.0"]
+
+# MCP 2.x removed the ``mcp.server.fastmcp`` API used by UMA's stdio server.
+mcp      = ["mcp[cli]>=1.0.0,<2.0.0"]
 
 # Storage backends
 vector   = ["faiss-cpu"]
