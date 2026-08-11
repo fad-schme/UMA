@@ -15,16 +15,14 @@ build-backend = "setuptools.build_meta"
 # -----------------------------------------------------------------------------
 
 [project]
-# Distribution name only. The import package stays `uma` (`import uma`,
-# `uma` CLI); `uma` was already taken on PyPI by an unrelated project.
 name = "uma-mem"
-description = "UMA: modular memory and context manager for AI agents"
+description = "UMA: modular memory and context manager SDK for AI agents"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.9"
 authors = [
-    { name = "a.Diaz-Schmeier", email = "ad-schme@ai-mem-engineering.com" },
+    { name = "A Diaz-Schmeier", email = "ad-schme@aibestlabs.com" },
 ]
 keywords = ["memory", "context", "rag", "ai", "agents", "llm"]
 classifiers = [
@@ -41,7 +39,9 @@ classifiers = [
 ]
 
 # Runtime dependencies (was `install_requires` in setup.py).
-# Every entry here is imported unconditionally by the base install.
+# Every entry here is imported unconditionally by the base install. Parser-only
+# libraries stay in the `parsers` extra — `uma/ingest/parser.py` guards those
+# imports with an install hint, which only makes sense while they are optional.
 dependencies = [
     "pyyaml",
     "numpy",
@@ -111,7 +111,13 @@ dev = [
     "pip-audit",
     "ruff",
     "matplotlib",
-    "PyPDF2",
+    # The suite exercises the optional surfaces, so `[dev]` alone must be enough
+    # to run it. Self-reference rather than restating the pins: the parser tests
+    # need beautifulsoup4/markdown/PyPDF2, and tests/test_cli.py runs `doctor`
+    # against an ollama-provider config that resolves through the
+    # OpenAI-compatible adapter.
+    "uma-mem[parsers]",
+    "openai>=1.0.0",
 ]
 
 # -----------------------------------------------------------------------------

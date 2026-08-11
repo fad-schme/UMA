@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import yaml
 
+from tests.helpers.cli import uma_entry_point
 from tests.helpers.runtime import build_test_config
 from uma.cli import main
 from uma.version import __version__
@@ -282,8 +283,8 @@ def test_security_scan_runtime_failure_is_exit_one_and_shuts_down(
 def test_installed_version_is_quiet_and_module_entrypoint_matches(
     tmp_path: Path,
 ) -> None:
-    executable = Path(sys.executable).with_name("uma")
-    assert executable.is_file()
+    executable = uma_entry_point()
+    assert executable.is_file(), "the test environment must install the uma entry point"
     config_path = _config_path(tmp_path)
 
     installed = subprocess.run(

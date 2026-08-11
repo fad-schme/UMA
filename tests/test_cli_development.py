@@ -25,6 +25,18 @@ def _repo(tmp_path: Path, monkeypatch) -> Path:
     return tmp_path
 
 
+def _norm(commands: list[list[str]]) -> list[list[str]]:
+    """Normalize path separators so argv assertions are platform-independent.
+
+    `dev check` derives a few arguments through `pathlib` (the security test
+    module, the built wheel), so they carry `\\` on Windows while the literal
+    arguments in the check definitions are written with `/`. Applying this to
+    both sides keeps the assertions about *which* commands run rather than
+    about `os.sep`; `sys.executable` is normalized identically on both sides.
+    """
+    return [[part.replace("\\", "/") for part in command] for command in commands]
+
+
 def test_dev_check_lists_predefined_checks(capsys, monkeypatch) -> None:
     monkeypatch.setattr(
         "uma.cli.development.subprocess.run",
@@ -76,7 +88,7 @@ def test_dev_check_quick_profile_runs_predefined_commands(
         "security-tests",
         "contract-tests",
     ]
-    assert commands == [
+    assert _norm(commands) == _norm([
         [
             "ruff",
             "check",
@@ -112,7 +124,7 @@ def test_dev_check_quick_profile_runs_predefined_commands(
             "-q",
             "--tb=short",
         ],
-    ]
+    ])
 
 
 def test_check_definition_has_required_immutable_schema() -> None:
@@ -160,7 +172,7 @@ def test_dev_check_full_profile_matches_local_ci_order_and_commands(
         "build",
         "twine",
     ]
-    assert commands == [
+    assert _norm(commands) == _norm([
         [sys.executable, "-m", "pip", "check"],
         [
             sys.executable,
@@ -207,7 +219,7 @@ def test_dev_check_full_profile_matches_local_ci_order_and_commands(
             "check",
             "dist/uma.whl",
         ],
-    ]
+    ])
 
 
 def test_dev_check_only_and_fail_fast(
@@ -452,6 +464,10 @@ def test_dev_check_refuses_to_run_outside_source_checkout(
     capsys,
     monkeypatch,
 ) -> None:
+    # Deliberately a system temp dir, not `tmp_path`: pytest's basetemp lives
+    # inside the repo, so root discovery would walk up and find the real
+    # checkout instead of failing.
+    original_cwd = Path.cwd()
     with tempfile.TemporaryDirectory() as directory:
         monkeypatch.chdir(directory)
         monkeypatch.setattr(
@@ -465,13 +481,18 @@ def test_dev_check_refuses_to_run_outside_source_checkout(
             ),
         )
 
-        assert (
-            main(["--format", "json", "dev", "check", "--only", "ruff"])
-            == 2
-        )
-        result = json.loads(capsys.readouterr().out)
-        assert result["status"] == "error"
-        assert "UMA source checkout" in result["errors"][0]["message"]
+        try:
+            assert (
+                main(["--format", "json", "dev", "check", "--only", "ruff"])
+                == 2
+            )
+            result = json.loads(capsys.readouterr().out)
+            assert result["status"] == "error"
+            assert "UMA source checkout" in result["errors"][0]["message"]
+        finally:
+            # Windows refuses to remove a directory that is a process's cwd,
+            # so leave before TemporaryDirectory cleans up. No-op elsewhere.
+            monkeypatch.chdir(original_cwd)
 
 
 def test_dev_check_interruption_returns_130_and_valid_json(

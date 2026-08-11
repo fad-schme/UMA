@@ -6,13 +6,13 @@ import io
 import json
 from pathlib import Path
 import subprocess
-import sys
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import yaml
 
+from tests.helpers.cli import uma_entry_point
 from tests.helpers.runtime import build_test_config
 from uma.api.management import (
     IntegrityVerificationResult,
@@ -760,7 +760,7 @@ def test_installed_cli_rejects_noninteractive_purge_without_yes(
     tmp_path: Path,
 ) -> None:
     path = _config_path(tmp_path)
-    executable = Path(sys.executable).with_name("uma")
+    executable = uma_entry_point()
     assert executable.is_file(), "the test environment must install the uma entry point"
 
     completed = subprocess.run(
@@ -788,6 +788,14 @@ def test_installed_cli_rejects_noninteractive_purge_without_yes(
         cwd=tmp_path,
         check=False,
         capture_output=True,
+        # `capture_output` redirects stdout/stderr only; without an explicit
+        # stdin the child inherits the parent's terminal and `isatty()` is True
+        # whenever the suite runs from a shell, sending the CLI down the
+        # interactive prompt path instead of the non-interactive one under test.
+        # `input` makes stdin a pipe, which reports False on POSIX and Windows
+        # alike — `DEVNULL` does not, because Windows `isatty()` returns True
+        # for the NUL character device.
+        input="",
         text=True,
         timeout=30,
     )
