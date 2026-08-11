@@ -2,7 +2,7 @@
 
 UMA is a memory and context runtime SDK for AI agents. It ingests data, stores it across typed memory lanes, and exposes two thin retrieval products. It does not generate replies, perform reasoning, or manage tool use — that belongs to the calling application.
 
-This document covers the architectural invariants. For developer-facing references, see `.claude/skills/uma-overview.md`, `.claude/skills/uma-api.md`, and the topic-specific skills under `.claude/skills/`.
+This document covers the architectural invariants. For developer-facing references, see `.claude/skills/overview.md`, `.claude/skills/api.md`, and the topic-specific skills under `.claude/skills/`.
 
 ---
 
@@ -142,7 +142,7 @@ Cross-lane quarantine awareness:
 - `LatestWinsFactResolver` excludes quarantined facts from canonical-row selection (degenerate all-quarantined case falls back across the full set with a warning; the chosen row remains quarantined and is filtered at retrieval anyway)
 - Working memory `get_context` filters quarantined messages by default; `include_quarantined=True` is required to see them
 
-The management API (`uma.api.management`) exposes `list_quarantined`, `reinstate_quarantined`, and `purge_quarantined` to review, restore, or permanently delete quarantined records. See `.claude/skills/uma-quarantine.md` for the full lifecycle.
+The management API (`uma.api.management`) exposes `list_quarantined`, `reinstate_quarantined`, and `purge_quarantined` to review, restore, or permanently delete quarantined records. See `.claude/skills/quarantine.md` for the full lifecycle.
 
 ### Integrity Verification
 
@@ -245,7 +245,7 @@ LanceDB returns metric-dependent raw `_distance`. UMA normalizes via `score = ma
 
 All three adapters validate every row in a batch before mutating any state. A bad row in position N causes the entire upsert to raise `ValueError`; no rows from the batch are committed. Partial state would surface as cross-scope leaks or silent retrieval misses on subsequent queries.
 
-See `.claude/skills/uma-vector-contract.md` for the full contract reference and the path to writing a custom backend.
+See `.claude/skills/vector-contract.md` for the full contract reference and the path to writing a custom backend.
 
 ---
 
@@ -509,7 +509,7 @@ UMA Lite uses a single embedded profile: SQLite (authoritative) + LanceDB (vecto
 |--------|-----|
 | `config/uma.yaml` | Convention — any accessible path works |
 
-LLM and embedding values in `uma.yaml` are user-customizable baselines — set provider, model, and host to match your environment. All initialization goes through the same path: `UMAMemory.from_yaml(path)`. The OpenAI and Anthropic provider packages are optional extras (`pip install -e '.[openai]'` or `pip install -e '.[llm]'`); the base install only requires `lancedb>=0.25.3`.
+LLM and embedding values in `uma.yaml` are user-customizable baselines — set provider, model, and host to match your environment. All initialization goes through the same path: `UMAMemory.from_yaml(path)`. The OpenAI and Anthropic provider packages are optional extras (`pip install -e '.[openai]'` or `pip install -e '.[llm]'`); no provider package is needed for the base install, whose only storage dependency is `lancedb>=0.25.3`.
 
 ---
 
@@ -519,12 +519,12 @@ UMA is in **beta**. Schema and API may change. No backward-compatibility guarant
 
 For developer-facing documentation, see the nine Agent Skills under `.claude/skills/`:
 
-- `uma-overview.md` — orientation, philosophy, DAT invariants
-- `uma-api.md` — full public API reference
+- `overview.md` — orientation, philosophy, DAT invariants
+- `api.md` — full public API reference
 - `lanes.md` — six public filter lanes plus the profile and optional graph planner/plugin views
-- `uma-configure.md` — YAML configuration reference
-- `uma-security.md` — full security model
-- `uma-agent-loop.md` — end-to-end integration pattern
+- `configure.md` — YAML configuration reference
+- `security.md` — full security model
+- `agent-loop.md` — end-to-end integration pattern
 - `promotion.md` — public profile-gated promotion contract
-- `uma-vector-contract.md` — the C1 vector contract
-- `uma-quarantine.md` — quarantine lifecycle
+- `vector-contract.md` — the C1 vector contract
+- `quarantine.md` — quarantine lifecycle

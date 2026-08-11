@@ -95,7 +95,7 @@ UMA is a memory SDK — the OWASP Agentic Security Initiative (ASI) is the most 
 | **LLM09** Misinformation | Partial | Every fact carries provenance back to source chunks. Quarantined facts excluded at SQL retrieval layer (`AND quarantined_at IS NULL`). `provenance_valid` is a top-level field on every `retrieve_memory` result. |
 | **LLM10** Unbounded Consumption | Partial | Ingest side (UMA-owned): `max_file_bytes` and `pdf_max_pages` cap resource use. Retrieval side (caller-owned): `set_rate_limit_hook` exposes a single plug-point on every public method — UMA ships no default limiter and owns no throttling policy (accounting, storage, timeouts, and refusal semantics are the caller's). |
 
-The vector isolation contract (C1) and the rate-limit hook are documented separately; see `uma-security.md` for the full model.
+The vector isolation contract (C1) and the rate-limit hook are documented separately; see `security.md` for the full model.
 
 ## One-Sentence Product Test
 
@@ -132,7 +132,7 @@ await memory.set_agent_profile(description=..., focus_areas=[...], tenant_id=...
 memory.set_rate_limit_hook(my_hook)
 ```
 
-See `uma-api.md` for full signatures and contracts.
+See `api.md` for full signatures and contracts.
 
 ## Storage Architecture
 
@@ -152,7 +152,7 @@ UMA Lite embeds SQLite (authoritative) and LanceDB (vector index), so it require
 |---|---|
 | `config/uma.yaml` | Default runnable config |
 
-LLM and embedding values are user-customizable baselines. See `uma-configure.md` for full configuration details.
+LLM and embedding values are user-customizable baselines. See `configure.md` for full configuration details.
 
 ## Status
 

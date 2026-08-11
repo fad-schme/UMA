@@ -35,11 +35,11 @@ management.
 
 ## 🏛️ Architecture
 
-![UMA architecture diagram](assets/uma_architecture.png)
+![UMA architecture diagram](https://raw.githubusercontent.com/fad-schme/UMA/main/assets/uma_architecture.png)
 
 UMA is a thin SDK around three concerns: **ingest** (data flows in, gets scanned, chunked, embedded), **storage** (SQLite is authoritative, LanceDB is a rebuildable accelerator), and **retrieval** (a canonical pipeline through candidate discovery, fusion, trust-aware ranking, and snippet rendering). Every write boundary scans for prompt injection; every read boundary enforces tenant/owner isolation and filters quarantined records.
 
-For the full architectural model — invariants, pipelines, the vector isolation contract, and the OWASP Top 10 mapping — see [`ARCHITECTURE.md`](ARCHITECTURE.md).
+For the full architectural model — invariants, pipelines, the vector isolation contract, and the OWASP Top 10 mapping — see [`ARCHITECTURE.md`](https://github.com/fad-schme/UMA/blob/main/ARCHITECTURE.md).
 
 ---
 
@@ -89,7 +89,7 @@ The [OWASP Top 10 for LLM Applications 2025](https://genai.owasp.org/llm-top-10/
 
 **Scanner evaluation status.** The injection catalog is currently regression-tested against an internal smoke corpus of 42 known attack strings and 33 benign controls (see `tests/test_security_injection.py`). Public benchmark results against adversarial-injection corpora (LOCOMO, TensorTrust, HackAPrompt) are in progress and will be published with precision / recall / F1 numbers by corpus and UMA version when complete. Do not read the smoke-corpus pass rate as a general-purpose accuracy claim.
 
-For the full security model — including the injection pattern catalog, severity behavior, quarantine lifecycle, and integrity verification — see [`.claude/skills/security.md`](.claude/skills/security.md) for the deep dive, or [`ARCHITECTURE.md`](ARCHITECTURE.md) for the architectural model.
+For the full security model — including the injection pattern catalog, severity behavior, quarantine lifecycle, and integrity verification — see [`.claude/skills/security.md`](https://github.com/fad-schme/UMA/blob/main/.claude/skills/security.md) for the deep dive, or [`ARCHITECTURE.md`](https://github.com/fad-schme/UMA/blob/main/ARCHITECTURE.md) for the architectural model.
 
 ---
 
@@ -142,7 +142,7 @@ asyncio.run(main())
 
 That's the whole loop. For the full agent integration pattern — pre-LLM injection scanning, error handling, multi-tenant SaaS, rate limiting — **ask your coding assistant** (see below).
 
-If a storage adapter needs credentials, `uma.yaml` also accepts an optional `secrets:` block; the reference shape lives in [`.claude/skills/configure.md`](.claude/skills/configure.md).
+If a storage adapter needs credentials, `uma.yaml` also accepts an optional `secrets:` block; the reference shape lives in [`.claude/skills/configure.md`](https://github.com/fad-schme/UMA/blob/main/.claude/skills/configure.md).
 
 ---
 
@@ -194,7 +194,7 @@ baseline on 2026-07-31 is **71%** across `uma/` (754 passed, 2 opt-in skips).
 
 Real-model fact-extraction precision and recall are measured separately against
 local Ollama so CI does not depend on a model service. See
-[`tests/e2e/README.md`](tests/e2e/README.md) for the held-out corpus, published
+[`tests/e2e/README.md`](https://github.com/fad-schme/UMA/blob/main/tests/e2e/README.md) for the held-out corpus, published
 baseline, thresholds, and run command.
 
 ---
@@ -227,15 +227,15 @@ UMA ships nine Agent Skills under `.claude/skills/`. They're structured markdown
 
 | Skill | Covers |
 | --- | --- |
-| [`overview.md`](.claude/skills/overview.md) | What UMA is, design philosophy, DAT invariants, security primitives at a glance |
-| [`api.md`](.claude/skills/api.md) | Full public API — every method, every management function, scope fields |
-| [`lanes.md`](.claude/skills/lanes.md) | Six public filter lanes plus the profile and optional graph planner/plugin views |
-| [`configure.md`](.claude/skills/configure.md) | YAML reference, LLM/embedding providers, security configuration, install surfaces |
-| [`security.md`](.claude/skills/security.md) | Two-layer scanning, pattern catalog, severity behavior, integrity verification |
-| [`agent-loop.md`](.claude/skills/agent-loop.md) | End-to-end integration: scan → retrieve → LLM → process_turn |
-| [`promotion.md`](.claude/skills/promotion.md) | Public agent-profile API, promotion gates, ownership changes, and provenance |
-| [`vector-contract.md`](.claude/skills/vector-contract.md) | Vector isolation contract, push-down filters, custom backend authoring |
-| [`quarantine.md`](.claude/skills/quarantine.md) | Quarantine lifecycle, management API, composition with trust scoring |
+| [`overview.md`](https://github.com/fad-schme/UMA/blob/main/.claude/skills/overview.md) | What UMA is, design philosophy, DAT invariants, security primitives at a glance |
+| [`api.md`](https://github.com/fad-schme/UMA/blob/main/.claude/skills/api.md) | Full public API — every method, every management function, scope fields |
+| [`lanes.md`](https://github.com/fad-schme/UMA/blob/main/.claude/skills/lanes.md) | Six public filter lanes plus the profile and optional graph planner/plugin views |
+| [`configure.md`](https://github.com/fad-schme/UMA/blob/main/.claude/skills/configure.md) | YAML reference, LLM/embedding providers, security configuration, install surfaces |
+| [`security.md`](https://github.com/fad-schme/UMA/blob/main/.claude/skills/security.md) | Two-layer scanning, pattern catalog, severity behavior, integrity verification |
+| [`agent-loop.md`](https://github.com/fad-schme/UMA/blob/main/.claude/skills/agent-loop.md) | End-to-end integration: scan → retrieve → LLM → process_turn |
+| [`promotion.md`](https://github.com/fad-schme/UMA/blob/main/.claude/skills/promotion.md) | Public agent-profile API, promotion gates, ownership changes, and provenance |
+| [`vector-contract.md`](https://github.com/fad-schme/UMA/blob/main/.claude/skills/vector-contract.md) | Vector isolation contract, push-down filters, custom backend authoring |
+| [`quarantine.md`](https://github.com/fad-schme/UMA/blob/main/.claude/skills/quarantine.md) | Quarantine lifecycle, management API, composition with trust scoring |
 
 Each skill is under 500 lines, follows the Agent Skills specification (third-person `description` field for discovery), and is verified against the patched codebase — no phantom APIs.
 
@@ -246,9 +246,9 @@ Assistants that don't follow `.claude/skills/` can read the same files directly,
 ### Other docs:
 
 - [**UMA Documentation**](https://uma.ai-mem-engineering.com/docs.html)
-- [**Contributing**](CONTRIBUTING.md)
+- [**Contributing**](https://github.com/fad-schme/UMA/blob/main/CONTRIBUTING.md)
 
 
-For the architectural deep dive, see [`ARCHITECTURE.md`](ARCHITECTURE.md). For everything else, ask your assistant.
+For the architectural deep dive, see [`ARCHITECTURE.md`](https://github.com/fad-schme/UMA/blob/main/ARCHITECTURE.md). For everything else, ask your assistant.
 
-This repository is licensed under the [Apache-2.0 License](LICENSE).
+This repository is licensed under the [Apache-2.0 License](https://github.com/fad-schme/UMA/blob/main/LICENSE).

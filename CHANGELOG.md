@@ -7,6 +7,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased]
 
+### Fixed
+- **`[ollama]` install extra pulled the wrong package.** It declared the
+  `ollama` client, which UMA never imports. Ollama is reached over its
+  OpenAI-compatible HTTP API through `OpenAICompatibleLLM` /
+  `OpenAICompatibleEmbedder`, so the extra now declares `openai>=1.0.0`.
+  Previously `pip install uma-mem[ollama]` still failed at initialization
+  with "requires the 'openai' package to be installed"; `uma doctor` now
+  reports `[ok]` for both the LLM and embedding provider on a fresh install.
+- **Source distribution shipped an uncollectable test suite.** setuptools
+  auto-included only top-level `tests/test_*.py`, omitting `tests/__init__.py`,
+  `conftest.py`, `helpers/`, `fixtures/`, and `e2e/` — 16 of 27 test modules
+  failed to import on `No module named 'tests.helpers'`. `MANIFEST.in` now
+  grafts `tests/` and `config/` (the reference config two tests read as the
+  source of truth for the documented lite profile). The sdist suite collects
+  and runs: 767 passed.
+- **README links were dead on the package page.** All 18 repo-relative links
+  (`ARCHITECTURE.md`, `CONTRIBUTING.md`, `LICENSE`, `tests/e2e/README.md`, and
+  the nine `.claude/skills/*.md` guides) plus the architecture diagram resolved
+  against nothing once rendered as the PyPI long description. They are now
+  absolute GitHub URLs — the diagram via `raw.githubusercontent.com` so it
+  actually renders. Added `Source` and `Changelog` project URLs, which the
+  package page previously lacked entirely.
+
 ---
 
 ## [0.2.0] — 2026-08-10
@@ -14,24 +37,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 First release published to PyPI.
 
 ### Added
-- **`.github/workflows/publish.yml`** — release pipeline. One build feeds both
-  indexes, and each index is reachable on its own: pushing a `v*` tag runs
-  TestPyPI as a rehearsal and then PyPI, while a manual dispatch publishes to
-  whichever index its `target` input names (`testpypi` by default, or `pypi`
-  directly, skipping the rehearsal). PyPI uploads sit behind the `pypi`
-  environment's approval gate. Uploads use PyPI Trusted Publishing (OIDC), so
-  no API tokens are stored in the repository. On the tag path a guard fails
-  the build when the tag disagrees with `uma/version.py`; a dispatch has no
-  tag to check, so bump the version before dispatching to PyPI.
 - **Operational CLI** with stable `uma` and `python -m uma.cli` entry points,
   text/JSON output, secret-redacted configuration inspection, offline and
   runtime diagnostics, injection scanning, CI-aligned development checks,
   scoped retrieval and ingestion, audit/quarantine listing, and guarded
   quarantine, index, and integrity administration. Destructive operations
   require an exact resolved target and interactive confirmation or `--yes`.
-- **Qdrant vector adapter restored to Lite** with mandatory tenant and owner
-  filtering in native Qdrant queries. Install its optional client dependency
-  with `pip install 'uma-mem[qdrant]'`.
 - **`google-re2` regex backend for the injection scanner** via a new
   `pip install uma-mem[security]` install extra. When installed, `scan_content`
   and every rule-function scorer compile their patterns through RE2, which
@@ -71,6 +82,11 @@ First release published to PyPI.
 - **`tests/test_package_imports.py`** — new guard importing every shipped
   subpackage in its own subprocess. The rest of the suite imports `uma.api`
   first via conftest, which masks this entire class of bug.
+- **Skill filenames in documentation.** `ARCHITECTURE.md` and four skills
+  referenced `.claude/skills/uma-*.md`; `uma-` is the skill *name* in
+  frontmatter, not part of the filename, so all 18 references pointed at
+  files that do not exist. `ARCHITECTURE.md` also no longer implies `lancedb`
+  is the base install's only dependency.
 
 ### Changed
 - **Distribution renamed to `uma-mem`.** `pip install uma` installs an
@@ -104,9 +120,9 @@ First release published to PyPI.
   every field (runtime dependencies, optional-dependencies, project
   metadata, package-data, dynamic version) now lives in `pyproject.toml`
   as the single source of truth. Supported extras are
-  (`llm`, `openai`, `ollama`, `vector`, `qdrant`, `graph`, `security`,
-  `parsers`, `dev`); the `vector` extra installs FAISS and the separate
-  `qdrant` extra installs the Qdrant client. Build with `python -m build`; install with
+  (`llm`, `openai`, `ollama`, `e2e`, `vector`, `graph`, `security`,
+  `parsers`, `dev`); the `vector` extra installs
+  FAISS. Build with `python -m build`; install with
   `pip install .` or `pip install -e '.[dev]'`. Anyone invoking
   `python setup.py <cmd>` directly will need to switch to `pip` or
   `python -m build` — the file is gone.

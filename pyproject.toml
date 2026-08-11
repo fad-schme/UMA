@@ -58,6 +58,9 @@ dynamic = ["version"]
 [project.urls]
 Homepage      = "https://uma.ai-mem-engineering.com"
 Documentation = "https://uma.ai-mem-engineering.com/docs.html"
+# README links resolve against this repo; keep the two in sync.
+Source        = "https://github.com/fad-schme/UMA"
+Changelog     = "https://github.com/fad-schme/UMA/blob/main/CHANGELOG.md"
 
 [project.scripts]
 uma = "uma.cli:main"
@@ -75,12 +78,15 @@ uma = "uma.cli:main"
 # LLM providers
 llm      = ["anthropic"]
 openai   = ["openai>=1.0.0"]
-ollama   = ["ollama"]
+# Ollama is reached through its OpenAI-compatible HTTP API
+# (`OpenAICompatibleLLM`/`OpenAICompatibleEmbedder`, see
+# uma/adapters/llm/provider_registry.py). The `ollama` Python package is never
+# imported; the `openai` client is what the adapter actually needs.
+ollama   = ["openai>=1.0.0"]
 e2e      = ["openai>=1.0.0"]
 
 # Storage backends
 vector   = ["faiss-cpu"]
-qdrant   = ["qdrant-client"]
 graph    = ["neo4j"]
 
 # Security: enable the google-re2 backend for ReDoS-proof injection scanning.

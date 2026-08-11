@@ -371,7 +371,7 @@ await purge_quarantined(
 )
 ```
 
-Quarantined records stay in the database but are excluded from every retrieval query. See `uma-quarantine.md` for the full lifecycle.
+Quarantined records stay in the database but are excluded from every retrieval query. See `quarantine.md` for the full lifecycle.
 
 ### `list_retrieval_audit` — Inspect retrieval audit log
 

@@ -33,9 +33,11 @@ Acknowledgement will come from a human, not an autoresponder.
 
 ## Supported Versions
 
-UMA is currently in **beta**. Only the latest published beta receives
-security fixes. There are no backwards-compatibility guarantees for
-schema or API between betas — see `ARCHITECTURE.md § Status`.
+UMA is **beta-quality** software published from version 0.2.0 onward under
+plain PEP 440 version numbers (the `-beta` suffix is gone; the maturity
+statement is not). Only the latest published release receives security
+fixes. There are no backwards-compatibility guarantees for schema or API
+between releases before 1.0 — see `ARCHITECTURE.md § Status`.
 
 | Version           | Status              | Security fixes  |
 |-------------------|---------------------|-----------------|

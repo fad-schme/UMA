@@ -118,7 +118,7 @@ class SecretsProvider(ABC):
 
     A "reference" is an opaque string the consumer agreed on with the
     operator who configured the provider — for example "postgres/main" or
-    "qdrant/api_key". The provider maps the reference to a backing-store
+    "openai/api_key". The provider maps the reference to a backing-store
     path according to its own rules; UMA core does not interpret the
     reference shape.
 
@@ -161,7 +161,7 @@ class SecretsProvider(ABC):
 
 # References are mapped to env var names by uppercasing and replacing any
 # non-alphanumeric character with an underscore. So "postgres/main" becomes
-# "POSTGRES_MAIN", "qdrant.api-key" becomes "QDRANT_API_KEY". This keeps the
+# "POSTGRES_MAIN", "openai.api-key" becomes "OPENAI_API_KEY". This keeps the
 # mapping predictable without forcing operators to learn a new convention.
 _REFERENCE_TO_ENVVAR = re.compile(r"[^A-Za-z0-9]+")
 

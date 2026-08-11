@@ -134,25 +134,27 @@ def test_doctor_offline_fails_for_missing_provider_dependency(
     )
 
 
-def test_doctor_offline_checks_qdrant_client_dependency(
+def test_doctor_offline_checks_plugin_vector_backend_dependency(
     tmp_path: Path,
     capsys,
     monkeypatch,
 ) -> None:
+    """A plugin backend spec resolves to its declared dependency, not to the
+    module prefix of the spec itself."""
     path = _config_path(tmp_path)
     config = yaml.safe_load(path.read_text(encoding="utf-8"))
     config["storage"]["vector_backend"] = (
-        "uma.adapters.vector.qdrant:QdrantIndex"
+        "uma.adapters.vector.lancedb:LanceDBIndex"
     )
     config["storage"]["vector_config"] = {
-        "url": "http://qdrant.test",
+        "path": str(tmp_path / "vectors"),
     }
     path.write_text(yaml.safe_dump(config), encoding="utf-8")
     checked_modules: list[str] = []
 
     def available(module_name: str) -> bool:
         checked_modules.append(module_name)
-        return module_name != "qdrant_client"
+        return module_name != "lancedb"
 
     monkeypatch.setattr(
         "uma.cli.diagnostics._module_available",
@@ -180,7 +182,7 @@ def test_doctor_offline_checks_qdrant_client_dependency(
         if check["name"] == "storage:vector"
     )
     assert vector_check["status"] == "error"
-    assert "qdrant_client" in checked_modules
+    assert "lancedb" in checked_modules
 
 
 def test_security_scan_safe_text(tmp_path: Path, capsys) -> None:

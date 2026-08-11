@@ -1,3 +1,13 @@
+# The sdist ships the full test suite so downstream packagers can run it.
+# setuptools auto-includes only top-level `tests/test_*.py`, which leaves the
+# suite uncollectable (conftest, helpers, and fixtures all missing); graft the
+# whole tree instead.
+graft tests
+
+# tests/test_configuration.py and tests/test_vector_contract.py read the
+# reference config as the source of truth for the documented lite profile.
+graft config
+
 # Exclude generated OS metadata, Python caches, and local quality artifacts
 # from source distributions even if they exist in the working tree.
 global-exclude .DS_Store
@@ -13,6 +23,8 @@ global-exclude *.tar.gz
 
 prune __MACOSX
 prune .pytest_cache
+# pytest addopts sets --basetemp=.pytest_tmp; never ship a local test run's temp tree.
+prune .pytest_tmp
 prune .ruff_cache
 prune .pytype
 prune .hypothesis

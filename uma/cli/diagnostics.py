@@ -61,7 +61,6 @@ def doctor_offline(
                 "faiss": "faiss",
                 "uma.adapters.vector.faiss_adapter:FaissIndex": "faiss",
                 "uma.adapters.vector.lancedb:LanceDBIndex": "lancedb",
-                "uma.adapters.vector.qdrant:QdrantIndex": "qdrant_client",
             }.get(runtime.storage.vector_backend),
         ),
         ("graph", runtime.storage.graph_backend, None),

@@ -148,7 +148,7 @@ context = await memory.retrieve_context(
 )
 ```
 
-Valid lane names: `raw`, `semantic`, `episodic`, `procedural`, `wiki`, `working_memory`. See `uma-lanes.md`.
+Valid lane names: `raw`, `semantic`, `episodic`, `procedural`, `wiki`, `working_memory`. See `lanes.md`.
 
 ---
 

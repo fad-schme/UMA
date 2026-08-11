@@ -225,7 +225,7 @@ Cross-tenant access is impossible **by construction**:
 - **InMemory** keeps isolation in a parallel `_scopes` dict; isolation is the first filter applied in the query loop.
 - **FAISS** does not support pushed-down predicates. The adapter oversamples (`k × 4`) and post-filters in Python — acceptable for single-tenant deployments; LanceDB is recommended for multi-tenant.
 
-All three adapters refuse empty isolation values at upsert time. See `uma-vector-contract.md` for the full contract.
+All three adapters refuse empty isolation values at upsert time. See `vector-contract.md` for the full contract.
 
 ---
 
@@ -298,7 +298,7 @@ The hook fires at the top of `retrieve_context`, `retrieve_memory`, `process_tur
 
 UMA ships no default rate limiter. Operators integrate with their existing throttling stack (Redis, Envoy, in-process LRU counter, etc.).
 
-See `uma-api.md` for the full hook signature.
+See `api.md` for the full hook signature.
 
 ---
 
