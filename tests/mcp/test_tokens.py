@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from uma.mcp.tokens import DEFAULT_TOKENS_DB_PATH, TokenRecord, TokenStore
+from uma.mcp.tokens import DEFAULT_TOKENS_DB_PATH, TokenStore
 
 
 @pytest.fixture
