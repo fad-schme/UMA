@@ -86,7 +86,7 @@ ollama   = ["openai>=1.0.0"]
 e2e      = ["openai>=1.0.0"]
 
 # MCP 2.x removed the ``mcp.server.fastmcp`` API used by UMA's stdio server.
-mcp      = ["mcp[cli]>=1.0.0,<2.0.0"]
+mcp      = ["mcp[cli]>=1.0.0,<3.0.0"]
 
 # Storage backends
 vector   = ["faiss-cpu"]
