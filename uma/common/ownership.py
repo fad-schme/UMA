@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from uma.stores.base_sql_store import DEFAULT_TENANT_ID
+from uma.common.types.types_scope import DEFAULT_TENANT_ID
 from uma.common.types.types_scope import validate_owner_type, validate_tenant_id, validate_workspace_id
 from uma.common.identity import normalize_user_id
 

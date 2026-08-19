@@ -18,7 +18,7 @@ from .base_vector_sql_store import BaseVectorSQLStore
 _QUARANTINE_FILTER = " AND quarantined_at IS NULL"
 _NO_FILTER = ""
 
-from .base_sql_store import DEFAULT_TENANT_ID
+from ..common.types.types_scope import DEFAULT_TENANT_ID
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from uma.stores.metadata import ensure_store_metadata

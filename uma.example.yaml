@@ -72,7 +72,13 @@ embedding:
     # batch size through IngestConfig.embed_batch_size.
     batch_size: 32
     # Provider request timeout in seconds.
-    timeout: 20.0
+    #
+    # Sized for a cold start, not a warm one. Ollama loads the model into
+    # memory on the first request after boot, which can take well over a
+    # minute; subsequent calls return in milliseconds. A tight value here
+    # fails the very first embed of a fresh install — and `uma health`
+    # probes the provider, so it would report an error too.
+    timeout: 120.0
     # Truncate each input before sending it to the embedding provider.
     # Set to 0 to disable character-based truncation.
     max_input_chars: 512

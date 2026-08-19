@@ -28,9 +28,13 @@ Design notes
 ------------
 The warning fires exactly once, at first import. Callers do not need to
 check ``USING_RE2`` at runtime — the fallback is functionally correct for
-every pattern currently in UMA's catalog (all 200 patterns are
-RE2-compatible; verified). RE2 upgrades ReDoS from "guarded by pattern
-review discipline" to "impossible by construction."
+every pattern currently in UMA's catalog (all 251 patterns across
+``injection_patterns.yaml``, ``injection_patterns.l10n.yaml``, and
+``sqli_patterns.yaml`` are RE2-compatible; verified). RE2 upgrades ReDoS
+from "guarded by pattern review discipline" to "impossible by construction."
+
+Note that ``google-re2`` wheels are not reliably available on Windows, so
+the ``re`` fallback is the practical default there.
 """
 from __future__ import annotations
 

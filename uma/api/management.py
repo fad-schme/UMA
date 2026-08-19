@@ -18,6 +18,7 @@ from uma.common.integrity import (
     hash_skill_content,
 )
 from uma.common.provenance import provenance_for_artifact
+from uma.common.types.types_scope import DEFAULT_TENANT_ID
 from uma.memory import wiki as wiki_module
 
 if TYPE_CHECKING:
@@ -79,12 +80,14 @@ async def explain_result(
     memory: "UMAMemory",
     result: Any,
     *,
+    agent_id: str,
     user_id: str,
-    tenant_id: str = "default",
+    tenant_id: str = DEFAULT_TENANT_ID,
     workspace_id: str | None = None,
 ) -> dict[str, Any]:
     """Explain a retrieval result or compiled artifact using canonical provenance."""
     runtime_context = memory._resolve_runtime_context(
+        agent_id=agent_id,
         user_id=user_id,
         tenant_id=tenant_id,
         request_id="management:explain_result",
@@ -157,8 +160,9 @@ async def lint_memory_drift(
     memory: "UMAMemory",
     artifacts: Any | Sequence[Any],
     *,
+    agent_id: str,
     user_id: str,
-    tenant_id: str = "default",
+    tenant_id: str = DEFAULT_TENANT_ID,
     workspace_id: str | None = None,
     stale_after_seconds: int | None = None,
 ) -> dict[str, Any]:
@@ -222,6 +226,7 @@ async def lint_memory_drift(
         lint_result = await wiki_module.lint_wiki_page(
             memory,
             artifact,
+            agent_id=agent_id,
             user_id=user_id,
             tenant_id=tenant_id,
             workspace_id=workspace_id,
@@ -251,7 +256,7 @@ async def verify_integrity(
     lane: str,
     owner_type: str,
     owner_id: str,
-    tenant_id: str = "default",
+    tenant_id: str = DEFAULT_TENANT_ID,
 ) -> IntegrityVerificationResult:
     """
     Re-compute the canonical hash of a stored record and compare it to the stored content_hash.
@@ -363,7 +368,7 @@ async def list_quarantined(
     *,
     owner_type: str,
     owner_id: str,
-    tenant_id: str = "default",
+    tenant_id: str = DEFAULT_TENANT_ID,
     lane: Optional[str] = None,
     limit: int = 100,
 ) -> list[QuarantinedRecord]:
@@ -470,7 +475,7 @@ async def reinstate_quarantined(
     lane: str,
     owner_type: str,
     owner_id: str,
-    tenant_id: str = "default",
+    tenant_id: str = DEFAULT_TENANT_ID,
     reason: str,
 ) -> bool:
     """
@@ -513,7 +518,7 @@ async def purge_quarantined(
     lane: str,
     owner_type: str,
     owner_id: str,
-    tenant_id: str = "default",
+    tenant_id: str = DEFAULT_TENANT_ID,
     reason: str,
 ) -> bool:
     """

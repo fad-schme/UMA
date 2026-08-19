@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from .types_owner import OwnerType
+from .types_scope import DEFAULT_TENANT_ID
 
 
 @dataclass
@@ -26,7 +27,7 @@ class Chunk:
 
     owner_type: OwnerType = "user"
     owner_id: str = ""
-    tenant_id: str = "default"
+    tenant_id: str = DEFAULT_TENANT_ID
     workspace_id: Optional[str] = None
     origin_agent_id: Optional[str] = None
     origin_user_id: Optional[str] = None

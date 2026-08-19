@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from tests.helpers.context_bundle import make_context_bundle
 from tests.helpers.graph_adapter import RecordingGraphAdapter
-from tests.helpers.runtime import init_uma_for_tests
+from tests.helpers.runtime import TEST_AGENT_ID, init_uma_for_tests
 from typing import Any
 from uma.api.memory import UMAMemory
 from uma.api.runtime import UMARuntime
@@ -29,9 +29,11 @@ from uma.retrieve.rlm.environment import UMAMemoryEnvironment
 from uma.retrieve.rlm.evidence import expand_evidence_chunks_from_facts
 from uma.retrieve.rlm.intent import QueryIntent, classify_query_intent
 from uma.retrieve.rlm.request import RetrievalRequest
-from uma.stores.base_sql_store import DEFAULT_TENANT_ID
+from uma.common.types.types_scope import DEFAULT_TENANT_ID
 import asyncio
 import pytest
+
+AGENT_ID = TEST_AGENT_ID
 
 # ── test_bound_context_retrieval ──────────────────────────────────────────
 
@@ -46,7 +48,7 @@ async def test_runtime_retrieval_delegates_directly(uma_memory) -> None:
     runtime = UMARuntime.from_memory(memory)
     context = RuntimeContext(
         tenant_id="tenant-1",
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-1",
         user_id="user:u1",
         workspace_id="workspace:alpha",
@@ -88,7 +90,7 @@ async def test_runtime_retrieval_delegates_directly(uma_memory) -> None:
         bound_context: RuntimeContext,
         *,
         query_text: str,
-        render_mode: str = "openclaw_v1",
+        render_mode: str = "guarded",
     ) -> dict[str, Any]:
         seen.append(("messages", bound_context, f"{query_text}:{render_mode}"))
         return {"messages": [{"role": "system", "content": "rendered context"}], "meta": {"render_mode": render_mode}}
@@ -119,7 +121,7 @@ async def test_runtime_retrieval_requires_user_id(uma_memory) -> None:
     runtime = UMARuntime.from_memory(uma_memory)
     context = RuntimeContext(
         tenant_id="tenant-1",
-        agent_id=uma_memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-1",
     )
 
@@ -167,6 +169,7 @@ async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory
 
     context = await memory.retrieve_context(
         query_text="hello world",
+        agent_id=AGENT_ID,
         user_id="user:u1",
         tenant_id="tenant-1",
         request_id="req-ctx",
@@ -175,6 +178,7 @@ async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory
     )
     memory_result = await memory.retrieve_memory(
         query_text="hello world",
+        agent_id=AGENT_ID,
         user_id="user:u1",
         tenant_id="tenant-1",
         request_id="req-mem",
@@ -191,7 +195,7 @@ async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory
             "context",
             RuntimeContext(
                 tenant_id="tenant-1",
-                agent_id=memory.agent_id,
+                agent_id=AGENT_ID,
                 request_id="req-ctx",
                 user_id="user:u1",
                 workspace_id="workspace:alpha",
@@ -203,7 +207,7 @@ async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory
             "memory",
             RuntimeContext(
                 tenant_id="tenant-1",
-                agent_id=memory.agent_id,
+                agent_id=AGENT_ID,
                 request_id="req-mem",
                 user_id="user:u1",
                 workspace_id="workspace:alpha",
@@ -219,7 +223,7 @@ async def test_runtime_memory_retrieval_surfaces_explicit_evidence_only_fallback
     runtime = UMARuntime.from_memory(uma_memory)
     context = RuntimeContext(
         tenant_id="tenant-1",
-        agent_id=uma_memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-memory-fallback",
         user_id="user:u1",
     )
@@ -273,7 +277,7 @@ async def test_runtime_memory_retrieval_can_expose_debug_payload(uma_memory) -> 
     runtime = UMARuntime.from_memory(uma_memory)
     context = RuntimeContext(
         tenant_id="tenant-1",
-        agent_id=uma_memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-memory-debug",
         user_id="user:u1",
     )
@@ -335,7 +339,7 @@ async def test_runtime_memory_zero_evidence_returns_honest_fallback_debug_shape(
     runtime = UMARuntime.from_memory(uma_memory)
     context = RuntimeContext(
         tenant_id="tenant-1",
-        agent_id=uma_memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-memory-fallback",
         user_id="user:u1",
     )
@@ -410,7 +414,7 @@ async def test_runtime_context_trace_surfaces_lane_plan(uma_memory) -> None:
     runtime = UMARuntime.from_memory(uma_memory)
     context = RuntimeContext(
         tenant_id="tenant-1",
-        agent_id=uma_memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-context-plan",
         user_id="user:u1",
     )
@@ -460,7 +464,7 @@ async def test_bound_context_workspace_id_does_not_broaden_retrieval_owner_suppo
     tmp_path,
 ) -> None:
     memory = uma_memory
-    assert memory.agent_id, "test runtime must set agent_id"
+    assert AGENT_ID, "test runtime must set agent_id"
 
     agent_doc = tmp_path / "agent_doc.txt"
     agent_doc.write_text(
@@ -481,13 +485,13 @@ async def test_bound_context_workspace_id_does_not_broaden_retrieval_owner_suppo
         encoding="utf-8",
     )
 
-    await memory.ingest_document(str(agent_doc), owner_type="agent", owner_id=memory.agent_id)
-    await memory.ingest_document(str(user_doc), owner_type="user", owner_id="user:u1")
+    await memory.ingest_document(str(agent_doc), owner_type="agent", owner_id=AGENT_ID, agent_id=AGENT_ID)
+    await memory.ingest_document(str(user_doc), owner_type="user", owner_id="user:u1", agent_id=AGENT_ID)
 
     runtime = UMARuntime.from_memory(memory)
     context = RuntimeContext(
         tenant_id=DEFAULT_TENANT_ID,
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-workspace-inert",
         user_id="user:u1",
         workspace_id="workspace:alpha",
@@ -519,9 +523,9 @@ async def test_retrieve_memory_empty_result_shape(uma_memory) -> None:
     result = await uma_memory.retrieve_memory(
         query_text="something that does not exist",
         user_id="user:u1",
-        tenant_id="default",
         request_id="req-mem-empty",
         session_id="session-mem-empty",
+        agent_id=AGENT_ID,
     )
 
     assert isinstance(result, MemoryResult)
@@ -546,9 +550,9 @@ async def test_retrieve_memory_returns_facts_after_ingest(tmp_path) -> None:
     result = await memory.load_memory_bootstrap(
         str(bootstrap_path),
         user_id="user:u1",
-        tenant_id="default",
         request_id="req-bootstrap",
         session_id="session-bootstrap",
+        agent_id=AGENT_ID,
     )
     assert result["status"] == "ingested"
     assert result["facts_created"] == 2
@@ -556,9 +560,9 @@ async def test_retrieve_memory_returns_facts_after_ingest(tmp_path) -> None:
     recalled = await memory.retrieve_memory(
         query_text="coffee preferences",
         user_id="user:u1",
-        tenant_id="default",
         request_id="req-recall",
         session_id="session-recall",
+        agent_id=AGENT_ID,
     )
 
     assert isinstance(recalled, MemoryResult)
@@ -582,14 +586,15 @@ async def test_retrieve_memory_user_scope_isolation(tmp_path) -> None:
         tenant_id="default",
         request_id="req-alice-ingest",
         session_id="session-alice",
+        agent_id=AGENT_ID,
     )
 
     bob_result = await memory.retrieve_memory(
         query_text="coffee preferences",
         user_id="user:bob",
-        tenant_id="default",
         request_id="req-bob-recall",
         session_id="session-bob",
+        agent_id=AGENT_ID,
     )
 
     assert bob_result.facts == []
@@ -638,9 +643,9 @@ async def test_retrieve_memory_third_person_fact_stays_within_same_user_scope(tm
     bob_before = await memory.retrieve_memory(
         query_text="Is Maria blond?",
         user_id="user:bob",
-        tenant_id="default",
         request_id="req-bob-before-own-maria-fact",
         session_id="session-bob",
+        agent_id=AGENT_ID,
     )
     assert bob_before.facts == []
 
@@ -648,9 +653,9 @@ async def test_retrieve_memory_third_person_fact_stays_within_same_user_scope(tm
     bob_after = await memory.retrieve_memory(
         query_text="Is Maria blond?",
         user_id="user:bob",
-        tenant_id="default",
         request_id="req-bob-after-own-maria-fact",
         session_id="session-bob",
+        agent_id=AGENT_ID,
     )
 
     fact_texts = {
@@ -666,10 +671,10 @@ async def test_retrieve_memory_include_debug_flag(uma_memory) -> None:
     result = await uma_memory.retrieve_memory(
         query_text="test query",
         user_id="user:u1",
-        tenant_id="default",
         request_id="req-mem-debug",
         session_id="session-mem-debug",
         include_debug=True,
+        agent_id=AGENT_ID,
     )
 
     assert isinstance(result, MemoryResult)
@@ -776,9 +781,9 @@ async def test_bound_context_retrieval_is_isolated_across_agents_on_shared_runti
         encoding="utf-8",
     )
 
-    await memory.ingest_document(str(doc_a), owner_type="agent", owner_id="agent:alpha")
-    await memory.ingest_document(str(doc_b), owner_type="agent", owner_id="agent:beta")
-    await memory.ingest_document(str(user_doc), owner_type="user", owner_id="user:u1")
+    await memory.ingest_document(str(doc_a), owner_type="agent", owner_id="agent:alpha", agent_id=AGENT_ID)
+    await memory.ingest_document(str(doc_b), owner_type="agent", owner_id="agent:beta", agent_id=AGENT_ID)
+    await memory.ingest_document(str(user_doc), owner_type="user", owner_id="user:u1", agent_id=AGENT_ID)
 
     ctx_a_context = RuntimeContext(
         tenant_id=DEFAULT_TENANT_ID,
@@ -835,7 +840,7 @@ async def test_environment_fetch_facts_by_ids_is_owner_scoped(uma_memory):
     request = RetrievalRequest.from_runtime_context(
         RuntimeContext(
             tenant_id=DEFAULT_TENANT_ID,
-            agent_id=memory.agent_id,
+            agent_id=AGENT_ID,
             request_id="req-env-facts",
             user_id="user:u1",
         )
@@ -870,7 +875,7 @@ async def test_environment_fetch_facts_by_ids_is_owner_scoped(uma_memory):
         request,
         ["fact_1"],
         owner_type="agent",
-        owner_id=memory.agent_id,
+        owner_id=AGENT_ID,
     )
     assert wrong == []
 
@@ -881,7 +886,7 @@ async def test_environment_graph_neighbors_returns_empty_when_no_edges(uma_memor
     request = RetrievalRequest.from_runtime_context(
         RuntimeContext(
             tenant_id="tenant-test",
-            agent_id=uma_memory.agent_id,
+            agent_id=AGENT_ID,
             request_id="req-env-graph",
             user_id="user:u1",
         )
@@ -893,7 +898,7 @@ async def test_environment_graph_neighbors_returns_empty_when_no_edges(uma_memor
         depth=2,
         k=5,
         owner_type="agent",
-        owner_id=uma_memory.agent_id,
+        owner_id=AGENT_ID,
     )
     assert out == []
 
@@ -903,7 +908,7 @@ async def test_environment_graph_neighbors_returns_empty_when_no_edges(uma_memor
         _cypher, params = queries[-1]
         assert params["tenant_id"] == "tenant-test"
         assert params["owner_type"] == "agent"
-        assert params["owner_id"] == (uma_memory.agent_id)
+        assert params["owner_id"] == (AGENT_ID)
 
 
 @pytest.mark.asyncio
@@ -912,7 +917,7 @@ async def test_environment_graph_resolve_nodes_is_tenant_and_owner_scoped(uma_me
     request = RetrievalRequest.from_runtime_context(
         RuntimeContext(
             tenant_id="tenant-test",
-            agent_id=uma_memory.agent_id,
+            agent_id=AGENT_ID,
             request_id="req-env-graph-resolve",
             user_id="user:u1",
         )
@@ -925,7 +930,7 @@ async def test_environment_graph_resolve_nodes_is_tenant_and_owner_scoped(uma_me
         request,
         names=["Resolved Node"],
         owner_type="agent",
-        owner_id=uma_memory.agent_id,
+        owner_id=AGENT_ID,
         limit=5,
     )
     assert out == ["resolved-node"]
@@ -933,7 +938,7 @@ async def test_environment_graph_resolve_nodes_is_tenant_and_owner_scoped(uma_me
     _cypher, params = adapter.queries[-1]
     assert params["tenant_id"] == "tenant-test"
     assert params["owner_type"] == "agent"
-    assert params["owner_id"] == (uma_memory.agent_id)
+    assert params["owner_id"] == (AGENT_ID)
 
 
 @pytest.mark.asyncio
@@ -942,7 +947,7 @@ async def test_environment_graph_neighbors_rejects_workspace_scope_in_runtime_fl
     request = RetrievalRequest.from_runtime_context(
         RuntimeContext(
             tenant_id="tenant-test",
-            agent_id=uma_memory.agent_id,
+            agent_id=AGENT_ID,
             request_id="req-env-graph-workspace",
             user_id="user:u1",
         )
@@ -965,7 +970,7 @@ async def test_environment_execute_action_delegates_semantic_search_to_core(uma_
     request = RetrievalRequest.from_runtime_context(
         RuntimeContext(
             tenant_id="tenant-test",
-            agent_id=memory.agent_id,
+            agent_id=AGENT_ID,
             request_id="req-env-execute-semantic",
             user_id="user:u1",
         )

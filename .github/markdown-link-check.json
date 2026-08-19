@@ -1,0 +1,9 @@
+{
+  "//": "Internal links are a correctness check and block CI. External links are not: they 404, rate-limit, and cloudflare-challenge for reasons outside this repo, and a flaky gate is a gate people learn to ignore. Repo-relative links are fully under our control, and a broken one means a doc we reference is missing — the failure that lost docs/mcp/*.",
+  "ignorePatterns": [
+    { "pattern": "^https?://" },
+    { "pattern": "^mailto:" }
+  ],
+  "retryOn429": true,
+  "aliveStatusCodes": [200, 206]
+}

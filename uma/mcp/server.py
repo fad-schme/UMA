@@ -11,8 +11,9 @@ Two transports, one binary:
 
 Configuration via environment variables (both modes):
     UMA_CONFIG_PATH   Absolute path to uma.yaml (required).
-    UMA_AGENT_ID      Agent identity bound to this server. Immutable per
-                      process. Default: "agent-default".
+
+The server holds no identity. Every tool call carries its own agent_id,
+user_id, and (optionally) tenant_id, so one process serves every agent.
 
 HTTP-mode flags:
     --http                       Enable HTTP transport (streamable-http).
@@ -69,6 +70,8 @@ from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
+from uma.common.types.types_scope import DEFAULT_TENANT_ID, validate_agent_id
+
 # ---------------------------------------------------------------------------
 # Logging — stderr only. stdout is reserved for the MCP JSON-RPC transport
 # in stdio mode; anything the server writes to stdout corrupts the frame.
@@ -84,7 +87,11 @@ _memory = None
 
 
 def _get_memory():
-    """Return the process-global scoped UMAMemory, creating it on first use."""
+    """Return the process-global UMAMemory, creating it on first use.
+
+    The instance holds no identity: one server process serves every agent,
+    every user, and the single tenant. Scope arrives with each tool call.
+    """
     global _memory
     if _memory is None:
         config_path = os.environ.get("UMA_CONFIG_PATH")
@@ -94,14 +101,11 @@ def _get_memory():
                 "Point it at your uma.yaml (absolute path). See "
                 "docs/mcp/STDIO_CLIENTS.md."
             )
-        agent_id = os.environ.get("UMA_AGENT_ID", "agent-default")
 
         from uma.api.memory import UMAMemory
 
-        logger.info(
-            "Initializing UMAMemory from %s (agent_id=%s)", config_path, agent_id
-        )
-        _memory = UMAMemory.from_yaml(config_path).set_context(agent_id=agent_id)
+        logger.info("Initializing UMAMemory from %s", config_path)
+        _memory = UMAMemory.from_yaml(config_path)
     return _memory
 
 
@@ -152,7 +156,7 @@ def _resolve_scope(user_id: str, tenant_id: str) -> tuple[str, str]:
             f"user_id={user_id!r} does not match authenticated user "
             f"(token identifies user={token_user!r})"
         )
-    if tenant_id and tenant_id != "default" and tenant_id != token_tenant:
+    if tenant_id and tenant_id != DEFAULT_TENANT_ID and tenant_id != token_tenant:
         raise ValueError(
             f"tenant_id={tenant_id!r} does not match authenticated tenant "
             f"(token identifies tenant={token_tenant!r})"
@@ -167,20 +171,23 @@ def _resolve_scope(user_id: str, tenant_id: str) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 async def retrieve_context(
     query_text: str,
+    agent_id: str,
     user_id: str = "",
     session_id: str = "",
-    tenant_id: str = "default",
+    tenant_id: str = DEFAULT_TENANT_ID,
 ) -> str:
     """Retrieve curated RAG context from UMA for the given query.
 
     Returns a JSON ContextBundle: snippets, facts, working_memory, meta,
-    and query_scan_severity. In stdio mode user_id is required; in HTTP
-    mode the bearer token supplies it.
+    and query_scan_severity. agent_id is required on every call and names
+    the calling agent. In stdio mode user_id is required too; in HTTP mode
+    the bearer token supplies it.
     """
     user_id, tenant_id = _resolve_scope(user_id, tenant_id)
     memory = _get_memory()
     result = await memory.retrieve_context(
         query_text=query_text,
+        agent_id=validate_agent_id(agent_id),
         user_id=user_id,
         tenant_id=tenant_id,
         session_id=session_id or None,
@@ -190,9 +197,10 @@ async def retrieve_context(
 
 async def retrieve_memory(
     query_text: str,
+    agent_id: str,
     user_id: str = "",
     session_id: str = "",
-    tenant_id: str = "default",
+    tenant_id: str = DEFAULT_TENANT_ID,
     memory_intent: str = "continuity",
 ) -> str:
     """Retrieve compiled, evidence-backed memory from UMA.
@@ -205,6 +213,7 @@ async def retrieve_memory(
     memory = _get_memory()
     result = await memory.retrieve_memory(
         query_text=query_text,
+        agent_id=validate_agent_id(agent_id),
         user_id=user_id,
         tenant_id=tenant_id,
         session_id=session_id or None,
@@ -217,8 +226,9 @@ async def process_turn(
     session_id: str,
     user_msg: str,
     assistant_reply: str,
+    agent_id: str,
     user_id: str = "",
-    tenant_id: str = "default",
+    tenant_id: str = DEFAULT_TENANT_ID,
 ) -> str:
     """Ingest a conversation turn into UMA memory.
 
@@ -233,6 +243,7 @@ async def process_turn(
     memory = _get_memory()
     try:
         await memory.process_turn(
+            agent_id=validate_agent_id(agent_id),
             user_id=user_id,
             user_msg=user_msg,
             assistant_reply=assistant_reply,
@@ -257,14 +268,15 @@ async def process_turn(
 
 async def ingest_document(
     file_path: str,
+    agent_id: str,
     owner_type: str = "agent",
     owner_id: str = "",
-    tenant_id: str = "default",
+    tenant_id: str = DEFAULT_TENANT_ID,
 ) -> str:
     """Ingest a document file into UMA's knowledge base.
 
     Chunks, embeds, and indexes the file. Returns a JSON IngestReport.
-    If owner_id is empty, defaults to the server's bound agent_id.
+    If owner_id is empty, the document is owned by the calling agent.
 
     Note: ingest_document does not carry a user_id — the C1 contract
     scopes documents by (tenant_id, owner_type, owner_id) only. In HTTP
@@ -275,12 +287,13 @@ async def ingest_document(
     # the resolver's stdio check, since we only care about tenant here.
     _, tenant_id = _resolve_scope("mcp-ingest", tenant_id)
 
+    resolved_agent_id = validate_agent_id(agent_id)
     memory = _get_memory()
-    resolved_owner_id = owner_id or memory.agent_id or "agent-default"
     report = await memory.ingest_document(
         file_path,
+        agent_id=resolved_agent_id,
         owner_type=owner_type,
-        owner_id=resolved_owner_id,
+        owner_id=owner_id or resolved_agent_id,
         tenant_id=tenant_id,
     )
     return json.dumps(dataclasses.asdict(report), default=str)
@@ -391,7 +404,7 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--oauth-tenant",
-        default="default",
+        default=DEFAULT_TENANT_ID,
         help=(
             "UMA tenant every authenticated user maps to (default: "
             "'default'). v0.3.0 is single-tenant per OAuth deployment; "

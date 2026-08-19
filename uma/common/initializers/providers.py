@@ -88,14 +88,6 @@ def initialize_embedder(memory: Any) -> None:
 
     memory.embedder = embedder
 
-    # Best-effort preflight if the embedder supports it.
-    try:
-        preflight = getattr(embedder, "preflight", None)
-        if callable(preflight):
-            preflight()
-    except Exception:
-        logger.exception("Embedder preflight failed at init; continuing.")
-
     logger.info("Embedder initialization successful.")
 
 

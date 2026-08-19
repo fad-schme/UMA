@@ -154,7 +154,6 @@ def ensure_pipeline(memory: "UMAMemory") -> None:
         memory.pipeline = MemoryPipeline(
             memory_client=memory,
             hooks=memory.hooks,
-            promotion_policy=memory.promotion_policy,
         )
 
 

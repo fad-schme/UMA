@@ -1,15 +1,17 @@
-"""Bootstrap APIs: load_memory_bootstrap, load_daily_diary_bootstrap, Animus integration.
+"""Bootstrap APIs: load_memory_bootstrap, load_daily_diary_bootstrap.
 
 Covers public bootstrap method surface, explicit user_id requirement,
 delegation to ingest service, and result shapes.
 """
 from __future__ import annotations
 from pathlib import Path
-from tests.helpers.runtime import build_test_config
+from tests.helpers.runtime import TEST_AGENT_ID, build_test_config
 from uma.api.memory import UMAMemory
 from uma.ingest import ingest_service
 import pytest
 import yaml
+
+AGENT_ID = TEST_AGENT_ID
 
 # ── test_bootstrap_ingest_surface ──────────────────────────────────────────
 
@@ -30,11 +32,13 @@ def _build_unbound_memory(tmp_path) -> UMAMemory:
     return memory
 
 
-def test_animus_bootstrap_methods_remain_public_on_umamemory() -> None:
-    assert hasattr(UMAMemory, "load_userprofile")
-    assert hasattr(UMAMemory, "load_agentprofile")
+def test_bootstrap_methods_remain_public_on_umamemory() -> None:
     assert hasattr(UMAMemory, "load_memory_bootstrap")
     assert hasattr(UMAMemory, "load_daily_diary_bootstrap")
+    # The USER.md / SOUL.md profile-overlay loaders were removed: nothing in
+    # UMA consumed the overlay through a supported surface.
+    assert not hasattr(UMAMemory, "load_userprofile")
+    assert not hasattr(UMAMemory, "load_agentprofile")
 
 
 @pytest.mark.asyncio
@@ -42,7 +46,7 @@ async def test_load_memory_bootstrap_requires_explicit_user_id(tmp_path) -> None
     memory = _build_unbound_memory(tmp_path)
     try:
         with pytest.raises(ValueError, match="explicit user_id"):
-            await memory.load_memory_bootstrap(str(tmp_path / "MEMORY.md"))
+            await memory.load_memory_bootstrap(str(tmp_path / "MEMORY.md"), agent_id=AGENT_ID)
     finally:
         memory.shutdown()
 
@@ -52,7 +56,7 @@ async def test_load_daily_diary_bootstrap_requires_explicit_user_id(tmp_path) ->
     memory = _build_unbound_memory(tmp_path)
     try:
         with pytest.raises(ValueError, match="explicit user_id"):
-            await memory.load_daily_diary_bootstrap(str(tmp_path / "2026-05-05.md"))
+            await memory.load_daily_diary_bootstrap(str(tmp_path / "2026-05-05.md"), agent_id=AGENT_ID)
     finally:
         memory.shutdown()
 
@@ -74,10 +78,10 @@ async def test_memory_bootstrap_wrapper_delegates_to_ingest_service(uma_memory, 
     result = await uma_memory.load_memory_bootstrap(
         str(bootstrap_path),
         user_id="user:u1",
-        tenant_id="default",
         request_id="req-memory-bootstrap",
         session_id="session-bootstrap",
         config={"mode": "test"},
+        agent_id=AGENT_ID,
     )
 
     assert result == {"status": "ingested", "path": str(bootstrap_path), "facts_created": 1}
@@ -106,9 +110,9 @@ async def test_daily_diary_bootstrap_wrapper_delegates_to_ingest_service(uma_mem
     result = await uma_memory.load_daily_diary_bootstrap(
         str(diary_path),
         user_id="user:u1",
-        tenant_id="default",
         request_id="req-diary-bootstrap",
         session_id="session-diary",
+        agent_id=AGENT_ID,
     )
 
     assert result == {"status": "ingested", "path": str(diary_path), "episodes_created": 1}
@@ -128,19 +132,19 @@ async def test_memory_bootstrap_preserves_skip_and_ingest_result_shapes(uma_memo
         "request_id": "req-memory-bootstrap-shape",
         "session_id": "session-memory-bootstrap",
     }
-    missing = await uma_memory.load_memory_bootstrap(str(tmp_path / "missing-memory.md"), **bootstrap_scope)
+    missing = await uma_memory.load_memory_bootstrap(str(tmp_path / "missing-memory.md"), **bootstrap_scope, agent_id=AGENT_ID)
     assert missing["status"] == "skipped"
     assert missing["reason"] == "missing_file"
 
     empty_path = tmp_path / "empty-memory.md"
     empty_path.write_text("", encoding="utf-8")
-    empty = await uma_memory.load_memory_bootstrap(str(empty_path), **bootstrap_scope)
+    empty = await uma_memory.load_memory_bootstrap(str(empty_path), **bootstrap_scope, agent_id=AGENT_ID)
     assert empty["status"] == "skipped"
     assert empty["reason"] == "empty_file"
 
     no_entries_path = tmp_path / "headings-only-memory.md"
     no_entries_path.write_text("# Memory\n<!-- comment -->\n", encoding="utf-8")
-    no_entries = await uma_memory.load_memory_bootstrap(str(no_entries_path), **bootstrap_scope)
+    no_entries = await uma_memory.load_memory_bootstrap(str(no_entries_path), **bootstrap_scope, agent_id=AGENT_ID)
     assert no_entries["status"] == "skipped"
     assert no_entries["reason"] == "no_entries"
 
@@ -149,8 +153,8 @@ async def test_memory_bootstrap_preserves_skip_and_ingest_result_shapes(uma_memo
         "# Memory\n- prefers espresso over drip coffee\n- reviews incidents before publishing summaries\n",
         encoding="utf-8",
     )
-    first = await uma_memory.load_memory_bootstrap(str(ingest_path), **bootstrap_scope)
-    second = await uma_memory.load_memory_bootstrap(str(ingest_path), **bootstrap_scope)
+    first = await uma_memory.load_memory_bootstrap(str(ingest_path), **bootstrap_scope, agent_id=AGENT_ID)
+    second = await uma_memory.load_memory_bootstrap(str(ingest_path), **bootstrap_scope, agent_id=AGENT_ID)
 
     assert first["status"] == "ingested"
     assert first["entries_found"] == 2
@@ -172,9 +176,9 @@ async def test_memory_bootstrap_persists_chunk_backed_provenance_for_retrieve_me
     result = await uma_memory.load_memory_bootstrap(
         str(bootstrap_path),
         user_id="user:u1",
-        tenant_id="default",
         request_id="req-memory-bootstrap-provenance",
         session_id="session-memory-bootstrap-provenance",
+        agent_id=AGENT_ID,
     )
 
     facts = await uma_memory.semantic_core.fetch_by_ids(
@@ -209,9 +213,9 @@ async def test_memory_bootstrap_persists_chunk_backed_provenance_for_retrieve_me
     memory_result = await uma_memory.retrieve_memory(
         query_text="sqlite",
         user_id="user:u1",
-        tenant_id="default",
         request_id="req-memory-bootstrap-recall",
         session_id="session-memory-bootstrap-recall",
+        agent_id=AGENT_ID,
     )
 
     assert memory_result.evidence
@@ -231,6 +235,7 @@ async def test_memory_bootstrap_persists_chunk_backed_provenance_for_retrieve_me
         tenant_id="default",
         request_id="req-memory-bootstrap-other-user",
         session_id="session-memory-bootstrap-other-user",
+        agent_id=AGENT_ID,
     )
     assert other_user_result.evidence == []
 
@@ -243,26 +248,26 @@ async def test_daily_diary_bootstrap_preserves_skip_and_ingest_result_shapes(uma
         "request_id": "req-diary-bootstrap-shape",
         "session_id": "session-diary-bootstrap",
     }
-    missing = await uma_memory.load_daily_diary_bootstrap(str(tmp_path / "missing-diary.md"), **bootstrap_scope)
+    missing = await uma_memory.load_daily_diary_bootstrap(str(tmp_path / "missing-diary.md"), **bootstrap_scope, agent_id=AGENT_ID)
     assert missing["status"] == "skipped"
     assert missing["reason"] == "missing_file"
 
     empty_path = tmp_path / "empty-diary.md"
     empty_path.write_text("", encoding="utf-8")
-    empty = await uma_memory.load_daily_diary_bootstrap(str(empty_path), **bootstrap_scope)
+    empty = await uma_memory.load_daily_diary_bootstrap(str(empty_path), **bootstrap_scope, agent_id=AGENT_ID)
     assert empty["status"] == "skipped"
     assert empty["reason"] == "empty_file"
 
     no_entries_path = tmp_path / "notes.md"
     no_entries_path.write_text("not a bullet\nanother line\n", encoding="utf-8")
-    no_entries = await uma_memory.load_daily_diary_bootstrap(str(no_entries_path), **bootstrap_scope)
+    no_entries = await uma_memory.load_daily_diary_bootstrap(str(no_entries_path), **bootstrap_scope, agent_id=AGENT_ID)
     assert no_entries["status"] == "skipped"
     assert no_entries["reason"] == "no_entries"
 
     diary_path = tmp_path / "2026-05-05.md"
     diary_path.write_text("- investigated alert routing\n- documented follow-up actions\n", encoding="utf-8")
-    first = await uma_memory.load_daily_diary_bootstrap(str(diary_path), **bootstrap_scope)
-    second = await uma_memory.load_daily_diary_bootstrap(str(diary_path), **bootstrap_scope)
+    first = await uma_memory.load_daily_diary_bootstrap(str(diary_path), **bootstrap_scope, agent_id=AGENT_ID)
+    second = await uma_memory.load_daily_diary_bootstrap(str(diary_path), **bootstrap_scope, agent_id=AGENT_ID)
 
     assert first["status"] == "ingested"
     assert first["diary_date"] == "2026-05-05"

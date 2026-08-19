@@ -155,6 +155,25 @@ class UMAMemoryEnvironment:
         return filtered
     # ------------------------------------------------------------------
 
+    def _embedder_label(self) -> str:
+        """Describe the configured embedding provider for error messages.
+
+        Never includes query text — only provider identity and connection
+        settings the operator needs in order to act.
+        """
+        cfg = getattr(self._memory, "embedding_cfg", None)
+        provider = getattr(cfg, "provider", None) or "unknown"
+        model = getattr(cfg, "model", None) or "unknown"
+        raw = getattr(cfg, "config", None) or {}
+        host = raw.get("host")
+        timeout = raw.get("timeout")
+        label = f"{provider}:{model}"
+        if host:
+            label = f"{label} @ {host}"
+        if timeout:
+            label = f"{label} (timeout={timeout}s)"
+        return label
+
     async def get_query_embedding(self, query_text: str) -> NumericVector:
         """
         Convert query text to embedding using the configured embedder.
@@ -174,8 +193,18 @@ class UMAMemoryEnvironment:
                 raise ValueError(f"Embedder returned invalid dim (expected={expected_dim} got={len(vec0) if isinstance(vec0, list) else None}).")
             return [float(x) for x in vec0]
         except Exception as exc:
-            logger.exception("Environment.get_query_embedding failed")
-            raise ValueError("Failed to embed query text.") from exc
+            label = self._embedder_label()
+            logger.exception("Environment.get_query_embedding failed provider=%s", label)
+            # Retrieval cannot proceed without a query embedding, so name the
+            # provider and the underlying cause: "failed to embed" alone gives
+            # the caller nothing to act on. A first-call timeout against a
+            # local provider is usually a cold model load, not a dead service.
+            raise ValueError(
+                f"Failed to embed query text via {label}: {exc}. "
+                "Verify the embedding provider is running and the model is "
+                "available; raise embedding.config.timeout if the first "
+                "request is still loading the model."
+            ) from exc
 
     async def fetch_chunks(
         self,

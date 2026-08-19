@@ -24,10 +24,11 @@ Steps 1, 2, and 4 are UMA. Step 3 is yours.
 from uma import UMAMemory, InjectionDetectedError
 import anthropic  # or openai, ollama, etc.
 
-memory = UMAMemory.from_yaml("config/uma.yaml").set_context(agent_id="my-agent")
+memory = UMAMemory.from_yaml("config/uma.yaml")
 llm = anthropic.Anthropic()
 
-TENANT = "acme-corp"
+# One instance serves every agent and user. Identity travels per call.
+AGENT = "my-agent"
 USER = "alice"
 SESSION = "session-abc"
 
@@ -40,8 +41,8 @@ async def handle_turn(user_msg: str) -> str:
     # 2. Retrieve evidence-oriented context
     context = await memory.retrieve_context(
         query_text=user_msg,
+        agent_id=AGENT,
         user_id=USER,
-        tenant_id=TENANT,
         session_id=SESSION,
     )
 
@@ -58,11 +59,11 @@ async def handle_turn(user_msg: str) -> str:
     # 4. Persist the turn
     try:
         await memory.process_turn(
+            agent_id=AGENT,
             user_id=USER,
             user_msg=user_msg,
             assistant_reply=reply,
             session_id=SESSION,
-            tenant_id=TENANT,
         )
     except InjectionDetectedError:
         # Layer-2 boundary scan caught a high-severity payload that the
@@ -95,9 +96,9 @@ The scope fields are not interchangeable. Treat them as a hierarchy:
 
 | Field | Lifetime | What changes it |
 |---|---|---|
-| `tenant_id` | Forever | Customer / org boundary; rarely changes |
-| `user_id` | Forever within tenant | One person |
-| `agent_id` | Forever within scoped instance | Immutable view returned by `set_context()` |
+| `tenant_id` | Forever | Single-tenant in Lite; defaults to `"default"` when you omit it |
+| `user_id` | Forever within tenant | One person; required on every user-scoped call |
+| `agent_id` | Per call | Which agent is calling; required on every call, never bound to the instance |
 | `session_id` | Conversation thread | New chat, new tab, new continuation |
 | `request_id` | Single API call | Auto-generated if you don't pass one |
 | `workspace_id` | Project / channel | Optional secondary scope |
@@ -125,16 +126,16 @@ By default, `retrieve_context` queries every available lane and merges the resul
 # RAG over ingested documents only — useful for "answer from the docs" mode
 context = await memory.retrieve_context(
     query_text=user_msg,
+    agent_id=AGENT,
     user_id=USER,
-    tenant_id=TENANT,
     lane_filter=["raw", "semantic"],
 )
 
 # Continuity / recall — what did we discuss before
 context = await memory.retrieve_context(
     query_text=user_msg,
+    agent_id=AGENT,
     user_id=USER,
-    tenant_id=TENANT,
     session_id=SESSION,
     lane_filter=["working_memory", "episodic"],
 )
@@ -142,8 +143,8 @@ context = await memory.retrieve_context(
 # Procedural recall — "how do I do X"
 context = await memory.retrieve_context(
     query_text=user_msg,
+    agent_id=AGENT,
     user_id=USER,
-    tenant_id=TENANT,
     lane_filter=["procedural"],
 )
 ```
@@ -209,7 +210,7 @@ except InjectionDetectedError as e:
     # Already replied — but nothing was stored
     log_security_event({
         "user_id": USER,
-        "tenant_id": TENANT,
+        "tenant_id": "default",
         "severity": e.severity,
         "rules": e.matched_rules,
         "score": e.score,
@@ -267,9 +268,9 @@ For RAG over user-uploaded documents:
 ```python
 report = await memory.ingest_document(
     file_path="/uploads/policy.pdf",
+    agent_id=AGENT,
     owner_type="user",
     owner_id=USER,
-    tenant_id=TENANT,
 )
 ```
 
@@ -286,43 +287,55 @@ After ingest, retrieval automatically includes the new chunks (no separate refre
 
 ---
 
-## Multi-Tenant Pattern
+## Multi-Agent, Multi-User Pattern
 
-Every UMA call takes `tenant_id` explicitly. Pass the right one for each request:
+UMA is single-tenant, multi-agent and multi-user. One `UMAMemory` per process
+serves every agent and every user; identity is an argument, not state:
 
 ```python
 async def serve_request(http_request):
-    tenant = authenticate(http_request)   # your code
-    user = http_request.user_id
+    agent = http_request.agent_id         # which of your agents is calling
+    user = authenticate(http_request)     # your code
     session = http_request.session_cookie
 
-    memory = get_shared_memory_instance()  # one UMAMemory per process is fine
+    memory = get_shared_memory_instance()  # one UMAMemory per process
 
     context = await memory.retrieve_context(
         query_text=http_request.body,
-        tenant_id=tenant,
+        agent_id=agent,
         user_id=user,
         session_id=session,
     )
-    # tenant A's request CANNOT see tenant B's data — enforced at storage layer
+    # agent A cannot see agent B's agent-owned rows, and user A cannot see
+    # user B's user-owned rows — enforced at the storage layer
 ```
 
-Cross-tenant isolation is enforced by the vector index (LanceDB pushes tenant into the `WHERE` clause) and by every SQL query — not by application-layer logic. You cannot accidentally leak across tenants by forgetting a filter.
+Never hold `agent_id` or `user_id` on the instance and never derive them from
+ambient state. Concurrent requests for different agents share the runtime; the
+only thing keeping them apart is that each call carries its own identity.
+
+`tenant_id` is accepted on every call and defaults to `"default"`. Lite runs a
+single tenant, but the column is real: it is written on every durable row and
+filtered on every read, by the vector index (LanceDB pushes it into the
+`WHERE` clause) and by every SQL query — not by application-layer logic.
 
 ---
 
 ## Promotion Pattern (Optional)
 
-Facts extracted from a turn are session-local by default. Configure the
-scoped agent's profile once to enable built-in, profile-gated promotion:
+Facts extracted from a turn are session-local by default. Configure an agent's
+profile once to enable built-in, profile-gated promotion for that agent:
 
 ```python
 await memory.set_agent_profile(
+    agent_id=AGENT,
     description="Infrastructure assistant for Kubernetes operations",
     focus_areas=["kubernetes", "containers", "incident response"],
-    tenant_id=TENANT,
 )
 ```
+
+The promotion policy is bound to the `agent_id` of the turn being processed,
+so one agent can never promote into another agent's KB.
 
 `process_turn` then evaluates extracted facts in a bounded background task.
 Only non-quarantined, eligible facts that match the profile are copied into a
@@ -349,7 +362,7 @@ an agent profile, promotion is a no-op. See `promotion.md`.
 | Continuity (recall earlier conversation) | retrieve_context with `lane_filter=["working_memory","episodic"]` |
 | Refuse hostile input | scan_user_input, return on `severity == "high"` |
 | Throttle per tenant | set_rate_limit_hook with a counter keyed by `ctx.tenant_id` |
-| Multi-tenant SaaS | pass `tenant_id` from auth context on every call |
+| Multi-agent service | pass `agent_id` from the request on every call; never bind it to the instance |
 | Debug what UMA returned | `from uma.api.management import explain_result` |
 | Inspect quarantined records | `list_quarantined` from management API |
 | Audit retrieval history | `list_retrieval_audit` from management API |

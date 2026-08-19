@@ -6,13 +6,15 @@ integration at each boundary and manifest idempotency.
 """
 from __future__ import annotations
 from datetime import datetime, timezone
-from tests.helpers.runtime import init_uma_for_tests
+from tests.helpers.runtime import TEST_AGENT_ID, init_uma_for_tests
 from uma.common.integrity import hash_episode_content
 from uma.ingest.ingest_service import capture_source, curate_compiled_memory, derive_memory_artifacts
 from uma.ingest.types import IngestConfig
 from uma.stores.document_sql import DocumentRecord
 import json
 import pytest
+
+AGENT_ID = TEST_AGENT_ID
 
 # ── test_pr1_ingest_end_to_end ──────────────────────────────────────────
 
@@ -57,6 +59,7 @@ async def test_ingest_chunks_have_trust_score(tmp_path, fixture_doc):
             fixture_doc,
             owner_type="user",
             owner_id="user:alice",
+            agent_id=AGENT_ID,
         )
         assert report.chunks_created > 0, "expected at least one chunk"
 
@@ -94,6 +97,7 @@ async def test_ingest_chunks_text_hash_still_in_meta(tmp_path, fixture_doc):
             fixture_doc,
             owner_type="user",
             owner_id="user:alice",
+            agent_id=AGENT_ID,
         )
         assert report.chunks_created > 0
 
@@ -128,6 +132,7 @@ async def test_ingest_derived_facts_have_trust_score_and_content_hash(tmp_path, 
             fixture_doc,
             owner_type="user",
             owner_id="user:alice",
+            agent_id=AGENT_ID,
         )
 
         sem_store = mem._stores["semantic"]
@@ -170,6 +175,7 @@ async def test_episode_has_content_hash_and_trust_score_after_process_turn(uma_m
         user_msg="I enjoy hiking in the mountains.",
         assistant_reply="That sounds like a great hobby.",
         session_id="session-pr1-ep",
+        agent_id=AGENT_ID,
     )
 
     epi_store = mem._stores["episodic"]
@@ -199,6 +205,7 @@ async def test_facts_have_content_hash_and_trust_score_after_process_turn(uma_me
         user_msg="I like hiking and rock climbing.",
         assistant_reply="Those are excellent outdoor activities.",
         session_id="session-pr1-facts",
+        agent_id=AGENT_ID,
     )
 
     sem_store = mem._stores["semantic"]
@@ -266,6 +273,7 @@ async def test_poisoned_doc_chunks_trust_zero(tmp_path, poisoned_doc):
             poisoned_doc,
             owner_type="user",
             owner_id="user:alice",
+            agent_id=AGENT_ID,
         )
         assert report.chunks_created > 0
 
@@ -302,6 +310,7 @@ async def test_clean_doc_chunks_trust_unaffected(tmp_path, clean_doc):
             clean_doc,
             owner_type="user",
             owner_id="user:dave",
+            agent_id=AGENT_ID,
         )
         assert report.chunks_created > 0
 
@@ -362,6 +371,7 @@ async def test_poisoned_reply_episode_trust_zero(tmp_path):
             user_msg=_CLEAN_USER,
             assistant_reply=_POISONED_REPLY,
             session_id="session-pr3-ep",
+            agent_id=AGENT_ID,
         )
 
         epi_store = mem._stores["episodic"]
@@ -399,6 +409,7 @@ async def test_poisoned_user_msg_facts_trust_zero(tmp_path):
                 user_msg=_POISONED_USER,
                 assistant_reply=_CLEAN_REPLY,
                 session_id="session-pr3-facts",
+                agent_id=AGENT_ID,
             )
 
         sem_store = mem._stores["semantic"]
@@ -426,6 +437,7 @@ async def test_clean_turn_trust_score_unaffected(tmp_path):
             user_msg=_CLEAN_USER,
             assistant_reply=_CLEAN_REPLY,
             session_id="session-pr3-clean",
+            agent_id=AGENT_ID,
         )
 
         epi_store = mem._stores["episodic"]
@@ -593,6 +605,7 @@ async def test_process_turn_poisoned_reply_quarantined_not_ranked(tmp_path):
         user_msg="hello",
         assistant_reply=_POISONED,
         session_id="s-pr5",
+        agent_id=AGENT_ID,
     )
 
     store = memory._stores["episodic"]
@@ -770,7 +783,7 @@ async def test_ingest_document_orchestrates_capture_derive_and_curate(uma_memory
         "The service manual explains indexing, search, and incident investigation workflows.\n"
     )
 
-    report = await memory.ingest_document(str(path), owner_type="user", owner_id="user:u1")
+    report = await memory.ingest_document(str(path), owner_type="user", owner_id="user:u1", agent_id=AGENT_ID)
 
     assert report.doc_id
     assert report.chunks_created > 0
@@ -801,13 +814,13 @@ async def test_ingest_document_is_idempotent_by_owner_and_hash(uma_memory, tmp_p
     p = tmp_path / "doc.txt"
     p.write_text("hello world.\n" * 200, encoding="utf-8")
 
-    report1 = await memory.ingest_document(str(p), owner_type="user", owner_id="user:u1")
+    report1 = await memory.ingest_document(str(p), owner_type="user", owner_id="user:u1", agent_id=AGENT_ID)
     assert report1.doc_id
     assert report1.chunks_created >= 0
     assert report1.facts_created >= 0
 
     # Second ingest should be a refresh-only (no new chunks/facts) for same owner+hash+signature.
-    report2 = await memory.ingest_document(str(p), owner_type="user", owner_id="user:u1")
+    report2 = await memory.ingest_document(str(p), owner_type="user", owner_id="user:u1", agent_id=AGENT_ID)
     assert report2.doc_id == report1.doc_id
     assert report2.chunks_created == 0
     assert report2.facts_created == 0
@@ -849,7 +862,7 @@ async def test_ingest_persists_terminal_chunks(uma_memory, tmp_path):
     p = tmp_path / "doc.txt"
     p.write_text(("A" * 400) + ".\n\n" + ("B" * 400) + ".", encoding="utf-8")
 
-    report = await memory.ingest_document(str(p), owner_type="user", owner_id="user:u1")
+    report = await memory.ingest_document(str(p), owner_type="user", owner_id="user:u1", agent_id=AGENT_ID)
     assert report.chunks_created > 0
 
     conn = memory._stores["chunk"]._conn()
@@ -874,7 +887,7 @@ async def test_ingest_document_reingests_when_signature_changes(uma_memory, tmp_
     p = tmp_path / "doc.txt"
     p.write_text("hello world.\n" * 200, encoding="utf-8")
 
-    report1 = await memory.ingest_document(str(p), owner_type="user", owner_id="user:u1")
+    report1 = await memory.ingest_document(str(p), owner_type="user", owner_id="user:u1", agent_id=AGENT_ID)
     assert report1.chunks_created > 0
 
     # Re-run ingest with a different chunk_size_tokens so the ingest signature changes.

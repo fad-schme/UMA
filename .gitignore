@@ -1,100 +1,69 @@
-# Python
-__MACOSX/
+# Ignore build artifacts, caches, local environments, secrets, and local data.
+# Nothing else. A broad ignore rule here is how `docs/mcp/*` was written and
+# then lost without ever appearing in `git status` — keep this list narrow so
+# `git status` stays trustworthy.
+
+# Python bytecode and build output
 __pycache__/
-.pycache*
 *.py[cod]
-._*
-Thumbs.db
-Desktop.ini
 *.so
-.Python
-env/
-venv/
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
 .venv/
 .venv*
-.claude/skills/dev/*
+venv/
+env/
 ENV/
-AGENTS.md
-.codex/
-.gold_runs/
+.Python
+
+# Test, lint, and type-check caches
+.pytest_cache/
+.pytest_tmp/
+tmp_pytest/
 .ruff_cache/
 .pytype/
 .hypothesis/
 .tox/
 .nox/
-# Pytest
-.pytest_cache/
+
+# Coverage artifacts
 .coverage
 .coverage.*
 coverage.xml
 htmlcov/
-# Byte-compiled / optimized / DLL files
-*.pyc
-*.pyo
-*.pyd
-resources/*
-# Distribution / packaging
-build/
-dist/
-*.egg-info/
 
-# VSCode
-.vscode/
-.uma/
-.DS_Store
-/.claude/settings.local.json
-
-
-
-# Logs
-*.log
-
-# Secrets
+# Secrets and local overrides
 .env
-config/*.local.yaml
+*.local.yaml
 
-website/
-material/
-data/
-scripts/
-*.zip
-*.tar.gz
-tmp.txt
-tools/
-
-PLANS.md
-PR_EXEC*
-PRs.md
-chat_inputs.txt
-docs/*
-!docs/docs.html
-!docs/llms.txt
-#ARCHITECTURE.md
-#AGENTS.md
-PRODUCTION.md
-scripts/
-#examples/
-.codex
-
-# Ignore pytest temporary test artifacts
-.pytest_tmp/
-tmp_pytest/
-.pytest_cache/
-# Database files and local SQLite DBs
+# Local UMA state: databases, vector indexes, run output
+.uma/
 *.db
 *.sqlite
 *.sqlite3
+locomo/runs/
+.gold_runs/
+
+# Coding-agent instructions belong in the parent working folder, never here.
 CLAUDE.md
-memory.md
-session_log.md
-locomo/runs/*
-tmp.py
-tmp.md
-*.zip
-*.tar.gz
-*copy.md
-runs/
-locomo/*
-examples/*
-config/*
-ROADMAP.md
+AGENTS.md
+.codex/
+.claude/settings.local.json
+.claude/skills/dev/
+
+# Internal working notes; the rest of docs/ is published documentation.
+docs/readiness/
+
+# Editor and OS metadata
+.vscode/
+.DS_Store
+._*
+__MACOSX/
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log

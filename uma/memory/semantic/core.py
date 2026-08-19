@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from uma.stores.base_sql_store import DEFAULT_TENANT_ID
+from uma.common.types.types_scope import DEFAULT_TENANT_ID
 from uma.common.types import Fact, RuntimeContext, SCOPE_MODEL_VERSION
 from uma.retrieve.ranking import fuse_candidates
 from uma.common.identity import normalize_user_id

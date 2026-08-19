@@ -25,13 +25,8 @@ def _config_path(tmp_path: Path) -> Path:
 class _FakeMemory:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
-        self.context_agents: list[str] = []
         self.shutdown_called = False
         self.failure: Exception | None = None
-
-    def set_context(self, *, agent_id: str) -> "_FakeMemory":
-        self.context_agents.append(agent_id)
-        return self
 
     async def retrieve_context(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(("retrieve_context", kwargs))
@@ -147,12 +142,12 @@ def test_retrieve_context_uses_request_scope_and_reports_audit_effect(
         "workspace_id": "workspace-a",
         "request_id": "request-a",
     }
-    assert memory.context_agents == ["agent-a"]
     assert memory.calls == [
         (
             "retrieve_context",
             {
                 "query_text": "Where is the runbook?",
+                "agent_id": "agent-a",
                 "user_id": "user-a",
                 "tenant_id": "tenant-a",
                 "request_id": "request-a",
@@ -232,7 +227,7 @@ def test_retrieval_requires_agent_and_user_before_runtime_initialization(
     assert "--user" in result["errors"][0]["message"]
 
 
-def test_document_ingestion_uses_owner_scope_without_agent_context(
+def test_document_ingestion_carries_agent_alongside_owner_scope(
     tmp_path: Path,
     capsys,
     monkeypatch,
@@ -255,6 +250,8 @@ def test_document_ingestion_uses_owner_scope_without_agent_context(
                 str(document),
                 "--tenant",
                 "tenant-a",
+                "--agent",
+                "agent-a",
                 "--owner-type",
                 "workspace",
                 "--owner-id",
@@ -275,8 +272,8 @@ def test_document_ingestion_uses_owner_scope_without_agent_context(
         "owner_id": "workspace-a",
     }
     assert result["data"]["result"]["chunks_created"] == 2
-    assert memory.context_agents == []
     assert memory.calls[0][0] == "ingest_document"
+    assert memory.calls[0][1]["agent_id"] == "agent-a"
 
 
 def test_ingest_missing_file_fails_before_runtime_initialization(
@@ -307,6 +304,8 @@ def test_ingest_missing_file_fails_before_runtime_initialization(
                 "ingest",
                 "document",
                 str(tmp_path / "missing.txt"),
+                "--agent",
+                "agent-a",
                 "--owner-type",
                 "user",
                 "--owner-id",

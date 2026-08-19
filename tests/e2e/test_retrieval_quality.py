@@ -23,6 +23,10 @@ import yaml
 from tests.e2e.ollama_env import resolve_ollama_host
 from uma.api.memory import UMAMemory
 
+from tests.helpers.runtime import TEST_AGENT_ID
+
+AGENT_ID = TEST_AGENT_ID
+
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -163,6 +167,7 @@ async def test_local_ollama_retrieval_precision_recall(tmp_path) -> None:
                 str(page),
                 owner_type="user",
                 owner_id=_OWNER_ID,
+                agent_id=AGENT_ID,
             )
             assert report.chunks_created > 0, f"{page.name} produced no chunks: {report.warnings}"
 
@@ -182,6 +187,7 @@ async def test_local_ollama_retrieval_precision_recall(tmp_path) -> None:
             bundle = await memory.retrieve_context(
                 query_text=query["text"],
                 user_id=_OWNER_ID,
+                agent_id=AGENT_ID,
             )
             ranked = _ranked_pages(list(bundle.chunks), _CUTOFF)
             recall = _recall_at_k(ranked, gold)

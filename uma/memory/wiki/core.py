@@ -6,6 +6,7 @@ import re
 from typing import Any, Mapping, Sequence
 
 from uma.common.ownership import validate_explicit_owner
+from uma.common.types.types_scope import DEFAULT_TENANT_ID
 from uma.common.provenance import collect_parent_artifact_ids, provenance_for_artifact
 
 logger = logging.getLogger(__name__)
@@ -200,8 +201,9 @@ async def lint_wiki_page(
     memory: Any,
     page_or_artifact: Any,
     *,
+    agent_id: str,
     user_id: str,
-    tenant_id: str = "default",
+    tenant_id: str = DEFAULT_TENANT_ID,
     workspace_id: str | None = None,
     stale_after_seconds: int | None = None,
 ) -> dict[str, Any]:
@@ -210,6 +212,7 @@ async def lint_wiki_page(
         raise ValueError("lint_wiki_page: memory is required")
 
     runtime_context = memory._resolve_runtime_context(
+        agent_id=agent_id,
         user_id=user_id,
         tenant_id=tenant_id,
         request_id="wiki:lint_wiki_page",

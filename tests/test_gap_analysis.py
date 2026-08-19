@@ -22,6 +22,10 @@ from uma.retrieve.gaps import (
     gap_thresholds,
 )
 
+
+from tests.helpers.runtime import TEST_AGENT_ID
+
+AGENT_ID = TEST_AGENT_ID
 NOW = datetime(2026, 8, 11, tzinfo=timezone.utc)
 
 
@@ -173,6 +177,7 @@ async def test_retrieve_memory_surfaces_gaps_without_dropping_the_fact(uma_memor
         user_msg="what does the team use?",
         assistant_reply="the team uses kubernetes cluster orchestration for production workloads.",
         session_id="session-gaps",
+        agent_id=AGENT_ID,
     )
     await memory.pipeline.await_pending_background()
 
@@ -180,6 +185,7 @@ async def test_retrieve_memory_surfaces_gaps_without_dropping_the_fact(uma_memor
         query_text="what does the team use?",
         user_id="user:u1",
         session_id="session-gaps",
+        agent_id=AGENT_ID,
     )
 
     # Contract: the field is always present and always a list.
@@ -208,11 +214,13 @@ async def test_retrieve_memory_gap_thresholds_come_from_retrieval_config(uma_mem
         user_msg=query,
         assistant_reply="the team uses kubernetes cluster orchestration for production workloads.",
         session_id="session-gaps-cfg",
+        agent_id=AGENT_ID,
     )
     await memory.pipeline.await_pending_background()
 
     seed = await memory.retrieve_memory(
-        query_text=query, user_id="user:u1", session_id="session-gaps-cfg", include_debug=True
+        query_text=query, user_id="user:u1", session_id="session-gaps-cfg", include_debug=True,
+        agent_id=AGENT_ID,
     )
     chunk_ids = [
         getattr(chunk, "id", None)
@@ -239,7 +247,8 @@ async def test_retrieve_memory_gap_thresholds_come_from_retrieval_config(uma_mem
     await memory.semantic_core.upsert_fact(supported, embedding)
 
     baseline = await memory.retrieve_memory(
-        query_text=query, user_id="user:u1", session_id="session-gaps-cfg"
+        query_text=query, user_id="user:u1", session_id="session-gaps-cfg",
+        agent_id=AGENT_ID,
     )
     assert baseline.facts, "seeded fact must be retrievable for the guard to be exercised"
     assert baseline.gaps == [], "a single high-trust source is not a gap at the default bar"
@@ -248,7 +257,8 @@ async def test_retrieve_memory_gap_thresholds_come_from_retrieval_config(uma_mem
     memory.retrieval_cfg.gap_min_support_trust = 0.95
 
     flagged = await memory.retrieve_memory(
-        query_text=query, user_id="user:u1", session_id="session-gaps-cfg"
+        query_text=query, user_id="user:u1", session_id="session-gaps-cfg",
+        agent_id=AGENT_ID,
     )
     weak = [g for g in flagged.gaps if g["reason"] == GAP_WEAK_SUPPORT]
     assert weak, "raising the trust bar must flag the single-source fact"

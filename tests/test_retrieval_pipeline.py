@@ -14,10 +14,13 @@ from uma.retrieve.planner import build_retrieval_plan
 from uma.retrieve.policy import RetrievalPolicy, should_stop
 from uma.retrieve.ranking import Ranker, fuse_candidates, rerank_candidates
 from uma.retrieve.rlm.snippet_refiner import SnippetRefiner
-from uma.stores.base_sql_store import DEFAULT_TENANT_ID
 import ast
 import pytest
 import re
+
+from tests.helpers.runtime import TEST_AGENT_ID
+
+AGENT_ID = TEST_AGENT_ID
 
 # ── test_retrieval_planner ──────────────────────────────────────────
 
@@ -456,7 +459,7 @@ def test_debug_scores_attaches_score_card_to_chunks() -> None:
 @pytest.mark.asyncio
 async def test_rlm_lane_recall_scopes_user_only(uma_memory, tmp_path):
     memory = uma_memory
-    assert memory.agent_id, "test runtime must set agent_id"
+    assert AGENT_ID, "test runtime must set agent_id"
     agent_doc = tmp_path / "agent_doc.txt"
     agent_doc.write_text(
         (
@@ -476,15 +479,15 @@ async def test_rlm_lane_recall_scopes_user_only(uma_memory, tmp_path):
         encoding="utf-8",
     )
 
-    await memory.ingest_document(str(agent_doc), owner_type="agent", owner_id=memory.agent_id)
-    await memory.ingest_document(str(user_doc), owner_type="user", owner_id="user:u1")
+    await memory.ingest_document(str(agent_doc), owner_type="agent", owner_id=AGENT_ID, agent_id=AGENT_ID)
+    await memory.ingest_document(str(user_doc), owner_type="user", owner_id="user:u1", agent_id=AGENT_ID)
 
     ctx = await memory.retrieve_context(
-        tenant_id=DEFAULT_TENANT_ID,
         request_id="req-recall-user-only",
         user_id="user:u1",
         session_id="session:user:u1",
         query_text="remember last time hello world",
+        agent_id=AGENT_ID,
     )
     facts = ctx.facts
     chunks = ctx.chunks
@@ -497,7 +500,7 @@ async def test_rlm_lane_recall_scopes_user_only(uma_memory, tmp_path):
 @pytest.mark.asyncio
 async def test_rlm_lane_kb_scopes_agent_and_user(uma_memory, tmp_path):
     memory = uma_memory
-    assert memory.agent_id, "test runtime must set agent_id"
+    assert AGENT_ID, "test runtime must set agent_id"
     agent_doc = tmp_path / "agent_doc.txt"
     agent_doc.write_text(
         (
@@ -517,15 +520,15 @@ async def test_rlm_lane_kb_scopes_agent_and_user(uma_memory, tmp_path):
         encoding="utf-8",
     )
 
-    await memory.ingest_document(str(agent_doc), owner_type="agent", owner_id=memory.agent_id)
-    await memory.ingest_document(str(user_doc), owner_type="user", owner_id="user:u1")
+    await memory.ingest_document(str(agent_doc), owner_type="agent", owner_id=AGENT_ID, agent_id=AGENT_ID)
+    await memory.ingest_document(str(user_doc), owner_type="user", owner_id="user:u1", agent_id=AGENT_ID)
 
     ctx = await memory.retrieve_context(
-        tenant_id=DEFAULT_TENANT_ID,
         request_id="req-recall-kb",
         user_id="user:u1",
         session_id="session:user:u1",
         query_text="hello world",
+        agent_id=AGENT_ID,
     )
     chunks = list(ctx.chunks)
     assert any(getattr(c, "owner_type", None) == "agent" for c in chunks)
@@ -612,7 +615,7 @@ def test_no_ambient_agent_scope_fallback_in_retrieval_internals(relpath: str, fo
 async def test_chunk_search_does_not_require_subject(uma_memory, tmp_path):
     memory = uma_memory
     owner_type = "agent"
-    owner_id = memory.agent_id
+    owner_id = AGENT_ID
 
     doc = tmp_path / "doc.txt"
     doc.write_text(
@@ -620,7 +623,7 @@ async def test_chunk_search_does_not_require_subject(uma_memory, tmp_path):
         "It contains the phrase hello world in a longer passage so lexical search can match it reliably. "
         "The rest of this sentence is padding to ensure the stored chunk is long enough for LIKE-based lexical search.\n"
     )
-    await memory.ingest_document(str(doc), owner_type=owner_type, owner_id=owner_id)
+    await memory.ingest_document(str(doc), owner_type=owner_type, owner_id=owner_id, agent_id=AGENT_ID)
 
     q = "hello world"
     query_embedding = (await memory.embedder.embed([q]))[0]
@@ -658,7 +661,7 @@ async def test_chunk_search_does_not_require_subject(uma_memory, tmp_path):
 async def test_procedural_search_does_not_require_subject(uma_memory):
     memory = uma_memory
     owner_type = "agent"
-    owner_id = memory.agent_id
+    owner_id = AGENT_ID
 
     skill = Skill(
         id="skill_s1",
@@ -693,7 +696,7 @@ async def test_procedural_search_does_not_require_subject(uma_memory):
 async def test_chunk_retrieval_returns_chunk_objects(uma_memory, tmp_path) -> None:
     memory = uma_memory
     owner_type = "agent"
-    owner_id = memory.agent_id
+    owner_id = AGENT_ID
 
     doc = tmp_path / "doc.txt"
     doc.write_text(
@@ -701,7 +704,7 @@ async def test_chunk_retrieval_returns_chunk_objects(uma_memory, tmp_path) -> No
         "Second sentence for stability.\n",
         encoding="utf-8",
     )
-    await memory.ingest_document(str(doc), owner_type=owner_type, owner_id=owner_id)
+    await memory.ingest_document(str(doc), owner_type=owner_type, owner_id=owner_id, agent_id=AGENT_ID)
 
     q = "hello world"
     query_embedding = (await memory.embedder.embed([q]))[0]

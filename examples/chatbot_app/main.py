@@ -4,12 +4,9 @@ import asyncio
 import logging
 import os
 import shutil
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
-from uma import UMAMemory
-from uma.adapters.llm.base import LLMInterface
-from uma.ingest.parser import FileContentParser
-from uma.retrieve import ContextPackBuilder
+from uma import ContextBundle, UMAMemory
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +51,7 @@ def _format_startup_error(config_path: str, exc: Exception) -> str:
     return "\n".join(lines)
 
 
-def _load_yaml_config(path: str) -> Dict[str, Any]:
+def _load_yaml_config(path: str) -> dict[str, Any]:
     try:
         import yaml
     except Exception as exc:
@@ -66,7 +63,7 @@ def _load_yaml_config(path: str) -> Dict[str, Any]:
     return data
 
 
-def _find_neo4j_config(cfg: Any) -> Optional[Dict[str, Any]]:
+def _find_neo4j_config(cfg: Any) -> Optional[dict[str, Any]]:
     if isinstance(cfg, dict):
         keys = {k.lower() for k in cfg.keys() if isinstance(k, str)}
         if ("uri" in keys or "url" in keys) and ("user" in keys or "username" in keys) and "password" in keys:
@@ -83,7 +80,7 @@ def _find_neo4j_config(cfg: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _reset_neo4j_from_config(cfg: Dict[str, Any]) -> Tuple[bool, str]:
+def _reset_neo4j_from_config(cfg: dict[str, Any]) -> tuple[bool, str]:
     try:
         neo = _find_neo4j_config(cfg)
         if not neo:
@@ -112,13 +109,72 @@ def _reset_neo4j_from_config(cfg: Dict[str, Any]) -> Tuple[bool, str]:
         return False, f"Failed to reset Neo4j (best-effort): {exc}"
 
 
-async def agent_generate(messages: list, llm: Optional[LLMInterface] = None) -> str:
-    if llm is None:
+def build_llm(config_path: str):
+    """Create an OpenAI-compatible client from the config's `llms.uma` block.
+
+    UMA manages memory only — the application owns the model call. Reading the
+    same config here is a convenience for the example, not a UMA API.
+    """
+    from openai import AsyncOpenAI
+
+    cfg = _load_yaml_config(config_path)
+    llm_cfg = (cfg.get("llms") or {}).get("uma")
+    if not llm_cfg:
         raise RuntimeError(
-            "No LLM configured. Add an `llms.agent` (or `llms.uma`) entry to your config."
+            "No LLM configured. Add an `llms.uma` entry to your config."
         )
-    reply = await llm.generate(messages=messages, max_tokens=512, temperature=0.2)
-    if not isinstance(reply, str) or not reply.strip():
+    provider_cfg = llm_cfg.get("config") or {}
+    host = provider_cfg.get("host", "http://localhost:11434")
+    client = AsyncOpenAI(
+        base_url=f"{host.rstrip('/')}/v1",
+        api_key=provider_cfg.get("api_key", "not-needed-for-ollama"),
+        timeout=provider_cfg.get("timeout", 120.0),
+    )
+    return client, llm_cfg["model"]
+
+
+def render_context(bundle: ContextBundle, max_chars: int = 4000) -> str:
+    """Flatten a ContextBundle into prompt text.
+
+    Read the bundle by attribute — it is a Pydantic model. `facts` are `Fact`
+    domain objects carrying a subject-predicate-object triple, not dicts.
+    """
+    parts: list[str] = []
+
+    if bundle.facts:
+        parts.append("Known facts:")
+        parts.extend(
+            "- " + " ".join(
+                part for part in (fact.subject, fact.predicate, fact.object) if part
+            )
+            for fact in bundle.facts
+        )
+
+    if bundle.episodic:
+        summaries = [
+            " ".join(str(getattr(ep, "summary", "")).split()) for ep in bundle.episodic
+        ]
+        summaries = [s for s in summaries if s]
+        if summaries:
+            parts.append("\nEarlier sessions:")
+            parts.extend(f"- {s}" for s in summaries)
+
+    if bundle.chunks:
+        parts.append("\nSupporting excerpts:")
+        parts.extend(f"- {' '.join(str(c.text).split())}" for c in bundle.chunks)
+
+    return "\n".join(parts)[:max_chars]
+
+
+async def agent_generate(client, model: str, messages: list) -> str:
+    response = await client.chat.completions.create(
+        model=model,
+        messages=messages,
+        max_tokens=512,
+        temperature=0.2,
+    )
+    reply = (response.choices[0].message.content or "").strip()
+    if not reply:
         logger.warning("agent_generate: LLM returned empty reply.")
     return reply
 
@@ -134,7 +190,7 @@ async def interactive_chat(
     session_id = f"chat:{user_id}"
 
     try:
-        memory = UMAMemory.from_yaml(config_path).set_context(agent_id=agent_id)
+        memory = UMAMemory.from_yaml(config_path)
     except Exception as exc:
         raise RuntimeError(_format_startup_error(config_path, exc)) from exc
 
@@ -143,13 +199,13 @@ async def interactive_chat(
         await memory.load_memory_bootstrap(
             os.path.join(_APP_DIR, "..", "MEMORY.md"),
             user_id=user_id,
+            agent_id=agent_id,
         )
         await memory.load_daily_diary_bootstrap(
             os.path.join(_APP_DIR, "..", "DAILY_DIARY.md"),
             user_id=user_id,
+            agent_id=agent_id,
         )
-        memory.load_userprofile(os.path.join(_APP_DIR, "..", "USER.md"))
-        memory.load_agentprofile(os.path.join(_APP_DIR, "..", "SOUL.md"))
 
         # Ingest documents from the chatbot_app directory
         pdf_path = os.path.join(_APP_DIR, "github-manual.pdf")
@@ -158,6 +214,7 @@ async def interactive_chat(
             try:
                 await memory.ingest_document(
                     pdf_path,
+                    agent_id=agent_id,
                     owner_type="agent",
                     owner_id=agent_id,
                 )
@@ -180,8 +237,7 @@ async def interactive_chat(
             await _load_all()
             print("Bootstrap load complete.\n")
 
-        ctx_cfg = getattr(getattr(memory, "retrieval_cfg", None), "context", None)
-        llm = getattr(memory, "agent_llm", None) or memory.llm
+        client, model = build_llm(config_path)
 
         print("UMA chatbot ready. Commands: /load, /setprompt <text>, /quit")
 
@@ -206,41 +262,39 @@ async def interactive_chat(
 
             if user_input.lower().startswith("/setprompt "):
                 system_prompt = user_input[len("/setprompt "):].strip() or system_prompt
-                print(f"System prompt updated.")
+                print("System prompt updated.")
                 continue
 
             try:
-                context = await memory.retrieve_context(
+                bundle = await memory.retrieve_context(
                     query_text=user_input,
                     user_id=user_id,
+                    session_id=session_id,
+                    agent_id=agent_id,
                 )
-                pack = ContextPackBuilder.build(user_input, context)
-                snippet = await ContextPackBuilder.render_snippet_async(
-                    pack,
-                    context_cfg=ctx_cfg,
-                    llm=llm,
-                )
+                context = render_context(bundle)
 
                 print("\n--- memory context ---")
-                print(snippet if snippet.strip() else "(no context retrieved)")
+                print(context if context.strip() else "(no context retrieved)")
                 print("---------------------\n")
 
-                if snippet.strip():
+                if context.strip():
                     user_content = (
-                        f"Context:\n{snippet}\n\n"
+                        f"Context:\n{context}\n\n"
                         f"Question: {user_input}"
                     )
                 else:
                     user_content = user_input
 
                 reply = await agent_generate(
+                    client,
+                    model,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_content},
                     ],
-                    llm=llm,
                 )
-                if not isinstance(reply, str) or not reply.strip():
+                if not reply:
                     reply = "(no reply)"
 
                 print("Assistant>", reply)
@@ -250,6 +304,7 @@ async def interactive_chat(
                     user_msg=user_input,
                     assistant_reply=reply,
                     session_id=session_id,
+                    agent_id=agent_id,
                 )
 
             except Exception as exc:
@@ -282,7 +337,7 @@ def main():
     args = parser.parse_args()
 
     if not os.path.exists(args.config):
-        raise SystemExit(f"Config not found: {args.config} — run from the repo root")
+        raise SystemExit(f"Config not found: {args.config} - run from the repo root")
 
     if args.clear_all:
         try:

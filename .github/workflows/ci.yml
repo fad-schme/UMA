@@ -263,13 +263,16 @@ jobs:
       - name: Validate package metadata
         run: python -m twine check dist/*
 
-  # Documentation feedback is intentionally non-blocking: broken external links
-  # or a missing changelog entry should be visible without masking code quality.
+  # Blocking, but scoped to repo-relative links only (see
+  # .github/markdown-link-check.json). A README that references a file which is
+  # not in the repo is a correctness failure, not documentation polish: it is
+  # how docs/mcp/* was lost — .gitignore hid the files, and this job was
+  # advisory, so nothing ever failed. External links stay out of the gate
+  # because their flakiness is not ours to fix.
   docs-lint:
     name: Documentation checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    continue-on-error: true
 
     steps:
       - name: Check out complete history
@@ -282,6 +285,7 @@ jobs:
         with:
           use-quiet-mode: yes
           use-verbose-mode: yes
+          config-file: .github/markdown-link-check.json
 
       - name: Warn when UMA changes omit the changelog
         if: github.event_name == 'pull_request'
@@ -308,6 +312,7 @@ jobs:
       # - dependency-audit  # re-add once uma-mem publishes to PyPI (see above)
       - secret-scan
       - package-build
+      - docs-lint
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always()

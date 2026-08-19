@@ -8,7 +8,7 @@ and trust-based candidate filtering.
 from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
-from tests.helpers.runtime import init_uma_for_tests
+from tests.helpers.runtime import TEST_AGENT_ID, init_uma_for_tests
 from uma.adapters.db.sqlite_adapter import SQLiteAdapter
 from uma.adapters.vector.base import VectorIndex
 from uma.common.integrity import hash_episode_content, hash_fact_content, hash_skill_content
@@ -21,6 +21,8 @@ from uma.stores.procedural_sql import ProceduralSQLStore
 from uma.stores.semantic_sql import SemanticSQLStore
 import hashlib
 import pytest
+
+AGENT_ID = TEST_AGENT_ID
 
 # ── test_pr1_dataclass_fields ──────────────────────────────────────────
 
@@ -711,6 +713,7 @@ async def test_process_turn_episode_trust_score(uma_memory):
         user_msg="I enjoy hiking in the mountains.",
         assistant_reply="That sounds like a great hobby.",
         session_id="session-pr2-ep",
+        agent_id=AGENT_ID,
     )
 
     epi_store = mem._stores["episodic"]
@@ -737,6 +740,7 @@ async def test_process_turn_facts_trust_score(uma_memory):
         user_msg="I like hiking and rock climbing.",
         assistant_reply="Those are excellent outdoor activities.",
         session_id="session-pr2-facts",
+        agent_id=AGENT_ID,
     )
 
     sem_store = mem._stores["semantic"]
@@ -763,6 +767,7 @@ async def test_ingest_document_chunks_trust_score(tmp_path, fixture_doc):
             fixture_doc,
             owner_type="user",
             owner_id="user:alice",
+            agent_id=AGENT_ID,
         )
         assert report.chunks_created > 0, "expected at least one chunk"
 

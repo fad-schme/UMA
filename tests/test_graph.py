@@ -6,7 +6,7 @@ retrieval pipeline, graph updates from process_turn, and RLM entity seeding.
 from __future__ import annotations
 from datetime import datetime, timezone
 from tests.helpers.graph_adapter import RecordingGraphAdapter
-from tests.helpers.runtime import init_uma_for_tests
+from tests.helpers.runtime import TEST_AGENT_ID, init_uma_for_tests
 from uma.common.results import ContextBundle
 from uma.common.types import Episode
 from uma.common.types.types_fact import Fact
@@ -14,6 +14,8 @@ from uma.memory.graph.core import GraphCore
 from uma.retrieve.rlm.decisions import deterministic_decision
 import pytest
 import pytest_asyncio
+
+AGENT_ID = TEST_AGENT_ID
 
 # ── test_graph_core ──────────────────────────────────────────
 
@@ -205,7 +207,8 @@ async def test_ingest_writes_graph_edges(uma_graph, tmp_path):
     queries_before = len(adapter.queries)
 
     report = await uma_graph.ingest_document(
-        str(doc), owner_type="agent", owner_id="agent-default"
+        str(doc), owner_type="agent", owner_id="agent-default",
+        agent_id=AGENT_ID,
     )
 
     assert report.chunks_created > 0, "Expected at least one chunk to be created"
@@ -225,9 +228,9 @@ async def test_retrieve_context_with_graph_enabled(uma_graph, tmp_path):
         "The graph lane enables relational and temporal retrieval across documents and episodes. "
         "Graph edges carry full provenance: fact_id, owner_type, owner_id, source_chunk_id, timestamps."
     )
-    await uma_graph.ingest_document(str(doc), owner_type="agent", owner_id="agent-default")
+    await uma_graph.ingest_document(str(doc), owner_type="agent", owner_id="agent-default", agent_id=AGENT_ID)
 
-    result = await uma_graph.retrieve_context(query_text="How does UMA graph memory work?", user_id="user-test")
+    result = await uma_graph.retrieve_context(query_text="How does UMA graph memory work?", user_id="user-test", agent_id=AGENT_ID)
 
     assert isinstance(result, ContextBundle), "retrieve_context must return a ContextBundle"
     assert hasattr(result, "graph"), "ContextBundle must include a `graph` attribute when graph is enabled"
@@ -241,9 +244,9 @@ async def test_retrieve_context_with_graph_disabled(uma_no_graph, tmp_path):
         "UMA is a modular memory runtime. It runs with or without a graph backend. "
         "Disabling graph still allows chunk and fact retrieval."
     )
-    await uma_no_graph.ingest_document(str(doc), owner_type="agent", owner_id="agent-default")
+    await uma_no_graph.ingest_document(str(doc), owner_type="agent", owner_id="agent-default", agent_id=AGENT_ID)
 
-    result = await uma_no_graph.retrieve_context(query_text="What is UMA?", user_id="user-test")
+    result = await uma_no_graph.retrieve_context(query_text="What is UMA?", user_id="user-test", agent_id=AGENT_ID)
 
     assert isinstance(result, ContextBundle), "retrieve_context must return a ContextBundle even without graph"
     for attr in ("chunks", "facts", "episodic"):
@@ -277,12 +280,14 @@ async def test_pipeline_updates_graph_with_facts_and_temporal_links(tmp_path):
             user_msg="I like sushi.",
             assistant_reply="Good to know.",
             session_id="session-a",
+            agent_id=AGENT_ID,
         )
         await mem.process_turn(
             user_id="user:u1",
             user_msg="I also like pizza.",
             assistant_reply="Pizza is delicious.",
             session_id="session-a",
+            agent_id=AGENT_ID,
         )
 
         adapter = getattr(mem.graph_core, "adapter", None)

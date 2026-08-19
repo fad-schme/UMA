@@ -28,23 +28,24 @@ Typical developer workflow
 
     memory = UMAMemory.from_yaml("uma.yaml")
 
-2. Create an immutable, agent-scoped instance:
-
-    memory = memory.set_context(
-        agent_id="agent-default",
-    )
-
-3. Retrieve context with explicit per-call request scope:
+2. Retrieve context with explicit per-call scope. UMA is single-tenant,
+   multi-agent and multi-user: `agent_id` and `user_id` identify the caller
+   on every call, and `tenant_id` falls back to the single-tenant default
+   when the caller does not set it.
 
     context = await memory.retrieve_context(
         query_text="the user's current question or task",
+        agent_id=agent_id,
         user_id=user_id,
-        tenant_id="default",
         request_id="req-1",
         session_id="session-1",
     )
 
-4. Ingest conversation turns or documents through the public APIs on UMAMemory.
+3. Ingest conversation turns or documents through the public APIs on UMAMemory.
+
+One `UMAMemory` instance serves every agent and every user. Identity is never
+held on the instance — passing it per call is what makes concurrent agents
+safe on a shared runtime.
 
 Design Philosophy
 -----------------
@@ -76,6 +77,7 @@ from uma.common.config import UMAConfig
 from uma.common.config_types import RuntimeConfig, SecretsProviderConfig, parse_plugin_spec
 from uma.common.hooks import UMAHooks
 from uma.common.identity import normalize_user_id
+from uma.common.types.types_scope import DEFAULT_TENANT_ID
 from uma.adapters.secrets import SecretsProvider
 from uma.memory.working_memory.core import WorkingMemoryCore
 from uma.memory.episodic.core import EpisodicCore
@@ -91,8 +93,9 @@ from uma.common.initializers.runtime import (
     schedule_ingestion_warmup,
 )
 from uma.common.registry import FeatureLoader, FeaturePolicy, default_feature_registry
-from .runtime import AnimusProfileProvider, UMARuntime
+from .runtime import UMARuntime
 from uma.common.types import AgentProfile, RuntimeContext
+from uma.common.types.types_scope import validate_agent_id, validate_tenant_id
 from uma.adapters.scanner.injection_scan import scan_content, InjectionDetectedError
 
 logger = logging.getLogger(__name__)
@@ -218,7 +221,6 @@ class UMAMemory:
         self._secrets_cfg = self.cfg.secrets
         self._secrets_provider: Optional[SecretsProvider] = self._build_secrets_provider(self._secrets_cfg)
         self._runtime: Optional[UMARuntime] = None
-        self.animus_profile_provider = AnimusProfileProvider()
 
         # Internal store registry (core-only access; no direct store usage outside cores)
         self._stores: dict[str, Any] = {}
@@ -232,9 +234,6 @@ class UMAMemory:
         # `RateLimitHook` documentation. Default None = no throttling.
         # Set via `set_rate_limit_hook(...)`.
         self._rate_limit_hook: Optional[RateLimitHook] = None
-
-        # Optional promotion policy (set by features or left None)
-        self.promotion_policy: Optional[Any] = None
 
         # Core runtime components (initialized later)
         self.llm: Any = None
@@ -264,11 +263,6 @@ class UMAMemory:
                 if self._runtime is None:
                     self._runtime = UMARuntime.from_memory(self)
         return self._runtime
-
-    @property
-    def agent_id(self) -> Optional[str]:
-        """Return None on the unscoped runtime container."""
-        return None
 
     def _build_secrets_provider(
         self,
@@ -316,34 +310,30 @@ class UMAMemory:
     def _resolve_runtime_context(
         self,
         *,
+        agent_id: Optional[str],
         user_id: Optional[str],
-        tenant_id: str = "default",
+        tenant_id: Optional[str] = DEFAULT_TENANT_ID,
         request_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> RuntimeContext:
-        """Resolve request scope for public APIs from explicit per-call values only."""
+        """Resolve request scope for public APIs from explicit per-call values only.
+
+        UMA is single-tenant, multi-agent and multi-user. ``agent_id`` and
+        ``user_id`` are always the caller's to supply — no instance-level
+        fallback exists, because one runtime serves every agent concurrently.
+        ``tenant_id`` falls back to ``DEFAULT_TENANT_ID`` when unset.
+
+        ``RuntimeContext`` validates every field it is given; this only fills
+        in the two values UMA derives rather than requires.
+        """
         if not isinstance(user_id, str) or not user_id.strip():
             raise ValueError("UMAMemory requires an explicit user_id.")
 
-        if not self.agent_id:
-            raise ValueError(
-                "UMAMemory requires an agent_id. Call set_context(agent_id=...) before use."
-            )
-        resolved_agent_id = self.agent_id
-
-        resolved_tenant_id = (tenant_id or "default").strip()
-        if not resolved_tenant_id:
-            raise ValueError("UMAMemory retrieval requires a non-empty tenant_id.")
-
-        resolved_request_id = (request_id or f"request:{user_id.strip()}").strip()
-        if not resolved_request_id:
-            raise ValueError("UMAMemory retrieval requires a non-empty request_id.")
-
         return RuntimeContext(
-            tenant_id=resolved_tenant_id,
-            agent_id=resolved_agent_id,
-            request_id=resolved_request_id,
+            tenant_id=tenant_id or DEFAULT_TENANT_ID,
+            agent_id=agent_id,
+            request_id=request_id or f"request:{user_id.strip()}",
             user_id=user_id.strip(),
             workspace_id=workspace_id,
             session_id=session_id,
@@ -417,26 +407,6 @@ class UMAMemory:
     # ----------------------------------------------------------------------
     # -------------------- Core Public APIs -------------------------------
     # ----------------------------------------------------------------------
-    def set_context(
-        self,
-        *,
-        agent_id: Optional[str] = None,
-    ) -> "ScopedUMAMemory":
-        """Return a new immutable view bound to one agent identity.
-
-        The source instance is never mutated. Create one scoped instance per
-        agent and reuse it for that agent's requests.
-        """
-        if not isinstance(agent_id, str) or not agent_id.strip():
-            raise ValueError("UMAMemory.set_context requires a non-empty agent_id.")
-
-        scoped = ScopedUMAMemory(self, agent_id=agent_id.strip())
-        logger.debug(
-            "UMAMemory.set_context: created immutable scoped instance agent=%s",
-            scoped.agent_id,
-        )
-        return scoped
-
     # ----------------------------------------------------------------------
     # Agent Profile (memory-promotion feature)
     # ----------------------------------------------------------------------
@@ -444,28 +414,25 @@ class UMAMemory:
     async def set_agent_profile(
         self,
         *,
+        agent_id: str,
         description: str,
         focus_areas: list[str],
-        tenant_id: str = "default",
+        tenant_id: Optional[str] = DEFAULT_TENANT_ID,
     ) -> AgentProfile:
-        """Upsert this instance's agent profile.
+        """Upsert the profile for ``agent_id``.
 
         The profile is consulted by ``PromotionPolicy.qualifies_for_agent_kb``
         to decide which user-owned facts qualify for elevation into the
         agent's global KB during ``process_turn``. Without a profile, automatic
         promotion is a no-op; there is no eligibility-only fallback.
 
-        Uses the immutable agent identity bound via :meth:`set_context`. Computes
-        the profile embedding from ``description`` via the configured
+        Computes the profile embedding from ``description`` via the configured
         embedder. Idempotent — a second call for the same agent overwrites.
         The row is persisted in the procedural store with
         ``kind='agent_profile'`` and never enters the vector index.
         """
-        if not self.agent_id:
-            raise ValueError(
-                "UMAMemory.set_agent_profile requires a bound agent_id. "
-                "Call set_context(agent_id=...) first."
-            )
+        resolved_agent_id = validate_agent_id(agent_id)
+        resolved_tenant_id = validate_tenant_id(tenant_id or DEFAULT_TENANT_ID)
         if self.procedural_core is None:
             raise RuntimeError(
                 "UMAMemory.set_agent_profile: procedural_core is not initialized."
@@ -487,15 +454,16 @@ class UMAMemory:
         embedding = list(embeddings[0])
 
         profile = await self.procedural_core.upsert_agent_profile(
-            agent_id=self.agent_id,
+            agent_id=resolved_agent_id,
             description=description,
             focus_areas=list(focus_areas),
             embedding=embedding,
-            tenant_id=tenant_id,
+            tenant_id=resolved_tenant_id,
         )
         logger.info(
-            "UMAMemory.set_agent_profile: upserted agent_id=%s focus_areas=%d",
-            self.agent_id,
+            "UMAMemory.set_agent_profile: upserted tenant_id=%s agent_id=%s focus_areas=%d",
+            resolved_tenant_id,
+            resolved_agent_id,
             len(profile.focus_areas),
         )
         return profile
@@ -503,19 +471,17 @@ class UMAMemory:
     async def get_agent_profile(
         self,
         *,
-        tenant_id: str = "default",
+        agent_id: str,
+        tenant_id: Optional[str] = DEFAULT_TENANT_ID,
     ) -> Optional[AgentProfile]:
-        """Return this instance's agent profile, or None if unset."""
-        if not self.agent_id:
-            raise ValueError(
-                "UMAMemory.get_agent_profile requires a bound agent_id. "
-                "Call set_context(agent_id=...) first."
-            )
+        """Return the profile for ``agent_id``, or None if unset."""
+        resolved_agent_id = validate_agent_id(agent_id)
+        resolved_tenant_id = validate_tenant_id(tenant_id or DEFAULT_TENANT_ID)
         if self.procedural_core is None:
             return None
         return await self.procedural_core.get_agent_profile(
-            agent_id=self.agent_id,
-            tenant_id=tenant_id,
+            agent_id=resolved_agent_id,
+            tenant_id=resolved_tenant_id,
         )
 
     # ----------------------------------------------------------------------
@@ -525,11 +491,12 @@ class UMAMemory:
         self,
         *,
         query_text: str,
+        agent_id: Optional[str] = None,
         user_id: Optional[str] = None,
-        tenant_id: str = "default",
         request_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        tenant_id: Optional[str] = DEFAULT_TENANT_ID,
         lane_filter: Optional[list[str]] = None,
         include_debug: bool = False,
     ) -> "ContextBundle":
@@ -548,6 +515,7 @@ class UMAMemory:
           part of the normal retrieval product.
         """
         runtime_context = self._resolve_runtime_context(
+            agent_id=agent_id,
             user_id=user_id,
             tenant_id=tenant_id,
             request_id=request_id,
@@ -566,11 +534,12 @@ class UMAMemory:
         self,
         *,
         query_text: str,
+        agent_id: Optional[str] = None,
         user_id: Optional[str] = None,
-        tenant_id: str = "default",
         request_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        tenant_id: Optional[str] = DEFAULT_TENANT_ID,
         memory_intent: str = "continuity",
         include_debug: bool = False,
     ) -> "MemoryResult":
@@ -589,11 +558,12 @@ class UMAMemory:
           `include_debug=True`
         """
         runtime_context = self._resolve_runtime_context(
+            agent_id=agent_id,
             user_id=user_id,
             tenant_id=tenant_id,
             request_id=request_id,
             workspace_id=workspace_id,
-            session_id=session_id
+            session_id=session_id,
         )
         await self._invoke_rate_limit_hook("retrieve_memory", runtime_context)
         return await self.runtime.retrieve_memory(
@@ -623,14 +593,15 @@ class UMAMemory:
     async def process_turn(
         self,
         *,
+        agent_id: str,
         user_id: str,
         user_msg: str,
         assistant_reply: str,
         session_id: Optional[str] = None,
-        tenant_id: str = "default",
         workspace_id: Optional[str] = None,
         extra_meta: Optional[dict[str, Any]] = None,
         skip_scan: bool = False,
+        tenant_id: Optional[str] = DEFAULT_TENANT_ID,
     ) -> None:
         """Public turn-ingest entrypoint.
 
@@ -651,6 +622,7 @@ class UMAMemory:
         # work happens. Build a synthetic RuntimeContext from process_turn
         # args so the hook sees the same shape as it does for retrieval.
         rl_ctx = self._resolve_runtime_context(
+            agent_id=agent_id,
             user_id=user_id,
             tenant_id=tenant_id,
             request_id=None,
@@ -689,17 +661,17 @@ class UMAMemory:
             self.pipeline = MemoryPipeline(
                 memory_client=self,
                 hooks=self.hooks,
-                promotion_policy=self.promotion_policy,
             )
             logger.debug("UMAMemory.process_turn: MemoryPipeline initialized lazily.")
 
         normalized_user_id = normalize_user_id(user_id)
         await self.pipeline.process_turn(
+            agent_id=rl_ctx.agent_id,
             user_id=normalized_user_id,
             user_msg=user_msg,
             assistant_reply=assistant_reply,
             session_id=session_id.strip(),
-            tenant_id=tenant_id,
+            tenant_id=rl_ctx.tenant_id,
             workspace_id=workspace_id,
             extra_meta=extra_meta,
         )
@@ -710,19 +682,21 @@ class UMAMemory:
         self,
         file_path: str,
         *,
+        agent_id: str,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
-        tenant_id: str = "default",
         workspace_id: Optional[str] = None,
+        tenant_id: Optional[str] = DEFAULT_TENANT_ID,
         config: Optional[Any] = None,
     ) -> "IngestReport":
         """Ingest an unstructured document into UMA memory.
 
-        tenant_id is required for durable artifacts (DAT invariant). It
-        defaults to "default" to preserve the single-tenant Lite experience,
-        but multi-tenant deployments MUST pass an explicit value. The same
-        rule already applies to load_memory_bootstrap and
-        load_daily_diary_bootstrap; ingest_document now matches.
+        Documents are scoped by ``(tenant_id, owner_type, owner_id)`` — the
+        DAT invariant — not by a user/session request scope, so this API takes
+        no ``user_id``. ``owner_type``/``owner_id`` remain required and are
+        validated by the ingest layer; ``agent_id`` records which agent
+        performed the ingest and is never a substitute for the owner tuple.
+        ``tenant_id`` defaults to the single-tenant value.
         """
         if not file_path or not isinstance(file_path, str) or not file_path.strip():
             raise ValueError("file_path is required and cannot be empty")
@@ -740,40 +714,35 @@ class UMAMemory:
         # owner-derived heuristic in its closure.
         await self._invoke_rate_limit_hook("ingest_document", None)
 
+        validate_agent_id(agent_id)
+        resolved_tenant_id = validate_tenant_id(tenant_id or DEFAULT_TENANT_ID)
+
         from uma.ingest.ingest_service import ingest_document as _ingest
         return await _ingest(
             file_path,
             owner_type=owner_type,
             owner_id=owner_id,
-            tenant_id=tenant_id,
+            tenant_id=resolved_tenant_id,
             workspace_id=workspace_id,
             config=config,
             memory=self,
         )
 
-    def load_userprofile(self, path: str) -> "UMAMemory":
-        """Load USER.md into the in-memory Animus profile cache."""
-        self.animus_profile_provider.load_user_profile(path)
-        return self
-
-    def load_agentprofile(self, path: str) -> "UMAMemory":
-        """Load SOUL.md into the in-memory Animus profile cache."""
-        self.animus_profile_provider.load_agent_profile(path)
-        return self
-
     async def load_memory_bootstrap(
         self,
         file_path: str,
         *,
+        agent_id: Optional[str] = None,
         user_id: Optional[str] = None,
-        tenant_id: str = "default",
         request_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        tenant_id: Optional[str] = DEFAULT_TENANT_ID,
         config: Optional[Any] = None,
     ) -> dict[str, Any]:
         """Bootstrap long-term memory facts from MEMORY.md through the ingest layer."""
         runtime_context = self._resolve_runtime_context(
+            agent_id=agent_id,
             user_id=user_id,
             tenant_id=tenant_id,
             request_id=request_id,
@@ -795,11 +764,12 @@ class UMAMemory:
         self,
         file_path: str,
         *,
+        agent_id: Optional[str] = None,
         user_id: Optional[str] = None,
-        tenant_id: str = "default",
         request_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        tenant_id: Optional[str] = DEFAULT_TENANT_ID,
         config: Optional[Any] = None,
     ) -> dict[str, Any]:
         """Bootstrap a daily diary file through the ingest layer.
@@ -809,6 +779,7 @@ class UMAMemory:
         IngestConfig is used (50 MiB file cap, 5000-page PDF cap).
         """
         runtime_context = self._resolve_runtime_context(
+            agent_id=agent_id,
             user_id=user_id,
             tenant_id=tenant_id,
             request_id=request_id,
@@ -855,7 +826,7 @@ class UMAMemory:
     async def rebuild_vector_indexes(
         self,
         *,
-        tenant_id: Optional[str] = None,
+        tenant_id: Optional[str] = DEFAULT_TENANT_ID,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
         include_episodic: bool = True,
@@ -863,12 +834,17 @@ class UMAMemory:
         include_procedural: bool = True,
         batch_size: int = 32,
     ) -> "VectorRebuildReport":
-        """Rebuild vector indexes from SQL-backed data."""
+        """Rebuild vector indexes from SQL-backed data.
+
+        Maintenance is scoped by tenant plus the durable owner tuple; an
+        agent's own rows are addressed as ``owner_type="agent"``,
+        ``owner_id=<agent_id>``.
+        """
         from uma.common.maintenance import rebuild_vector_indexes
 
         return await rebuild_vector_indexes(
             self,
-            tenant_id=tenant_id,
+            tenant_id=validate_tenant_id(tenant_id or DEFAULT_TENANT_ID),
             owner_type=owner_type,
             owner_id=owner_id,
             include_episodic=include_episodic,
@@ -880,7 +856,7 @@ class UMAMemory:
     async def rebuild_derived_indexes(
         self,
         *,
-        tenant_id: Optional[str] = None,
+        tenant_id: Optional[str] = DEFAULT_TENANT_ID,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
         include_episodic: bool = True,
@@ -889,12 +865,17 @@ class UMAMemory:
         include_graph: bool = True,
         batch_size: int = 32,
     ) -> "DerivedRebuildReport":
-        """Rebuild derived vector and graph indexes from authoritative SQL-backed data."""
+        """Rebuild derived vector and graph indexes from authoritative SQL-backed data.
+
+        Maintenance is scoped by tenant plus the durable owner tuple; an
+        agent's own rows are addressed as ``owner_type="agent"``,
+        ``owner_id=<agent_id>``.
+        """
         from uma.common.maintenance import rebuild_derived_indexes
 
         return await rebuild_derived_indexes(
             self,
-            tenant_id=tenant_id,
+            tenant_id=validate_tenant_id(tenant_id or DEFAULT_TENANT_ID),
             owner_type=owner_type,
             owner_id=owner_id,
             include_episodic=include_episodic,
@@ -1146,79 +1127,3 @@ class UMAMemory:
                 )
             setattr(self, name, func)
 
-
-class ScopedUMAMemory(UMAMemory):
-    """Immutable per-agent view over an initialized UMA runtime.
-
-    Storage, providers, and retrieval infrastructure remain owned by the base
-    ``UMAMemory`` instance. Agent identity, turn ingestion, and promotion state
-    are isolated on this view so concurrent agents never communicate through
-    mutable ambient scope.
-    """
-
-    def __init__(
-        self,
-        memory: UMAMemory,
-        *,
-        agent_id: str,
-    ) -> None:
-        from uma.memory.promotion import PromotionPolicy
-
-        object.__setattr__(self, "_scoped_memory", memory)
-        object.__setattr__(self, "_scoped_agent_id", agent_id)
-        object.__setattr__(
-            self,
-            "_scoped_promotion_policy",
-            PromotionPolicy(agent_id=agent_id),
-        )
-        object.__setattr__(self, "_scoped_pipeline", None)
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._scoped_memory, name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name in {"agent_id", "_agent_id", "_scoped_agent_id"}:
-            raise AttributeError("ScopedUMAMemory agent_id is immutable")
-        object.__setattr__(self, name, value)
-
-    @property
-    def agent_id(self) -> str:
-        """Return this view's immutable agent identity."""
-        return self._scoped_agent_id
-
-    @property
-    def runtime(self) -> UMARuntime:
-        """Return the shared stateless retrieval runtime."""
-        return self._scoped_memory.runtime
-
-    @property
-    def promotion_policy(self) -> Any:
-        """Return the agent-bound promotion policy used by this view."""
-        return self._scoped_promotion_policy
-
-    @property
-    def pipeline(self) -> Any:
-        """Return this agent view's turn-ingestion pipeline."""
-        return self._scoped_pipeline
-
-    @pipeline.setter
-    def pipeline(self, value: Any) -> None:
-        object.__setattr__(self, "_scoped_pipeline", value)
-
-    def set_context(
-        self,
-        *,
-        agent_id: Optional[str] = None,
-    ) -> "ScopedUMAMemory":
-        """Return another immutable agent-scoped view over the same runtime."""
-        return self._scoped_memory.set_context(agent_id=agent_id)
-
-    def _ensure_retrieval_ready(self) -> None:
-        self._scoped_memory._ensure_retrieval_ready()
-
-    def _ensure_ingestion_ready(self) -> None:
-        self._scoped_memory._ensure_ingestion_ready()
-
-    def shutdown(self) -> None:
-        """Shut down the underlying UMA runtime and its shared resources."""
-        self._scoped_memory.shutdown()

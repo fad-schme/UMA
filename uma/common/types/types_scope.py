@@ -19,6 +19,11 @@ from .types_owner import OwnerType
 
 SCOPE_MODEL_VERSION = "v2"
 
+# UMA Lite is single-tenant: callers may omit tenant_id and every layer
+# resolves to this value. It is still carried explicitly alongside agent and
+# user identity rather than being assumed at the storage boundary.
+DEFAULT_TENANT_ID = "default"
+
 
 def _require_non_empty(value: str, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():

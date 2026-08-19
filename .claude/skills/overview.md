@@ -111,16 +111,16 @@ from uma.api.management import (
     list_retrieval_audit,
 )
 
-memory = UMAMemory.from_yaml("config/uma.yaml").set_context(agent_id="agent-default")
-# set_context returns a new immutable per-agent view; it does not mutate the
-# unscoped UMAMemory container.
+memory = UMAMemory.from_yaml("config/uma.yaml")
+# One instance serves every agent and every user. agent_id and user_id are
+# passed on every call; tenant_id defaults to "default" when omitted.
 
 # Pre-LLM injection gate (returns dict, never raises)
 scan = memory.scan_user_input(user_msg)
 
 # Retrieval — explicit scope, isolated by construction
-context = await memory.retrieve_context(query_text=..., user_id=..., tenant_id=..., session_id=...)
-result  = await memory.retrieve_memory(query_text=..., user_id=..., tenant_id=..., session_id=...)
+context = await memory.retrieve_context(query_text=..., agent_id=..., user_id=..., session_id=...)
+result  = await memory.retrieve_memory(query_text=..., agent_id=..., user_id=..., session_id=...)
 
 # Ingest — raises InjectionDetectedError on high-severity user_msg
 await memory.process_turn(user_id=..., user_msg=..., assistant_reply=..., session_id=...)

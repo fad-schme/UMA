@@ -12,9 +12,10 @@ Requires the ``mcp`` optional extra:
 Configuration is via environment variables read by the server module:
 
     UMA_CONFIG_PATH   Absolute path to uma.yaml (required).
-    UMA_AGENT_ID      Agent identity bound to this server (default:
-                      "agent-default"). Immutable per process — spawn
-                      one uma-mcp per agent identity.
+
+The server holds no agent, user, or tenant identity. Each tool call carries
+its own ``agent_id`` (required) and ``user_id``, so a single uma-mcp process
+serves every agent.
 
 Client configuration lives in ``docs/mcp/STDIO_CLIENTS.md``.
 """

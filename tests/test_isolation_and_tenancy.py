@@ -9,7 +9,7 @@ from dataclasses import FrozenInstanceError
 from datetime import datetime, timezone
 from pathlib import Path
 from tests.helpers.context_bundle import make_context_bundle
-from tests.helpers.runtime import build_test_config
+from tests.helpers.runtime import TEST_AGENT_ID, build_test_config
 from tests.helpers.runtime import init_uma_for_tests
 from typing import get_args
 from uma.api.memory import UMAMemory
@@ -22,11 +22,13 @@ from uma.common.types.types_scope import validate_agent_id, validate_owner_id, v
 from uma.memory.promotion import PromotionPolicy
 from uma.retrieve.rlm.context_pack import ContextPack
 from uma.retrieve.rlm.request import RetrievalRequest
-from uma.stores.base_sql_store import DEFAULT_TENANT_ID
+from uma.common.types.types_scope import DEFAULT_TENANT_ID
 import asyncio
 import pytest
 import threading
 import yaml
+
+AGENT_ID = TEST_AGENT_ID
 
 # Barrier waits run inside `asyncio.to_thread`, i.e. on non-daemon pool threads
 # that asyncio cannot cancel. Without a timeout, one party failing before it
@@ -104,7 +106,7 @@ class _EmptyController:
 
 @pytest.mark.asyncio
 async def test_multi_tenant_isolation_holds_with_matching_scope_tokens(tmp_path: Path) -> None:
-    memory = await init_uma_for_tests(tmp_path, agent_id="agent-tenant")
+    memory = await init_uma_for_tests(tmp_path)
     try:
         embedding = (await memory.embedder.embed(["tenant isolation fact"]))[0]
         fact_a = _build_fact(
@@ -186,7 +188,7 @@ async def test_multi_tenant_isolation_holds_with_matching_scope_tokens(tmp_path:
 @pytest.mark.asyncio
 async def test_multi_user_retrieval_isolates_user_owned_data_but_keeps_agent_kb_shared(uma_memory, tmp_path: Path) -> None:
     memory = uma_memory
-    assert memory.agent_id
+    assert AGENT_ID
     runtime = UMARuntime.from_memory(memory)
 
     agent_doc = tmp_path / "agent_shared.txt"
@@ -205,19 +207,19 @@ async def test_multi_user_retrieval_isolates_user_owned_data_but_keeps_agent_kb_
         encoding="utf-8",
     )
 
-    await memory.ingest_document(str(agent_doc), owner_type="agent", owner_id=memory.agent_id)
-    await memory.ingest_document(str(user_a_doc), owner_type="user", owner_id="user:u1")
-    await memory.ingest_document(str(user_b_doc), owner_type="user", owner_id="user:u2")
+    await memory.ingest_document(str(agent_doc), owner_type="agent", owner_id=AGENT_ID, agent_id=AGENT_ID)
+    await memory.ingest_document(str(user_a_doc), owner_type="user", owner_id="user:u1", agent_id=AGENT_ID)
+    await memory.ingest_document(str(user_b_doc), owner_type="user", owner_id="user:u2", agent_id=AGENT_ID)
 
     ctx_a_context = RuntimeContext(
         tenant_id=DEFAULT_TENANT_ID,
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-user-a",
         user_id="user:u1",
     )
     ctx_b_context = RuntimeContext(
         tenant_id=DEFAULT_TENANT_ID,
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-user-b",
         user_id="user:u2",
     )
@@ -230,8 +232,8 @@ async def test_multi_user_retrieval_isolates_user_owned_data_but_keeps_agent_kb_
     owner_pairs_a = {(getattr(chunk, "owner_type", None), getattr(chunk, "owner_id", None)) for chunk in ctx_a.chunks}
     owner_pairs_b = {(getattr(chunk, "owner_type", None), getattr(chunk, "owner_id", None)) for chunk in ctx_b.chunks}
 
-    assert ("agent", memory.agent_id) in owner_pairs_a
-    assert ("agent", memory.agent_id) in owner_pairs_b
+    assert ("agent", AGENT_ID) in owner_pairs_a
+    assert ("agent", AGENT_ID) in owner_pairs_b
     assert ("user", "user:u1") in owner_pairs_a
     assert ("user", "user:u2") not in owner_pairs_a
     assert ("user", "user:u2") in owner_pairs_b
@@ -240,7 +242,7 @@ async def test_multi_user_retrieval_isolates_user_owned_data_but_keeps_agent_kb_
 
 @pytest.mark.asyncio
 async def test_retrieval_and_process_turn_overlap_preserve_session_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    memory = await init_uma_for_tests(tmp_path, agent_id="agent-overlap")
+    memory = await init_uma_for_tests(tmp_path)
     try:
         runtime = UMARuntime.from_memory(memory)
         memory._rlm_controller = _EmptyController()
@@ -251,6 +253,7 @@ async def test_retrieval_and_process_turn_overlap_preserve_session_isolation(tmp
             assistant_reply="Good to know.",
             session_id="session-a",
             extra_meta={"request_id": "req-seed-a"},
+            agent_id="agent-overlap",
         )
 
         entered = asyncio.Event()
@@ -271,6 +274,7 @@ async def test_retrieval_and_process_turn_overlap_preserve_session_isolation(tmp
                 assistant_reply="Nice.",
                 session_id="session-b",
                 extra_meta={"request_id": "req-write-b"},
+                agent_id="agent-overlap",
             )
         )
         await asyncio.wait_for(entered.wait(), timeout=1.0)
@@ -379,7 +383,7 @@ async def test_cross_agent_visibility_requires_explicit_promotion(uma_memory) ->
 @pytest.mark.asyncio
 async def test_retrieval_remains_isolated_under_concurrent_requests(uma_memory, monkeypatch: pytest.MonkeyPatch) -> None:
     memory = uma_memory
-    assert memory.agent_id
+    assert AGENT_ID
     barrier = threading.Barrier(2)
     seen_contexts: list[tuple[str, str, str]] = []
 
@@ -400,14 +404,14 @@ async def test_retrieval_remains_isolated_under_concurrent_requests(uma_memory, 
 
     ctx_a = RuntimeContext(
         tenant_id=DEFAULT_TENANT_ID,
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-overlap-a",
         user_id="user:u1",
         session_id="session:user:u1",
     )
     ctx_b = RuntimeContext(
         tenant_id=DEFAULT_TENANT_ID,
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-overlap-b",
         user_id="user:u2",
         session_id="session:user:u2",
@@ -1109,7 +1113,7 @@ async def test_document_ingest_rejects_missing_owner_type(uma_memory, tmp_path) 
     path = tmp_path / "missing-owner-type.txt"
     path.write_text("Explicit owner validation should reject missing owner_type.\n")
     with pytest.raises(ValueError, match="owner_type and owner_id are required"):
-        await uma_memory.ingest_document(str(path), owner_id="user:u1")
+        await uma_memory.ingest_document(str(path), owner_id="user:u1", agent_id=AGENT_ID)
 
 
 @pytest.mark.asyncio
@@ -1117,12 +1121,12 @@ async def test_document_ingest_rejects_missing_owner_id(uma_memory, tmp_path) ->
     path = tmp_path / "missing-owner-id.txt"
     path.write_text("Explicit owner validation should reject missing owner_id.\n")
     with pytest.raises(ValueError, match="owner_type and owner_id are required"):
-        await uma_memory.ingest_document(str(path), owner_type="user")
+        await uma_memory.ingest_document(str(path), owner_type="user", agent_id=AGENT_ID)
 
 
 @pytest.mark.asyncio
 async def test_promotion_rejects_missing_owner_type(uma_memory) -> None:
-    policy = PromotionPolicy(agent_id=uma_memory.agent_id)
+    policy = PromotionPolicy(agent_id=AGENT_ID)
     now = datetime.now(timezone.utc)
     fact = Fact(
         id="fact_missing_owner_type",
@@ -1146,7 +1150,7 @@ async def test_promotion_rejects_missing_owner_type(uma_memory) -> None:
 
 @pytest.mark.asyncio
 async def test_promotion_rejects_missing_owner_id(uma_memory) -> None:
-    policy = PromotionPolicy(agent_id=uma_memory.agent_id)
+    policy = PromotionPolicy(agent_id=AGENT_ID)
     now = datetime.now(timezone.utc)
     fact = Fact(
         id="fact_missing_owner_id",
@@ -1197,7 +1201,7 @@ async def test_ingest_document_persists_explicit_owner_fields(
         "document-derived fact path is exercised reliably during ingestion.\n"
     )
 
-    report = await memory.ingest_document(str(path), owner_type=owner_type, owner_id=owner_id)
+    report = await memory.ingest_document(str(path), owner_type=owner_type, owner_id=owner_id, agent_id=AGENT_ID)
     assert report.doc_id
 
     conn = memory.document_store._conn()
@@ -1250,7 +1254,7 @@ async def test_document_ingest_requires_explicit_owner_fields(uma_memory, tmp_pa
         "This passage is intentionally long enough to produce a valid chunk and fact extraction path.\n"
     )
 
-    report = await memory.ingest_document(str(path), owner_type="user", owner_id="u1")
+    report = await memory.ingest_document(str(path), owner_type="user", owner_id="u1", agent_id=AGENT_ID)
     assert report.doc_id
 
     # Query directly to avoid changing the public read surface in this PR.
@@ -1284,6 +1288,7 @@ async def test_document_ingest_rejects_system_owner_scope(uma_memory, tmp_path) 
             str(path),
             owner_type="system",
             owner_id="system:ops",
+            agent_id=AGENT_ID,
         )
 
 
@@ -1522,9 +1527,7 @@ async def _init_memory_with_procedural_feature(tmp_path) -> UMAMemory:
     cfg_path = tmp_path / "uma_test.yaml"
     cfg_path.write_text(yaml.safe_dump(cfg))
 
-    memory = UMAMemory.from_yaml(str(cfg_path)).set_context(
-        agent_id="agent-default"
-    )
+    memory = UMAMemory.from_yaml(str(cfg_path))
     memory._ensure_ingestion_ready()
     return memory
 
@@ -1644,27 +1647,46 @@ async def test_public_procedural_reads_accept_explicit_workspace_scope_without_b
         memory.shutdown()
 
 
-def test_agent_id_setter_is_removed_from_public_surface(uma_memory) -> None:
-    with pytest.raises(AttributeError):
-        uma_memory.agent_id = "agent-deprecated-test"
-
-
-def test_set_context_returns_distinct_immutable_agent_views(uma_memory) -> None:
-    agent_a = uma_memory.set_context(agent_id="agent-a")
-    agent_b = uma_memory.set_context(agent_id="agent-b")
-
-    assert agent_a is not agent_b
-    assert agent_a.agent_id == "agent-a"
-    assert agent_b.agent_id == "agent-b"
-    assert uma_memory.agent_id == "agent-default"
-
-    with pytest.raises(AttributeError, match="immutable"):
-        agent_a._agent_id = "agent-b"
+def test_agent_identity_is_never_held_on_the_instance(uma_memory) -> None:
+    """UMA is multi-agent on one shared runtime: the instance carries no
+    agent identity and offers no way to bind one."""
+    assert not hasattr(uma_memory, "agent_id")
+    assert not hasattr(uma_memory, "set_context")
+    assert not hasattr(uma_memory, "promotion_policy")
 
 
 @pytest.mark.asyncio
-async def test_retrieve_context_raises_if_set_context_not_called(tmp_path) -> None:
-    """_resolve_runtime_context must raise rather than fall back to 'agent-default'."""
+async def test_one_instance_serves_distinct_agents_per_call(uma_memory) -> None:
+    """Two agents retrieve through the same instance; each call's scope is
+    built from that call's agent_id."""
+    seen: list[str] = []
+
+    def _hook(operation: str, ctx) -> None:
+        if ctx is not None:
+            seen.append(ctx.agent_id)
+
+    uma_memory.set_rate_limit_hook(_hook)
+    try:
+        await uma_memory.retrieve_context(
+            query_text="hello",
+            agent_id="agent-a",
+            user_id="user:u1",
+        )
+        await uma_memory.retrieve_context(
+            query_text="hello",
+            agent_id="agent-b",
+            user_id="user:u1",
+        )
+    finally:
+        uma_memory.set_rate_limit_hook(None)
+
+    assert seen == ["agent-a", "agent-b"]
+
+
+@pytest.mark.asyncio
+async def test_retrieve_context_raises_when_agent_id_is_missing(tmp_path) -> None:
+    """_resolve_runtime_context must raise rather than fall back to any
+    instance-level or default agent identity."""
     db_root = tmp_path / "db"
     db_root.mkdir(parents=True, exist_ok=True)
     cfg = build_test_config(db_root=db_root)

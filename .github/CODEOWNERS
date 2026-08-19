@@ -1,18 +1,21 @@
-# All files require review by the maintainer team
-* @aimemlabs/repo-maintainers
+# GitHub only reads CODEOWNERS from the repository root, .github/, or docs/.
+# This file was previously under .github/workflows/, where it was inert.
+
+# All files require maintainer review
+* @fad-schme
 
 # Security and runtime critical paths
-uma/retrieve/                         @aimemlabs/repo-maintainers
-uma/memory/                           @aimemlabs/repo-maintainers
-uma/common/                           @aimemlabs/repo-maintainers
-uma/runtime/                          @aimemlabs/repo-maintainers
-uma/adapters/scanner/injection_patterns.yaml    @aimemlabs/repo-maintainers
+uma/retrieve/                         @fad-schme
+uma/memory/                           @fad-schme
+uma/common/                           @fad-schme
+uma/api/                              @fad-schme
+uma/adapters/scanner/injection_patterns.yaml    @fad-schme
 
 # Governance, licensing, and repository control
-.github/                              @aimemlabs/repo-maintainers
-CLA.md                                @aimemlabs/repo-maintainers
-NOTICE                                @aimemlabs/repo-maintainers
-LICENSE                               @aimemlabs/repo-maintainers
-README.md                             @aimemlabs/repo-maintainers
-ARCHITECTURE.md                       @aimemlabs/repo-maintainers
-CONTRIBUTING.md                       @aimemlabs/repo-maintainers
+.github/                              @fad-schme
+CLA.md                                @fad-schme
+NOTICE                                @fad-schme
+LICENSE                               @fad-schme
+README.md                             @fad-schme
+ARCHITECTURE.md                       @fad-schme
+CONTRIBUTING.md                       @fad-schme

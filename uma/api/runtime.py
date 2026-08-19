@@ -11,8 +11,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-import threading
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Mapping, Optional
 
 if TYPE_CHECKING:
@@ -51,101 +49,6 @@ from uma.retrieve.rlm.request import RetrievalRequest
 from uma.memory.working_memory.core import session_scope_from_runtime_context
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class _AnimusProfileCacheEntry:
-    """One cached markdown profile file.
-
-    The provider keeps the source path and refreshes the cached text lazily when
-    the TTL expires. This is intentionally simple because OpenClaw uses one
-    current user profile and one current agent profile.
-    """
-
-    path: str
-    text: str
-    loaded_at: float
-    expires_at: float
-
-
-class AnimusProfileProvider:
-    """Small in-memory provider for USER.md and SOUL.md overlays.
-
-    Phase 1 design:
-    - no DB persistence
-    - no partial field editing
-    - load from markdown files provided by the integration
-    - refresh cached content when the TTL expires
-    """
-
-    def __init__(self, ttl_seconds: int = 300) -> None:
-        if ttl_seconds <= 0:
-            raise ValueError("AnimusProfileProvider.ttl_seconds must be a positive integer.")
-        self.ttl_seconds = ttl_seconds
-        self._lock = threading.RLock()
-        self._user_profile: Optional[_AnimusProfileCacheEntry] = None
-        self._agent_profile: Optional[_AnimusProfileCacheEntry] = None
-
-    def load_user_profile(self, path: str) -> None:
-        """Load and cache the current USER.md profile."""
-        loaded = self._load_profile(path)
-        with self._lock:
-            self._user_profile = loaded
-        logger.info("AnimusProfileProvider: loaded user profile from %s", loaded.path)
-
-    def load_agent_profile(self, path: str) -> None:
-        """Load and cache the current SOUL.md profile."""
-        loaded = self._load_profile(path)
-        with self._lock:
-            self._agent_profile = loaded
-        logger.info("AnimusProfileProvider: loaded agent profile from %s", loaded.path)
-
-    def get_user_profile_text(self) -> str:
-        """Return cached USER.md content, refreshing it after TTL expiry."""
-        with self._lock:
-            self._user_profile = self._refresh_if_needed(self._user_profile)
-            return self._user_profile.text if self._user_profile is not None else ""
-
-    def get_agent_profile_text(self) -> str:
-        """Return cached SOUL.md content, refreshing it after TTL expiry."""
-        with self._lock:
-            self._agent_profile = self._refresh_if_needed(self._agent_profile)
-            return self._agent_profile.text if self._agent_profile is not None else ""
-
-    def _refresh_if_needed(
-        self,
-        entry: Optional[_AnimusProfileCacheEntry],
-    ) -> Optional[_AnimusProfileCacheEntry]:
-        if entry is None:
-            return None
-        if time.time() < entry.expires_at:
-            return entry
-        refreshed = self._load_profile(entry.path)
-        logger.info("AnimusProfileProvider: refreshed profile from %s after TTL expiry", refreshed.path)
-        return refreshed
-
-    def _load_profile(self, path: str) -> _AnimusProfileCacheEntry:
-        if not isinstance(path, str) or not path.strip():
-            raise ValueError("AnimusProfileProvider path must be a non-empty string.")
-
-        normalized_path = path.strip()
-        try:
-            with open(normalized_path, "r", encoding="utf-8") as handle:
-                text = handle.read().strip()
-        except FileNotFoundError as exc:
-            logger.exception("AnimusProfileProvider: profile file not found: %s", normalized_path)
-            raise RuntimeError(f"Profile file not found: {normalized_path}") from exc
-        except Exception as exc:
-            logger.exception("AnimusProfileProvider: failed to read profile file: %s", normalized_path)
-            raise RuntimeError(f"Failed to read profile file: {normalized_path}") from exc
-
-        now = time.time()
-        return _AnimusProfileCacheEntry(
-            path=normalized_path,
-            text=text,
-            loaded_at=now,
-            expires_at=now + self.ttl_seconds,
-        )
 
 
 class UMARuntime:
@@ -1178,27 +1081,6 @@ class UMARuntime:
             debug=debug,
         )
 
-    def _render_profile_overlay(self) -> str:
-        """Render cached USER.md and SOUL.md overlays for every response."""
-        memory = self._require_memory_bridge()
-        provider = getattr(memory, "animus_profile_provider", None)
-        if provider is None:
-            return ""
-
-        try:
-            agent_profile = provider.get_agent_profile_text().strip()
-            user_profile = provider.get_user_profile_text().strip()
-        except Exception:
-            logger.exception("UMARuntime: failed to load cached Animus profiles.")
-            return ""
-
-        sections: list[str] = []
-        if agent_profile:
-            sections.append("## Agent Profile\n" + agent_profile)
-        if user_profile:
-            sections.append("## User Profile\n" + user_profile)
-        return "\n\n".join(sections).strip()
-
     async def render_context(
         self,
         runtime_context: RuntimeContext,
@@ -1240,18 +1122,24 @@ class UMARuntime:
         else:
             rendered_memory = ContextPackBuilder.render_snippet(pack, ctx_cfg)
 
-        profile_overlay = self._render_profile_overlay()
-        parts = [part.strip() for part in (profile_overlay, rendered_memory) if part and part.strip()]
-        return "\n\n".join(parts).strip()
+        return (rendered_memory or "").strip()
 
     async def get_context_messages(
         self,
         runtime_context: RuntimeContext,
         *,
         query_text: str,
-        render_mode: str = "animus_v1",
+        render_mode: str = "guarded",
     ) -> dict[str, Any]:
-        """Retrieve context formatted as prompt messages."""
+        """Retrieve context formatted as prompt messages.
+
+        `render_mode` selects how the rendered memory is wrapped:
+
+        - ``guarded`` (default) — prefixed with an instruction telling the
+          model to treat the memory as supporting context only, so retrieved
+          text cannot outrank the caller's own task instructions.
+        - ``raw_rendered`` — the rendered memory verbatim, no framing.
+        """
         if not isinstance(runtime_context, RuntimeContext):
             raise TypeError("UMARuntime retrieval requires a RuntimeContext instance.")
         if not runtime_context.user_id:
@@ -1262,10 +1150,10 @@ class UMARuntime:
             raise ValueError("UMARuntime.get_context_messages: render_mode must be a non-empty string.")
 
         normalized_render_mode = render_mode.strip()
-        if normalized_render_mode not in {"animus_v1", "raw_rendered"}:
+        if normalized_render_mode not in {"guarded", "raw_rendered"}:
             raise ValueError(
                 f"UMARuntime.get_context_messages: unsupported render_mode={normalized_render_mode!r}. "
-                "Supported modes: 'animus_v1', 'raw_rendered'."
+                "Supported modes: 'guarded', 'raw_rendered'."
             )
 
         rendered = await self.render_context(
@@ -1276,7 +1164,7 @@ class UMARuntime:
 
         messages: list[dict[str, str]] = []
         if rendered:
-            if normalized_render_mode == "animus_v1":
+            if normalized_render_mode == "guarded":
                 messages.append(
                     {
                         "role": "system",

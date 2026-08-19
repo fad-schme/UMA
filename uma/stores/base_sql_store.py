@@ -39,7 +39,6 @@ from ..adapters.db.base import DBAdapter, DBConnection
 _T = TypeVar("_T")
 
 logger = logging.getLogger(__name__)
-DEFAULT_TENANT_ID = "default"
 
 # ---------------------------------------------------------------------------
 # SQL identifier whitelists — Pattern A fix (Bandit B608)

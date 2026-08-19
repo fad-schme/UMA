@@ -14,8 +14,12 @@ from uma.common.types import (
     SCOPE_MODEL_VERSION,
 )
 from uma.memory.promotion import PromotionPolicy, SCOPE_COSINE_THRESHOLD
-from uma.stores.base_sql_store import DEFAULT_TENANT_ID
+from uma.common.types.types_scope import DEFAULT_TENANT_ID
 import pytest
+
+from tests.helpers.runtime import TEST_AGENT_ID
+
+AGENT_ID = TEST_AGENT_ID
 
 # ── test_promotion_v2 ──────────────────────────────────────────
 
@@ -68,10 +72,11 @@ async def test_promotion_duplicate_guard_blocks_same_content_from_a_later_turn(u
     (subject, predicate, object) previously minted two durable agent rows.
     """
     memory = uma_memory
-    assert memory.agent_id
+    assert AGENT_ID
     await memory.set_agent_profile(
         description="kubernetes cluster orchestration expertise",
         focus_areas=["kubernetes"],
+        agent_id=AGENT_ID,
     )
 
     embedding = (await memory.embedder.embed(["kubernetes cluster orchestration for production workloads"]))[0]
@@ -82,7 +87,7 @@ async def test_promotion_duplicate_guard_blocks_same_content_from_a_later_turn(u
             owner_type="user",
             owner_id="user:u1",
             session_id="session-dup",
-            agent_id=memory.agent_id,
+            agent_id=AGENT_ID,
         )
         # Same content, different turn — exactly what the turn_id guard misses.
         fact.meta = {**fact.meta, "embedding": list(embedding), "turn_id": turn_id}
@@ -104,11 +109,13 @@ async def test_promotion_duplicate_guard_blocks_same_content_from_a_later_turn(u
         user_msg="hello",
         assistant_reply="unrelated bootstrap reply about postgres replication tuning.",
         session_id="session-bootstrap",
+        agent_id=AGENT_ID,
     )
     await memory.pipeline.await_pending_background()
     baseline = len(await _durable_facts())
 
     await memory.pipeline._maybe_promote_facts(
+        agent_id=AGENT_ID,
         user_id="user:u1",
         facts=[_candidate("fact_dup_turn_one", "turn-1")],
         tenant_id=DEFAULT_TENANT_ID,
@@ -118,6 +125,7 @@ async def test_promotion_duplicate_guard_blocks_same_content_from_a_later_turn(u
         pytest.skip("promotion did not admit the candidate; guard is not exercised")
 
     await memory.pipeline._maybe_promote_facts(
+        agent_id=AGENT_ID,
         user_id="user:u1",
         facts=[_candidate("fact_dup_turn_two", "turn-2")],
         tenant_id=DEFAULT_TENANT_ID,
@@ -139,7 +147,7 @@ async def test_durable_fact_exists_is_scoped_and_content_keyed(uma_memory) -> No
         fact_id="fact_guard_stored",
         owner_type="user",
         owner_id="user:u1",
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
     )
     embedding = (await memory.embedder.embed([str(stored.object)]))[0]
     await memory.semantic_core.upsert_fact(stored, embedding)
@@ -149,7 +157,7 @@ async def test_durable_fact_exists_is_scoped_and_content_keyed(uma_memory) -> No
         fact_id="fact_guard_twin",
         owner_type="user",
         owner_id="user:u1",
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
     )
     assert await store.durable_fact_exists(
         twin, tenant_id=DEFAULT_TENANT_ID, owner_type="user", owner_id="user:u1"
@@ -166,7 +174,7 @@ async def test_durable_fact_exists_is_scoped_and_content_keyed(uma_memory) -> No
         owner_type="user",
         owner_id="user:u1",
         object_text="a completely unrelated statement about postgres replication",
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
     )
     assert await store.durable_fact_exists(
         other, tenant_id=DEFAULT_TENANT_ID, owner_type="user", owner_id="user:u1"
@@ -176,18 +184,18 @@ async def test_durable_fact_exists_is_scoped_and_content_keyed(uma_memory) -> No
 @pytest.mark.asyncio
 async def test_session_to_user_promotion_creates_new_fact_and_preserves_original(uma_memory) -> None:
     memory = uma_memory
-    assert memory.agent_id
+    assert AGENT_ID
     source = _build_fact(
         fact_id="fact_source_session_user",
         owner_type="user",
         owner_id="user:u1",
         session_id="session-a",
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
     )
     embedding = (await memory.embedder.embed([str(source.object)]))[0]
     await memory.semantic_core.upsert_fact(source, embedding)
 
-    policy = PromotionPolicy(agent_id=memory.agent_id)
+    policy = PromotionPolicy(agent_id=AGENT_ID)
     promoted = policy.promote(
         source,
         tenant_id=DEFAULT_TENANT_ID,
@@ -209,7 +217,7 @@ async def test_session_to_user_promotion_creates_new_fact_and_preserves_original
     request = memory.runtime._build_retrieval_request(
         RuntimeContext(
             tenant_id=DEFAULT_TENANT_ID,
-            agent_id=memory.agent_id,
+            agent_id=AGENT_ID,
             request_id="req-prom-user",
             user_id="user:u1",
         )
@@ -226,18 +234,18 @@ async def test_session_to_user_promotion_creates_new_fact_and_preserves_original
 @pytest.mark.asyncio
 async def test_session_to_workspace_promotion_is_explicit_and_does_not_broaden_user_visibility(uma_memory) -> None:
     memory = uma_memory
-    assert memory.agent_id
+    assert AGENT_ID
     source = _build_fact(
         fact_id="fact_source_session_workspace",
         owner_type="user",
         owner_id="user:u1",
         session_id="session-a",
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
     )
     embedding = (await memory.embedder.embed([str(source.object)]))[0]
     await memory.semantic_core.upsert_fact(source, embedding)
 
-    policy = PromotionPolicy(agent_id=memory.agent_id)
+    policy = PromotionPolicy(agent_id=AGENT_ID)
     promoted = policy.promote(
         source,
         tenant_id=DEFAULT_TENANT_ID,
@@ -265,7 +273,7 @@ async def test_session_to_workspace_promotion_is_explicit_and_does_not_broaden_u
     request = memory.runtime._build_retrieval_request(
         RuntimeContext(
             tenant_id=DEFAULT_TENANT_ID,
-            agent_id=memory.agent_id,
+            agent_id=AGENT_ID,
             request_id="req-prom-workspace",
             user_id="user:u1",
         )
@@ -282,36 +290,36 @@ async def test_session_to_workspace_promotion_is_explicit_and_does_not_broaden_u
 @pytest.mark.asyncio
 async def test_user_to_agent_promotion_is_copy_based_and_idempotent(uma_memory) -> None:
     memory = uma_memory
-    assert memory.agent_id
+    assert AGENT_ID
     source = _build_fact(
         fact_id="fact_source_user_agent",
         owner_type="user",
         owner_id="user:u1",
         session_id=None,
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
     )
     embedding = (await memory.embedder.embed([str(source.object)]))[0]
     await memory.semantic_core.upsert_fact(source, embedding)
 
-    policy = PromotionPolicy(agent_id=memory.agent_id)
+    policy = PromotionPolicy(agent_id=AGENT_ID)
     promoted_a = policy.promote(
         source,
         tenant_id=DEFAULT_TENANT_ID,
         owner_type="agent",
-        owner_id=memory.agent_id,
+        owner_id=AGENT_ID,
         reason="test_user_to_agent",
     )
     promoted_b = policy.promote(
         source,
         tenant_id=DEFAULT_TENANT_ID,
         owner_type="agent",
-        owner_id=memory.agent_id,
+        owner_id=AGENT_ID,
         reason="test_user_to_agent",
     )
     assert promoted_a.id == promoted_b.id
     assert promoted_a.id != source.id
     assert promoted_a.owner_type == "agent"
-    assert promoted_a.owner_id == memory.agent_id
+    assert promoted_a.owner_id == AGENT_ID
 
     await memory.semantic_core.upsert_fact(promoted_a, embedding)
     await memory.semantic_core.upsert_fact(promoted_b, embedding)
@@ -331,15 +339,13 @@ async def test_user_to_agent_promotion_is_copy_based_and_idempotent(uma_memory) 
 
 @pytest.mark.asyncio
 async def test_invalid_promotion_targets_are_rejected(uma_memory) -> None:
-    memory = uma_memory
-    assert memory.agent_id
-    policy = PromotionPolicy(agent_id=memory.agent_id)
+    policy = PromotionPolicy(agent_id=AGENT_ID)
     session_fact = _build_fact(
         fact_id="fact_source_invalid_targets",
         owner_type="user",
         owner_id="user:u1",
         session_id="session-a",
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
     )
 
     with pytest.raises(ValueError, match="tenant_id"):
@@ -363,21 +369,21 @@ async def test_invalid_promotion_targets_are_rejected(uma_memory) -> None:
             session_fact,
             tenant_id=DEFAULT_TENANT_ID,
             owner_type="agent",
-            owner_id=memory.agent_id,
+            owner_id=AGENT_ID,
         )
 
 
 @pytest.mark.asyncio
 async def test_process_turn_without_profile_does_not_silently_promote(uma_memory) -> None:
     memory = uma_memory
-    assert memory.promotion_policy is not None
-    assert await memory.get_agent_profile() is None
+    assert await memory.get_agent_profile(agent_id=AGENT_ID) is None
 
     await memory.process_turn(
         user_id="user:u1",
         user_msg="hello",
         assistant_reply="the team uses kubernetes cluster orchestration for production workloads.",
         session_id="session-a",
+        agent_id=AGENT_ID,
     )
     await memory.pipeline.await_pending_background()
 
@@ -401,8 +407,8 @@ async def test_process_turn_without_profile_does_not_silently_promote(uma_memory
 async def test_get_agent_profile_returns_none_when_unset(uma_memory) -> None:
     """A fresh UMAMemory has no agent profile set."""
     memory = uma_memory
-    assert memory.agent_id
-    profile = await memory.get_agent_profile()
+    assert AGENT_ID
+    profile = await memory.get_agent_profile(agent_id=AGENT_ID)
     assert profile is None
 
 
@@ -411,21 +417,22 @@ async def test_set_get_agent_profile_roundtrip(uma_memory) -> None:
     """set_agent_profile persists description, focus_areas, and an
     embedding; get_agent_profile reads them back."""
     memory = uma_memory
-    assert memory.agent_id
+    assert AGENT_ID
 
     written = await memory.set_agent_profile(
         description="I help engineers with kubernetes, container orchestration, and cluster operations.",
         focus_areas=["kubernetes", "orchestration", "clusters"],
+        agent_id=AGENT_ID,
     )
     assert written is not None
-    assert written.agent_id == memory.agent_id
+    assert written.agent_id == AGENT_ID
     assert written.focus_areas == ["kubernetes", "orchestration", "clusters"]
     assert written.profile_embedding
     assert len(written.profile_embedding) > 0
 
-    read = await memory.get_agent_profile()
+    read = await memory.get_agent_profile(agent_id=AGENT_ID)
     assert read is not None
-    assert read.agent_id == memory.agent_id
+    assert read.agent_id == AGENT_ID
     assert read.description == "I help engineers with kubernetes, container orchestration, and cluster operations."
     assert read.focus_areas == ["kubernetes", "orchestration", "clusters"]
     # Float32 packing rounds; use approx.
@@ -438,17 +445,19 @@ async def test_set_get_agent_profile_roundtrip(uma_memory) -> None:
 async def test_set_agent_profile_upsert_overwrites(uma_memory) -> None:
     """A second set_agent_profile for the same agent overwrites in place."""
     memory = uma_memory
-    assert memory.agent_id
+    assert AGENT_ID
 
     await memory.set_agent_profile(
         description="initial scope description",
         focus_areas=["initial"],
+        agent_id=AGENT_ID,
     )
     await memory.set_agent_profile(
         description="revised scope description",
         focus_areas=["revised", "topics"],
+        agent_id=AGENT_ID,
     )
-    profile = await memory.get_agent_profile()
+    profile = await memory.get_agent_profile(agent_id=AGENT_ID)
     assert profile is not None
     assert profile.description == "revised scope description"
     assert profile.focus_areas == ["revised", "topics"]
@@ -460,10 +469,11 @@ async def test_agent_profile_row_is_not_returned_by_normal_procedural_search(uma
     they skip the vector index entirely, so search cannot surface them
     even for a semantically close query."""
     memory = uma_memory
-    assert memory.agent_id
+    assert AGENT_ID
     await memory.set_agent_profile(
         description="I specialize in kubernetes orchestration and cluster operations.",
         focus_areas=["kubernetes"],
+        agent_id=AGENT_ID,
     )
 
     # Search using a query embedding close to the profile description —
@@ -475,7 +485,7 @@ async def test_agent_profile_row_is_not_returned_by_normal_procedural_search(uma
         query_embedding=query_embedding,
         tenant_id="default",
         owner_type="agent",
-        owner_id=f"agent:{memory.agent_id}",
+        owner_id=f"agent:{AGENT_ID}",
         k=10,
     )
     profile_row_ids = {
@@ -676,14 +686,15 @@ async def test_promotion_without_agent_profile_promotes_nothing(uma_memory) -> N
     is a no-op. There is no is_eligible-only fallback path — the
     scope-match gate is the only pathway into the agent KB."""
     memory = uma_memory
-    assert memory.agent_id
-    assert await memory.get_agent_profile() is None  # nothing bound
+    assert AGENT_ID
+    assert await memory.get_agent_profile(agent_id=AGENT_ID) is None  # nothing bound
 
     await memory.process_turn(
         user_id="user:u1",
         user_msg="hello",
         assistant_reply="the team uses kubernetes cluster orchestration for production workloads.",
         session_id="session-noprofile",
+        agent_id=AGENT_ID,
     )
     # Phase 5: promotion is fire-and-forget — drain before observing.
     await memory.pipeline.await_pending_background()
@@ -697,7 +708,7 @@ async def test_promotion_without_agent_profile_promotes_nothing(uma_memory) -> N
                 "WHERE owner_type = 'agent' AND owner_id = ? "
                 "AND id LIKE 'fact_prom_%'"
             ),
-            params=[memory.agent_id],
+            params=[AGENT_ID],
             log_context="test_promotion_without_agent_profile_promotes_nothing",
         )
     finally:
@@ -707,42 +718,46 @@ async def test_promotion_without_agent_profile_promotes_nothing(uma_memory) -> N
 
 
 @pytest.mark.asyncio
-async def test_promotion_uses_scope_match_when_profile_is_bound(uma_memory) -> None:
-    """With an agent_profile bound and a policy set, promotion routes
-    through qualifies_for_agent_kb — verified by patching the policy
-    and asserting the method was called."""
+async def test_promotion_uses_scope_match_when_profile_is_bound(
+    uma_memory,
+    monkeypatch,
+) -> None:
+    """With an agent_profile bound, promotion routes through
+    qualifies_for_agent_kb — verified by patching the policy class and
+    asserting the method was called. The policy is bound to the turn's
+    agent_id, so the patch goes on the class, not on an instance."""
     memory = uma_memory
-    assert memory.agent_id
 
     # Bind a profile with focus_areas that will match the assistant reply.
     await memory.set_agent_profile(
         description="kubernetes cluster orchestration expertise",
         focus_areas=["kubernetes"],
+        agent_id=AGENT_ID,
     )
 
-    policy = memory.promotion_policy
-
-    # Patch qualifies_for_agent_kb to record calls; keep the return
-    # value shaped correctly so the pipeline continues.
+    # Record calls; keep the return value shaped correctly so the pipeline
+    # continues, and assert the policy was bound to the calling agent.
     calls: list = []
-    original = policy.qualifies_for_agent_kb
+    original = PromotionPolicy.qualifies_for_agent_kb
 
-    def _spy(fact, agent_profile, fact_embedding=None):
-        result = original(fact, agent_profile, fact_embedding=fact_embedding)
+    def _spy(self, fact, agent_profile, fact_embedding=None):
+        result = original(self, fact, agent_profile, fact_embedding=fact_embedding)
         calls.append({
+            "agent_id": self.agent_id,
             "fact_id": getattr(fact, "id", None),
             "passed": result.passed,
             "reasons": list(result.reasons),
         })
         return result
 
-    policy.qualifies_for_agent_kb = _spy  # type: ignore[assignment]
+    monkeypatch.setattr(PromotionPolicy, "qualifies_for_agent_kb", _spy)
 
     await memory.process_turn(
         user_id="user:u1",
         user_msg="hello",
         assistant_reply="the team uses kubernetes cluster orchestration for production workloads.",
         session_id="session-scope-match",
+        agent_id=AGENT_ID,
     )
     # Phase 5: promotion is fire-and-forget — drain before asserting on
     # the spy list. Without this, calls will be empty because the task
@@ -755,6 +770,7 @@ async def test_promotion_uses_scope_match_when_profile_is_bound(uma_memory) -> N
     # extractor.
     if calls:
         assert all("fact_id" in c for c in calls)
+        assert {c["agent_id"] for c in calls} == {AGENT_ID}
 
 
 @pytest.mark.asyncio
@@ -763,19 +779,21 @@ async def test_promotion_with_orthogonal_profile_blocks_all_facts(uma_memory) ->
     (focus_areas mismatch AND no embedding match), no fact reaches the
     agent KB even though it would have under plain is_eligible."""
     memory = uma_memory
-    assert memory.agent_id
+    assert AGENT_ID
 
     # Deliberately orthogonal focus — no substring of the assistant
     # reply will hit "gardening" and the embeddings will be far apart.
     await memory.set_agent_profile(
         description="botanical gardening and horticultural techniques",
         focus_areas=["gardening", "horticulture"],
+        agent_id=AGENT_ID,
     )
     await memory.process_turn(
         user_id="user:u1",
         user_msg="hello",
         assistant_reply="the team uses kubernetes cluster orchestration for production workloads.",
         session_id="session-orthogonal",
+        agent_id=AGENT_ID,
     )
     # Phase 5: promotion is fire-and-forget — drain before observing.
     await memory.pipeline.await_pending_background()
@@ -789,7 +807,7 @@ async def test_promotion_with_orthogonal_profile_blocks_all_facts(uma_memory) ->
                 "WHERE owner_type = 'agent' AND owner_id = ? "
                 "AND id LIKE 'fact_prom_%'"
             ),
-            params=[memory.agent_id],
+            params=[AGENT_ID],
             log_context="test_promotion_with_orthogonal_profile_blocks_all_facts",
         )
     finally:
@@ -804,12 +822,13 @@ async def test_promotion_get_agent_profile_failure_promotes_nothing(uma_memory) 
     promotion is a no-op for this turn. There is no fallback to
     plain is_eligible — the scope-match gate is required."""
     memory = uma_memory
-    assert memory.agent_id
+    assert AGENT_ID
     # Set a profile first so the "profile missing" path isn't what we
     # exercise — we want the store-failure path specifically.
     await memory.set_agent_profile(
         description="kubernetes cluster orchestration expertise",
         focus_areas=["kubernetes"],
+        agent_id=AGENT_ID,
     )
     # Patch procedural_core.get_agent_profile to raise. The fire-and-forget
     # promotion task will hit this exception and log it; nothing gets
@@ -825,6 +844,7 @@ async def test_promotion_get_agent_profile_failure_promotes_nothing(uma_memory) 
             user_msg="hello",
             assistant_reply="the team uses kubernetes cluster orchestration for production workloads.",
             session_id="session-boom",
+            agent_id=AGENT_ID,
         )
         # Drain BEFORE restoring so the boom actually runs in the
         # background task, not against the restored (working) method.
@@ -843,7 +863,7 @@ async def test_promotion_get_agent_profile_failure_promotes_nothing(uma_memory) 
                 "WHERE owner_type = 'agent' AND owner_id = ? "
                 "AND id LIKE 'fact_prom_%'"
             ),
-            params=[memory.agent_id],
+            params=[AGENT_ID],
             log_context="test_promotion_get_agent_profile_failure_promotes_nothing",
         )
     finally:
@@ -867,13 +887,14 @@ async def test_process_turn_returns_before_promotion_completes(uma_memory) -> No
     import asyncio as _asyncio
     import time
     memory = uma_memory
-    assert memory.agent_id
+    assert AGENT_ID
     # Trigger pipeline init so we can patch it.
     await memory.process_turn(
         user_id="user:u1",
         user_msg="prime",
         assistant_reply="pipeline init trigger",
         session_id="session-latency-prime",
+        agent_id=AGENT_ID,
     )
     await memory.pipeline.await_pending_background()
 
@@ -886,7 +907,7 @@ async def test_process_turn_returns_before_promotion_completes(uma_memory) -> No
     # of whether the pipeline gathered any facts to promote. This
     # isolates the property we care about (fire-and-forget) from the
     # extractor's fact yield.
-    def _always_schedule(*, user_id, facts, tenant_id):
+    def _always_schedule(*, agent_id, user_id, facts, tenant_id):
         task = _asyncio.create_task(_slow_body(), name="latency-probe")
         memory.pipeline._background_tasks.add(task)
         task.add_done_callback(memory.pipeline._background_tasks.discard)
@@ -902,6 +923,7 @@ async def test_process_turn_returns_before_promotion_completes(uma_memory) -> No
             user_msg="hello",
             assistant_reply="the team uses kubernetes cluster orchestration for production workloads.",
             session_id="session-latency",
+            agent_id=AGENT_ID,
         )
         turn_elapsed = time.monotonic() - t0
 
@@ -947,11 +969,12 @@ async def test_promotion_background_task_exception_does_not_break_turn(uma_memor
     to raise — every internal call site inside the original body is
     already inside a try/except, so patching an internal is not enough."""
     memory = uma_memory
-    assert memory.agent_id
+    assert AGENT_ID
     # Bind a profile so promotion is actually attempted.
     await memory.set_agent_profile(
         description="kubernetes cluster orchestration",
         focus_areas=["kubernetes"],
+        agent_id=AGENT_ID,
     )
     # Trigger pipeline init so we can patch the method.
     await memory.process_turn(
@@ -959,6 +982,7 @@ async def test_promotion_background_task_exception_does_not_break_turn(uma_memor
         user_msg="prime",
         assistant_reply="pipeline init trigger",
         session_id="session-safety-net-prime",
+        agent_id=AGENT_ID,
     )
     await memory.pipeline.await_pending_background()
 
@@ -974,6 +998,7 @@ async def test_promotion_background_task_exception_does_not_break_turn(uma_memor
             user_msg="hello",
             assistant_reply="the team uses kubernetes cluster orchestration for production workloads.",
             session_id="session-safety-net",
+            agent_id=AGENT_ID,
         )
         # Drain — gather(return_exceptions=True) means a task-level
         # raise doesn't bubble out here even if the safety net were
@@ -1000,6 +1025,7 @@ async def test_await_pending_background_is_safe_when_no_tasks_pending(uma_memory
         user_msg="prime",
         assistant_reply="pipeline init trigger",
         session_id="session-empty-drain",
+        agent_id=AGENT_ID,
     )
     await memory.pipeline.await_pending_background()
     assert memory.pipeline._background_tasks == set()
@@ -1014,12 +1040,13 @@ async def test_promotion_task_is_tracked_and_removed_on_completion(uma_memory) -
     _background_tasks (guards against GC-mid-flight) and clears it via
     done_callback once the task finishes."""
     memory = uma_memory
-    assert memory.agent_id
+    assert AGENT_ID
     await memory.process_turn(
         user_id="user:u1",
         user_msg="hello",
         assistant_reply="the team uses kubernetes cluster orchestration for production workloads.",
         session_id="session-lifecycle",
+        agent_id=AGENT_ID,
     )
     # Immediately after process_turn returns, either the task is still
     # pending in the set OR it already completed and the done_callback

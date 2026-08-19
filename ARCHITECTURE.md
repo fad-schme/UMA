@@ -83,11 +83,22 @@ Every stored and retrieved artifact must carry explicit ownership. These invaria
 | `tenant_id` | Required for durable artifacts; preserved end-to-end |
 | `session_id` + `agent_id` | Required for session-local artifacts |
 
-Cross-tenant access is impossible **by construction** (not by application-layer convention):
+`agent_id` and `user_id` are supplied on every public call and are never held
+on the `UMAMemory` instance; `tenant_id` is supplied per call too and falls
+back to `DEFAULT_TENANT_ID`. One instance therefore serves every agent and
+user concurrently without ambient scope.
 
-- The LanceDB adapter promotes `tenant_id` / `owner_type` / `owner_id` to first-class indexed columns and pushes them into every query's `WHERE` clause **before** the candidate cap is applied — the k-nearest cap cannot starve a tenant under multi-tenant load.
+UMA is single-tenant, multi-agent and multi-user. Cross-owner access — one
+agent or user reading another's artifacts — is prevented **at the storage
+layer** (not by application-layer convention):
+
+- The LanceDB adapter promotes `owner_type` / `owner_id` to first-class indexed columns and pushes them into every query's `WHERE` clause **before** the candidate cap is applied — the k-nearest cap cannot starve one owner under load from another.
 - SQL stores filter by `tenant_id AND owner_type AND owner_id` in every read path, with `AND quarantined_at IS NULL` appended.
 - Vector adapters refuse empty isolation values at write time (`ValueError`).
+
+Note: SQL stores bind isolation values as parameters; the LanceDB predicate is a
+string the adapter escapes itself (`_sql_escape`), so that path depends on the
+escaping rather than on engine-side binding.
 
 **Practical rule:** If you cannot answer "which user/agent/project is allowed to see this row?" the design is wrong.
 
@@ -222,7 +233,7 @@ class VectorIndex(ABC):
 | **FAISS** | Stored in parallel scope dict | Oversample (`k × 4`) then post-filter in Python |
 | **InMemory** | Stored in parallel `_scopes` dict | Isolation check before similarity computation |
 
-**LanceDB push-down** is the architectural reason cross-tenant isolation holds under load. The query path:
+**LanceDB push-down** is the architectural reason owner isolation holds under load. The query path:
 
 ```python
 where = (
@@ -235,7 +246,7 @@ table.search(vec).where(where).limit(limit).to_list()
 
 The cap (`limit`) is applied **after** scope narrowing. Hostile values (e.g. `t'malicious;DROP TABLE foo;--`) are SQL-escaped via standard single-quote doubling and round-trip safely.
 
-**FAISS** does not support pushed-down predicates. The adapter oversamples by a factor of 4 and post-filters; under heavy cross-tenant load FAISS can suffer recall loss. The docstring documents this; LanceDB is recommended for multi-tenant deployments.
+**FAISS** does not support pushed-down predicates. The adapter oversamples by a factor of 4 and post-filters; under heavy multi-owner load FAISS can suffer recall loss. The docstring documents this; LanceDB is recommended for deployments with many agents or users.
 
 ### Score Normalization
 
@@ -357,7 +368,7 @@ UMAMemory.ingest_document(file_path, owner_type, owner_id, tenant_id, ...)
 
 **The manifest is always written after embedding succeeds.** If embedding raises, no manifest is recorded and re-ingest is safe.
 
-`tenant_id` is required at `UMAMemory.ingest_document` — defaults to `"default"` for single-tenant deployments but multi-tenant callers MUST pass an explicit value. Empty `owner_type` / `owner_id` raises `ValueError`.
+`tenant_id` is a parameter on every public method and defaults to `DEFAULT_TENANT_ID` (`"default"`) when the caller omits it. UMA Lite runs a single tenant, but the value is carried explicitly alongside `agent_id` and `user_id` and written on every durable row — it is never inferred at the storage boundary. Ownership stays the caller's concern — empty `owner_type` / `owner_id` raises `ValueError`.
 
 HTML and Markdown chunks pass through `_sanitize_html` in `uma/ingest/parser.py`, stripping `<script>` / `<iframe>` tags, inline event handlers, `javascript:` / `data:` URLs, conditional comments, and inline SVG. Per-category removal counts are recorded in `meta["security"]["sanitization"]` on the document manifest.
 
@@ -453,8 +464,9 @@ from uma.api.management import (
 
 # Initialize
 # Replace with the path to your uma.yaml
-memory = UMAMemory.from_yaml("/path/to/your/uma.yaml").set_context(agent_id="agent-default")
-# set_context returns an immutable per-agent view; the source instance is unchanged.
+memory = UMAMemory.from_yaml("/path/to/your/uma.yaml")
+# One instance serves every agent and every user. agent_id and user_id are
+# required on each call; tenant_id defaults to "default" when omitted.
 
 # Optional: pre-LLM injection gate (never raises)
 scan = memory.scan_user_input(user_msg)
@@ -462,23 +474,24 @@ if scan["severity"] == "high":
     return safe_rejection_response()
 
 # Retrieve
-context = await memory.retrieve_context(query_text=..., user_id=..., session_id=..., tenant_id=...)
-result  = await memory.retrieve_memory(query_text=..., user_id=..., session_id=..., tenant_id=...)
+context = await memory.retrieve_context(query_text=..., agent_id=..., user_id=..., session_id=..., tenant_id=...)
+result  = await memory.retrieve_memory(query_text=..., agent_id=..., user_id=..., session_id=..., tenant_id=...)
 # result keys: compiled_memory, facts, evidence, provenance_valid
 # facts: [{text, confidence, salience, source_chunk_ids}] — text is full "subject predicate object" triple
 # evidence: [{id, text, source, source_document_id}]
 
 # Ingest — raises InjectionDetectedError on high-severity user_msg
-await memory.process_turn(user_id=..., user_msg=..., assistant_reply=..., session_id=..., tenant_id=...)
+await memory.process_turn(agent_id=..., user_id=..., user_msg=..., assistant_reply=..., session_id=..., tenant_id=...)
 await memory.process_turn(..., skip_scan=True)  # bypass Layer-2 entry scan
-report = await memory.ingest_document(file_path, owner_type="user", owner_id=..., tenant_id=...)
+report = await memory.ingest_document(file_path, agent_id=..., owner_type="user", owner_id=..., tenant_id=...)
 
-# Opt this agent into profile-gated, copy-based promotion
-await memory.set_agent_profile(description=..., focus_areas=[...], tenant_id=...)
+# Opt one agent into profile-gated, copy-based promotion
+await memory.set_agent_profile(agent_id=..., description=..., focus_areas=[...], tenant_id=...)
+profile = await memory.get_agent_profile(agent_id=..., tenant_id=...)
 
-# Bootstrap (Animus integration)
-await memory.load_memory_bootstrap("MEMORY.md", user_id=..., tenant_id=...)
-await memory.load_daily_diary_bootstrap("diary.md", user_id=...)
+# Bootstrap
+await memory.load_memory_bootstrap("MEMORY.md", agent_id=..., user_id=..., tenant_id=...)
+await memory.load_daily_diary_bootstrap("diary.md", agent_id=..., user_id=..., tenant_id=...)
 
 # Operational
 memory.set_rate_limit_hook(my_hook)

@@ -207,9 +207,9 @@ All production retrieval follows this exact sequence:
 Every lane query is owner-scoped. The scope fields required per call:
 
 ```python
-tenant_id="default"      # required; isolates by tenant
+agent_id="agent-default" # required on every call; never bound to the instance
 user_id="user-123"       # required for user-scoped lanes
-agent_id="agent-default" # bound via set_context(); required
+tenant_id="default"      # optional; defaults to "default" (single-tenant Lite)
 session_id="session-1"   # required for session-local lanes
 ```
 

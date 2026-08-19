@@ -92,7 +92,7 @@ def _validate_operation_args(args: Any) -> None:
     if args.command == "retrieve":
         _require(args, "agent_id", "user_id")
     elif args.command == "ingest" and args.operation == "document":
-        _require(args, "owner_type", "owner_id")
+        _require(args, "agent_id", "owner_type", "owner_id")
         _require_input_file(args)
     elif args.command == "ingest" and args.operation == "turn":
         _require(args, "agent_id", "user_id", "session_id")
@@ -264,9 +264,9 @@ async def _run_scoped_operation(
         memory = UMAMemory.from_yaml(str(config_path))
 
         if args.command == "retrieve":
-            scoped = memory.set_context(agent_id=args.agent_id)
             kwargs = {
                 "query_text": args.query,
+                "agent_id": args.agent_id,
                 "user_id": args.user_id,
                 "tenant_id": args.tenant_id,
                 "request_id": args.request_id,
@@ -274,14 +274,15 @@ async def _run_scoped_operation(
                 "session_id": args.session_id,
             }
             if args.operation == "context":
-                result = await scoped.retrieve_context(**kwargs)
+                result = await memory.retrieve_context(**kwargs)
             else:
-                result = await scoped.retrieve_memory(**kwargs)
+                result = await memory.retrieve_memory(**kwargs)
             scope = _request_scope(args)
 
         elif args.command == "ingest" and args.operation == "document":
             result = await memory.ingest_document(
                 str(args.file),
+                agent_id=args.agent_id,
                 owner_type=args.owner_type,
                 owner_id=args.owner_id,
                 tenant_id=args.tenant_id,
@@ -289,8 +290,8 @@ async def _run_scoped_operation(
             scope = _owner_scope(args)
 
         elif args.command == "ingest" and args.operation == "turn":
-            scoped = memory.set_context(agent_id=args.agent_id)
-            await scoped.process_turn(
+            await memory.process_turn(
+                agent_id=args.agent_id,
                 user_id=args.user_id,
                 user_msg=args.user_message,
                 assistant_reply=args.assistant_reply,
@@ -302,8 +303,8 @@ async def _run_scoped_operation(
             scope = _request_scope(args)
 
         elif args.command == "ingest":
-            scoped = memory.set_context(agent_id=args.agent_id)
             kwargs = {
+                "agent_id": args.agent_id,
                 "user_id": args.user_id,
                 "tenant_id": args.tenant_id,
                 "request_id": args.request_id,
@@ -311,12 +312,12 @@ async def _run_scoped_operation(
                 "session_id": args.session_id,
             }
             if args.operation == "memory-bootstrap":
-                result = await scoped.load_memory_bootstrap(
+                result = await memory.load_memory_bootstrap(
                     str(args.file),
                     **kwargs,
                 )
             else:
-                result = await scoped.load_daily_diary_bootstrap(
+                result = await memory.load_daily_diary_bootstrap(
                     str(args.file),
                     **kwargs,
                 )
