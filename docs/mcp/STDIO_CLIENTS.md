@@ -79,9 +79,13 @@ token to derive identity from, so the tool arguments are authoritative and an
 empty `user_id` is an error. `process_turn` additionally requires a non-empty
 `session_id`.
 
-`ingest_document` carries no `user_id`: documents are scoped by
-`(tenant_id, owner_type, owner_id)` only. An empty `owner_id` defaults to the
-server's bound agent id.
+`ingest_document` is scoped by `(tenant_id, owner_type, owner_id)` rather than
+by a request scope. `owner_type` is `"agent"` (the default — the document joins
+the calling agent's shared KB) or `"user"` (private to the ingesting user), and
+an empty `owner_id` defaults to the caller in both cases. It may not name anyone
+else: an agent-owned document is owned by the `agent_id` on the call, and a
+user-owned one by the calling user, so `user_id` is required in stdio mode when
+`owner_type` is `"user"` and unnecessary otherwise.
 
 ---
 

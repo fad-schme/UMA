@@ -802,18 +802,21 @@ async def test_extract_user_facts_captures_durable_self_declared_context() -> No
     education_facts = await extractor.extract_user_facts(
         subject="user",
         text="I want to continue my education and check out career options. I am keen on counseling or working in mental health.",
+        tenant_id="default",
         owner_type="user",
         owner_id="user:u1",
     )
     adoption_facts = await extractor.extract_user_facts(
         subject="user",
         text="I am researching adoption agencies and one of the adoption agencies I am looking into seems promising.",
+        tenant_id="default",
         owner_type="user",
         owner_id="user:u1",
     )
     identity_facts = await extractor.extract_user_facts(
         subject="user",
         text="I want to talk about my transgender journey and give a voice to the trans community.",
+        tenant_id="default",
         owner_type="user",
         owner_id="user:u1",
     )
@@ -995,6 +998,7 @@ def test_extract_facts_batch_salvages_missing_chunks() -> None:
         extractor = FactExtractor(llm=llm)
         return await extractor.extract_chunk_facts_batch(
             chunks,
+            tenant_id="default",
             owner_type="user",
             owner_id="user:u1",
             source_path="p.pdf",
@@ -1039,6 +1043,7 @@ async def test_episodic_fetch_summaries_owner_scoped(tmp_path):
         summary="s1",
         raw="r1",
         meta={},
+        tenant_id="default",
         owner_type="user",
         owner_id="user:u1",
     )
@@ -1835,6 +1840,7 @@ async def test_snippet_refiner_accepts_object_facts_and_chunks(uma_memory) -> No
         source_ids=[],
         confidence=0.9,
         salience=0.5,
+        tenant_id="default",
         owner_type="user",
         owner_id="user:u1",
         meta={},
@@ -1850,6 +1856,7 @@ async def test_snippet_refiner_accepts_object_facts_and_chunks(uma_memory) -> No
             source_hash="h",
             created_at=now,
             updated_at=now,
+            tenant_id="default",
             owner_type="user",
             owner_id="user:u1",
             meta={},
@@ -1861,3 +1868,49 @@ async def test_snippet_refiner_accepts_object_facts_and_chunks(uma_memory) -> No
     assert isinstance(out, list)
     assert out and isinstance(out[0], dict)
 
+
+
+@pytest.mark.asyncio
+async def test_extracted_facts_carry_the_requested_tenant() -> None:
+    """Every extractor entrypoint stamps the tenant it was handed.
+
+    `Fact.tenant_id` defaults to the single-tenant value, so an extractor
+    that ignored its tenant would hand back facts that land in "default"
+    whatever tenant asked for them. Each caller used to re-stamp them
+    afterwards, which is one remembering-to too many.
+    """
+    tenant = "tenant-x"
+
+    user_facts = await FactExtractor(llm=_PromptSensitiveLLM()).extract_user_facts(
+        subject="user",
+        text="I want to continue my education and check out career options. I am keen on counseling or working in mental health.",
+        tenant_id=tenant,
+        owner_type="user",
+        owner_id="user:u1",
+    )
+    assert user_facts, "expected the fixture LLM to yield at least one fact"
+    assert {fact.tenant_id for fact in user_facts} == {tenant}
+
+    chunks = [
+        DocumentChunk(
+            chunk_id="chunk_a",
+            doc_id="doc1",
+            text="Architecture " * 30 + ".",
+            page_range=(1, 1),
+            position=1,
+            paragraph_index_start=0,
+            paragraph_index_end=0,
+        ),
+    ]
+    chunk_facts, _ = await FactExtractor(llm=_FakeLLMMixed()).extract_chunk_facts_batch(
+        chunks,
+        tenant_id=tenant,
+        owner_type="user",
+        owner_id="user:u1",
+        source_path="p.pdf",
+        source_hash="h",
+        doc_id="doc1",
+        min_fact_words=5,
+    )
+    assert chunk_facts, "eligible chunks must never yield zero facts"
+    assert {fact.tenant_id for fact in chunk_facts} == {tenant}

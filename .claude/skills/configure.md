@@ -217,8 +217,9 @@ security:
   # false only if you want flagged artifacts dropped instead of retained.
   quarantine_enabled: true
 
-  # Retrieval audit log. Default on. Records hashed query previews,
-  # severity, scope, and result counts for every retrieve_* call.
+  # Retrieval audit log. Default on. Records a query digest plus the
+  # first 80 characters of the query, severity, scope, and result
+  # counts for every retrieve_* call. The full query is never stored.
   retrieval_audit_enabled: true
   retrieval_audit_db_path: null   # defaults to `.uma/db/retrieval_audit.db`
 ```

@@ -23,7 +23,7 @@ UMA exposes six public `lane_filter` lanes. The planner also uses `profile` (a s
 
 | Lane | Store | Role | Scope default |
 |------|-------|------|---------------|
-| Working Memory | In-memory buffer | Recent message continuity within a session | Session-local |
+| Working Memory | In-memory buffer | Recent message continuity within a session | Per user, per session |
 | Raw Chunks (`raw`) | SQLite + vector index | Immutable source evidence from ingested documents | Durable |
 | Semantic Facts (`semantic`) | SQLite + vector index | Structured statements extracted from chunks/turns | Session-local; promotable |
 | Profile Facts (`profile`) | SQLite + vector index (shared with `semantic`) | User-profile facts; `kind=profile_fact` rows in the semantic store surfaced as a distinct retrieval lane | Durable |
@@ -108,7 +108,7 @@ escaping rather than on engine-side binding.
 
 - No shared mutable object stores current request scope. Patterns like `memory.user_id` or `controller.current_scope` are forbidden.
 - Every API entry point operates from an explicit, immutable `RuntimeContext` built at the call boundary.
-- Working memory and episodic turns are session-local by default. Semantic facts extracted from turns are also session-local by default and must be explicitly promoted to become durable.
+- Working memory is keyed by `(tenant_id, agent_id, user_id, session_id)`; a shared `session_id` does not merge two users' buffers. Episodic turns are session-local by default. Semantic facts extracted from turns are also session-local by default and must be explicitly promoted to become durable.
 
 ---
 
@@ -120,7 +120,7 @@ Security in UMA is not an overlay — it is the shape of every code path that to
 2. **Trust scoring + quarantine** — every artifact carries `trust_score ∈ [0, 1]` (classifier-derived via `uma.common.trust.score_source`) and a nullable `quarantined_at` timestamp
 3. **Content hashing + integrity verification** — every Fact / Episode / Skill / Chunk carries a canonical SHA-256 `content_hash`; `verify_integrity` re-derives and quarantines on mismatch
 4. **Ingest gating** — MIME consistency, file size limits, PDF page caps, HTML/Markdown sanitization
-5. **Retrieval audit log** — every retrieval call records a hashed query preview, scope, severity, and result counts
+5. **Retrieval audit log** — every retrieval call records a query digest plus a bounded 80-character preview (never the full query), scope, severity, and result counts
 
 OWASP mapping (Top 10 for LLM Applications 2025): primitives 1, 2, and 4 address **LLM01 (Prompt Injection)**. Primitives 2, 3, and ingest scanning address **LLM04 (Data and Model Poisoning)**. The C1 vector isolation contract (next section) addresses **LLM08 (Vector and Embedding Weaknesses)** — isolation is pushed into the vector engine before the k-nearest cap so no tenant can starve another, and write-time scanning addresses the RAG poisoning sub-problem. Ingest size caps (`max_file_bytes`, `pdf_max_pages`) address the ingest side of **LLM10 (Unbounded Consumption)** — UMA-owned. The retrieval side is only partially covered: `set_rate_limit_hook` exposes a single plug-point that fires at the top of every public retrieval/ingest call, but UMA ships no default limiter and owns no throttling policy. The caller registers a hook backed by whatever accounting, storage, timeout, and refusal semantics fits their deployment. The hashed-preview audit log addresses parts of **LLM02 (Sensitive Information Disclosure)**. Every fact carries provenance back to source chunks and quarantined facts are excluded at the SQL retrieval layer, giving partial coverage of **LLM09 (Misinformation)**. **LLM03 (Supply Chain)** is out of scope as a model-supply-chain concern — UMA has no training or fine-tuning pipeline — but `PickleParser` removal and MIME consistency checks harden the document ingest boundary against executable payloads. **LLM05 (Improper Output Handling)**, **LLM06 (Excessive Agency)**, and **LLM07 (System Prompt Leakage)** are structurally out of scope: UMA returns context, not generated output; it has no tool use or autonomy; and system prompts live in the calling application.
 

@@ -560,6 +560,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                       AND tenant_id = ?
                       AND owner_type = ?
                       AND owner_id = ?
+                      AND quarantined_at IS NULL
                 """
                 params = list(ids) + [tenant_id, owner_type, owner_id]
                 rows = self._query_all(conn, sql, params=params, log_context="fetch_episode_summaries")
@@ -612,6 +613,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                       AND tenant_id = ?
                       AND owner_type = ?
                       AND owner_id = ?
+                      AND quarantined_at IS NULL
                 """
                 params = list(ids) + [tenant_id, owner_type, owner_id]
                 rows = self._query_all(conn, sql, params=params, log_context="fetch_episode_transcripts")

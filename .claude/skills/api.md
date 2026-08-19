@@ -406,7 +406,7 @@ rows = await list_retrieval_audit(
 #           query_hash, query_preview, scan_severity, result_count, llm_hops_skipped
 ```
 
-Each retrieval call (`retrieve_context`, `retrieve_memory`) records a hashed query preview and metadata. The audit store is enabled by default; disable via `security.retrieval_audit_enabled: false` in your YAML.
+Each retrieval call (`retrieve_context`, `retrieve_memory`) records a SHA-256 query digest (`query_hash`, for correlating one query across log lines), the first 80 characters of the query (`query_preview`, for human auditing), and metadata. The full query is never stored. The audit store is enabled by default; disable via `security.retrieval_audit_enabled: false` in your YAML.
 
 ---
 

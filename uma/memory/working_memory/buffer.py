@@ -23,6 +23,7 @@ from datetime import datetime
 import threading
 from typing import Literal, Optional
 
+from uma.common.identity import normalize_user_id
 from uma.common.types import SessionScope
 
 logger = logging.getLogger(__name__)
@@ -106,7 +107,7 @@ class WorkingMemoryBuffer:
         """
         self._max_tokens = max_tokens
         self._lock = threading.RLock()
-        self._store: dict[tuple[str, str, str], list[WorkingMemoryMessage]] = {}
+        self._store: dict[tuple[str, str, str, str], list[WorkingMemoryMessage]] = {}
         logger.debug("Initialized WorkingMemoryBuffer with max_tokens=%d", max_tokens)
 
     @property
@@ -133,10 +134,34 @@ class WorkingMemoryBuffer:
         word_count = len(text.split())
         return max(1, int(word_count * 1.3))
 
-    def _key_for_scope(self, scope: SessionScope) -> tuple[str, str, str]:
+    def _key_for_scope(self, scope: SessionScope) -> tuple[str, str, str, str]:
+        """Return the buffer key for a session scope.
+
+        ``user_id`` is part of the key and is required. Working memory is
+        per-user like every durable lane: ``session_id`` is caller-supplied
+        and carries no identity, so keying without the user lets two users
+        on the same (tenant, agent, session) read each other's turns — and
+        those turns are also copied into the durable episode.
+
+        The id is normalized here because the two scope producers disagree:
+        the turn path passes the canonical ``user:<id>`` subject while
+        ``session_scope_from_runtime_context`` passes the raw request value.
+        Both must land on the same key.
+        """
         if not isinstance(scope, SessionScope):
             raise TypeError("WorkingMemoryBuffer requires a SessionScope.")
-        return (scope.tenant_id, scope.agent_id, scope.session_id)
+        if not scope.user_id:
+            raise ValueError(
+                "WorkingMemoryBuffer requires SessionScope.user_id — working "
+                "memory is per-user and a user-less key would share one "
+                "buffer across every user of the session."
+            )
+        return (
+            scope.tenant_id,
+            scope.agent_id,
+            normalize_user_id(scope.user_id),
+            scope.session_id,
+        )
 
     def append(
         self,

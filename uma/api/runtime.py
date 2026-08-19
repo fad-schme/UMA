@@ -45,7 +45,7 @@ from uma.common.storage_metadata import (
     shared_metadata_view,
 )
 from uma.retrieve.planner import build_retrieval_plan
-from uma.retrieve.rlm.request import RetrievalRequest
+from uma.retrieve.rlm.request import RetrievalRequest, RetrievalScope
 from uma.memory.working_memory.core import session_scope_from_runtime_context
 
 logger = logging.getLogger(__name__)
@@ -350,31 +350,52 @@ class UMARuntime:
         return [item for item in (items or []) if cls._item_lane(item) in allowed]
 
     @staticmethod
-    def _filter_items_by_owner(items: list[Any], requesting_user_id: str) -> list[Any]:
-        """Drop user-owned items whose owner_id does not match the requesting user.
+    def _filter_items_by_scope(
+        items: list[Any],
+        allowed_scopes: tuple[RetrievalScope, ...],
+    ) -> list[Any]:
+        """Keep only items owned by one of the request's own retrieval scopes.
 
-        Agent-owned items (shared KB) pass through unconditionally.
-        Items with no owner metadata are kept to avoid silently dropping
-        records with incomplete scope fields.
+        Defense in depth at the public boundary. Every store read is already
+        scoped, so anything dropped here is a plumbing defect upstream rather
+        than routine filtering — hence the warning on each drop.
+
+        The allowed set is the request's own ``RetrievalScope`` tuple, so
+        this cannot drift from what retrieval actually asked for: an item is
+        admissible only if it belongs to the calling agent's shared KB or to
+        the calling user. It fails closed — an item whose owner cannot be
+        read is dropped, because every domain object these lanes return
+        carries a validated owner, so a missing one means the item did not
+        come from a store.
+
+        Applied to the four lanes whose items carry owner fields (facts,
+        chunks, episodic, skills). Graph rows carry no top-level owner — they
+        are scoped inside the Cypher predicate — and working memory is keyed
+        per user by the buffer, so neither is filtered here.
         """
+        allowed = {
+            (
+                scope.owner_type,
+                normalize_user_id(scope.owner_id)
+                if scope.owner_type == "user"
+                else scope.owner_id,
+            )
+            for scope in allowed_scopes
+        }
         out = []
         for item in items or []:
-            owner_type = getattr(item, "owner_type", None)
-            if isinstance(item, dict):
-                owner_type = item.get("owner_type", owner_type)
-            if owner_type != "user":
-                out.append(item)
-                continue
-            owner_id = getattr(item, "owner_id", None)
-            if isinstance(item, dict):
-                owner_id = item.get("owner_id", owner_id)
-            if owner_id == requesting_user_id:
+            owner_type = _artifact_value(item, "owner_type")
+            owner_id = _artifact_value(item, "owner_id")
+            if owner_type == "user" and owner_id:
+                owner_id = normalize_user_id(str(owner_id))
+            if (owner_type, owner_id) in allowed:
                 out.append(item)
             else:
                 logger.warning(
-                    "UMARuntime: dropped user-owned item owner_id=%s requesting_user_id=%s",
+                    "UMARuntime: dropped out-of-scope item owner=%s:%s allowed=%s",
+                    owner_type,
                     owner_id,
-                    requesting_user_id,
+                    sorted(allowed),
                 )
         return out
 
@@ -409,23 +430,29 @@ class UMARuntime:
         plan: Any,
         working_memory: list[Any],
         pack: Any,
-        requesting_user_id: str,
+        allowed_scopes: tuple[RetrievalScope, ...],
     ) -> "ContextBundle":
         from uma.common.results import ContextBundle, Confidence, DebugInfo, Provenance
         from uma.retrieve.rlm.coverage import compute_confidence
 
         coverage = getattr(pack, "coverage", None)
         active_lanes = list(plan.participating_lanes)
-        episodic = self._filter_items_by_lanes(pack.episodes, active_lanes)
-        facts = self._filter_items_by_owner(
+        episodic = self._filter_items_by_scope(
+            self._filter_items_by_lanes(pack.episodes, active_lanes),
+            allowed_scopes,
+        )
+        facts = self._filter_items_by_scope(
             self._filter_items_by_lanes(pack.facts or [], active_lanes),
-            requesting_user_id,
+            allowed_scopes,
         )
-        chunks = self._filter_items_by_owner(
+        chunks = self._filter_items_by_scope(
             self._filter_items_by_lanes(getattr(pack, "chunks", []), active_lanes),
-            requesting_user_id,
+            allowed_scopes,
         )
-        skills = self._filter_items_by_lanes(pack.skills, active_lanes)
+        skills = self._filter_items_by_scope(
+            self._filter_items_by_lanes(pack.skills, active_lanes),
+            allowed_scopes,
+        )
         trace = list(getattr(pack, "steps", []) or [])
         confidence_data = compute_confidence(coverage) if coverage is not None else None
 
@@ -536,13 +563,14 @@ class UMARuntime:
                 raise RuntimeError(
                     "UMARuntime.retrieve_context: RLM controller not initialized."
                 )
+            request = self._build_retrieval_request(
+                runtime_context,
+                plan=plan,
+                query_scan_severity=query_scan_severity,
+                debug=include_debug,
+            )
             pack = await controller.retrieve_context(
-                request=self._build_retrieval_request(
-                    runtime_context,
-                    plan=plan,
-                    query_scan_severity=query_scan_severity,
-                    debug=include_debug,
-                ),
+                request=request,
                 query_text=normalized_query_text,
             )
             increment("uma.get_structured_context.calls", tags={"path": "rlm"})
@@ -552,7 +580,7 @@ class UMARuntime:
                 plan=plan,
                 working_memory=working_memory,
                 pack=pack,
-                requesting_user_id=normalize_user_id(runtime_context.user_id),
+                allowed_scopes=request.scopes,
             )
             # Surface the scan severity on the bundle so callers and
             # downstream consumers (notably ContextPackBuilder) can act on
@@ -875,7 +903,7 @@ class UMARuntime:
                 artifact_id=f"memory:{runtime_context.request_id}:{memory_intent.strip()}",
                 title=f"Memory {memory_intent.strip()}",
                 owner_type="user",
-                owner_id=str(runtime_context.user_id or ""),
+                owner_id=normalize_user_id(runtime_context.user_id),
                 artifact_kind="compiled_memory_answer",
                 text=None,
                 summary=None,

@@ -47,6 +47,7 @@ _NO_FILTER = ""
 
 from ..common.types.types_scope import DEFAULT_TENANT_ID
 from uma.retrieve.user_query_helper import extract_keywords_and_phrases
+from .base_sql_store import LIKE_ESCAPE_SQL, escape_like
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from uma.common.conflict import FactResolver, LatestWinsFactResolver
@@ -703,9 +704,11 @@ class SemanticSQLStore(BaseVectorSQLStore):
                 term_clauses: list[str] = []
                 for term in terms:
                     term_clauses.append(
-                        "(LOWER(subject) LIKE ? OR LOWER(predicate) LIKE ? OR LOWER(object) LIKE ?)"
+                        f"(LOWER(subject) LIKE ?{LIKE_ESCAPE_SQL}"
+                        f" OR LOWER(predicate) LIKE ?{LIKE_ESCAPE_SQL}"
+                        f" OR LOWER(object) LIKE ?{LIKE_ESCAPE_SQL})"
                     )
-                    like = f"%{term.lower()}%"
+                    like = f"%{escape_like(term.lower())}%"
                     params.extend([like, like, like])
                 if term_clauses:
                     where.append(f"({' OR '.join(term_clauses)})")

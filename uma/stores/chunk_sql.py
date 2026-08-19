@@ -19,6 +19,7 @@ _QUARANTINE_FILTER = " AND quarantined_at IS NULL"
 _NO_FILTER = ""
 
 from ..common.types.types_scope import DEFAULT_TENANT_ID
+from .base_sql_store import LIKE_ESCAPE_SQL, escape_like
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from uma.stores.metadata import ensure_store_metadata
@@ -432,9 +433,6 @@ class ChunkSQLStore(BaseVectorSQLStore):
 
         from uma.retrieve.user_query_helper import build_query_term_set
 
-        def _escape_like(term: str) -> str:
-            return (term or "").replace("%", "\\%").replace("_", "\\_")
-
         # Consistent with user_query_helper: use the extracted keywords + phrases when available.
         term_set = build_query_term_set(query_text, max_terms=12, max_phrases=12)
         terms = list(term_set.terms) if term_set else []
@@ -490,14 +488,18 @@ class ChunkSQLStore(BaseVectorSQLStore):
         phrase_terms: list[str] = []
         for i, phrase in enumerate(phrases):
             key = f"p{i}"
-            phrase_terms.append(f"CASE WHEN LOWER(text) LIKE :{key} THEN :phrase_weight ELSE 0.0 END")
-            params[key] = f"%{_escape_like(phrase.lower())}%"
+            phrase_terms.append(
+                f"CASE WHEN LOWER(text) LIKE :{key}{LIKE_ESCAPE_SQL} THEN :phrase_weight ELSE 0.0 END"
+            )
+            params[key] = f"%{escape_like(phrase.lower())}%"
 
         keyword_terms: list[str] = []
         for i, term in enumerate(terms):
             key = f"t{i}"
-            keyword_terms.append(f"CASE WHEN LOWER(text) LIKE :{key} THEN :keyword_weight ELSE 0.0 END")
-            params[key] = f"%{_escape_like(term.lower())}%"
+            keyword_terms.append(
+                f"CASE WHEN LOWER(text) LIKE :{key}{LIKE_ESCAPE_SQL} THEN :keyword_weight ELSE 0.0 END"
+            )
+            params[key] = f"%{escape_like(term.lower())}%"
 
         phrase_expr = " + ".join(phrase_terms) if phrase_terms else "0.0"
         keyword_expr = " + ".join(keyword_terms) if keyword_terms else "0.0"

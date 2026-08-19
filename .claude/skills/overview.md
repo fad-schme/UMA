@@ -85,7 +85,7 @@ UMA is a memory SDK — the OWASP Agentic Security Initiative (ASI) is the most 
 | Control | Scope | How |
 |---|---|---|
 | **LLM01** Prompt Injection | In scope | Two-layer gate: `scan_user_input` (pre-LLM, advisory) + `process_turn` write-time rescan (raises `InjectionDetectedError` on high severity, drops turn entirely) |
-| **LLM02** Sensitive Information Disclosure | Partial | Retrieval audit log stores SHA-256-hashed query preview only, never raw text. HTML sanitization strips active URLs from ingested documents. |
+| **LLM02** Sensitive Information Disclosure | Partial | Retrieval audit log stores a SHA-256 query digest plus a bounded 80-character preview, never the full query. HTML sanitization strips active URLs from ingested documents. |
 | **LLM03** Supply Chain | Out of scope (adjacent) | No model training or plugin registry. `PickleParser` removed; MIME checks reject executables at the document ingest boundary. |
 | **LLM04** Data and Model Poisoning | In scope | Quarantined chunks excluded from fact extraction. SHA-256 `content_hash` + `verify_integrity` detect post-hoc tampering across all lanes. |
 | **LLM05** Improper Output Handling | Out of scope | UMA returns context, not generated output. Caller owns rendering and escaping. |

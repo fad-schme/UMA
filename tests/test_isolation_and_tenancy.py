@@ -21,7 +21,7 @@ from uma.common.types.types_owner import OwnerType
 from uma.common.types.types_scope import validate_agent_id, validate_owner_id, validate_owner_type, validate_request_id, validate_session_id, validate_tenant_id, validate_user_id, validate_workspace_id
 from uma.memory.promotion import PromotionPolicy
 from uma.retrieve.rlm.context_pack import ContextPack
-from uma.retrieve.rlm.request import RetrievalRequest
+from uma.retrieve.rlm.request import RetrievalRequest, RetrievalScope
 from uma.common.types.types_scope import DEFAULT_TENANT_ID
 import asyncio
 import pytest
@@ -241,6 +241,112 @@ async def test_multi_user_retrieval_isolates_user_owned_data_but_keeps_agent_kb_
 
 
 @pytest.mark.asyncio
+async def test_working_memory_isolates_users_sharing_one_session_id(tmp_path: Path) -> None:
+    """session_id carries no identity, so it cannot be the whole WM key.
+
+    The caller supplies session_id (over MCP it is a plain tool argument),
+    so two users can legitimately present the same (tenant, agent, session).
+    Working memory must still separate them the way every durable lane does.
+    """
+    memory = await init_uma_for_tests(tmp_path)
+    try:
+        runtime = UMARuntime.from_memory(memory)
+        memory.working_memory.append(
+            scope=SessionScope(
+                tenant_id=DEFAULT_TENANT_ID,
+                agent_id=AGENT_ID,
+                session_id="shared-session",
+                user_id="user:alpha",
+            ),
+            role="user",
+            content="alpha only wm",
+        )
+        memory.working_memory.append(
+            scope=SessionScope(
+                tenant_id=DEFAULT_TENANT_ID,
+                agent_id=AGENT_ID,
+                session_id="shared-session",
+                user_id="user:beta",
+            ),
+            role="user",
+            content="beta only wm",
+        )
+
+        ctx_alpha, ctx_beta = await asyncio.gather(
+            runtime.retrieve_context(
+                RuntimeContext(
+                    tenant_id=DEFAULT_TENANT_ID,
+                    agent_id=AGENT_ID,
+                    request_id="req-wm-alpha",
+                    user_id="user:alpha",
+                    session_id="shared-session",
+                ),
+                query_text="wm",
+            ),
+            runtime.retrieve_context(
+                RuntimeContext(
+                    tenant_id=DEFAULT_TENANT_ID,
+                    agent_id=AGENT_ID,
+                    request_id="req-wm-beta",
+                    user_id="user:beta",
+                    session_id="shared-session",
+                ),
+                query_text="wm",
+            ),
+        )
+
+        assert [msg.content for msg in ctx_alpha.working_memory] == ["alpha only wm"]
+        assert [msg.content for msg in ctx_beta.working_memory] == ["beta only wm"]
+    finally:
+        memory.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_working_memory_key_normalizes_the_user_subject(tmp_path: Path) -> None:
+    """The turn path writes "user:<id>"; the request path reads the raw id.
+
+    Both must resolve to the same buffer, or process_turn's working memory
+    would be invisible to the retrieval that follows it.
+    """
+    memory = await init_uma_for_tests(tmp_path)
+    try:
+        memory.working_memory.append(
+            scope=SessionScope(
+                tenant_id=DEFAULT_TENANT_ID,
+                agent_id=AGENT_ID,
+                session_id="s1",
+                user_id=normalize_user_id("gamma"),
+            ),
+            role="user",
+            content="written with canonical subject",
+        )
+        messages = memory.working_memory.get_context(
+            SessionScope(
+                tenant_id=DEFAULT_TENANT_ID,
+                agent_id=AGENT_ID,
+                session_id="s1",
+                user_id="gamma",
+            )
+        )
+        assert [msg.content for msg in messages] == ["written with canonical subject"]
+    finally:
+        memory.shutdown()
+
+
+def test_working_memory_buffer_rejects_a_scope_without_a_user() -> None:
+    from uma.memory.working_memory.buffer import WorkingMemoryBuffer
+
+    buffer = WorkingMemoryBuffer(max_tokens=1000)
+    scope = SessionScope(
+        tenant_id=DEFAULT_TENANT_ID,
+        agent_id=AGENT_ID,
+        session_id="s1",
+    )
+    with pytest.raises(ValueError, match="requires SessionScope.user_id"):
+        buffer.append(scope=scope, role="user", content="no user on this scope")
+
+
+@pytest.mark.asyncio
 async def test_retrieval_and_process_turn_overlap_preserve_session_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     memory = await init_uma_for_tests(tmp_path)
     try:
@@ -429,24 +535,76 @@ async def test_retrieval_remains_isolated_under_concurrent_requests(uma_memory, 
     ]
 
 
-def test_filter_items_by_owner_drops_foreign_user_items_and_keeps_agent_items() -> None:
+def _alice_scopes() -> tuple[RetrievalScope, ...]:
+    return RetrievalRequest.from_runtime_context(
+        RuntimeContext(
+            tenant_id=DEFAULT_TENANT_ID,
+            agent_id="agent-default",
+            request_id="req-filter",
+            user_id="user:alice",
+        )
+    ).scopes
+
+
+def test_filter_items_by_scope_admits_only_the_requests_own_scopes() -> None:
     from types import SimpleNamespace
     from uma.api.runtime import UMARuntime
 
-    agent_item = SimpleNamespace(owner_type="agent", owner_id="agent-default")
-    own_item = SimpleNamespace(owner_type="user", owner_id="user:alice")
-    foreign_item = SimpleNamespace(owner_type="user", owner_id="user:bob")
-    no_owner_item = SimpleNamespace()  # no owner_type attribute — kept for safety
+    own_agent_item = SimpleNamespace(owner_type="agent", owner_id="agent-default")
+    own_user_item = SimpleNamespace(owner_type="user", owner_id="user:alice")
+    foreign_user_item = SimpleNamespace(owner_type="user", owner_id="user:bob")
+    foreign_agent_item = SimpleNamespace(owner_type="agent", owner_id="agent-other")
+    workspace_item = SimpleNamespace(owner_type="workspace", owner_id="ws-1")
 
-    result = UMARuntime._filter_items_by_owner(
-        [agent_item, own_item, foreign_item, no_owner_item],
-        requesting_user_id="user:alice",
+    result = UMARuntime._filter_items_by_scope(
+        [
+            own_agent_item,
+            own_user_item,
+            foreign_user_item,
+            foreign_agent_item,
+            workspace_item,
+        ],
+        _alice_scopes(),
     )
 
-    assert agent_item in result
-    assert own_item in result
-    assert foreign_item not in result
-    assert no_owner_item in result
+    assert result == [own_agent_item, own_user_item]
+
+
+def test_filter_items_by_scope_fails_closed_on_unreadable_owner() -> None:
+    """Every lane this runs on returns owner-bearing domain objects.
+
+    An item without one did not come from a store, so it is dropped rather
+    than waved through.
+    """
+    from types import SimpleNamespace
+    from uma.api.runtime import UMARuntime
+
+    no_owner_item = SimpleNamespace()
+    half_owner_item = SimpleNamespace(owner_type="user", owner_id=None)
+
+    assert UMARuntime._filter_items_by_scope(
+        [no_owner_item, half_owner_item], _alice_scopes()
+    ) == []
+
+
+def test_filter_items_by_scope_matches_either_user_subject_form() -> None:
+    """A row written as "alice" is the same principal as "user:alice"."""
+    from types import SimpleNamespace
+    from uma.api.runtime import UMARuntime
+
+    raw_form = SimpleNamespace(owner_type="user", owner_id="alice")
+
+    assert UMARuntime._filter_items_by_scope([raw_form], _alice_scopes()) == [raw_form]
+
+
+def test_filter_items_by_scope_covers_every_owner_bearing_lane() -> None:
+    """Regression: episodic and skills used to bypass the filter entirely."""
+    import inspect
+    from uma.api.runtime import UMARuntime
+
+    source = inspect.getsource(UMARuntime._assemble_public_context_result)
+    for lane in ("episodic", "facts", "chunks", "skills"):
+        assert f"{lane} = self._filter_items_by_scope(" in source, lane
 
 
 # ── test_tenant_scoped_durable_boundaries ──────────────────────────────────────────
@@ -1224,25 +1382,29 @@ async def test_ingest_document_persists_explicit_owner_fields(
     finally:
         conn.close()
 
-    if expected_owner_type == "workspace":
-        conn = memory.semantic_core.store._conn()
-        try:
-            fact_rows = memory.semantic_core.store._query_all(
-                conn,
-                """
-                SELECT owner_type, owner_id, workspace_id
-                FROM facts
-                WHERE owner_type=? AND owner_id=? AND meta LIKE ?
-                """,
-                params=["workspace", "workspace:alpha", f"%{report.doc_id}%"],
-                log_context="test_write_owner_ingest_workspace_facts",
-            )
-            assert fact_rows
-            assert all(row["owner_type"] == "workspace" for row in fact_rows)
-            assert all(row["owner_id"] == "workspace:alpha" for row in fact_rows)
-            assert all(row["workspace_id"] == "workspace:alpha" for row in fact_rows)
-        finally:
-            conn.close()
+    # Document-derived facts carry the scope the extractor was handed. The
+    # ingest stage no longer re-stamps tenant or owner onto what comes back,
+    # so this asserts the whole tuple for every owner type rather than just
+    # the workspace case.
+    conn = memory.semantic_core.store._conn()
+    try:
+        fact_rows = memory.semantic_core.store._query_all(
+            conn,
+            """
+            SELECT tenant_id, owner_type, owner_id, workspace_id
+            FROM facts
+            WHERE owner_type=? AND owner_id=? AND meta LIKE ?
+            """,
+            params=[expected_owner_type, expected_owner_id, f"%{report.doc_id}%"],
+            log_context="test_write_owner_ingest_facts",
+        )
+        assert fact_rows, f"no document-derived facts for {expected_owner_type}"
+        assert all(row["tenant_id"] == "default" for row in fact_rows)
+        assert all(row["owner_type"] == expected_owner_type for row in fact_rows)
+        assert all(row["owner_id"] == expected_owner_id for row in fact_rows)
+        assert all(row["workspace_id"] == expected_workspace_id for row in fact_rows)
+    finally:
+        conn.close()
 
 
 @pytest.mark.asyncio

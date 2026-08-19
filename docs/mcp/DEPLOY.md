@@ -134,13 +134,32 @@ user_id='bob' does not match authenticated user (token identifies user='alice')
 That is deliberate. A silent override would let a confused or manipulated client
 believe it wrote to one scope while UMA wrote to another.
 
+`agent_id` is deliberately **not** part of the token, and is not authenticated.
+Over MCP there is no agent to authenticate: the client is a chat application
+driven by a person, and `uma auth create --user alice` issues a credential to
+that person. `agent_id` selects which shared knowledge-base namespace the call
+reads and writes — it is a partition selector, not a principal.
+
+That means agent-owned memory is shared, by design, across every user of a
+tenant who names that `agent_id`. The confidentiality boundary is the token's
+`(tenant_id, user_id)` pair and the user-owned lane it scopes. Do not put
+anything in an agent-owned lane that one user of the tenant should not see.
+
+(Embedding UMA as a library is the other shape: there the application *is* the
+agent and asserts its own `agent_id` alongside `user_id`, the same way it
+asserts every other scope value.)
+
 Practical consequences:
 
 - One token per user. Sharing a token across people merges their memory.
 - Revoking a token cuts access immediately; it does not delete anything already
   stored under that scope.
-- `ingest_document` has no `user_id` — documents are owned by
-  `(tenant_id, owner_type, owner_id)`. The token's tenant is still enforced.
+- `ingest_document` is owner-scoped rather than request-scoped: documents are
+  owned by `(tenant_id, owner_type, owner_id)`. The token still decides who the
+  owner may be — `owner_type: "agent"` is owned by the `agent_id` on the call,
+  `owner_type: "user"` by the token's user. Naming anyone else is an error, not
+  a silent redirect, because an ingested document is read back later as trusted
+  context.
 
 ---
 

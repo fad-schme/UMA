@@ -23,13 +23,21 @@ Schema
     user_id         TEXT
     agent_id        TEXT
     query_hash      TEXT               -- sha256_hex(query)[:16]
-    query_preview   TEXT               -- query[:80]
+    query_preview   TEXT               -- query[:80], verbatim (see note below)
     scan_severity   TEXT               -- "none" / "low" / "medium" / "high"
     lanes           TEXT               -- JSON list of participating lanes
     result_count    INTEGER            -- count of chunks + facts returned
     refined_via_llm INTEGER            -- 1 if snippet refinement ran, else 0
     pruned_via_llm  INTEGER            -- 1 if fact pruning ran, else 0
     created_at      DATETIME           -- ISO-8601 UTC
+
+`query_preview` holds the first 80 characters of the query verbatim, and
+that is deliberate (M1). A hash alone correlates a query across log lines
+but tells a human auditor nothing about what was asked, which is the
+purpose of an audit log. The pair is the design: `query_hash` for
+correlation, `query_preview` for reading. The bound is the control — do
+not widen it to the full query, and do not replace the preview with a
+second hash.
 
 The store is opt-out via config — enabled by default at the standard
 embedded profile path. Disable by setting

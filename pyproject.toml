@@ -109,13 +109,17 @@ dev = [
     "bandit[toml]",
     "pip-audit",
     "ruff",
+    "mypy",
+    "types-PyYAML",
     "matplotlib",
     # The suite exercises the optional surfaces, so `[dev]` alone must be enough
     # to run it. Self-reference rather than restating the pins: the parser tests
-    # need beautifulsoup4/markdown/PyPDF2, and tests/test_cli.py runs `doctor`
-    # against an ollama-provider config that resolves through the
-    # OpenAI-compatible adapter.
+    # need beautifulsoup4/markdown/PyPDF2, tests/mcp needs the MCP SDK (it
+    # skips itself silently when absent, which hides real breakage), and
+    # tests/test_cli.py runs `doctor` against an ollama-provider config that
+    # resolves through the OpenAI-compatible adapter.
     "uma-mem[parsers]",
+    "uma-mem[mcp]",
     "openai>=1.0.0",
 ]
 

@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from uma.common.types.types_scope import DEFAULT_TENANT_ID
+from uma.common.types.types_scope import DEFAULT_TENANT_ID, validate_tenant_id
 from uma.common.types import Fact, RuntimeContext, SCOPE_MODEL_VERSION
 from uma.retrieve.ranking import fuse_candidates
 from uma.common.identity import normalize_user_id
@@ -160,11 +160,17 @@ class SemanticCore:
         user_id: str,
         text: str,
         *,
+        tenant_id: str = DEFAULT_TENANT_ID,
         extra_meta: dict | None = None,
     ) -> list[Fact]:
         """
         Extract semantic facts (not persisted).
         Normalizes user_id to the canonical identity format.
+
+        ``tenant_id`` is stamped on every extracted fact by the extractor.
+        It matters even though nothing is persisted here: the caller may
+        persist what it gets back, and a fact carrying the wrong tenant is
+        a cross-tenant write waiting to happen.
         """
         try:
             normalized_user_id = normalize_user_id(user_id)
@@ -172,13 +178,19 @@ class SemanticCore:
             logger.exception("SemanticCore.extract: invalid user_id=%r", user_id)
             raise
 
-        return await self.ingestor.extract(normalized_user_id, text, extra_meta=extra_meta)
+        return await self.ingestor.extract(
+            normalized_user_id,
+            text,
+            tenant_id=validate_tenant_id(tenant_id or DEFAULT_TENANT_ID),
+            extra_meta=extra_meta,
+        )
 
     async def ingest(
         self,
         user_id: str,
         text: str,
         *,
+        tenant_id: Optional[str] = None,
         extra_meta: dict | None = None,
         turn_context: Optional[RuntimeContext] = None,
         source_kind: str = "turn_user",
@@ -204,6 +216,15 @@ class SemanticCore:
             logger.exception("SemanticCore.ingest: invalid user_id=%r", user_id)
             raise
 
+        # One resolution for the whole call: an explicit tenant_id wins, then
+        # the turn's, then the single-tenant default. The extractor stamps it
+        # onto every fact, so nothing downstream re-derives it.
+        resolved_tenant_id = validate_tenant_id(
+            tenant_id
+            or (turn_context.tenant_id if turn_context is not None else None)
+            or DEFAULT_TENANT_ID
+        )
+
         # Scan input text once at the boundary; result is captured by closure
         # and applied per-fact before storage. Option A discipline: scan at
         # the boundary; everything derived inherits.
@@ -221,7 +242,6 @@ class SemanticCore:
                 if _source_ids and not list(getattr(f, "source_ids", None) or []):
                     f.source_ids = list(_source_ids)
                 if turn_context is not None:
-                    f.tenant_id = turn_context.tenant_id
                     f.workspace_id = turn_context.workspace_id
                     f.session_id = turn_context.session_id
                     f.origin_agent_id = turn_context.agent_id
@@ -250,6 +270,7 @@ class SemanticCore:
         facts = await self.ingestor.ingest(
             normalized_user_id,
             text,
+            tenant_id=resolved_tenant_id,
             extra_meta=extra_meta,
             fact_transform=_apply_turn_scope,
         )
