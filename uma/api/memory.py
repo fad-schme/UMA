@@ -682,7 +682,6 @@ class UMAMemory:
         self,
         file_path: str,
         *,
-        agent_id: str,
         owner_type: Optional[str] = None,
         owner_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
@@ -693,10 +692,10 @@ class UMAMemory:
 
         Documents are scoped by ``(tenant_id, owner_type, owner_id)`` — the
         DAT invariant — not by a user/session request scope, so this API takes
-        no ``user_id``. ``owner_type``/``owner_id`` remain required and are
-        validated by the ingest layer; ``agent_id`` records which agent
-        performed the ingest and is never a substitute for the owner tuple.
-        ``tenant_id`` defaults to the single-tenant value.
+        neither ``user_id`` nor ``agent_id``. Uploading a file is a user
+        action; the owner tuple alone decides who can read the document back,
+        and ``owner_type``/``owner_id`` are required and validated by the
+        ingest layer. ``tenant_id`` defaults to the single-tenant value.
         """
         if not file_path or not isinstance(file_path, str) or not file_path.strip():
             raise ValueError("file_path is required and cannot be empty")
@@ -714,7 +713,6 @@ class UMAMemory:
         # owner-derived heuristic in its closure.
         await self._invoke_rate_limit_hook("ingest_document", None)
 
-        validate_agent_id(agent_id)
         resolved_tenant_id = validate_tenant_id(tenant_id or DEFAULT_TENANT_ID)
 
         from uma.ingest.ingest_service import ingest_document as _ingest

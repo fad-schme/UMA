@@ -167,7 +167,6 @@ async def test_local_ollama_retrieval_precision_recall(tmp_path) -> None:
                 str(page),
                 owner_type="user",
                 owner_id=_OWNER_ID,
-                agent_id=AGENT_ID,
             )
             assert report.chunks_created > 0, f"{page.name} produced no chunks: {report.warnings}"
 

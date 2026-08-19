@@ -130,6 +130,18 @@ class UMAMemoryEnvironment:
 
     @staticmethod
     def _filter_session_local_items(request: RetrievalRequest, items: list[Any]) -> list[Any]:
+        """Narrow episodic items to the request's own session.
+
+        Fails closed on both isolation fields. An item missing ``tenant_id``,
+        or a session-local item missing ``origin_agent_id``, is dropped rather
+        than admitted: every episode written through the turn path stamps both
+        (``EpisodicCore`` sets ``origin_agent_id`` from the turn context), so a
+        missing value means the row predates the column or did not come from a
+        store — neither is something a multi-agent read should admit on trust.
+        Items with no ``session_id`` are not session-local and pass through to
+        the owner-scope filter unchanged; cluster summaries are written with
+        ``session_id=None`` and take that path.
+        """
         filtered: list[Any] = []
         request_session_id = getattr(request.context, "session_id", None)
         request_runtime_agent = getattr(request.context, "agent_id", None)
@@ -137,7 +149,7 @@ class UMAMemoryEnvironment:
         for item in items or []:
             try:
                 tenant_id = getattr(item, "tenant_id", None)
-                if tenant_id and request_tenant_id and tenant_id != request_tenant_id:
+                if not tenant_id or tenant_id != request_tenant_id:
                     continue
                 session_id = getattr(item, "session_id", None)
                 if not session_id:
@@ -146,7 +158,7 @@ class UMAMemoryEnvironment:
                 if not request_session_id or session_id != request_session_id:
                     continue
                 origin_agent_id = getattr(item, "origin_agent_id", None)
-                if origin_agent_id and request_runtime_agent and origin_agent_id != request_runtime_agent:
+                if not origin_agent_id or origin_agent_id != request_runtime_agent:
                     continue
                 filtered.append(item)
             except Exception:

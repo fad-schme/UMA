@@ -380,7 +380,6 @@ async def ingest_document(
     memory = _get_memory()
     report = await memory.ingest_document(
         file_path,
-        agent_id=resolved_agent_id,
         owner_type=resolved_owner_type,
         owner_id=resolved_owner_id,
         tenant_id=tenant_id,

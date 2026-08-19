@@ -1724,7 +1724,7 @@ async def test_chunk_search_does_not_require_subject(uma_memory, tmp_path):
         "It contains the phrase hello world in a longer passage so lexical search can match it reliably. "
         "The rest of this sentence is padding to ensure the stored chunk is long enough for LIKE-based lexical search.\n"
     )
-    await memory.ingest_document(str(doc), owner_type=owner_type, owner_id=owner_id, agent_id=AGENT_ID)
+    await memory.ingest_document(str(doc), owner_type=owner_type, owner_id=owner_id)
 
     q = "hello world"
     query_embedding = (await memory.embedder.embed([q]))[0]
@@ -1805,7 +1805,7 @@ async def test_chunk_retrieval_returns_chunk_objects(uma_memory, tmp_path) -> No
         "Second sentence for stability.\n",
         encoding="utf-8",
     )
-    await memory.ingest_document(str(doc), owner_type=owner_type, owner_id=owner_id, agent_id=AGENT_ID)
+    await memory.ingest_document(str(doc), owner_type=owner_type, owner_id=owner_id)
 
     q = "hello world"
     query_embedding = (await memory.embedder.embed([q]))[0]

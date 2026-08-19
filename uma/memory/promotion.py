@@ -481,13 +481,23 @@ class PromotionPolicy:
             owner_type=owner_type,
             owner_id=owner_id,
         )
+        # A promotion that lands on a different owner than the source widens
+        # readership: an agent's KB is shared by every user of that agent, and
+        # a workspace by every member. Lineage metadata rides along in
+        # `Fact.meta` all the way out to `ContextBundle.facts`, so carrying the
+        # originating user's id and session there would hand every other reader
+        # the identity that `is_eligible`'s `blocked_subject_prefixes` gate just
+        # refused to promote. `source_fact_id` still points at the source row,
+        # which carries its own owner — the audit chain survives redaction.
+        # Session -> user promotion keeps the same owner and is left intact.
+        widens_readership = owner_id != fact.owner_id
         promoted_meta = dict(getattr(fact, "meta", None) or {})
         promoted_meta["promotion"] = {
             "source_fact_id": fact.id,
             "source_owner_type": fact.owner_type,
-            "source_owner_id": fact.owner_id,
+            "source_owner_id": None if widens_readership else fact.owner_id,
             "source_scope_kind": self._source_scope_kind(fact),
-            "source_session_id": source_session_id,
+            "source_session_id": None if widens_readership else source_session_id,
             "promoted_owner_type": owner_type,
             "promoted_owner_id": owner_id,
             "tenant_id": tenant_id,
@@ -497,10 +507,21 @@ class PromotionPolicy:
         promoted_meta["promoted_from"] = {
             "fact_id": fact.id,
             "owner_type": fact.owner_type,
-            "owner_id": fact.owner_id,
-            "session_id": source_session_id,
+            "owner_id": None if widens_readership else fact.owner_id,
+            "session_id": None if widens_readership else source_session_id,
         }
         promoted_meta["promotion_policy"] = "v2"
+        if widens_readership:
+            logger.debug(
+                "PromotionPolicy.promote: redacted source identity from lineage "
+                "tenant_id=%s source_owner_type=%s promoted_owner_type=%s "
+                "promoted_owner_id=%s source_fact_id=%s",
+                tenant_id,
+                fact.owner_type,
+                owner_type,
+                owner_id,
+                fact.id,
+            )
 
         promoted = Fact(
             id=promotion_id,
@@ -522,9 +543,17 @@ class PromotionPolicy:
                 else (owner_id if owner_type == "workspace" else source_workspace_id)
             ),
             session_id=None,
+            # `origin_agent_id` names the agent, not a person, and survives.
+            # The other two identify the originating user and are redacted on
+            # the same rule as the lineage metadata above — they are columns on
+            # the domain object, so they reach `ContextBundle.facts` directly.
             origin_agent_id=getattr(fact, "origin_agent_id", None),
-            origin_user_id=getattr(fact, "origin_user_id", None),
-            origin_session_id=getattr(fact, "origin_session_id", None),
+            origin_user_id=(
+                None if widens_readership else getattr(fact, "origin_user_id", None)
+            ),
+            origin_session_id=(
+                None if widens_readership else getattr(fact, "origin_session_id", None)
+            ),
             scope_model_version=SCOPE_MODEL_VERSION,
             trust_score=score_source(SourceDescriptor(kind="promotion", parent_trust_score=getattr(fact, "trust_score", None))),
             content_hash=getattr(fact, "content_hash", None),

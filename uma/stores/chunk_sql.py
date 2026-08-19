@@ -457,17 +457,14 @@ class ChunkSQLStore(BaseVectorSQLStore):
                 bool(phrases),
             )
 
-        where = []
-        params: dict[str, Any] = {}
-        if tenant_id:
-            where.append("tenant_id = :tenant_id")
-            params["tenant_id"] = tenant_id
-        if owner_type:
-            where.append("owner_type = :owner_type")
-            params["owner_type"] = owner_type
-        if owner_id:
-            where.append("owner_id = :owner_id")
-            params["owner_id"] = owner_id
+        # Scope is mandatory and already validated above, so it is always the
+        # full three-column predicate — never a partial one.
+        where = ["tenant_id = :tenant_id", "owner_type = :owner_type", "owner_id = :owner_id"]
+        params: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "owner_type": owner_type,
+            "owner_id": owner_id,
+        }
 
         # Weighted SQL scoring, using extracted phrases/keywords.
         # Phrase weight > keyword weight to favor coherent multi-word matches.
@@ -505,13 +502,13 @@ class ChunkSQLStore(BaseVectorSQLStore):
         keyword_expr = " + ".join(keyword_terms) if keyword_terms else "0.0"
 
         # Pre-primacy scoring: always add phrase + keyword scores.
-        # Never allow lexical fallback to devolve to an unscoped full-table scan.
-        where_sql = " AND ".join(where) if where else "0=1"
+        where_sql = " AND ".join(where)
         # nosec B608 — three dynamic parts, all safe:
         # phrase_expr/keyword_expr: "CASE WHEN LOWER(text) LIKE :p0 THEN :phrase_weight ELSE 0.0 END + ..."
         #   structure is hardcoded; all LIKE values bound as :p0/:t0 named params.
-        # where_sql: " AND ".join(where) where every item in `where` is a hardcoded
-        #   literal string ("tenant_id = ?", "owner_type = ?", etc.); no user data.
+        # where_sql: " AND ".join(where) where `where` is the fixed three-element
+        #   literal list above ("tenant_id = :tenant_id", ...); the scope values
+        #   are bound as named params, so no user data becomes SQL structure.
         sql = f"""
             WITH scored AS (
                 SELECT *,

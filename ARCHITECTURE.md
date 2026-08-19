@@ -483,7 +483,7 @@ result  = await memory.retrieve_memory(query_text=..., agent_id=..., user_id=...
 # Ingest — raises InjectionDetectedError on high-severity user_msg
 await memory.process_turn(agent_id=..., user_id=..., user_msg=..., assistant_reply=..., session_id=..., tenant_id=...)
 await memory.process_turn(..., skip_scan=True)  # bypass Layer-2 entry scan
-report = await memory.ingest_document(file_path, agent_id=..., owner_type="user", owner_id=..., tenant_id=...)
+report = await memory.ingest_document(file_path, owner_type="user", owner_id=..., tenant_id=...)
 
 # Opt one agent into profile-gated, copy-based promotion
 await memory.set_agent_profile(agent_id=..., description=..., focus_areas=[...], tenant_id=...)

@@ -208,7 +208,6 @@ async def test_ingest_writes_graph_edges(uma_graph, tmp_path):
 
     report = await uma_graph.ingest_document(
         str(doc), owner_type="agent", owner_id="agent-default",
-        agent_id=AGENT_ID,
     )
 
     assert report.chunks_created > 0, "Expected at least one chunk to be created"
@@ -228,7 +227,7 @@ async def test_retrieve_context_with_graph_enabled(uma_graph, tmp_path):
         "The graph lane enables relational and temporal retrieval across documents and episodes. "
         "Graph edges carry full provenance: fact_id, owner_type, owner_id, source_chunk_id, timestamps."
     )
-    await uma_graph.ingest_document(str(doc), owner_type="agent", owner_id="agent-default", agent_id=AGENT_ID)
+    await uma_graph.ingest_document(str(doc), owner_type="agent", owner_id="agent-default")
 
     result = await uma_graph.retrieve_context(query_text="How does UMA graph memory work?", user_id="user-test", agent_id=AGENT_ID)
 
@@ -244,7 +243,7 @@ async def test_retrieve_context_with_graph_disabled(uma_no_graph, tmp_path):
         "UMA is a modular memory runtime. It runs with or without a graph backend. "
         "Disabling graph still allows chunk and fact retrieval."
     )
-    await uma_no_graph.ingest_document(str(doc), owner_type="agent", owner_id="agent-default", agent_id=AGENT_ID)
+    await uma_no_graph.ingest_document(str(doc), owner_type="agent", owner_id="agent-default")
 
     result = await uma_no_graph.retrieve_context(query_text="What is UMA?", user_id="user-test", agent_id=AGENT_ID)
 

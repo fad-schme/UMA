@@ -767,7 +767,6 @@ async def test_ingest_document_chunks_trust_score(tmp_path, fixture_doc):
             fixture_doc,
             owner_type="user",
             owner_id="user:alice",
-            agent_id=AGENT_ID,
         )
         assert report.chunks_created > 0, "expected at least one chunk"
 

@@ -227,7 +227,7 @@ def test_retrieval_requires_agent_and_user_before_runtime_initialization(
     assert "--user" in result["errors"][0]["message"]
 
 
-def test_document_ingestion_carries_agent_alongside_owner_scope(
+def test_document_ingestion_is_scoped_by_owner_tuple_alone(
     tmp_path: Path,
     capsys,
     monkeypatch,
@@ -250,8 +250,6 @@ def test_document_ingestion_carries_agent_alongside_owner_scope(
                 str(document),
                 "--tenant",
                 "tenant-a",
-                "--agent",
-                "agent-a",
                 "--owner-type",
                 "workspace",
                 "--owner-id",
@@ -273,7 +271,9 @@ def test_document_ingestion_carries_agent_alongside_owner_scope(
     }
     assert result["data"]["result"]["chunks_created"] == 2
     assert memory.calls[0][0] == "ingest_document"
-    assert memory.calls[0][1]["agent_id"] == "agent-a"
+    # Uploading a file is a user action; the owner tuple alone decides who
+    # reads the document back, so no agent identity travels with the ingest.
+    assert "agent_id" not in memory.calls[0][1]
 
 
 def test_ingest_missing_file_fails_before_runtime_initialization(
@@ -304,8 +304,6 @@ def test_ingest_missing_file_fails_before_runtime_initialization(
                 "ingest",
                 "document",
                 str(tmp_path / "missing.txt"),
-                "--agent",
-                "agent-a",
                 "--owner-type",
                 "user",
                 "--owner-id",

@@ -353,19 +353,25 @@ class UMARuntime:
     def _filter_items_by_scope(
         items: list[Any],
         allowed_scopes: tuple[RetrievalScope, ...],
+        tenant_id: str,
     ) -> list[Any]:
-        """Keep only items owned by one of the request's own retrieval scopes.
+        """Keep only items in the request's own tenant and retrieval scopes.
 
         Defense in depth at the public boundary. Every store read is already
         scoped, so anything dropped here is a plumbing defect upstream rather
         than routine filtering — hence the warning on each drop.
 
-        The allowed set is the request's own ``RetrievalScope`` tuple, so
-        this cannot drift from what retrieval actually asked for: an item is
-        admissible only if it belongs to the calling agent's shared KB or to
-        the calling user. It fails closed — an item whose owner cannot be
-        read is dropped, because every domain object these lanes return
-        carries a validated owner, so a missing one means the item did not
+        The admissible set is the request's own ``tenant_id`` plus its own
+        ``RetrievalScope`` tuple, so this cannot drift from what retrieval
+        actually asked for: an item is admissible only if it carries the
+        calling tenant AND belongs to the calling agent's shared KB or to the
+        calling user. ``RetrievalScope`` carries no tenant of its own, which
+        is why the tenant is passed in alongside it rather than folded into
+        the scope set.
+
+        It fails closed — an item whose tenant or owner cannot be read is
+        dropped, because every domain object these lanes return carries a
+        validated tenant and owner, so a missing one means the item did not
         come from a store.
 
         Applied to the four lanes whose items carry owner fields (facts,
@@ -384,17 +390,21 @@ class UMARuntime:
         }
         out = []
         for item in items or []:
+            item_tenant_id = _artifact_value(item, "tenant_id")
             owner_type = _artifact_value(item, "owner_type")
             owner_id = _artifact_value(item, "owner_id")
             if owner_type == "user" and owner_id:
                 owner_id = normalize_user_id(str(owner_id))
-            if (owner_type, owner_id) in allowed:
+            if item_tenant_id == tenant_id and (owner_type, owner_id) in allowed:
                 out.append(item)
             else:
                 logger.warning(
-                    "UMARuntime: dropped out-of-scope item owner=%s:%s allowed=%s",
+                    "UMARuntime: dropped out-of-scope item tenant_id=%s owner=%s:%s "
+                    "allowed_tenant_id=%s allowed_owners=%s",
+                    item_tenant_id,
                     owner_type,
                     owner_id,
+                    tenant_id,
                     sorted(allowed),
                 )
         return out
@@ -431,6 +441,7 @@ class UMARuntime:
         working_memory: list[Any],
         pack: Any,
         allowed_scopes: tuple[RetrievalScope, ...],
+        tenant_id: str,
     ) -> "ContextBundle":
         from uma.common.results import ContextBundle, Confidence, DebugInfo, Provenance
         from uma.retrieve.rlm.coverage import compute_confidence
@@ -440,18 +451,22 @@ class UMARuntime:
         episodic = self._filter_items_by_scope(
             self._filter_items_by_lanes(pack.episodes, active_lanes),
             allowed_scopes,
+            tenant_id,
         )
         facts = self._filter_items_by_scope(
             self._filter_items_by_lanes(pack.facts or [], active_lanes),
             allowed_scopes,
+            tenant_id,
         )
         chunks = self._filter_items_by_scope(
             self._filter_items_by_lanes(getattr(pack, "chunks", []), active_lanes),
             allowed_scopes,
+            tenant_id,
         )
         skills = self._filter_items_by_scope(
             self._filter_items_by_lanes(pack.skills, active_lanes),
             allowed_scopes,
+            tenant_id,
         )
         trace = list(getattr(pack, "steps", []) or [])
         confidence_data = compute_confidence(coverage) if coverage is not None else None
@@ -581,6 +596,7 @@ class UMARuntime:
                 working_memory=working_memory,
                 pack=pack,
                 allowed_scopes=request.scopes,
+                tenant_id=request.context.tenant_id,
             )
             # Surface the scan severity on the bundle so callers and
             # downstream consumers (notably ContextPackBuilder) can act on

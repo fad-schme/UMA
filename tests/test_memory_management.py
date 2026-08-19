@@ -58,7 +58,7 @@ async def test_management_explain_uses_canonical_provenance(uma_memory, tmp_path
     path.write_text(
         "Prometheus backs metrics collection for production systems and feeds alerting workflows.\n"
     )
-    await memory.ingest_document(str(path), owner_type="user", owner_id="user:u1", agent_id=AGENT_ID)
+    await memory.ingest_document(str(path), owner_type="user", owner_id="user:u1")
 
     runtime = UMARuntime.from_memory(memory)
     context = RuntimeContext(
@@ -364,7 +364,7 @@ async def test_provenance_chain_supports_fact_memory_and_wiki_artifact_expansion
         "The operations handbook documents rollout, rollback, and service ownership procedures.\n"
     )
 
-    report = await memory.ingest_document(str(path), owner_type="user", owner_id="user:u1", agent_id=AGENT_ID)
+    report = await memory.ingest_document(str(path), owner_type="user", owner_id="user:u1")
     chunk_store = getattr(memory.chunk_core, "store", None)
     assert chunk_store is not None
     conn = chunk_store._conn()
@@ -506,7 +506,7 @@ async def test_compiled_memory_artifact_builds_index_log_and_transitive_raw_evid
         "The runbook uses it for dashboards, alert routing, and service-level health checks.\n"
     )
 
-    await memory.ingest_document(str(path), owner_type="user", owner_id="user:u1", agent_id=AGENT_ID)
+    await memory.ingest_document(str(path), owner_type="user", owner_id="user:u1")
     runtime = UMARuntime.from_memory(memory)
     context = RuntimeContext(
         tenant_id="default",
@@ -557,7 +557,7 @@ async def test_compiled_memory_artifact_update_and_conflicts_remain_visible(uma_
         "The incident handbook records escalation policy ownership and responder routing details.\n"
     )
 
-    report = await memory.ingest_document(str(path), owner_type="user", owner_id="user:u1", agent_id=AGENT_ID)
+    report = await memory.ingest_document(str(path), owner_type="user", owner_id="user:u1")
     chunk_store = getattr(memory.chunk_core, "store", None)
     assert chunk_store is not None
     conn = chunk_store._conn()
@@ -692,7 +692,7 @@ async def test_expand_evidence_is_cycle_safe_for_parent_artifact_lineage(uma_mem
         "Grafana dashboards summarize service health and operational trends. "
         "Teams use them alongside alerts to inspect incidents and capacity changes.\n"
     )
-    report = await memory.ingest_document(str(path), owner_type="user", owner_id="user:u1", agent_id=AGENT_ID)
+    report = await memory.ingest_document(str(path), owner_type="user", owner_id="user:u1")
     chunk_store = getattr(memory.chunk_core, "store", None)
     assert chunk_store is not None
     conn = chunk_store._conn()
@@ -759,7 +759,7 @@ async def test_regenerated_wiki_page_is_canonical_record_with_evidence_links(uma
         "VictoriaMetrics stores long-term metrics for platform operations and auditing. "
         "The operations handbook explains retention, service health review, and evidence-backed incident analysis.\n"
     )
-    await memory.ingest_document(str(path), owner_type="user", owner_id="user:u1", agent_id=AGENT_ID)
+    await memory.ingest_document(str(path), owner_type="user", owner_id="user:u1")
 
     runtime = UMARuntime.from_memory(memory)
     context = RuntimeContext(

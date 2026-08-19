@@ -485,8 +485,8 @@ async def test_bound_context_workspace_id_does_not_broaden_retrieval_owner_suppo
         encoding="utf-8",
     )
 
-    await memory.ingest_document(str(agent_doc), owner_type="agent", owner_id=AGENT_ID, agent_id=AGENT_ID)
-    await memory.ingest_document(str(user_doc), owner_type="user", owner_id="user:u1", agent_id=AGENT_ID)
+    await memory.ingest_document(str(agent_doc), owner_type="agent", owner_id=AGENT_ID)
+    await memory.ingest_document(str(user_doc), owner_type="user", owner_id="user:u1")
 
     runtime = UMARuntime.from_memory(memory)
     context = RuntimeContext(
@@ -781,9 +781,9 @@ async def test_bound_context_retrieval_is_isolated_across_agents_on_shared_runti
         encoding="utf-8",
     )
 
-    await memory.ingest_document(str(doc_a), owner_type="agent", owner_id="agent:alpha", agent_id=AGENT_ID)
-    await memory.ingest_document(str(doc_b), owner_type="agent", owner_id="agent:beta", agent_id=AGENT_ID)
-    await memory.ingest_document(str(user_doc), owner_type="user", owner_id="user:u1", agent_id=AGENT_ID)
+    await memory.ingest_document(str(doc_a), owner_type="agent", owner_id="agent:alpha")
+    await memory.ingest_document(str(doc_b), owner_type="agent", owner_id="agent:beta")
+    await memory.ingest_document(str(user_doc), owner_type="user", owner_id="user:u1")
 
     ctx_a_context = RuntimeContext(
         tenant_id=DEFAULT_TENANT_ID,
@@ -977,6 +977,13 @@ async def test_environment_execute_action_delegates_semantic_search_to_core(uma_
     )
 
     captured = {}
+    # The session-local filter downstream fails closed on a missing tenant, so
+    # the stub returns a scope-bearing row rather than a bare sentinel.
+    from types import SimpleNamespace
+
+    native_fact = SimpleNamespace(
+        id="fact-native", tenant_id="tenant-test", session_id=None
+    )
 
     async def fake_search(
         query_embedding,
@@ -1001,7 +1008,7 @@ async def test_environment_execute_action_delegates_semantic_search_to_core(uma_
                 "query_text": query_text,
             }
         )
-        return ["fact-native"]
+        return [native_fact]
 
     memory.semantic_core.search = fake_search  # type: ignore[method-assign]
 
@@ -1015,7 +1022,7 @@ async def test_environment_execute_action_delegates_semantic_search_to_core(uma_
         default_k=5,
     )
 
-    assert result == ["fact-native"]
+    assert result == [native_fact]
     assert captured == {
         "query_embedding": [1.0, 2.0, 3.0],
         "tenant_id": "tenant-test",

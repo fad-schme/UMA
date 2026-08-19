@@ -92,7 +92,7 @@ def _validate_operation_args(args: Any) -> None:
     if args.command == "retrieve":
         _require(args, "agent_id", "user_id")
     elif args.command == "ingest" and args.operation == "document":
-        _require(args, "agent_id", "owner_type", "owner_id")
+        _require(args, "owner_type", "owner_id")
         _require_input_file(args)
     elif args.command == "ingest" and args.operation == "turn":
         _require(args, "agent_id", "user_id", "session_id")
@@ -282,7 +282,6 @@ async def _run_scoped_operation(
         elif args.command == "ingest" and args.operation == "document":
             result = await memory.ingest_document(
                 str(args.file),
-                agent_id=args.agent_id,
                 owner_type=args.owner_type,
                 owner_id=args.owner_id,
                 tenant_id=args.tenant_id,

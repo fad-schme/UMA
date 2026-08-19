@@ -1055,3 +1055,75 @@ async def test_promotion_task_is_tracked_and_removed_on_completion(uma_memory) -
     # that after draining, the set is empty.
     await memory.pipeline.await_pending_background()
     assert memory.pipeline._background_tasks == set()
+
+
+def test_user_to_agent_promotion_redacts_the_originating_user() -> None:
+    """An agent KB is shared by every user of that agent.
+
+    Content promotion is deliberate and gated, but the lineage must not carry
+    the originating user's identity into a scope other users read — that would
+    reinstate exactly what `blocked_subject_prefixes` refuses to promote.
+    Both carriers are checked: the `Fact` columns, which reach
+    `ContextBundle.facts` directly, and the `meta` lineage blocks, which reach
+    it via `provenance.derivation`.
+    """
+    source = _build_fact(
+        fact_id="fact_source_redaction",
+        owner_type="user",
+        owner_id="user:alice",
+        session_id=None,
+        agent_id=AGENT_ID,
+    )
+    assert source.origin_user_id == "user:u1"
+
+    promoted = PromotionPolicy(agent_id=AGENT_ID).promote(
+        source,
+        tenant_id=DEFAULT_TENANT_ID,
+        owner_type="agent",
+        owner_id=AGENT_ID,
+        reason="test_redaction",
+    )
+
+    assert promoted.origin_user_id is None
+    assert promoted.origin_session_id is None
+    # The agent is not a person and still names the producing configuration.
+    assert promoted.origin_agent_id == AGENT_ID
+
+    assert promoted.meta["promotion"]["source_owner_id"] is None
+    assert promoted.meta["promotion"]["source_session_id"] is None
+    assert promoted.meta["promoted_from"]["owner_id"] is None
+    assert promoted.meta["promoted_from"]["session_id"] is None
+    # The audit chain survives: the source row carries its own owner.
+    assert promoted.meta["promotion"]["source_fact_id"] == source.id
+
+    serialized = str(promoted.meta) + str(promoted.origin_user_id)
+    assert "user:alice" not in serialized
+    assert "user:u1" not in serialized
+
+
+def test_session_to_user_promotion_keeps_lineage_for_the_same_owner() -> None:
+    """Redaction is scoped to promotions that widen readership.
+
+    Session -> user stays with the same principal, so the lineage that makes
+    the promotion auditable is preserved intact.
+    """
+    source = _build_fact(
+        fact_id="fact_source_same_owner_lineage",
+        owner_type="user",
+        owner_id="user:u1",
+        session_id="session-a",
+        agent_id=AGENT_ID,
+    )
+
+    promoted = PromotionPolicy(agent_id=AGENT_ID).promote(
+        source,
+        tenant_id=DEFAULT_TENANT_ID,
+        owner_type="user",
+        owner_id="user:u1",
+        reason="test_same_owner_lineage",
+    )
+
+    assert promoted.origin_user_id == "user:u1"
+    assert promoted.origin_session_id == "session-a"
+    assert promoted.meta["promotion"]["source_owner_id"] == "user:u1"
+    assert promoted.meta["promotion"]["source_session_id"] == "session-a"

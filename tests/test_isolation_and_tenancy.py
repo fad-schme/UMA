@@ -207,9 +207,9 @@ async def test_multi_user_retrieval_isolates_user_owned_data_but_keeps_agent_kb_
         encoding="utf-8",
     )
 
-    await memory.ingest_document(str(agent_doc), owner_type="agent", owner_id=AGENT_ID, agent_id=AGENT_ID)
-    await memory.ingest_document(str(user_a_doc), owner_type="user", owner_id="user:u1", agent_id=AGENT_ID)
-    await memory.ingest_document(str(user_b_doc), owner_type="user", owner_id="user:u2", agent_id=AGENT_ID)
+    await memory.ingest_document(str(agent_doc), owner_type="agent", owner_id=AGENT_ID)
+    await memory.ingest_document(str(user_a_doc), owner_type="user", owner_id="user:u1")
+    await memory.ingest_document(str(user_b_doc), owner_type="user", owner_id="user:u2")
 
     ctx_a_context = RuntimeContext(
         tenant_id=DEFAULT_TENANT_ID,
@@ -550,11 +550,17 @@ def test_filter_items_by_scope_admits_only_the_requests_own_scopes() -> None:
     from types import SimpleNamespace
     from uma.api.runtime import UMARuntime
 
-    own_agent_item = SimpleNamespace(owner_type="agent", owner_id="agent-default")
-    own_user_item = SimpleNamespace(owner_type="user", owner_id="user:alice")
-    foreign_user_item = SimpleNamespace(owner_type="user", owner_id="user:bob")
-    foreign_agent_item = SimpleNamespace(owner_type="agent", owner_id="agent-other")
-    workspace_item = SimpleNamespace(owner_type="workspace", owner_id="ws-1")
+    def item(owner_type: str, owner_id: str, tenant_id: str = DEFAULT_TENANT_ID):
+        return SimpleNamespace(
+            tenant_id=tenant_id, owner_type=owner_type, owner_id=owner_id
+        )
+
+    own_agent_item = item("agent", "agent-default")
+    own_user_item = item("user", "user:alice")
+    foreign_user_item = item("user", "user:bob")
+    foreign_agent_item = item("agent", "agent-other")
+    workspace_item = item("workspace", "ws-1")
+    foreign_tenant_item = item("user", "user:alice", tenant_id="tenant-other")
 
     result = UMARuntime._filter_items_by_scope(
         [
@@ -563,27 +569,36 @@ def test_filter_items_by_scope_admits_only_the_requests_own_scopes() -> None:
             foreign_user_item,
             foreign_agent_item,
             workspace_item,
+            foreign_tenant_item,
         ],
         _alice_scopes(),
+        DEFAULT_TENANT_ID,
     )
 
     assert result == [own_agent_item, own_user_item]
 
 
-def test_filter_items_by_scope_fails_closed_on_unreadable_owner() -> None:
-    """Every lane this runs on returns owner-bearing domain objects.
+def test_filter_items_by_scope_fails_closed_on_unreadable_owner_or_tenant() -> None:
+    """Every lane this runs on returns tenant- and owner-bearing domain objects.
 
-    An item without one did not come from a store, so it is dropped rather
+    An item missing either did not come from a store, so it is dropped rather
     than waved through.
     """
     from types import SimpleNamespace
     from uma.api.runtime import UMARuntime
 
     no_owner_item = SimpleNamespace()
-    half_owner_item = SimpleNamespace(owner_type="user", owner_id=None)
+    half_owner_item = SimpleNamespace(
+        tenant_id=DEFAULT_TENANT_ID, owner_type="user", owner_id=None
+    )
+    no_tenant_item = SimpleNamespace(
+        tenant_id=None, owner_type="user", owner_id="user:alice"
+    )
 
     assert UMARuntime._filter_items_by_scope(
-        [no_owner_item, half_owner_item], _alice_scopes()
+        [no_owner_item, half_owner_item, no_tenant_item],
+        _alice_scopes(),
+        DEFAULT_TENANT_ID,
     ) == []
 
 
@@ -592,9 +607,13 @@ def test_filter_items_by_scope_matches_either_user_subject_form() -> None:
     from types import SimpleNamespace
     from uma.api.runtime import UMARuntime
 
-    raw_form = SimpleNamespace(owner_type="user", owner_id="alice")
+    raw_form = SimpleNamespace(
+        tenant_id=DEFAULT_TENANT_ID, owner_type="user", owner_id="alice"
+    )
 
-    assert UMARuntime._filter_items_by_scope([raw_form], _alice_scopes()) == [raw_form]
+    assert UMARuntime._filter_items_by_scope(
+        [raw_form], _alice_scopes(), DEFAULT_TENANT_ID
+    ) == [raw_form]
 
 
 def test_filter_items_by_scope_covers_every_owner_bearing_lane() -> None:
@@ -1271,7 +1290,7 @@ async def test_document_ingest_rejects_missing_owner_type(uma_memory, tmp_path) 
     path = tmp_path / "missing-owner-type.txt"
     path.write_text("Explicit owner validation should reject missing owner_type.\n")
     with pytest.raises(ValueError, match="owner_type and owner_id are required"):
-        await uma_memory.ingest_document(str(path), owner_id="user:u1", agent_id=AGENT_ID)
+        await uma_memory.ingest_document(str(path), owner_id="user:u1")
 
 
 @pytest.mark.asyncio
@@ -1279,7 +1298,7 @@ async def test_document_ingest_rejects_missing_owner_id(uma_memory, tmp_path) ->
     path = tmp_path / "missing-owner-id.txt"
     path.write_text("Explicit owner validation should reject missing owner_id.\n")
     with pytest.raises(ValueError, match="owner_type and owner_id are required"):
-        await uma_memory.ingest_document(str(path), owner_type="user", agent_id=AGENT_ID)
+        await uma_memory.ingest_document(str(path), owner_type="user")
 
 
 @pytest.mark.asyncio
@@ -1359,7 +1378,7 @@ async def test_ingest_document_persists_explicit_owner_fields(
         "document-derived fact path is exercised reliably during ingestion.\n"
     )
 
-    report = await memory.ingest_document(str(path), owner_type=owner_type, owner_id=owner_id, agent_id=AGENT_ID)
+    report = await memory.ingest_document(str(path), owner_type=owner_type, owner_id=owner_id)
     assert report.doc_id
 
     conn = memory.document_store._conn()
@@ -1416,7 +1435,7 @@ async def test_document_ingest_requires_explicit_owner_fields(uma_memory, tmp_pa
         "This passage is intentionally long enough to produce a valid chunk and fact extraction path.\n"
     )
 
-    report = await memory.ingest_document(str(path), owner_type="user", owner_id="u1", agent_id=AGENT_ID)
+    report = await memory.ingest_document(str(path), owner_type="user", owner_id="u1")
     assert report.doc_id
 
     # Query directly to avoid changing the public read surface in this PR.
@@ -1450,7 +1469,6 @@ async def test_document_ingest_rejects_system_owner_scope(uma_memory, tmp_path) 
             str(path),
             owner_type="system",
             owner_id="system:ops",
-            agent_id=AGENT_ID,
         )
 
 
@@ -1862,3 +1880,58 @@ async def test_retrieve_context_raises_when_agent_id_is_missing(tmp_path) -> Non
             user_id="user:u1",
         )
     memory.shutdown()
+
+
+def test_session_local_filter_fails_closed_on_missing_isolation_fields() -> None:
+    """Session-local items must prove their tenant and originating agent.
+
+    Every fact written through the turn path stamps both, so a missing value
+    means the row predates the column or did not come from a store. In a
+    runtime serving many agents, neither is admissible on trust.
+    """
+    from types import SimpleNamespace
+
+    from uma.retrieve.rlm.environment import UMAMemoryEnvironment
+
+    request = RetrievalRequest.from_runtime_context(
+        RuntimeContext(
+            tenant_id=DEFAULT_TENANT_ID,
+            agent_id="agent-default",
+            request_id="req-session-filter",
+            user_id="user:alice",
+        )
+    )
+    object.__setattr__(request.context, "session_id", "session-1")
+
+    def item(**kwargs):
+        base = {
+            "tenant_id": DEFAULT_TENANT_ID,
+            "session_id": "session-1",
+            "origin_agent_id": "agent-default",
+        }
+        base.update(kwargs)
+        return SimpleNamespace(**base)
+
+    own = item()
+    no_tenant = item(tenant_id=None)
+    foreign_tenant = item(tenant_id="tenant-other")
+    no_origin_agent = item(origin_agent_id=None)
+    foreign_agent = item(origin_agent_id="agent-other")
+    foreign_session = item(session_id="session-2")
+    # Not session-local: scoped by the owner filter instead, so it passes here.
+    not_session_local = item(session_id=None, origin_agent_id=None)
+
+    kept = UMAMemoryEnvironment._filter_session_local_items(
+        request,
+        [
+            own,
+            no_tenant,
+            foreign_tenant,
+            no_origin_agent,
+            foreign_agent,
+            foreign_session,
+            not_session_local,
+        ],
+    )
+
+    assert kept == [own, not_session_local]

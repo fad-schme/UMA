@@ -25,7 +25,7 @@ call:
 
 | Field | Required | Default |
 | --- | --- | --- |
-| `agent_id` | yes | none — omitting it raises `ValueError` |
+| `agent_id` | yes on request-scoped APIs | none — omitting it raises `ValueError` |
 | `user_id` | yes on user-scoped APIs | none — omitting it raises `ValueError` |
 | `tenant_id` | no | `"default"` (`DEFAULT_TENANT_ID`) |
 
@@ -42,6 +42,10 @@ There is no `set_context`, no bound `agent_id` attribute, and no ambient
 scope. Two agents calling the same instance concurrently cannot see each
 other's agent-owned rows, because each call builds its own `RuntimeContext`
 from its own arguments.
+
+`ingest_document` is the exception to both: a document is scoped by its
+durable `(tenant_id, owner_type, owner_id)` tuple rather than by a request
+scope, so it takes neither id.
 
 `tenant_id` is a real parameter on every public method even though Lite runs
 single-tenant: it is carried explicitly to storage next to `agent_id` and
@@ -202,16 +206,16 @@ except InjectionDetectedError as e:
 ```python
 report = await memory.ingest_document(
     file_path="/path/to/document.pdf",
-    agent_id="agent-default",   # REQUIRED — the agent performing the ingest
-    owner_type="user",          # required — durable owner, not the agent
+    owner_type="user",          # required — the durable owner
     owner_id="user-123",        # required
     tenant_id="default",        # optional; defaults to "default"
     workspace_id=None,
     config=None,                # optional IngestConfig override
 )
 
-Documents are owner-scoped, so there is no `user_id` here. `agent_id` records
-which agent ingested the document; it never substitutes for the owner tuple.
+Documents are owner-scoped, so there is neither a `user_id` nor an `agent_id`
+here. Uploading a file is a user action, and the owner tuple alone decides who
+can read the document back.
 ```
 
 Chunks, embeds, and indexes the document through the canonical pipeline.

@@ -248,7 +248,7 @@ async def test_none_file_path_raises_value_error(tmp_path):
     mem.ingest_document = UMAMemory.ingest_document.__get__(mem, UMAMemory)
 
     with pytest.raises(ValueError, match="file_path is required"):
-        await mem.ingest_document(None, agent_id=AGENT_ID)
+        await mem.ingest_document(None)
 
 
 @pytest.mark.asyncio
@@ -259,7 +259,7 @@ async def test_empty_string_raises_value_error(tmp_path):
     mem.ingest_document = UMAMemory.ingest_document.__get__(mem, UMAMemory)
 
     with pytest.raises(ValueError, match="file_path is required"):
-        await mem.ingest_document("", agent_id=AGENT_ID)
+        await mem.ingest_document("")
 
 
 @pytest.mark.asyncio
@@ -270,7 +270,7 @@ async def test_whitespace_only_raises_value_error(tmp_path):
     mem.ingest_document = UMAMemory.ingest_document.__get__(mem, UMAMemory)
 
     with pytest.raises(ValueError, match="file_path is required"):
-        await mem.ingest_document("   ", agent_id=AGENT_ID)
+        await mem.ingest_document("   ")
 
 
 @pytest.mark.asyncio
@@ -281,7 +281,7 @@ async def test_nonexistent_path_raises_file_not_found(tmp_path):
     mem.ingest_document = UMAMemory.ingest_document.__get__(mem, UMAMemory)
 
     with pytest.raises(FileNotFoundError, match="file not found"):
-        await mem.ingest_document(str(tmp_path / "does_not_exist.txt"), agent_id=AGENT_ID)
+        await mem.ingest_document(str(tmp_path / "does_not_exist.txt"))
 
 
 @pytest.mark.asyncio
@@ -292,7 +292,7 @@ async def test_directory_path_raises_value_error(tmp_path):
     mem.ingest_document = UMAMemory.ingest_document.__get__(mem, UMAMemory)
 
     with pytest.raises(ValueError, match="regular file"):
-        await mem.ingest_document(str(tmp_path), agent_id=AGENT_ID)
+        await mem.ingest_document(str(tmp_path))
 
 
 @pytest.mark.asyncio
@@ -309,7 +309,7 @@ async def test_valid_path_passes_validation_and_calls_ingest(tmp_path):
 
     mock_ingest = AsyncMock(return_value="report")
     with patch("uma.ingest.ingest_service.ingest_document", mock_ingest):
-        result = await mem.ingest_document(str(real_file), agent_id=AGENT_ID)
+        result = await mem.ingest_document(str(real_file))
 
     assert result == "report"
     mock_ingest.assert_awaited_once()
@@ -448,7 +448,7 @@ async def test_ingest_document_rejects_exe(tmp_path):
     exe_path = os.path.join(FIXTURES, "evil.exe")
 
     with pytest.raises(MimeRejection):
-        await memory.ingest_document(exe_path, owner_type="agent", owner_id="agent:test", agent_id=AGENT_ID)
+        await memory.ingest_document(exe_path, owner_type="agent", owner_id="agent:test")
 
 
 @pytest.mark.asyncio

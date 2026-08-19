@@ -282,10 +282,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Ingest one document for an explicit durable owner.",
     )
     document_parser.add_argument("file", type=Path)
+    # Documents are owner-scoped, not user- or agent-scoped: the owner tuple
+    # alone decides who reads the document back, so there is no --agent here.
     add_owner_scope_arguments(document_parser)
-    # Documents are owner-scoped, not user-scoped, but the calling agent is
-    # still explicit: it supplies the default owner when --owner-* is omitted.
-    document_parser.add_argument("--agent", dest="agent_id", type=non_empty_value)
 
     turn_parser = ingest_commands.add_parser(
         "turn",
