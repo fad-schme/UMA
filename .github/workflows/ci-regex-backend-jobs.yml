@@ -1,0 +1,45 @@
+# Add these two jobs to .github/workflows/ci.yml
+#
+# Purpose: `uma/common/_regex_backend.py` has two code paths — RE2 (when
+# `uma[security]` is installed) and the stdlib `re` fallback (when it
+# isn't). Today CI most likely exercises only whichever one happens to
+# be installed in the default job. These two jobs make both paths
+# explicit and both run `tests/test_injection_scan_perf.py`, which
+# asserts a backend-aware latency ceiling and (per its own design) can
+# assert `_regex_backend.USING_RE2` directly when RE2 is installed.
+#
+# Adjust `python-version` to match whatever matrix your existing jobs
+# use — these two are written standalone so you can merge them in
+# without assuming your current matrix shape.
+
+  regex-backend-re2:
+    name: injection scan perf (RE2 backend)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install with the security extra (RE2)
+        run: pip install -e '.[security,dev]'
+      - name: Confirm RE2 is active
+        run: |
+          python -c "from uma.common._regex_backend import USING_RE2; assert USING_RE2, 'RE2 not active — install/wheel problem'"
+      - name: Run the injection-scan perf benchmark
+        run: pytest tests/test_injection_scan_perf.py -q --tb=short
+
+  regex-backend-fallback:
+    name: injection scan perf (re fallback)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install WITHOUT the security extra (stdlib re fallback)
+        run: pip install -e '.[dev]'
+      - name: Confirm the fallback is active
+        run: |
+          python -c "from uma.common._regex_backend import USING_RE2; assert not USING_RE2, 'RE2 unexpectedly active — extras leaked into this job'"
+      - name: Run the injection-scan perf benchmark
+        run: pytest tests/test_injection_scan_perf.py -q --tb=short
