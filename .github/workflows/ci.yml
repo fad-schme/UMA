@@ -299,6 +299,63 @@ jobs:
             echo "::warning::UMA source changed without a CHANGELOG.md update."
           fi
 
+  # Exercise both injection-scanner regex engines explicitly. The regular
+  # development install intentionally does not include google-re2, while the
+  # security extra enables the production, linear-time backend.
+  regex-backend-re2:
+    name: Injection scan perf (RE2 backend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install with the security extra
+        run: python -m pip install --editable ".[security,dev]"
+
+      - name: Confirm RE2 is active
+        run: >-
+          python -c "from uma.common._regex_backend import USING_RE2;
+          assert USING_RE2, 'RE2 not active - install/wheel problem'"
+
+      - name: Run injection-scan performance tests
+        run: python -m pytest tests/test_injection_scan_perf.py -q --tb=short
+
+  regex-backend-fallback:
+    name: Injection scan perf (re fallback)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install without the security extra
+        run: python -m pip install --editable ".[dev]"
+
+      - name: Confirm the fallback is active
+        run: >-
+          python -c "from uma.common._regex_backend import USING_RE2;
+          assert not USING_RE2, 'RE2 unexpectedly active - extras leaked into this job'"
+
+      - name: Run injection-scan performance tests
+        run: python -m pytest tests/test_injection_scan_perf.py -q --tb=short
+
   # Configure only "CI / All checks passed" as the required branch-protection
   # check. Jobs can then be added or removed without changing that rule.
   all-checks-passed:
@@ -313,6 +370,8 @@ jobs:
       - secret-scan
       - package-build
       - docs-lint
+      - regex-backend-re2
+      - regex-backend-fallback
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always()
