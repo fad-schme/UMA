@@ -35,7 +35,7 @@ from typing import Any, Optional
 from uma.memory.promotion import PromotionPolicy
 from uma.adapters.observability.context import request_context
 from uma.adapters.observability.metrics import increment, timed
-from uma.stores.base_sql_store import DEFAULT_TENANT_ID
+from uma.common.types.types_scope import DEFAULT_TENANT_ID
 from uma.common.types import RuntimeContext, SessionScope, Chunk
 from uma.common.identity import normalize_user_id
 from uma.common.trust import SourceDescriptor, score_source
@@ -98,25 +98,15 @@ class MemoryPipeline:
     Retrieval happens outside this pipeline through the bound runtime/request-handle path.
     """
 
-    def __init__(self, memory_client: Any, hooks: Any, promotion_policy: Optional[PromotionPolicy] = None) -> None:
+    def __init__(self, memory_client: Any, hooks: Any) -> None:
         self.mem = memory_client
         self.hooks = hooks
-        self.promotion_policy = promotion_policy
         # Fire-and-forget background tasks (currently: promotion). We
         # keep strong references so tasks aren't garbage-collected
         # mid-flight (asyncio quirk) and so tests / shutdown paths can
         # await pending work via ``await_pending_background``. Each task
         # removes itself from the set via done_callback.
         self._background_tasks: set[asyncio.Task] = set()
-        if promotion_policy is None:
-            logger.info("PromotionPolicy disabled (none provided).")
-        else:
-            try:
-                enabled = promotion_policy.is_enabled() if hasattr(promotion_policy, "is_enabled") else True
-                logger.info("PromotionPolicy configured (enabled=%s, max_promotions_per_turn=%s).", enabled, getattr(promotion_policy, "max_promotions_per_turn", "<unset>"))
-            except Exception:
-                logger.exception("PromotionPolicy provided but failed during initialization checks; disabling promotion.")
-                self.promotion_policy = None
 
     # ------------------------------------------------------------------
     # PUBLIC ENTRYPOINT
@@ -124,6 +114,7 @@ class MemoryPipeline:
 
     async def process_turn(
         self,
+        agent_id: str,
         user_id: str,
         user_msg: str,
         assistant_reply: str,
@@ -172,6 +163,7 @@ class MemoryPipeline:
                 )
 
                 turn_context = self._resolve_turn_context(
+                    agent_id=agent_id,
                     user_id=user_id,
                     session_id=resolved_session_id,
                     tenant_id=resolved_tenant_id,
@@ -247,6 +239,7 @@ class MemoryPipeline:
                 # after this function returns; tests and graceful
                 # shutdown can await it via ``await_pending_background``.
                 self._schedule_promotion(
+                    agent_id=turn_context.agent_id,
                     user_id=user_id,
                     facts=facts,
                     tenant_id=resolved_tenant_id,
@@ -271,6 +264,7 @@ class MemoryPipeline:
     def _schedule_promotion(
         self,
         *,
+        agent_id: str,
         user_id: str,
         facts: Any,
         tenant_id: str,
@@ -290,16 +284,15 @@ class MemoryPipeline:
              :meth:`await_pending_background`.
         The done-callback removes the task from the set on completion.
         """
-        if self.promotion_policy is None:
-            return None
         if not facts:
             return None
         coro = self._safe_promotion_task(
+            agent_id=agent_id,
             user_id=user_id,
             facts=facts,
             tenant_id=tenant_id,
         )
-        task = asyncio.create_task(coro, name=f"promotion-{tenant_id}-{user_id}")
+        task = asyncio.create_task(coro, name=f"promotion-{tenant_id}-{agent_id}-{user_id}")
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
         return task
@@ -307,6 +300,7 @@ class MemoryPipeline:
     async def _safe_promotion_task(
         self,
         *,
+        agent_id: str,
         user_id: str,
         facts: Any,
         tenant_id: str,
@@ -322,6 +316,7 @@ class MemoryPipeline:
         """
         try:
             await self._maybe_promote_facts(
+                agent_id=agent_id,
                 user_id=user_id,
                 facts=facts,
                 tenant_id=tenant_id,
@@ -344,20 +339,29 @@ class MemoryPipeline:
         # Snapshot — the done_callback mutates the set during gather.
         pending = list(self._background_tasks)
         await asyncio.gather(*pending, return_exceptions=True)
+        # `add_done_callback` fires via `call_soon`, so the discards are not
+        # guaranteed to have run by the time gather returns. Drop the drained
+        # tasks here so the postcondition — nothing pending after a drain —
+        # holds regardless of callback scheduling.
+        self._background_tasks.difference_update(pending)
 
     async def _maybe_promote_facts(
         self,
+        agent_id: str,
         user_id: str,
         facts: Any,
         tenant_id: str = DEFAULT_TENANT_ID,
     ) -> None:
-        """Promote qualifying facts into the agent's KB.
+        """Promote qualifying facts into the KB of ``agent_id``.
+
+        The policy is bound to the turn's agent — it is per call, never
+        ambient, so concurrent agents on one runtime cannot promote into
+        each other's KB.
 
         Contract:
             - NEVER raises to caller (best-effort stage)
             - Bounded by ``policy.max_promotions_per_turn``
             - Requires:
-                * a ``PromotionPolicy`` bound on the memory
                 * an ``AgentProfile`` set via ``UMAMemory.set_agent_profile``
                 * a semantic core with async ``upsert_fact(fact, embedding)``
                 * embeddings already present on facts (populated by the
@@ -371,8 +375,13 @@ class MemoryPipeline:
         There is no "no-profile" pathway — the scope-match gate is the
         only pathway to the agent KB.
         """
-        policy = getattr(self, "promotion_policy", None)
-        if policy is None:
+        try:
+            policy = PromotionPolicy(agent_id=agent_id)
+        except Exception:
+            logger.exception(
+                "Promotion: could not bind a policy for agent_id=%s; skipping promotions.",
+                agent_id,
+            )
             return
 
         try:
@@ -404,13 +413,6 @@ class MemoryPipeline:
             )
             return
 
-        policy_agent_id = getattr(policy, "agent_id", None)
-        if not policy_agent_id:
-            logger.warning(
-                "Promotion enabled but policy has no agent_id; skipping promotions."
-            )
-            return
-
         max_promotions = getattr(policy, "max_promotions_per_turn", 5)
         try:
             max_promotions = int(max_promotions)
@@ -425,19 +427,19 @@ class MemoryPipeline:
         # must call set_agent_profile to opt in).
         try:
             agent_profile = await procedural_core.get_agent_profile(
-                agent_id=policy_agent_id,
+                agent_id=policy.agent_id,
                 tenant_id=tenant_id,
             )
         except Exception:
             logger.exception(
                 "Promotion: get_agent_profile failed for agent_id=%s; skipping promotions this turn.",
-                policy_agent_id,
+                policy.agent_id,
             )
             return
         if agent_profile is None:
             logger.debug(
                 "Promotion: no agent_profile set for agent_id=%s; skipping promotions this turn.",
-                policy_agent_id,
+                policy.agent_id,
             )
             return
 
@@ -477,6 +479,25 @@ class MemoryPipeline:
                     continue
             except Exception:
                 logger.exception("PromotionPolicy target selection failed; skipping fact.")
+                continue
+
+            # Duplicate guard. The store's own idempotency check keys on
+            # turn_id, so it only catches a replay of the same turn; the same
+            # statement extracted in a later turn would mint a second durable
+            # row. Check content identity in the target scope before minting.
+            if await sem_core.durable_fact_exists(
+                fact,
+                tenant_id=target[0],
+                owner_type=target[1],
+                owner_id=target[2],
+            ):
+                logger.debug(
+                    "Promotion: skipped fact id=%r — equivalent fact already in %s:%s",
+                    getattr(fact, "id", None),
+                    target[1],
+                    target[2],
+                )
+                increment("pipeline.promotion.duplicate_skipped")
                 continue
 
             try:
@@ -547,14 +568,15 @@ class MemoryPipeline:
     def _resolve_turn_context(
         self,
         *,
+        agent_id: str,
         user_id: str,
         session_id: str,
         tenant_id: str = DEFAULT_TENANT_ID,
         workspace_id: Optional[str] = None,
     ) -> RuntimeContext:
-        agent_id = getattr(self.mem, "agent_id", None)
-        if not agent_id:
-            raise ValueError("MemoryPipeline.process_turn requires agent_id for scoped turn processing.")
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise ValueError("MemoryPipeline.process_turn requires a non-empty agent_id.")
+        agent_id = agent_id.strip()
 
         normalized_user_id = normalize_user_id(user_id)
 

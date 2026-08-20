@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from tests.e2e.ollama_env import resolve_ollama_host
 from uma.adapters.llm.openai_compatible import OpenAICompatibleLLM
 from uma.memory.semantic.extractor import FactExtractor
 
@@ -62,11 +63,10 @@ def _score_case(expected: list[dict[str, Any]], predicted: list[Any]) -> tuple[i
 async def test_local_ollama_fact_extraction_precision_recall() -> None:
     """Measure extraction quality without weakening the hermetic default suite."""
     model = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
-    host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
     llm = OpenAICompatibleLLM(
         provider_name="ollama",
         model=model,
-        base_url=f"{host.rstrip('/')}/v1",
+        base_url=f"{resolve_ollama_host()}/v1",
         api_key="ollama",
         timeout=float(os.getenv("OLLAMA_TIMEOUT_S", "120")),
     )

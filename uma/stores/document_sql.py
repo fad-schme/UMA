@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from .base_sql_store import BaseSQLStore, DEFAULT_TENANT_ID
+from .base_sql_store import BaseSQLStore
+from ..common.types.types_scope import DEFAULT_TENANT_ID
 from ..adapters.db.base import DBAdapter
 from uma.stores.metadata import ensure_store_metadata
 from uma.common.types import SCOPE_MODEL_VERSION

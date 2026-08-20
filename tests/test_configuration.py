@@ -467,16 +467,22 @@ _EXPECTED_CHECK_KEYS = {
 
 
 @pytest.mark.asyncio
-async def test_health_check_returns_ok_or_degraded_on_initialized_instance(tmp_path) -> None:
+async def test_health_check_returns_ok_on_initialized_instance(tmp_path) -> None:
+    """A correct lite install reports ok, even with graph disabled.
+
+    Graph is opt-in and user-supplied, so `graph_backend: disabled` reports
+    the neutral "disabled" status and must not drag the overall result down.
+    """
     memory = await init_uma_for_tests(tmp_path)
     result = memory.health_check()
 
-    assert result.status in ("ok", "degraded")
+    assert result.status == "ok"
     assert _EXPECTED_CHECK_KEYS.issubset(result.checks.keys())
+    assert result.checks["graph"].status == "disabled"
 
     for check in result.checks.values():
         assert check.name
-        assert check.status in ("ok", "error", "skipped")
+        assert check.status in ("ok", "error", "degraded", "disabled")
 
 
 @pytest.mark.asyncio

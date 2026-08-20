@@ -54,7 +54,7 @@ def _unpack_embedding(blob: Optional[bytes]) -> Optional[list[float]]:
         return None
     return list(struct.unpack(f"<{count}f", blob))
 
-from .base_sql_store import DEFAULT_TENANT_ID
+from ..common.types.types_scope import DEFAULT_TENANT_ID
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from uma.stores.metadata import ensure_store_metadata

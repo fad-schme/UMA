@@ -68,11 +68,6 @@ def _positive_seconds(value: str) -> float:
 
 def _add_runtime_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--agent",
-        dest="agent_id",
-        help="Run the diagnostic through an agent-scoped runtime view.",
-    )
-    parser.add_argument(
         "--timeout",
         dest="timeout_seconds",
         type=_positive_seconds,
@@ -287,6 +282,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Ingest one document for an explicit durable owner.",
     )
     document_parser.add_argument("file", type=Path)
+    # Documents are owner-scoped, not user- or agent-scoped: the owner tuple
+    # alone decides who reads the document back, so there is no --agent here.
     add_owner_scope_arguments(document_parser)
 
     turn_parser = ingest_commands.add_parser(
@@ -575,7 +572,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if args.command == "health":
                 data, text, status, exit_code = runtime_health(
                     config_path,
-                    agent_id=args.agent_id,
                     timeout_seconds=args.timeout_seconds,
                 )
             elif args.offline:
@@ -587,7 +583,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 data, text, status, exit_code = doctor_runtime(
                     config,
                     config_path,
-                    agent_id=args.agent_id,
                     timeout_seconds=args.timeout_seconds,
                 )
             _emit(args.command, data, args.output_format, text, status)

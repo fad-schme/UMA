@@ -17,27 +17,40 @@ runtime = UMAMemory.from_yaml("/path/to/your/uma.yaml")
 
 `from_yaml` accepts any path — absolute or relative to the working directory of the running process. `"config/uma.yaml"` is the convention used throughout the examples, but the file can live anywhere accessible to your application at runtime (e.g. `"./uma.yaml"`, `"/etc/myapp/uma.yaml"`, or any other location you choose). There is one initialization path — no `init_lite()` or `init_cont()` variants.
 
-### Create an immutable per-agent instance
+### Identity is per call, never per instance
+
+UMA is **single-tenant, multi-agent and multi-user**. One `UMAMemory` instance
+serves every agent and every user in the process; identity travels with each
+call:
+
+| Field | Required | Default |
+| --- | --- | --- |
+| `agent_id` | yes on request-scoped APIs | none — omitting it raises `ValueError` |
+| `user_id` | yes on user-scoped APIs | none — omitting it raises `ValueError` |
+| `tenant_id` | no | `"default"` (`DEFAULT_TENANT_ID`) |
 
 ```python
-memory = runtime.set_context(agent_id="agent-default")
+context_a = await memory.retrieve_context(
+    query_text="...", agent_id="agent-a", user_id="user-1",
+)
+context_b = await memory.retrieve_context(
+    query_text="...", agent_id="agent-b", user_id="user-1",
+)
 ```
 
-`set_context` does not mutate `memory`. It returns a distinct
-`ScopedUMAMemory` whose `agent_id` cannot be reassigned. Create and reuse one
-scoped instance per agent; do not call `set_context` per request on a shared
-scoped instance.
+There is no `set_context`, no bound `agent_id` attribute, and no ambient
+scope. Two agents calling the same instance concurrently cannot see each
+other's agent-owned rows, because each call builds its own `RuntimeContext`
+from its own arguments.
 
-```python
-agent_a = memory.set_context(agent_id="agent-a")
-agent_b = memory.set_context(agent_id="agent-b")
+`ingest_document` is the exception to both: a document is scoped by its
+durable `(tenant_id, owner_type, owner_id)` tuple rather than by a request
+scope, so it takes neither id.
 
-assert agent_a.agent_id == "agent-a"
-assert agent_b.agent_id == "agent-b"
-```
-
-Retrieval, turn processing, bootstrap ingestion, and promotion profile methods
-require a scoped instance.
+`tenant_id` is a real parameter on every public method even though Lite runs
+single-tenant: it is carried explicitly to storage next to `agent_id` and
+`user_id`, and only *defaults* when the caller omits it — it is never inferred
+at the storage boundary.
 
 ---
 
@@ -47,9 +60,9 @@ require a scoped instance.
 
 ```python
 profile = await memory.set_agent_profile(
+    agent_id="agent-default",
     description="An infrastructure assistant focused on Kubernetes operations",
     focus_areas=["kubernetes", "containers", "incident response"],
-    tenant_id="default",
 )
 ```
 
@@ -61,7 +74,7 @@ preserves provenance; the source fact is never widened in place.
 ### `get_agent_profile` — Read the configured profile
 
 ```python
-profile = await memory.get_agent_profile(tenant_id="default")
+profile = await memory.get_agent_profile(agent_id="agent-default")
 if profile is None:
     # No profile means automatic promotion is a no-op.
     ...
@@ -80,8 +93,9 @@ See `promotion.md` for the complete gate and ownership contract.
 ```python
 context = await memory.retrieve_context(
     query_text="the user's current question or task",
-    user_id="user-123",
-    tenant_id="default",           # required; defaults to "default"
+    agent_id="agent-default",      # REQUIRED
+    user_id="user-123",            # REQUIRED
+    tenant_id="default",           # optional; defaults to "default"
     request_id="req-1",            # optional; auto-generated if omitted
     session_id="session-1",        # optional
     workspace_id=None,             # optional
@@ -154,11 +168,12 @@ from uma import InjectionDetectedError
 
 try:
     await memory.process_turn(
-        user_id="user-123",
+        agent_id="agent-default",      # REQUIRED
+        user_id="user-123",            # REQUIRED
         user_msg="what the user said",
         assistant_reply="what the assistant replied",
         session_id="session-1",        # REQUIRED; raises ValueError if missing
-        tenant_id="default",
+        tenant_id="default",           # optional; defaults to "default"
         workspace_id=None,
         extra_meta={"custom": "data"}, # optional
         skip_scan=False,               # see below
@@ -191,12 +206,16 @@ except InjectionDetectedError as e:
 ```python
 report = await memory.ingest_document(
     file_path="/path/to/document.pdf",
-    owner_type="user",          # required
+    owner_type="user",          # required — the durable owner
     owner_id="user-123",        # required
-    tenant_id="default",        # defaults to "default"
+    tenant_id="default",        # optional; defaults to "default"
     workspace_id=None,
     config=None,                # optional IngestConfig override
 )
+
+Documents are owner-scoped, so there is neither a `user_id` nor an `agent_id`
+here. Uploading a file is a user action, and the owner tuple alone decides who
+can read the document back.
 ```
 
 Chunks, embeds, and indexes the document through the canonical pipeline.
@@ -211,14 +230,15 @@ Chunks, embeds, and indexes the document through the canonical pipeline.
 
 ---
 
-## Animus Bootstrap APIs (Animus integration)
+## Bootstrap APIs
+
+Seed a store from markdown before the first turn. Both require an explicit
+`agent_id` and `user_id`; `tenant_id` defaults.
 
 ```python
-memory.load_userprofile("USER.md")        # loads user profile into in-memory cache
-memory.load_agentprofile("SOUL.md")       # loads agent profile (soul) into cache
-
 await memory.load_memory_bootstrap(
     "MEMORY.md",
+    agent_id="agent-default",
     user_id="user-123",
     tenant_id="default",
     session_id="session-1",
@@ -226,6 +246,7 @@ await memory.load_memory_bootstrap(
 
 await memory.load_daily_diary_bootstrap(
     "diary.md",
+    agent_id="agent-default",
     user_id="user-123",
     session_id="session-1",
 )
@@ -262,6 +283,8 @@ The hook **raises to refuse**. Returning normally allows the call. UMA does not 
 status = memory.health_check()  # sync; {"status": "ok"|"error", "checks": {...}}
 
 # Rebuild vector indexes from authoritative SQL data
+# Maintenance is scoped by tenant plus the durable owner tuple. An agent's own
+# rows are addressed as owner_type="agent", owner_id=<agent_id>.
 await memory.rebuild_vector_indexes(
     tenant_id="default",
     owner_type="user",
@@ -387,7 +410,7 @@ rows = await list_retrieval_audit(
 #           query_hash, query_preview, scan_severity, result_count, llm_hops_skipped
 ```
 
-Each retrieval call (`retrieve_context`, `retrieve_memory`) records a hashed query preview and metadata. The audit store is enabled by default; disable via `security.retrieval_audit_enabled: false` in your YAML.
+Each retrieval call (`retrieve_context`, `retrieve_memory`) records a SHA-256 query digest (`query_hash`, for correlating one query across log lines), the first 80 characters of the query (`query_preview`, for human auditing), and metadata. The full query is never stored. The audit store is enabled by default; disable via `security.retrieval_audit_enabled: false` in your YAML.
 
 ---
 

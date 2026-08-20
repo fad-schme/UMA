@@ -18,7 +18,8 @@ from .base_vector_sql_store import BaseVectorSQLStore
 _QUARANTINE_FILTER = " AND quarantined_at IS NULL"
 _NO_FILTER = ""
 
-from .base_sql_store import DEFAULT_TENANT_ID
+from ..common.types.types_scope import DEFAULT_TENANT_ID
+from .base_sql_store import LIKE_ESCAPE_SQL, escape_like
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from uma.stores.metadata import ensure_store_metadata
@@ -432,9 +433,6 @@ class ChunkSQLStore(BaseVectorSQLStore):
 
         from uma.retrieve.user_query_helper import build_query_term_set
 
-        def _escape_like(term: str) -> str:
-            return (term or "").replace("%", "\\%").replace("_", "\\_")
-
         # Consistent with user_query_helper: use the extracted keywords + phrases when available.
         term_set = build_query_term_set(query_text, max_terms=12, max_phrases=12)
         terms = list(term_set.terms) if term_set else []
@@ -459,17 +457,14 @@ class ChunkSQLStore(BaseVectorSQLStore):
                 bool(phrases),
             )
 
-        where = []
-        params: dict[str, Any] = {}
-        if tenant_id:
-            where.append("tenant_id = :tenant_id")
-            params["tenant_id"] = tenant_id
-        if owner_type:
-            where.append("owner_type = :owner_type")
-            params["owner_type"] = owner_type
-        if owner_id:
-            where.append("owner_id = :owner_id")
-            params["owner_id"] = owner_id
+        # Scope is mandatory and already validated above, so it is always the
+        # full three-column predicate — never a partial one.
+        where = ["tenant_id = :tenant_id", "owner_type = :owner_type", "owner_id = :owner_id"]
+        params: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "owner_type": owner_type,
+            "owner_id": owner_id,
+        }
 
         # Weighted SQL scoring, using extracted phrases/keywords.
         # Phrase weight > keyword weight to favor coherent multi-word matches.
@@ -490,26 +485,30 @@ class ChunkSQLStore(BaseVectorSQLStore):
         phrase_terms: list[str] = []
         for i, phrase in enumerate(phrases):
             key = f"p{i}"
-            phrase_terms.append(f"CASE WHEN LOWER(text) LIKE :{key} THEN :phrase_weight ELSE 0.0 END")
-            params[key] = f"%{_escape_like(phrase.lower())}%"
+            phrase_terms.append(
+                f"CASE WHEN LOWER(text) LIKE :{key}{LIKE_ESCAPE_SQL} THEN :phrase_weight ELSE 0.0 END"
+            )
+            params[key] = f"%{escape_like(phrase.lower())}%"
 
         keyword_terms: list[str] = []
         for i, term in enumerate(terms):
             key = f"t{i}"
-            keyword_terms.append(f"CASE WHEN LOWER(text) LIKE :{key} THEN :keyword_weight ELSE 0.0 END")
-            params[key] = f"%{_escape_like(term.lower())}%"
+            keyword_terms.append(
+                f"CASE WHEN LOWER(text) LIKE :{key}{LIKE_ESCAPE_SQL} THEN :keyword_weight ELSE 0.0 END"
+            )
+            params[key] = f"%{escape_like(term.lower())}%"
 
         phrase_expr = " + ".join(phrase_terms) if phrase_terms else "0.0"
         keyword_expr = " + ".join(keyword_terms) if keyword_terms else "0.0"
 
         # Pre-primacy scoring: always add phrase + keyword scores.
-        # Never allow lexical fallback to devolve to an unscoped full-table scan.
-        where_sql = " AND ".join(where) if where else "0=1"
+        where_sql = " AND ".join(where)
         # nosec B608 — three dynamic parts, all safe:
         # phrase_expr/keyword_expr: "CASE WHEN LOWER(text) LIKE :p0 THEN :phrase_weight ELSE 0.0 END + ..."
         #   structure is hardcoded; all LIKE values bound as :p0/:t0 named params.
-        # where_sql: " AND ".join(where) where every item in `where` is a hardcoded
-        #   literal string ("tenant_id = ?", "owner_type = ?", etc.); no user data.
+        # where_sql: " AND ".join(where) where `where` is the fixed three-element
+        #   literal list above ("tenant_id = :tenant_id", ...); the scope values
+        #   are bound as named params, so no user data becomes SQL structure.
         sql = f"""
             WITH scored AS (
                 SELECT *,

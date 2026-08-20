@@ -8,9 +8,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from pathlib import Path
 from tests.helpers.context_bundle import make_context_bundle
-from tests.helpers.runtime import build_test_config
+from tests.helpers.runtime import TEST_AGENT_ID, build_test_config
 from uma.api.memory import UMAMemory
-from uma.api.runtime import AnimusProfileProvider, _AnimusProfileCacheEntry
 from uma.common import maintenance as maintenance_module
 from uma.common.config import UMAConfig
 from uma.common.identity import normalize_user_id
@@ -23,13 +22,15 @@ from uma.common.types import Skill
 from uma.ingest import ingest_service
 from uma.memory.working_memory.buffer import WorkingMemoryBuffer
 from uma.retrieve.user_query_helper import build_fact_embedding_text
-from uma.stores.base_sql_store import DEFAULT_TENANT_ID
+from uma.common.types.types_scope import DEFAULT_TENANT_ID
 import asyncio
 import pytest
 import threading
 import time
 import uma.api.memory as memory_module
 import yaml
+
+AGENT_ID = TEST_AGENT_ID
 
 # Barrier waits run inside `asyncio.to_thread`, i.e. on non-daemon pool threads
 # that asyncio cannot cancel. Without a timeout, one party failing before it
@@ -401,56 +402,6 @@ def test_memory_runtime_singleton_is_thread_safe(tmp_path: Path, monkeypatch: py
     assert seen[0] is seen[1]
 
 
-def test_animus_profile_provider_refresh_is_singleflight(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    profile_path = tmp_path / "USER.md"
-    profile_path.write_text("first", encoding="utf-8")
-    provider = AnimusProfileProvider(ttl_seconds=300)
-    provider.load_user_profile(str(profile_path))
-
-    provider._user_profile = _AnimusProfileCacheEntry(
-        path=str(profile_path),
-        text="expired",
-        loaded_at=0.0,
-        expires_at=0.0,
-    )
-
-    entered = threading.Event()
-    release = threading.Event()
-    calls = {"count": 0}
-
-    def fake_load_profile(path: str):
-        calls["count"] += 1
-        entered.set()
-        assert release.wait(timeout=2.0)
-        now = time.time()
-        return _AnimusProfileCacheEntry(
-            path=path,
-            text="refreshed",
-            loaded_at=now,
-            expires_at=now + 300,
-        )
-
-    monkeypatch.setattr(provider, "_load_profile", fake_load_profile)
-
-    results: list[str] = []
-
-    def read_profile() -> None:
-        results.append(provider.get_user_profile_text())
-
-    first = threading.Thread(target=read_profile)
-    second = threading.Thread(target=read_profile)
-    first.start()
-    assert entered.wait(timeout=1.0)
-    second.start()
-    time.sleep(0.1)
-    release.set()
-    first.join(timeout=2.0)
-    second.join(timeout=2.0)
-
-    assert calls["count"] == 1
-    assert results == ["refreshed", "refreshed"]
-
-
 def test_working_memory_buffer_thread_safe_for_append_read_replace() -> None:
     buffer = WorkingMemoryBuffer(max_tokens=100)
     scope = SessionScope(
@@ -523,6 +474,7 @@ async def test_retrieve_context_passes_explicit_request_scope_through(uma_memory
 
     result = await memory.retrieve_context(
         query_text="coffee",
+        agent_id=AGENT_ID,
         user_id="user:u1",
         tenant_id="tenant-a",
         request_id="req-a",
@@ -561,16 +513,16 @@ async def test_concurrent_retrieve_context_calls_keep_request_scope_isolated(
         memory.retrieve_context(
             query_text="query-a",
             user_id="user:u1",
-            tenant_id="tenant-a",
             request_id="req-a",
             session_id="session-a",
+            agent_id=AGENT_ID,
         ),
         memory.retrieve_context(
             query_text="query-b",
             user_id="user:u2",
-            tenant_id="tenant-b",
             request_id="req-b",
             session_id="session-b",
+            agent_id=AGENT_ID,
         ),
     )
 
@@ -609,11 +561,12 @@ async def test_retrieve_context_overlap_with_process_turn_keeps_each_call_scope(
         async def process_turn(
             self,
             *,
+            agent_id: str,
             user_id: str,
             user_msg: str,
             assistant_reply: str,
             session_id: str,
-            tenant_id: str = "default",
+            tenant_id: str = DEFAULT_TENANT_ID,
             workspace_id=None,
             extra_meta=None,
         ) -> None:
@@ -636,11 +589,12 @@ async def test_retrieve_context_overlap_with_process_turn_keeps_each_call_scope(
         memory.retrieve_context(
             query_text="query-a",
             user_id="user:u1",
-            tenant_id="tenant-a",
             request_id="req-a",
             session_id="session-a",
+            agent_id=AGENT_ID,
         ),
         memory.process_turn(
+            agent_id=AGENT_ID,
             user_id="user:u2",
             user_msg="hello",
             assistant_reply="world",
@@ -704,6 +658,7 @@ async def test_bootstrap_overlap_with_retrieval_keeps_explicit_request_scope(
             tenant_id="tenant-bootstrap",
             request_id="req-bootstrap",
             session_id="session-bootstrap",
+            agent_id=AGENT_ID,
         ),
         memory.retrieve_context(
             query_text="coffee",
@@ -711,6 +666,7 @@ async def test_bootstrap_overlap_with_retrieval_keeps_explicit_request_scope(
             tenant_id="tenant-retrieve",
             request_id="req-retrieve",
             session_id="session-retrieve",
+            agent_id=AGENT_ID,
         ),
     )
 
@@ -1576,6 +1532,7 @@ async def test_deferred_graph_update_overlap_with_graph_rebuild_keeps_scope_isol
     await entered.wait()
 
     await memory.process_turn(
+        agent_id=AGENT_ID,
         user_id="user:graph-b",
         user_msg="I like tea",
         assistant_reply="Noted that you like tea.",

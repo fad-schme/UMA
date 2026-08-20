@@ -22,7 +22,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Optional, Sequence
 
-from uma.stores.base_sql_store import DEFAULT_TENANT_ID
+from uma.common.types.types_scope import DEFAULT_TENANT_ID
 from uma.common.types import Chunk
 from uma.retrieve.ranking import fuse_candidates
 from uma.common.dedupe import dedupe_by_id

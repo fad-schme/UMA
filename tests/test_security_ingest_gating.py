@@ -10,6 +10,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import os
 import pytest
 
+from tests.helpers.runtime import TEST_AGENT_ID
+
+AGENT_ID = TEST_AGENT_ID
+
 # ── test_pr6_html_sanitization ──────────────────────────────────────────
 
 

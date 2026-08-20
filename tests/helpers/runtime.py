@@ -133,10 +133,12 @@ def build_test_config(
     return cfg
 
 
+TEST_AGENT_ID = "agent-default"
+
+
 async def init_uma_for_tests(
     tmp_path: Path,
     *,
-    agent_id: str = "agent-default",
     embedding_dim: int = 64,
     graph_backend: str = "disabled",
     graph_config: Optional[dict[str, Any]] = None,
@@ -161,6 +163,8 @@ async def init_uma_for_tests(
     cfg_path = tmp_path / "uma_test.yaml"
     cfg_path.write_text(yaml.safe_dump(cfg))
 
-    memory = UMAMemory.from_yaml(str(cfg_path)).set_context(agent_id=agent_id)
+    # Identity is per call, not per instance. `agent_id` is kept on the helper
+    # only so tests have one canonical value to pass into the public API.
+    memory = UMAMemory.from_yaml(str(cfg_path))
     memory._ensure_ingestion_ready()
     return memory

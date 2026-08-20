@@ -11,8 +11,9 @@ Two transports, one binary:
 
 Configuration via environment variables (both modes):
     UMA_CONFIG_PATH   Absolute path to uma.yaml (required).
-    UMA_AGENT_ID      Agent identity bound to this server. Immutable per
-                      process. Default: "agent-default".
+
+The server holds no identity. Every tool call carries its own agent_id,
+user_id, and (optionally) tenant_id, so one process serves every agent.
 
 HTTP-mode flags:
     --http                       Enable HTTP transport (streamable-http).
@@ -69,6 +70,8 @@ from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
+from uma.common.types.types_scope import DEFAULT_TENANT_ID, validate_agent_id
+
 # ---------------------------------------------------------------------------
 # Logging — stderr only. stdout is reserved for the MCP JSON-RPC transport
 # in stdio mode; anything the server writes to stdout corrupts the frame.
@@ -84,7 +87,11 @@ _memory = None
 
 
 def _get_memory():
-    """Return the process-global scoped UMAMemory, creating it on first use."""
+    """Return the process-global UMAMemory, creating it on first use.
+
+    The instance holds no identity: one server process serves every agent,
+    every user, and the single tenant. Scope arrives with each tool call.
+    """
     global _memory
     if _memory is None:
         config_path = os.environ.get("UMA_CONFIG_PATH")
@@ -94,21 +101,23 @@ def _get_memory():
                 "Point it at your uma.yaml (absolute path). See "
                 "docs/mcp/STDIO_CLIENTS.md."
             )
-        agent_id = os.environ.get("UMA_AGENT_ID", "agent-default")
 
         from uma.api.memory import UMAMemory
 
-        logger.info(
-            "Initializing UMAMemory from %s (agent_id=%s)", config_path, agent_id
-        )
-        _memory = UMAMemory.from_yaml(config_path).set_context(agent_id=agent_id)
+        logger.info("Initializing UMAMemory from %s", config_path)
+        _memory = UMAMemory.from_yaml(config_path)
     return _memory
 
 
 # ---------------------------------------------------------------------------
 # Scope resolution — DAT invariant enforcement at the tool boundary
 # ---------------------------------------------------------------------------
-def _resolve_scope(user_id: str, tenant_id: str) -> tuple[str, str]:
+def _resolve_scope(
+    user_id: str,
+    tenant_id: str,
+    *,
+    require_user: bool = True,
+) -> tuple[str, str]:
     """Resolve (user_id, tenant_id) for the current tool call.
 
     stdio mode: no AccessToken. The passed args are authoritative and
@@ -119,6 +128,13 @@ def _resolve_scope(user_id: str, tenant_id: str) -> tuple[str, str]:
     the tool call also passed non-default values for these args, they
     must match the token's claim — otherwise we raise, which surfaces to
     the caller as a tool error. This is the ASI03 boundary.
+
+    ``require_user=False`` is for ``ingest_document``, whose scope is a
+    durable owner tuple rather than a request scope: it always needs the
+    tenant and the caller's identity, but an agent-owned ingest has no
+    user of its own. It never relaxes the token check — in HTTP mode the
+    returned user is still the token's, which is what the owner resolver
+    below constrains against.
     """
     token = None
     try:
@@ -135,12 +151,12 @@ def _resolve_scope(user_id: str, tenant_id: str) -> tuple[str, str]:
 
     if token is None:
         # stdio mode — args are authoritative
-        if not user_id or not user_id.strip():
+        if require_user and not (user_id or "").strip():
             raise ValueError(
                 "user_id is required when running in stdio mode "
                 "(the LLM must pass it in every tool call)"
             )
-        return user_id, tenant_id
+        return (user_id or "").strip(), tenant_id
 
     # HTTP mode — token wins, but reject explicit mismatches to keep the
     # DAT invariant loud rather than silent.
@@ -152,12 +168,79 @@ def _resolve_scope(user_id: str, tenant_id: str) -> tuple[str, str]:
             f"user_id={user_id!r} does not match authenticated user "
             f"(token identifies user={token_user!r})"
         )
-    if tenant_id and tenant_id != "default" and tenant_id != token_tenant:
+    if tenant_id and tenant_id != DEFAULT_TENANT_ID and tenant_id != token_tenant:
         raise ValueError(
             f"tenant_id={tenant_id!r} does not match authenticated tenant "
             f"(token identifies tenant={token_tenant!r})"
         )
     return token_user, token_tenant
+
+
+# Documents are readable only through the two scopes retrieval builds
+# (`RetrievalScope` is agent|user), so those are the only two an ingest
+# tool may target. A workspace- or system-owned document would be
+# write-only over MCP.
+_INGEST_OWNER_TYPES = ("agent", "user")
+
+
+def _resolve_ingest_owner(
+    *,
+    agent_id: str,
+    owner_type: str,
+    owner_id: str,
+    caller_user_id: str,
+) -> tuple[str, str]:
+    """Return the (owner_type, owner_id) this ingest call may write to.
+
+    The owner tuple is never taken on trust from the arguments alone.
+    Ingested documents are retrieved later as trusted context, so letting
+    a caller name an arbitrary owner is a write primitive into someone
+    else's memory:
+
+    - ``agent``: the owner is the calling ``agent_id``. Naming a different
+      agent raises rather than being silently ignored.
+    - ``user``: the owner is the caller's own identity. In HTTP mode
+      ``caller_user_id`` comes from the bearer token, so a user-owned
+      ingest can only ever target that user. In stdio mode there is no
+      token and the calling application is the authority on identity, as
+      it is everywhere else in UMA — the asserted value is used as-is.
+
+    ``owner_id`` stays accepted for both types so an explicit call still
+    reads the same way; it just has to agree with the caller.
+    """
+    normalized_owner_type = (owner_type or "").strip().lower()
+    if normalized_owner_type not in _INGEST_OWNER_TYPES:
+        raise ValueError(
+            f"owner_type must be one of {list(_INGEST_OWNER_TYPES)}; "
+            f"got {owner_type!r}"
+        )
+
+    requested_owner_id = (owner_id or "").strip()
+
+    if normalized_owner_type == "agent":
+        if requested_owner_id and requested_owner_id != agent_id:
+            raise ValueError(
+                f"owner_id={requested_owner_id!r} does not match the calling "
+                f"agent (agent_id={agent_id!r}); an agent-owned document is "
+                f"owned by the agent that ingests it"
+            )
+        return "agent", agent_id
+
+    from uma.common.identity import normalize_user_id
+
+    if not caller_user_id:
+        raise ValueError(
+            "user_id is required for a user-owned ingest "
+            "(owner_type='user') when running in stdio mode"
+        )
+    resolved_owner_id = normalize_user_id(requested_owner_id or caller_user_id)
+    if resolved_owner_id != normalize_user_id(caller_user_id):
+        raise ValueError(
+            f"owner_id={requested_owner_id!r} does not match the calling user "
+            f"({caller_user_id!r}); a user-owned document is owned by the "
+            f"user that ingests it"
+        )
+    return "user", resolved_owner_id
 
 
 # ---------------------------------------------------------------------------
@@ -167,20 +250,23 @@ def _resolve_scope(user_id: str, tenant_id: str) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 async def retrieve_context(
     query_text: str,
+    agent_id: str,
     user_id: str = "",
     session_id: str = "",
-    tenant_id: str = "default",
+    tenant_id: str = DEFAULT_TENANT_ID,
 ) -> str:
     """Retrieve curated RAG context from UMA for the given query.
 
     Returns a JSON ContextBundle: snippets, facts, working_memory, meta,
-    and query_scan_severity. In stdio mode user_id is required; in HTTP
-    mode the bearer token supplies it.
+    and query_scan_severity. agent_id is required on every call and names
+    the calling agent. In stdio mode user_id is required too; in HTTP mode
+    the bearer token supplies it.
     """
     user_id, tenant_id = _resolve_scope(user_id, tenant_id)
     memory = _get_memory()
     result = await memory.retrieve_context(
         query_text=query_text,
+        agent_id=validate_agent_id(agent_id),
         user_id=user_id,
         tenant_id=tenant_id,
         session_id=session_id or None,
@@ -190,9 +276,10 @@ async def retrieve_context(
 
 async def retrieve_memory(
     query_text: str,
+    agent_id: str,
     user_id: str = "",
     session_id: str = "",
-    tenant_id: str = "default",
+    tenant_id: str = DEFAULT_TENANT_ID,
     memory_intent: str = "continuity",
 ) -> str:
     """Retrieve compiled, evidence-backed memory from UMA.
@@ -205,6 +292,7 @@ async def retrieve_memory(
     memory = _get_memory()
     result = await memory.retrieve_memory(
         query_text=query_text,
+        agent_id=validate_agent_id(agent_id),
         user_id=user_id,
         tenant_id=tenant_id,
         session_id=session_id or None,
@@ -217,8 +305,9 @@ async def process_turn(
     session_id: str,
     user_msg: str,
     assistant_reply: str,
+    agent_id: str,
     user_id: str = "",
-    tenant_id: str = "default",
+    tenant_id: str = DEFAULT_TENANT_ID,
 ) -> str:
     """Ingest a conversation turn into UMA memory.
 
@@ -233,6 +322,7 @@ async def process_turn(
     memory = _get_memory()
     try:
         await memory.process_turn(
+            agent_id=validate_agent_id(agent_id),
             user_id=user_id,
             user_msg=user_msg,
             assistant_reply=assistant_reply,
@@ -257,29 +347,40 @@ async def process_turn(
 
 async def ingest_document(
     file_path: str,
+    agent_id: str,
     owner_type: str = "agent",
     owner_id: str = "",
-    tenant_id: str = "default",
+    user_id: str = "",
+    tenant_id: str = DEFAULT_TENANT_ID,
 ) -> str:
     """Ingest a document file into UMA's knowledge base.
 
     Chunks, embeds, and indexes the file. Returns a JSON IngestReport.
-    If owner_id is empty, defaults to the server's bound agent_id.
 
-    Note: ingest_document does not carry a user_id — the C1 contract
-    scopes documents by (tenant_id, owner_type, owner_id) only. In HTTP
-    mode the bearer token's tenant is still enforced.
+    Documents are scoped by (tenant_id, owner_type, owner_id), not by a
+    request scope. owner_type is "agent" (default — the document joins the
+    calling agent's shared KB) or "user" (the document is private to the
+    ingesting user). owner_id defaults to the caller in both cases and may
+    not name anyone else. In HTTP mode the bearer token supplies the user
+    and the tenant.
     """
-    # Reuse the scope resolver only for tenant_id (user_id is not part
-    # of this API surface). Pass a placeholder user_id that satisfies
-    # the resolver's stdio check, since we only care about tenant here.
-    _, tenant_id = _resolve_scope("mcp-ingest", tenant_id)
+    resolved_agent_id = validate_agent_id(agent_id)
+    # require_user=False: an agent-owned ingest has no user of its own, and
+    # demanding one would make the common stdio call impossible.
+    caller_user_id, tenant_id = _resolve_scope(
+        user_id, tenant_id, require_user=False
+    )
+    resolved_owner_type, resolved_owner_id = _resolve_ingest_owner(
+        agent_id=resolved_agent_id,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        caller_user_id=caller_user_id,
+    )
 
     memory = _get_memory()
-    resolved_owner_id = owner_id or memory.agent_id or "agent-default"
     report = await memory.ingest_document(
         file_path,
-        owner_type=owner_type,
+        owner_type=resolved_owner_type,
         owner_id=resolved_owner_id,
         tenant_id=tenant_id,
     )
@@ -391,7 +492,7 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--oauth-tenant",
-        default="default",
+        default=DEFAULT_TENANT_ID,
         help=(
             "UMA tenant every authenticated user maps to (default: "
             "'default'). v0.3.0 is single-tenant per OAuth deployment; "

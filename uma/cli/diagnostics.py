@@ -270,8 +270,6 @@ def _runtime_text(data: dict[str, Any], status: str) -> str:
         "UMA health",
         f"Config: {data['config_path']}",
     ]
-    if data.get("agent_id"):
-        lines.append(f"Agent: {data['agent_id']}")
     for name, check in data["checks"].items():
         check_status = check.get("status", "error")
         detail = check.get("detail", "")
@@ -282,20 +280,13 @@ def _runtime_text(data: dict[str, Any], status: str) -> str:
             else ""
         )
         lines.append(f"[{check_status}] {name}: {detail}{latency}")
-    lines.extend(
-        (
-            "LLM probe: initialization only; no provider generation request "
-            "was performed.",
-            f"Overall: {status}",
-        )
-    )
+    lines.append(f"Overall: {status}")
     return "\n".join(lines)
 
 
 def runtime_health(
     config_path: Path,
     *,
-    agent_id: str | None,
     timeout_seconds: float | None,
 ) -> tuple[dict[str, Any], str, str, int]:
     """Initialize UMA, run its lightweight health probe, and always shut down."""
@@ -308,12 +299,8 @@ def runtime_health(
     try:
         with _runtime_deadline(timeout_seconds):
             memory = UMAMemory.from_yaml(str(config_path))
-            health_target: Any = memory
-            if agent_id is not None:
-                phase = "agent context"
-                health_target = memory.set_context(agent_id=agent_id)
             phase = "health check"
-            health = health_target.health_check()
+            health = memory.health_check()
             status, checks = _health_data(health)
     except RuntimeHealthTimeout as exc:
         checks["timeout"] = _error_check("timeout", str(exc))
@@ -337,10 +324,8 @@ def runtime_health(
 
     data = {
         "config_path": str(config_path),
-        "agent_id": agent_id,
         "timeout_seconds": timeout_seconds,
         "duration_ms": round((time.monotonic() - started) * 1000),
-        "llm_probe": "initialization_only",
         "checks": checks,
     }
     return (
@@ -355,7 +340,6 @@ def doctor_runtime(
     config: dict[str, Any],
     config_path: Path,
     *,
-    agent_id: str | None,
     timeout_seconds: float | None,
 ) -> tuple[dict[str, Any], str, str, int]:
     """Combine offline readiness diagnostics with live runtime health."""
@@ -366,7 +350,6 @@ def doctor_runtime(
     )
     runtime_data, runtime_text, runtime_status, _ = runtime_health(
         config_path,
-        agent_id=agent_id,
         timeout_seconds=timeout_seconds,
     )
     if "error" in {offline_status, runtime_status}:

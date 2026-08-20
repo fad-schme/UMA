@@ -19,7 +19,9 @@ UMA exposes six public `lane_filter` values: `raw`, `semantic`, `episodic`, `pro
 
 **Role:** Holds recent messages within a session for immediate context injection.
 
-**Storage:** In-memory buffer managed by `WorkingMemoryCore`. Backed by session-scoped state; not persisted across sessions.
+**Storage:** In-memory buffer managed by `WorkingMemoryCore`. Not persisted across sessions.
+
+**Scope:** Keyed by `(tenant_id, agent_id, user_id, session_id)` — all four. `session_id` is caller-supplied and carries no identity of its own, so two users may legitimately present the same one; working memory separates them the way every durable lane does.
 
 **Security:** Each appended message is injection-scanned before persistence. High-severity messages are kept in the buffer with `quarantined_at` set, but `get_context` filters them out by default (pass `include_quarantined=True` to include).
 
@@ -168,7 +170,7 @@ await lint_memory_drift(memory, artifact, user_id=..., stale_after_seconds=86400
 
 | Lane | Authoritative Store | Accelerator | Write-time scan | Read-time quarantine filter |
 |---|---|---|---|---|
-| Working Memory | In-memory buffer (session-scoped) | — | ✅ | ✅ |
+| Working Memory | In-memory buffer (per user, per session) | — | ✅ | ✅ |
 | Semantic | SQLite (`semantic_sql.py`) | Vector index | ✅ | ✅ |
 | Raw Chunks | SQLite (`chunk_sql.py`) | Vector index | ✅ | ✅ |
 | Episodic | SQLite (`episodic_sql.py`) | Vector index | ✅ | ✅ |
@@ -207,9 +209,9 @@ All production retrieval follows this exact sequence:
 Every lane query is owner-scoped. The scope fields required per call:
 
 ```python
-tenant_id="default"      # required; isolates by tenant
+agent_id="agent-default" # required on every call; never bound to the instance
 user_id="user-123"       # required for user-scoped lanes
-agent_id="agent-default" # bound via set_context(); required
+tenant_id="default"      # optional; defaults to "default" (single-tenant Lite)
 session_id="session-1"   # required for session-local lanes
 ```
 

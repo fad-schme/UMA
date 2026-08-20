@@ -20,7 +20,7 @@ from .base_vector_sql_store import BaseVectorSQLStore
 _QUARANTINE_FILTER = " AND quarantined_at IS NULL"
 _NO_FILTER = ""
 
-from .base_sql_store import DEFAULT_TENANT_ID
+from ..common.types.types_scope import DEFAULT_TENANT_ID
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from uma.stores.metadata import ensure_store_metadata
@@ -560,6 +560,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                       AND tenant_id = ?
                       AND owner_type = ?
                       AND owner_id = ?
+                      AND quarantined_at IS NULL
                 """
                 params = list(ids) + [tenant_id, owner_type, owner_id]
                 rows = self._query_all(conn, sql, params=params, log_context="fetch_episode_summaries")
@@ -612,6 +613,7 @@ class EpisodicSQLStore(BaseVectorSQLStore):
                       AND tenant_id = ?
                       AND owner_type = ?
                       AND owner_id = ?
+                      AND quarantined_at IS NULL
                 """
                 params = list(ids) + [tenant_id, owner_type, owner_id]
                 rows = self._query_all(conn, sql, params=params, log_context="fetch_episode_transcripts")

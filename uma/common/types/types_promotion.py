@@ -22,6 +22,8 @@ Coding agent instructions
 
 from __future__ import annotations
 
+from .types_scope import DEFAULT_TENANT_ID
+
 from dataclasses import dataclass, field
 
 
@@ -54,7 +56,7 @@ class AgentProfile:
     description: str
     focus_areas: list[str]
     profile_embedding: list[float]
-    tenant_id: str = "default"
+    tenant_id: str = DEFAULT_TENANT_ID
 
     def __post_init__(self) -> None:
         if not isinstance(self.agent_id, str) or not self.agent_id.strip():

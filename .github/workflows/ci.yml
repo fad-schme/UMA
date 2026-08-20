@@ -24,8 +24,10 @@ env:
   PYTHONUNBUFFERED: "1"
 
 jobs:
-  # UMA supports Python 3.9 and newer. Run the full suite on every supported
-  # minor version so packaging or language compatibility regressions are caught.
+  # Run the full suite on every version allowed by `requires-python` in
+  # pyproject.toml so packaging or language compatibility regressions are
+  # caught. Keep this matrix in step with that floor — a version below it
+  # cannot install the package at all.
   tests:
     name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -34,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12"]
 
     steps:
       - name: Check out repository
@@ -182,6 +184,12 @@ jobs:
 
   # Audit both direct and transitive dependencies in the environment users get
   # from the documented development install. Any known vulnerability fails CI.
+  #
+  # TEMPORARILY NOT REQUIRED. `--strict` fails the run when any distribution
+  # cannot be audited, and the editable `uma-mem` install resolves to a version
+  # that is not on PyPI yet, so the job errors out before auditing anything.
+  # It still runs and stays visible; it is omitted from `all-checks-passed`
+  # below. Restore it there once releases land on PyPI cleanly.
   dependency-audit:
     name: Dependency audit (pip-audit)
     runs-on: ubuntu-latest
@@ -255,13 +263,16 @@ jobs:
       - name: Validate package metadata
         run: python -m twine check dist/*
 
-  # Documentation feedback is intentionally non-blocking: broken external links
-  # or a missing changelog entry should be visible without masking code quality.
+  # Blocking, but scoped to repo-relative links only (see
+  # .github/markdown-link-check.json). A README that references a file which is
+  # not in the repo is a correctness failure, not documentation polish: it is
+  # how docs/mcp/* was lost — .gitignore hid the files, and this job was
+  # advisory, so nothing ever failed. External links stay out of the gate
+  # because their flakiness is not ours to fix.
   docs-lint:
     name: Documentation checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    continue-on-error: true
 
     steps:
       - name: Check out complete history
@@ -274,6 +285,7 @@ jobs:
         with:
           use-quiet-mode: yes
           use-verbose-mode: yes
+          config-file: .github/markdown-link-check.json
 
       - name: Warn when UMA changes omit the changelog
         if: github.event_name == 'pull_request'
@@ -297,9 +309,10 @@ jobs:
       - contract-tests
       - lint
       - static-analysis
-      - dependency-audit
+      # - dependency-audit  # re-add once uma-mem publishes to PyPI (see above)
       - secret-scan
       - package-build
+      - docs-lint
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always()

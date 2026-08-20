@@ -11,26 +11,27 @@ Facts extracted by `process_turn` are session-local by default. Promotion is
 UMA's conservative path for copying a qualifying fact into a broader durable
 scope without changing or deleting the source fact.
 
-Promotion is agent-specific. Start with an immutable scoped instance:
+Promotion is agent-specific, and the agent is named on every call:
 
 ```python
 from uma import UMAMemory
 
-memory = UMAMemory.from_yaml("config/uma.yaml").set_context(
-    agent_id="infrastructure-agent",
-)
+memory = UMAMemory.from_yaml("config/uma.yaml")
+AGENT = "infrastructure-agent"
 ```
 
-`set_context` returns a new `ScopedUMAMemory`; it does not mutate the source
-runtime. Reuse one scoped instance per agent.
+The promotion policy is constructed from the `agent_id` of the turn being
+processed. One instance serves every agent, and no agent can promote into
+another agent's KB.
 
 ## Enable Promotion with an Agent Profile
 
 ```python
 profile = await memory.set_agent_profile(
+    agent_id=AGENT,
     description="An infrastructure assistant focused on Kubernetes operations",
     focus_areas=["kubernetes", "containers", "incident response"],
-    tenant_id="default",
+    tenant_id="default",   # optional; defaults to "default"
 )
 ```
 

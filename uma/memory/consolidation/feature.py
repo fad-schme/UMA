@@ -23,6 +23,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from uma.common.registry import FeatureContext, FeatureHandle, FeatureResult, UMAFeature
+from uma.common.types.types_scope import DEFAULT_TENANT_ID, validate_tenant_id
 from .consolidator import Consolidator
 
 if TYPE_CHECKING:
@@ -111,9 +112,18 @@ class ConsolidationFeature(UMAFeature):
                 return FeatureResult.failure([f"missing: {', '.join(missing_deps)}"])
             return FeatureResult.success()
 
-        async def consolidation_run(user_id: str) -> FeatureResult:
+        async def consolidation_run(
+            *,
+            user_id: str,
+            tenant_id: str = DEFAULT_TENANT_ID,
+        ) -> FeatureResult:
             """
-            Run consolidation for a user.
+            Run consolidation for one user in one tenant.
+
+            Scope is per call, like every other public UMA entrypoint: one
+            runtime serves every user concurrently, so there is no instance
+            to read it from. Consolidation touches user-owned lanes only and
+            therefore takes no agent_id.
 
             Returns
             -------
@@ -126,14 +136,25 @@ class ConsolidationFeature(UMAFeature):
                     user_id,
                 )
                 return FeatureResult.failure(["invalid user_id"], data={"facts": [], "fact_count": 0})
+            resolved_tenant_id = validate_tenant_id(tenant_id or DEFAULT_TENANT_ID)
             try:
-                facts = await self.consolidator.run_once(user_id)
+                facts = await self.consolidator.run_once(
+                    user_id, tenant_id=resolved_tenant_id
+                )
+                logger.info(
+                    "ConsolidationFeature.consolidation_run: tenant_id=%s user_id=%s facts=%d",
+                    resolved_tenant_id,
+                    user_id,
+                    len(facts),
+                )
                 return FeatureResult.success(
                     {"facts": facts, "fact_count": len(facts)}
                 )
             except Exception as exc:
                 logger.exception(
-                    "ConsolidationFeature.consolidation_run failed (user_id=%s).",
+                    "ConsolidationFeature.consolidation_run failed "
+                    "(tenant_id=%s user_id=%s).",
+                    resolved_tenant_id,
                     user_id,
                 )
                 return FeatureResult.failure(

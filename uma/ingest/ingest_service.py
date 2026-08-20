@@ -880,6 +880,7 @@ async def _extract_facts_and_update_graph(
     fact_extractor = semantic_extractor.FactExtractor(llm=runtime.llm)
     extracted_fact_records, llm_batch_failures = await fact_extractor.extract_chunk_facts_batch(
         extract_chunks,
+        tenant_id=tenant_id,
         owner_type=owner_type,
         owner_id=owner_id,
         source_path=parsed.source_path,
@@ -897,12 +898,11 @@ async def _extract_facts_and_update_graph(
         warnings.append(msg)
         logger.warning("ingest_document: %s", msg)
 
+    # Scope is set at construction: capture_source normalizes the owner tuple
+    # through validate_explicit_owner before this stage, and every Fact the
+    # extractor builds takes tenant/owner from the arguments it was handed.
+    # Re-stamping here would only mask a divergence rather than surface one.
     for fact in extracted_fact_records:
-        if fact.owner_type != owner_type:
-            fact.owner_type = owner_type
-        if fact.owner_id != owner_id:
-            fact.owner_id = owner_id
-        fact.tenant_id = tenant_id
         fact.workspace_id = workspace_id
         fact.trust_score = score_source(SourceDescriptor(kind="document"))
         fact.meta = dict(fact.meta or {})

@@ -130,6 +130,18 @@ class UMAMemoryEnvironment:
 
     @staticmethod
     def _filter_session_local_items(request: RetrievalRequest, items: list[Any]) -> list[Any]:
+        """Narrow episodic items to the request's own session.
+
+        Fails closed on both isolation fields. An item missing ``tenant_id``,
+        or a session-local item missing ``origin_agent_id``, is dropped rather
+        than admitted: every episode written through the turn path stamps both
+        (``EpisodicCore`` sets ``origin_agent_id`` from the turn context), so a
+        missing value means the row predates the column or did not come from a
+        store — neither is something a multi-agent read should admit on trust.
+        Items with no ``session_id`` are not session-local and pass through to
+        the owner-scope filter unchanged; cluster summaries are written with
+        ``session_id=None`` and take that path.
+        """
         filtered: list[Any] = []
         request_session_id = getattr(request.context, "session_id", None)
         request_runtime_agent = getattr(request.context, "agent_id", None)
@@ -137,7 +149,7 @@ class UMAMemoryEnvironment:
         for item in items or []:
             try:
                 tenant_id = getattr(item, "tenant_id", None)
-                if tenant_id and request_tenant_id and tenant_id != request_tenant_id:
+                if not tenant_id or tenant_id != request_tenant_id:
                     continue
                 session_id = getattr(item, "session_id", None)
                 if not session_id:
@@ -146,7 +158,7 @@ class UMAMemoryEnvironment:
                 if not request_session_id or session_id != request_session_id:
                     continue
                 origin_agent_id = getattr(item, "origin_agent_id", None)
-                if origin_agent_id and request_runtime_agent and origin_agent_id != request_runtime_agent:
+                if not origin_agent_id or origin_agent_id != request_runtime_agent:
                     continue
                 filtered.append(item)
             except Exception:
@@ -154,6 +166,25 @@ class UMAMemoryEnvironment:
                 continue
         return filtered
     # ------------------------------------------------------------------
+
+    def _embedder_label(self) -> str:
+        """Describe the configured embedding provider for error messages.
+
+        Never includes query text — only provider identity and connection
+        settings the operator needs in order to act.
+        """
+        cfg = getattr(self._memory, "embedding_cfg", None)
+        provider = getattr(cfg, "provider", None) or "unknown"
+        model = getattr(cfg, "model", None) or "unknown"
+        raw = getattr(cfg, "config", None) or {}
+        host = raw.get("host")
+        timeout = raw.get("timeout")
+        label = f"{provider}:{model}"
+        if host:
+            label = f"{label} @ {host}"
+        if timeout:
+            label = f"{label} (timeout={timeout}s)"
+        return label
 
     async def get_query_embedding(self, query_text: str) -> NumericVector:
         """
@@ -174,8 +205,18 @@ class UMAMemoryEnvironment:
                 raise ValueError(f"Embedder returned invalid dim (expected={expected_dim} got={len(vec0) if isinstance(vec0, list) else None}).")
             return [float(x) for x in vec0]
         except Exception as exc:
-            logger.exception("Environment.get_query_embedding failed")
-            raise ValueError("Failed to embed query text.") from exc
+            label = self._embedder_label()
+            logger.exception("Environment.get_query_embedding failed provider=%s", label)
+            # Retrieval cannot proceed without a query embedding, so name the
+            # provider and the underlying cause: "failed to embed" alone gives
+            # the caller nothing to act on. A first-call timeout against a
+            # local provider is usually a cold model load, not a dead service.
+            raise ValueError(
+                f"Failed to embed query text via {label}: {exc}. "
+                "Verify the embedding provider is running and the model is "
+                "available; raise embedding.config.timeout if the first "
+                "request is still loading the model."
+            ) from exc
 
     async def fetch_chunks(
         self,

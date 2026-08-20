@@ -11,8 +11,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-import threading
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Mapping, Optional
 
 if TYPE_CHECKING:
@@ -33,6 +31,7 @@ from uma.common.provenance import (
     provenance_for_artifact,
 )
 from uma.common.dedupe import dedupe_evidence_by_text
+from uma.retrieve.gaps import assess_gaps, gap_thresholds
 from uma.common.identity import normalize_user_id
 from uma.common.types import RuntimeContext
 from uma.common.storage_metadata import (
@@ -46,105 +45,10 @@ from uma.common.storage_metadata import (
     shared_metadata_view,
 )
 from uma.retrieve.planner import build_retrieval_plan
-from uma.retrieve.rlm.request import RetrievalRequest
+from uma.retrieve.rlm.request import RetrievalRequest, RetrievalScope
 from uma.memory.working_memory.core import session_scope_from_runtime_context
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class _AnimusProfileCacheEntry:
-    """One cached markdown profile file.
-
-    The provider keeps the source path and refreshes the cached text lazily when
-    the TTL expires. This is intentionally simple because OpenClaw uses one
-    current user profile and one current agent profile.
-    """
-
-    path: str
-    text: str
-    loaded_at: float
-    expires_at: float
-
-
-class AnimusProfileProvider:
-    """Small in-memory provider for USER.md and SOUL.md overlays.
-
-    Phase 1 design:
-    - no DB persistence
-    - no partial field editing
-    - load from markdown files provided by the integration
-    - refresh cached content when the TTL expires
-    """
-
-    def __init__(self, ttl_seconds: int = 300) -> None:
-        if ttl_seconds <= 0:
-            raise ValueError("AnimusProfileProvider.ttl_seconds must be a positive integer.")
-        self.ttl_seconds = ttl_seconds
-        self._lock = threading.RLock()
-        self._user_profile: Optional[_AnimusProfileCacheEntry] = None
-        self._agent_profile: Optional[_AnimusProfileCacheEntry] = None
-
-    def load_user_profile(self, path: str) -> None:
-        """Load and cache the current USER.md profile."""
-        loaded = self._load_profile(path)
-        with self._lock:
-            self._user_profile = loaded
-        logger.info("AnimusProfileProvider: loaded user profile from %s", loaded.path)
-
-    def load_agent_profile(self, path: str) -> None:
-        """Load and cache the current SOUL.md profile."""
-        loaded = self._load_profile(path)
-        with self._lock:
-            self._agent_profile = loaded
-        logger.info("AnimusProfileProvider: loaded agent profile from %s", loaded.path)
-
-    def get_user_profile_text(self) -> str:
-        """Return cached USER.md content, refreshing it after TTL expiry."""
-        with self._lock:
-            self._user_profile = self._refresh_if_needed(self._user_profile)
-            return self._user_profile.text if self._user_profile is not None else ""
-
-    def get_agent_profile_text(self) -> str:
-        """Return cached SOUL.md content, refreshing it after TTL expiry."""
-        with self._lock:
-            self._agent_profile = self._refresh_if_needed(self._agent_profile)
-            return self._agent_profile.text if self._agent_profile is not None else ""
-
-    def _refresh_if_needed(
-        self,
-        entry: Optional[_AnimusProfileCacheEntry],
-    ) -> Optional[_AnimusProfileCacheEntry]:
-        if entry is None:
-            return None
-        if time.time() < entry.expires_at:
-            return entry
-        refreshed = self._load_profile(entry.path)
-        logger.info("AnimusProfileProvider: refreshed profile from %s after TTL expiry", refreshed.path)
-        return refreshed
-
-    def _load_profile(self, path: str) -> _AnimusProfileCacheEntry:
-        if not isinstance(path, str) or not path.strip():
-            raise ValueError("AnimusProfileProvider path must be a non-empty string.")
-
-        normalized_path = path.strip()
-        try:
-            with open(normalized_path, "r", encoding="utf-8") as handle:
-                text = handle.read().strip()
-        except FileNotFoundError as exc:
-            logger.exception("AnimusProfileProvider: profile file not found: %s", normalized_path)
-            raise RuntimeError(f"Profile file not found: {normalized_path}") from exc
-        except Exception as exc:
-            logger.exception("AnimusProfileProvider: failed to read profile file: %s", normalized_path)
-            raise RuntimeError(f"Failed to read profile file: {normalized_path}") from exc
-
-        now = time.time()
-        return _AnimusProfileCacheEntry(
-            path=normalized_path,
-            text=text,
-            loaded_at=now,
-            expires_at=now + self.ttl_seconds,
-        )
 
 
 class UMARuntime:
@@ -446,31 +350,62 @@ class UMARuntime:
         return [item for item in (items or []) if cls._item_lane(item) in allowed]
 
     @staticmethod
-    def _filter_items_by_owner(items: list[Any], requesting_user_id: str) -> list[Any]:
-        """Drop user-owned items whose owner_id does not match the requesting user.
+    def _filter_items_by_scope(
+        items: list[Any],
+        allowed_scopes: tuple[RetrievalScope, ...],
+        tenant_id: str,
+    ) -> list[Any]:
+        """Keep only items in the request's own tenant and retrieval scopes.
 
-        Agent-owned items (shared KB) pass through unconditionally.
-        Items with no owner metadata are kept to avoid silently dropping
-        records with incomplete scope fields.
+        Defense in depth at the public boundary. Every store read is already
+        scoped, so anything dropped here is a plumbing defect upstream rather
+        than routine filtering — hence the warning on each drop.
+
+        The admissible set is the request's own ``tenant_id`` plus its own
+        ``RetrievalScope`` tuple, so this cannot drift from what retrieval
+        actually asked for: an item is admissible only if it carries the
+        calling tenant AND belongs to the calling agent's shared KB or to the
+        calling user. ``RetrievalScope`` carries no tenant of its own, which
+        is why the tenant is passed in alongside it rather than folded into
+        the scope set.
+
+        It fails closed — an item whose tenant or owner cannot be read is
+        dropped, because every domain object these lanes return carries a
+        validated tenant and owner, so a missing one means the item did not
+        come from a store.
+
+        Applied to the four lanes whose items carry owner fields (facts,
+        chunks, episodic, skills). Graph rows carry no top-level owner — they
+        are scoped inside the Cypher predicate — and working memory is keyed
+        per user by the buffer, so neither is filtered here.
         """
+        allowed = {
+            (
+                scope.owner_type,
+                normalize_user_id(scope.owner_id)
+                if scope.owner_type == "user"
+                else scope.owner_id,
+            )
+            for scope in allowed_scopes
+        }
         out = []
         for item in items or []:
-            owner_type = getattr(item, "owner_type", None)
-            if isinstance(item, dict):
-                owner_type = item.get("owner_type", owner_type)
-            if owner_type != "user":
-                out.append(item)
-                continue
-            owner_id = getattr(item, "owner_id", None)
-            if isinstance(item, dict):
-                owner_id = item.get("owner_id", owner_id)
-            if owner_id == requesting_user_id:
+            item_tenant_id = _artifact_value(item, "tenant_id")
+            owner_type = _artifact_value(item, "owner_type")
+            owner_id = _artifact_value(item, "owner_id")
+            if owner_type == "user" and owner_id:
+                owner_id = normalize_user_id(str(owner_id))
+            if item_tenant_id == tenant_id and (owner_type, owner_id) in allowed:
                 out.append(item)
             else:
                 logger.warning(
-                    "UMARuntime: dropped user-owned item owner_id=%s requesting_user_id=%s",
+                    "UMARuntime: dropped out-of-scope item tenant_id=%s owner=%s:%s "
+                    "allowed_tenant_id=%s allowed_owners=%s",
+                    item_tenant_id,
+                    owner_type,
                     owner_id,
-                    requesting_user_id,
+                    tenant_id,
+                    sorted(allowed),
                 )
         return out
 
@@ -505,23 +440,34 @@ class UMARuntime:
         plan: Any,
         working_memory: list[Any],
         pack: Any,
-        requesting_user_id: str,
+        allowed_scopes: tuple[RetrievalScope, ...],
+        tenant_id: str,
     ) -> "ContextBundle":
         from uma.common.results import ContextBundle, Confidence, DebugInfo, Provenance
         from uma.retrieve.rlm.coverage import compute_confidence
 
         coverage = getattr(pack, "coverage", None)
         active_lanes = list(plan.participating_lanes)
-        episodic = self._filter_items_by_lanes(pack.episodes, active_lanes)
-        facts = self._filter_items_by_owner(
+        episodic = self._filter_items_by_scope(
+            self._filter_items_by_lanes(pack.episodes, active_lanes),
+            allowed_scopes,
+            tenant_id,
+        )
+        facts = self._filter_items_by_scope(
             self._filter_items_by_lanes(pack.facts or [], active_lanes),
-            requesting_user_id,
+            allowed_scopes,
+            tenant_id,
         )
-        chunks = self._filter_items_by_owner(
+        chunks = self._filter_items_by_scope(
             self._filter_items_by_lanes(getattr(pack, "chunks", []), active_lanes),
-            requesting_user_id,
+            allowed_scopes,
+            tenant_id,
         )
-        skills = self._filter_items_by_lanes(pack.skills, active_lanes)
+        skills = self._filter_items_by_scope(
+            self._filter_items_by_lanes(pack.skills, active_lanes),
+            allowed_scopes,
+            tenant_id,
+        )
         trace = list(getattr(pack, "steps", []) or [])
         confidence_data = compute_confidence(coverage) if coverage is not None else None
 
@@ -632,13 +578,14 @@ class UMARuntime:
                 raise RuntimeError(
                     "UMARuntime.retrieve_context: RLM controller not initialized."
                 )
+            request = self._build_retrieval_request(
+                runtime_context,
+                plan=plan,
+                query_scan_severity=query_scan_severity,
+                debug=include_debug,
+            )
             pack = await controller.retrieve_context(
-                request=self._build_retrieval_request(
-                    runtime_context,
-                    plan=plan,
-                    query_scan_severity=query_scan_severity,
-                    debug=include_debug,
-                ),
+                request=request,
                 query_text=normalized_query_text,
             )
             increment("uma.get_structured_context.calls", tags={"path": "rlm"})
@@ -648,7 +595,8 @@ class UMARuntime:
                 plan=plan,
                 working_memory=working_memory,
                 pack=pack,
-                requesting_user_id=normalize_user_id(runtime_context.user_id),
+                allowed_scopes=request.scopes,
+                tenant_id=request.context.tenant_id,
             )
             # Surface the scan severity on the bundle so callers and
             # downstream consumers (notably ContextPackBuilder) can act on
@@ -971,7 +919,7 @@ class UMARuntime:
                 artifact_id=f"memory:{runtime_context.request_id}:{memory_intent.strip()}",
                 title=f"Memory {memory_intent.strip()}",
                 owner_type="user",
-                owner_id=str(runtime_context.user_id or ""),
+                owner_id=normalize_user_id(runtime_context.user_id),
                 artifact_kind="compiled_memory_answer",
                 text=None,
                 summary=None,
@@ -1004,6 +952,27 @@ class UMARuntime:
                 memory_intent,
                 len(chunks),
             )
+        # Gap analysis runs on the raw domain objects, not the serialized
+        # projections: `_chunk_payload` drops `created_at` and `trust_score`,
+        # which are exactly the two signals this needs.
+        max_support_age_days, min_support_trust = gap_thresholds(
+            getattr(self._require_memory_bridge(), "retrieval_cfg", None)
+        )
+        gaps = assess_gaps(
+            facts=context.facts,
+            chunks=chunks,
+            max_support_age_days=max_support_age_days,
+            min_support_trust=min_support_trust,
+        )
+        if gaps:
+            logger.info(
+                "UMARuntime.retrieve_memory: %d gap(s) flagged tenant=%s user=%s intent=%s",
+                len(gaps),
+                runtime_context.tenant_id,
+                runtime_context.user_id,
+                memory_intent,
+            )
+
         semantic_retrieved_event = build_compiled_memory_log_event(
             event_type="semantic_retrieved",
             artifact=compiled_answer,
@@ -1027,6 +996,7 @@ class UMARuntime:
             "evidence": chunks,
             "supporting_evidence": supporting_evidence,
             "supporting_facts": list(context.facts),
+            "gaps": gaps,
             "supporting_skills": list(context.skills),
             "conflicts": [],
             "support_density": support_density,
@@ -1151,29 +1121,9 @@ class UMARuntime:
             evidence=evidence,
             provenance_valid=bool(provenance.get("valid")),
             provenance_error=provenance_error,
+            gaps=[dict(item) for item in (detailed_result.get("gaps") or []) if isinstance(item, Mapping)],
             debug=debug,
         )
-
-    def _render_profile_overlay(self) -> str:
-        """Render cached USER.md and SOUL.md overlays for every response."""
-        memory = self._require_memory_bridge()
-        provider = getattr(memory, "animus_profile_provider", None)
-        if provider is None:
-            return ""
-
-        try:
-            agent_profile = provider.get_agent_profile_text().strip()
-            user_profile = provider.get_user_profile_text().strip()
-        except Exception:
-            logger.exception("UMARuntime: failed to load cached Animus profiles.")
-            return ""
-
-        sections: list[str] = []
-        if agent_profile:
-            sections.append("## Agent Profile\n" + agent_profile)
-        if user_profile:
-            sections.append("## User Profile\n" + user_profile)
-        return "\n\n".join(sections).strip()
 
     async def render_context(
         self,
@@ -1216,18 +1166,24 @@ class UMARuntime:
         else:
             rendered_memory = ContextPackBuilder.render_snippet(pack, ctx_cfg)
 
-        profile_overlay = self._render_profile_overlay()
-        parts = [part.strip() for part in (profile_overlay, rendered_memory) if part and part.strip()]
-        return "\n\n".join(parts).strip()
+        return (rendered_memory or "").strip()
 
     async def get_context_messages(
         self,
         runtime_context: RuntimeContext,
         *,
         query_text: str,
-        render_mode: str = "animus_v1",
+        render_mode: str = "guarded",
     ) -> dict[str, Any]:
-        """Retrieve context formatted as prompt messages."""
+        """Retrieve context formatted as prompt messages.
+
+        `render_mode` selects how the rendered memory is wrapped:
+
+        - ``guarded`` (default) — prefixed with an instruction telling the
+          model to treat the memory as supporting context only, so retrieved
+          text cannot outrank the caller's own task instructions.
+        - ``raw_rendered`` — the rendered memory verbatim, no framing.
+        """
         if not isinstance(runtime_context, RuntimeContext):
             raise TypeError("UMARuntime retrieval requires a RuntimeContext instance.")
         if not runtime_context.user_id:
@@ -1238,10 +1194,10 @@ class UMARuntime:
             raise ValueError("UMARuntime.get_context_messages: render_mode must be a non-empty string.")
 
         normalized_render_mode = render_mode.strip()
-        if normalized_render_mode not in {"animus_v1", "raw_rendered"}:
+        if normalized_render_mode not in {"guarded", "raw_rendered"}:
             raise ValueError(
                 f"UMARuntime.get_context_messages: unsupported render_mode={normalized_render_mode!r}. "
-                "Supported modes: 'animus_v1', 'raw_rendered'."
+                "Supported modes: 'guarded', 'raw_rendered'."
             )
 
         rendered = await self.render_context(
@@ -1252,7 +1208,7 @@ class UMARuntime:
 
         messages: list[dict[str, str]] = []
         if rendered:
-            if normalized_render_mode == "animus_v1":
+            if normalized_render_mode == "guarded":
                 messages.append(
                     {
                         "role": "system",

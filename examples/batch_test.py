@@ -1,39 +1,47 @@
+"""Batch retrieval smoke test.
+
+Runs a fixed question set against a loaded UMA store and prints what each query
+retrieves. Useful for eyeballing recall after a bootstrap or an ingest.
+
+Load the store first with `python examples/memory_app/main.py --config <path> --load`,
+then:
+
+    python examples/batch_test.py --config path/to/uma.yaml
 """
-Batch retrieval test — runs 20 questions against the loaded UMA memory and prints results.
-Usage: python examples/batch_test.py
-"""
+
 from __future__ import annotations
 
+import argparse
 import asyncio
-import inspect
-import os
-import sys
+from pathlib import Path
 
-from uma import UMAMemory
-from uma.retrieve.context_pack_builder import ContextPackBuilder
+from uma import ContextBundle, UMAMemory
 
+USER_ID = "user:local"
+AGENT_ID = "agent-default"
+SESSION_ID = "batch-test"
 
 QUESTIONS = [
-    # Project Animus
-    "What is the status of Project Animus and when is the v1.0 launch targeted?",
-    "What tech stack is being used for Project Animus?",
-    "What are the current blockers or risks for Project Animus?",
-    "What milestones has Project Animus completed so far?",
+    # Project status
+    "What is the status of the current project and when is the v1.0 launch targeted?",
+    "What tech stack is being used?",
+    "What are the current blockers or risks?",
+    "What milestones have been completed so far?",
     # Daily diary
     "What happened on May 10 in the daily diary?",
     "What did Anna work on during the week of May 12-14?",
     "Were there any production issues or incidents logged in the diary?",
     "What were the main tasks completed in the diary on May 13?",
-    # Anna's profile and preferences
+    # Profile and preferences
     "What is Anna's core availability window and when should I avoid scheduling meetings?",
-    "Are there any dietary or personal restrictions I should know about when planning team activities?",
+    "Are there any dietary or personal restrictions to know about when planning team activities?",
     "Who does Anna work closely with and what is her reporting structure?",
     "How does Anna typically evaluate architectural proposals?",
     # Communication and work style
     "How should I format documentation and code examples for Anna?",
     "What does Anna look for when reviewing code and what is her approval workflow?",
     "If there is a production issue, how should I communicate the problem to Anna?",
-    # Memory / long-term
+    # Long-term memory
     "When is Anna on vacation and what communication should be avoided during that time?",
     "What are Anna's long-term career goals or aspirations?",
     "What recurring meetings or commitments does Anna have each week?",
@@ -43,51 +51,73 @@ QUESTIONS = [
 ]
 
 
-def _set_context(memory: UMAMemory, user_id: str, agent_id: str) -> UMAMemory:
-    params = inspect.signature(memory.set_context).parameters
-    if "user_id" in params:
-        return memory.set_context(
-            user_id=user_id,
-            agent_id=agent_id,
-            tenant_id="default",
-            request_id="batch-test",
-            session_id="batch-test",
+def summarize(bundle: ContextBundle) -> str:
+    """Print the retrieved lanes of a ContextBundle.
+
+    Read the bundle by attribute — it is a Pydantic model. `facts` are `Fact`
+    domain objects (subject-predicate-object), `chunks` and `episodic` are
+    `Chunk` and `Episode`.
+    """
+    lines = [
+        f"  lanes: {len(bundle.facts)} facts | {len(bundle.chunks)} chunks | "
+        f"{len(bundle.episodic)} episodic | {len(bundle.skills)} skills"
+    ]
+
+    for fact in bundle.facts:
+        triple = " ".join(
+            part for part in (fact.subject, fact.predicate, fact.object) if part
         )
-    return memory.set_context(agent_id=agent_id)
+        lines.append(f"    fact:  {triple}")
+
+    for chunk in bundle.chunks:
+        text = " ".join(str(chunk.text).split())
+        lines.append(f"    chunk: {text[:160]}")
+
+    for episode in bundle.episodic:
+        summary = " ".join(str(getattr(episode, "summary", "")).split())
+        if summary:
+            lines.append(f"    epi:   {summary[:160]}")
+
+    if len(lines) == 1:
+        lines.append("    (nothing retrieved)")
+    return "\n".join(lines)
 
 
-async def run() -> None:
-    config_path = "config/uma.yaml"
-    user_id = "user:local"
-    agent_id = "agent-default"
+async def run(config_path: str) -> None:
+    memory = UMAMemory.from_yaml(config_path)
 
-    memory = _set_context(UMAMemory.from_yaml(config_path), user_id, agent_id)
-
+    empty = 0
     try:
-        for i, question in enumerate(QUESTIONS, start=1):
-            print(f"\n{'='*70}")
-            print(f"Q{i:02d}: {question}")
+        for index, question in enumerate(QUESTIONS, start=1):
+            print(f"\n{'=' * 70}")
+            print(f"Q{index:02d}: {question}")
             print("-" * 70)
-            try:
-                ctx = await memory.retrieve_context(
-                    query_text=question,
-                    user_id=user_id,
-                )
-                pack = ContextPackBuilder.build(question, ctx)
-                snippet = await ContextPackBuilder.render_snippet_async(
-                    pack,
-                    context_cfg=getattr(memory, "retrieval_cfg", None) and
-                                 getattr(memory.retrieval_cfg, "context", None),
-                    llm=getattr(memory, "llm", None),
-                )
-                print(snippet if snippet.strip() else "(no context retrieved)")
-            except Exception as exc:
-                print(f"ERROR: {exc}")
+            bundle = await memory.retrieve_context(
+                query_text=question,
+                user_id=USER_ID,
+                session_id=SESSION_ID,
+                agent_id=AGENT_ID,
+            )
+            if not (bundle.facts or bundle.chunks or bundle.episodic):
+                empty += 1
+            print(summarize(bundle))
+
+        print(f"\n{'=' * 70}")
+        print(f"Queries returning nothing: {empty}/{len(QUESTIONS)}")
     finally:
         memory.shutdown()
 
 
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", required=True, help="Path to your uma.yaml.")
+    args = parser.parse_args()
+
+    if not Path(args.config).is_file():
+        raise SystemExit(f"Config file not found: {args.config}")
+
+    asyncio.run(run(args.config))
+
+
 if __name__ == "__main__":
-    if not os.path.exists("config/uma.yaml"):
-        sys.exit("Config not found: config/uma.yaml — run from the repo root")
-    asyncio.run(run())
+    main()

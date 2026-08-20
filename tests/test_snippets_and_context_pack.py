@@ -17,6 +17,10 @@ from uma.retrieve.rlm.snippet_refiner import SnippetRefiner
 import asyncio
 import pytest
 
+from tests.helpers.runtime import TEST_AGENT_ID
+
+AGENT_ID = TEST_AGENT_ID
+
 # ── test_context_builders ──────────────────────────────────────────
 
 
@@ -391,7 +395,7 @@ async def test_semantic_search_subject_optional(uma_memory):
     """
     memory = uma_memory
     owner_type = "agent"
-    owner_id = memory.agent_id
+    owner_id = AGENT_ID
 
     now = datetime.now(timezone.utc)
     emb = (await memory.embedder.embed(["shared"]))[0]

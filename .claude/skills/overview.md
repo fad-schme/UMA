@@ -85,7 +85,7 @@ UMA is a memory SDK — the OWASP Agentic Security Initiative (ASI) is the most 
 | Control | Scope | How |
 |---|---|---|
 | **LLM01** Prompt Injection | In scope | Two-layer gate: `scan_user_input` (pre-LLM, advisory) + `process_turn` write-time rescan (raises `InjectionDetectedError` on high severity, drops turn entirely) |
-| **LLM02** Sensitive Information Disclosure | Partial | Retrieval audit log stores SHA-256-hashed query preview only, never raw text. HTML sanitization strips active URLs from ingested documents. |
+| **LLM02** Sensitive Information Disclosure | Partial | Retrieval audit log stores a SHA-256 query digest plus a bounded 80-character preview, never the full query. HTML sanitization strips active URLs from ingested documents. |
 | **LLM03** Supply Chain | Out of scope (adjacent) | No model training or plugin registry. `PickleParser` removed; MIME checks reject executables at the document ingest boundary. |
 | **LLM04** Data and Model Poisoning | In scope | Quarantined chunks excluded from fact extraction. SHA-256 `content_hash` + `verify_integrity` detect post-hoc tampering across all lanes. |
 | **LLM05** Improper Output Handling | Out of scope | UMA returns context, not generated output. Caller owns rendering and escaping. |
@@ -111,16 +111,16 @@ from uma.api.management import (
     list_retrieval_audit,
 )
 
-memory = UMAMemory.from_yaml("config/uma.yaml").set_context(agent_id="agent-default")
-# set_context returns a new immutable per-agent view; it does not mutate the
-# unscoped UMAMemory container.
+memory = UMAMemory.from_yaml("config/uma.yaml")
+# One instance serves every agent and every user. agent_id and user_id are
+# passed on every call; tenant_id defaults to "default" when omitted.
 
 # Pre-LLM injection gate (returns dict, never raises)
 scan = memory.scan_user_input(user_msg)
 
 # Retrieval — explicit scope, isolated by construction
-context = await memory.retrieve_context(query_text=..., user_id=..., tenant_id=..., session_id=...)
-result  = await memory.retrieve_memory(query_text=..., user_id=..., tenant_id=..., session_id=...)
+context = await memory.retrieve_context(query_text=..., agent_id=..., user_id=..., session_id=...)
+result  = await memory.retrieve_memory(query_text=..., agent_id=..., user_id=..., session_id=...)
 
 # Ingest — raises InjectionDetectedError on high-severity user_msg
 await memory.process_turn(user_id=..., user_msg=..., assistant_reply=..., session_id=...)

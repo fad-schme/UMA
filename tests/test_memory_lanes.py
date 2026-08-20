@@ -23,7 +23,7 @@ from uma.memory.episodic.indexer import EpisodeIndexer
 from uma.memory.semantic.extractor import FactExtractor
 from uma.memory.working_memory.core import WorkingMemoryCore
 from uma.retrieve.rlm.snippet_refiner import SnippetRefiner
-from uma.stores.base_sql_store import DEFAULT_TENANT_ID
+from uma.common.types.types_scope import DEFAULT_TENANT_ID
 from uma.stores.chunk_sql import ChunkSQLStore
 from uma.stores.episodic_sql import EpisodicSQLStore
 from uma.stores.procedural_sql import ProceduralSQLStore
@@ -32,6 +32,10 @@ import asyncio
 import json
 import pytest
 import sqlite3
+
+from tests.helpers.runtime import TEST_AGENT_ID
+
+AGENT_ID = TEST_AGENT_ID
 
 # ── test_store_round_trip ──────────────────────────────────────────
 
@@ -517,7 +521,7 @@ async def test_semantic_search_subject_optional(uma_memory):
     """
     memory = uma_memory
     owner_type = "agent"
-    owner_id = memory.agent_id
+    owner_id = AGENT_ID
 
     now = datetime.now(timezone.utc)
     emb = (await memory.embedder.embed(["shared"]))[0]
@@ -798,18 +802,21 @@ async def test_extract_user_facts_captures_durable_self_declared_context() -> No
     education_facts = await extractor.extract_user_facts(
         subject="user",
         text="I want to continue my education and check out career options. I am keen on counseling or working in mental health.",
+        tenant_id="default",
         owner_type="user",
         owner_id="user:u1",
     )
     adoption_facts = await extractor.extract_user_facts(
         subject="user",
         text="I am researching adoption agencies and one of the adoption agencies I am looking into seems promising.",
+        tenant_id="default",
         owner_type="user",
         owner_id="user:u1",
     )
     identity_facts = await extractor.extract_user_facts(
         subject="user",
         text="I want to talk about my transgender journey and give a voice to the trans community.",
+        tenant_id="default",
         owner_type="user",
         owner_id="user:u1",
     )
@@ -991,6 +998,7 @@ def test_extract_facts_batch_salvages_missing_chunks() -> None:
         extractor = FactExtractor(llm=llm)
         return await extractor.extract_chunk_facts_batch(
             chunks,
+            tenant_id="default",
             owner_type="user",
             owner_id="user:u1",
             source_path="p.pdf",
@@ -1019,8 +1027,11 @@ def test_extract_facts_batch_salvages_missing_chunks() -> None:
 
 
 @pytest.mark.asyncio
-async def test_episodic_fetch_summaries_owner_scoped():
-    db = SQLiteAdapter("/tmp/uma_test_episodic_scoping.sqlite")
+async def test_episodic_fetch_summaries_owner_scoped(tmp_path):
+    # Per-test DB. A fixed path outside the test tree survives between runs, so
+    # a store written by an older build keeps its old `uma_store_meta` and later
+    # trips the format check on a DB the test never meant to reuse.
+    db = SQLiteAdapter(str(tmp_path / "episodic_scoping.sqlite"))
     vec = InMemoryVectorIndex(dim=3)
     store = EpisodicSQLStore(db_adapter=db, vector_index=vec)
 
@@ -1032,6 +1043,7 @@ async def test_episodic_fetch_summaries_owner_scoped():
         summary="s1",
         raw="r1",
         meta={},
+        tenant_id="default",
         owner_type="user",
         owner_id="user:u1",
     )
@@ -1314,17 +1326,17 @@ def test_reset_only_clears_current_session_bucket():
 async def test_bound_retrieval_uses_only_current_session_working_memory(uma_memory) -> None:
     memory = uma_memory
     assert memory.working_memory is not None
-    assert memory.agent_id
+    assert AGENT_ID
 
     scope_a = SessionScope(
         tenant_id=DEFAULT_TENANT_ID,
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
         session_id="session-a",
         user_id="user:u1",
     )
     scope_b = SessionScope(
         tenant_id=DEFAULT_TENANT_ID,
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
         session_id="session-b",
         user_id="user:u1",
     )
@@ -1332,11 +1344,11 @@ async def test_bound_retrieval_uses_only_current_session_working_memory(uma_memo
     memory.working_memory.append(scope=scope_b, role="user", content="beta memory")
 
     ctx = await memory.retrieve_context(
-        tenant_id=DEFAULT_TENANT_ID,
         request_id="req-session-a",
         user_id="user:u1",
         session_id="session-a",
         query_text="hello world",
+        agent_id=AGENT_ID,
     )
 
     wm_contents = [msg.content for msg in ctx.working_memory]
@@ -1347,21 +1359,21 @@ async def test_bound_retrieval_uses_only_current_session_working_memory(uma_memo
 async def test_bound_retrieval_without_session_does_not_fallback_to_broad_working_memory(uma_memory) -> None:
     memory = uma_memory
     assert memory.working_memory is not None
-    assert memory.agent_id
+    assert AGENT_ID
 
     unscoped_scope = SessionScope(
         tenant_id=DEFAULT_TENANT_ID,
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
         session_id="other-session:user:u1",
         user_id="user:u1",
     )
     memory.working_memory.append(scope=unscoped_scope, role="user", content="other session memory")
 
     ctx = await memory.retrieve_context(
-        tenant_id=DEFAULT_TENANT_ID,
         request_id="req-no-session",
         user_id="user:u1",
         query_text="hello world",
+        agent_id=AGENT_ID,
     )
 
     assert ctx.working_memory == []
@@ -1371,19 +1383,21 @@ async def test_bound_retrieval_without_session_does_not_fallback_to_broad_workin
 async def test_process_turn_uses_explicit_session_scope_for_working_memory(tmp_path) -> None:
     from tests.helpers.runtime import init_uma_for_tests
 
-    memory = await init_uma_for_tests(tmp_path, agent_id="agent-wm")
+    memory = await init_uma_for_tests(tmp_path)
     try:
         await memory.process_turn(
             user_id="user:u1",
             user_msg="first",
             assistant_reply="reply one",
             session_id="session-a",
+            agent_id="agent-wm",
         )
         await memory.process_turn(
             user_id="user:u1",
             user_msg="second",
             assistant_reply="reply two",
             session_id="session-b",
+            agent_id="agent-wm",
         )
 
         assert memory.working_memory is not None
@@ -1702,7 +1716,7 @@ async def test_expand_neighbors_enforces_max_total(uma_memory) -> None:
 async def test_chunk_search_does_not_require_subject(uma_memory, tmp_path):
     memory = uma_memory
     owner_type = "agent"
-    owner_id = memory.agent_id
+    owner_id = AGENT_ID
 
     doc = tmp_path / "doc.txt"
     doc.write_text(
@@ -1748,7 +1762,7 @@ async def test_chunk_search_does_not_require_subject(uma_memory, tmp_path):
 async def test_procedural_search_does_not_require_subject(uma_memory):
     memory = uma_memory
     owner_type = "agent"
-    owner_id = memory.agent_id
+    owner_id = AGENT_ID
 
     skill = Skill(
         id="skill_s1",
@@ -1783,7 +1797,7 @@ async def test_procedural_search_does_not_require_subject(uma_memory):
 async def test_chunk_retrieval_returns_chunk_objects(uma_memory, tmp_path) -> None:
     memory = uma_memory
     owner_type = "agent"
-    owner_id = memory.agent_id
+    owner_id = AGENT_ID
 
     doc = tmp_path / "doc.txt"
     doc.write_text(
@@ -1826,6 +1840,7 @@ async def test_snippet_refiner_accepts_object_facts_and_chunks(uma_memory) -> No
         source_ids=[],
         confidence=0.9,
         salience=0.5,
+        tenant_id="default",
         owner_type="user",
         owner_id="user:u1",
         meta={},
@@ -1841,6 +1856,7 @@ async def test_snippet_refiner_accepts_object_facts_and_chunks(uma_memory) -> No
             source_hash="h",
             created_at=now,
             updated_at=now,
+            tenant_id="default",
             owner_type="user",
             owner_id="user:u1",
             meta={},
@@ -1852,3 +1868,49 @@ async def test_snippet_refiner_accepts_object_facts_and_chunks(uma_memory) -> No
     assert isinstance(out, list)
     assert out and isinstance(out[0], dict)
 
+
+
+@pytest.mark.asyncio
+async def test_extracted_facts_carry_the_requested_tenant() -> None:
+    """Every extractor entrypoint stamps the tenant it was handed.
+
+    `Fact.tenant_id` defaults to the single-tenant value, so an extractor
+    that ignored its tenant would hand back facts that land in "default"
+    whatever tenant asked for them. Each caller used to re-stamp them
+    afterwards, which is one remembering-to too many.
+    """
+    tenant = "tenant-x"
+
+    user_facts = await FactExtractor(llm=_PromptSensitiveLLM()).extract_user_facts(
+        subject="user",
+        text="I want to continue my education and check out career options. I am keen on counseling or working in mental health.",
+        tenant_id=tenant,
+        owner_type="user",
+        owner_id="user:u1",
+    )
+    assert user_facts, "expected the fixture LLM to yield at least one fact"
+    assert {fact.tenant_id for fact in user_facts} == {tenant}
+
+    chunks = [
+        DocumentChunk(
+            chunk_id="chunk_a",
+            doc_id="doc1",
+            text="Architecture " * 30 + ".",
+            page_range=(1, 1),
+            position=1,
+            paragraph_index_start=0,
+            paragraph_index_end=0,
+        ),
+    ]
+    chunk_facts, _ = await FactExtractor(llm=_FakeLLMMixed()).extract_chunk_facts_batch(
+        chunks,
+        tenant_id=tenant,
+        owner_type="user",
+        owner_id="user:u1",
+        source_path="p.pdf",
+        source_hash="h",
+        doc_id="doc1",
+        min_fact_words=5,
+    )
+    assert chunk_facts, "eligible chunks must never yield zero facts"
+    assert {fact.tenant_id for fact in chunk_facts} == {tenant}

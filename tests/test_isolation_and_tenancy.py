@@ -9,7 +9,7 @@ from dataclasses import FrozenInstanceError
 from datetime import datetime, timezone
 from pathlib import Path
 from tests.helpers.context_bundle import make_context_bundle
-from tests.helpers.runtime import build_test_config
+from tests.helpers.runtime import TEST_AGENT_ID, build_test_config
 from tests.helpers.runtime import init_uma_for_tests
 from typing import get_args
 from uma.api.memory import UMAMemory
@@ -21,12 +21,14 @@ from uma.common.types.types_owner import OwnerType
 from uma.common.types.types_scope import validate_agent_id, validate_owner_id, validate_owner_type, validate_request_id, validate_session_id, validate_tenant_id, validate_user_id, validate_workspace_id
 from uma.memory.promotion import PromotionPolicy
 from uma.retrieve.rlm.context_pack import ContextPack
-from uma.retrieve.rlm.request import RetrievalRequest
-from uma.stores.base_sql_store import DEFAULT_TENANT_ID
+from uma.retrieve.rlm.request import RetrievalRequest, RetrievalScope
+from uma.common.types.types_scope import DEFAULT_TENANT_ID
 import asyncio
 import pytest
 import threading
 import yaml
+
+AGENT_ID = TEST_AGENT_ID
 
 # Barrier waits run inside `asyncio.to_thread`, i.e. on non-daemon pool threads
 # that asyncio cannot cancel. Without a timeout, one party failing before it
@@ -104,7 +106,7 @@ class _EmptyController:
 
 @pytest.mark.asyncio
 async def test_multi_tenant_isolation_holds_with_matching_scope_tokens(tmp_path: Path) -> None:
-    memory = await init_uma_for_tests(tmp_path, agent_id="agent-tenant")
+    memory = await init_uma_for_tests(tmp_path)
     try:
         embedding = (await memory.embedder.embed(["tenant isolation fact"]))[0]
         fact_a = _build_fact(
@@ -186,7 +188,7 @@ async def test_multi_tenant_isolation_holds_with_matching_scope_tokens(tmp_path:
 @pytest.mark.asyncio
 async def test_multi_user_retrieval_isolates_user_owned_data_but_keeps_agent_kb_shared(uma_memory, tmp_path: Path) -> None:
     memory = uma_memory
-    assert memory.agent_id
+    assert AGENT_ID
     runtime = UMARuntime.from_memory(memory)
 
     agent_doc = tmp_path / "agent_shared.txt"
@@ -205,19 +207,19 @@ async def test_multi_user_retrieval_isolates_user_owned_data_but_keeps_agent_kb_
         encoding="utf-8",
     )
 
-    await memory.ingest_document(str(agent_doc), owner_type="agent", owner_id=memory.agent_id)
+    await memory.ingest_document(str(agent_doc), owner_type="agent", owner_id=AGENT_ID)
     await memory.ingest_document(str(user_a_doc), owner_type="user", owner_id="user:u1")
     await memory.ingest_document(str(user_b_doc), owner_type="user", owner_id="user:u2")
 
     ctx_a_context = RuntimeContext(
         tenant_id=DEFAULT_TENANT_ID,
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-user-a",
         user_id="user:u1",
     )
     ctx_b_context = RuntimeContext(
         tenant_id=DEFAULT_TENANT_ID,
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-user-b",
         user_id="user:u2",
     )
@@ -230,8 +232,8 @@ async def test_multi_user_retrieval_isolates_user_owned_data_but_keeps_agent_kb_
     owner_pairs_a = {(getattr(chunk, "owner_type", None), getattr(chunk, "owner_id", None)) for chunk in ctx_a.chunks}
     owner_pairs_b = {(getattr(chunk, "owner_type", None), getattr(chunk, "owner_id", None)) for chunk in ctx_b.chunks}
 
-    assert ("agent", memory.agent_id) in owner_pairs_a
-    assert ("agent", memory.agent_id) in owner_pairs_b
+    assert ("agent", AGENT_ID) in owner_pairs_a
+    assert ("agent", AGENT_ID) in owner_pairs_b
     assert ("user", "user:u1") in owner_pairs_a
     assert ("user", "user:u2") not in owner_pairs_a
     assert ("user", "user:u2") in owner_pairs_b
@@ -239,8 +241,114 @@ async def test_multi_user_retrieval_isolates_user_owned_data_but_keeps_agent_kb_
 
 
 @pytest.mark.asyncio
+async def test_working_memory_isolates_users_sharing_one_session_id(tmp_path: Path) -> None:
+    """session_id carries no identity, so it cannot be the whole WM key.
+
+    The caller supplies session_id (over MCP it is a plain tool argument),
+    so two users can legitimately present the same (tenant, agent, session).
+    Working memory must still separate them the way every durable lane does.
+    """
+    memory = await init_uma_for_tests(tmp_path)
+    try:
+        runtime = UMARuntime.from_memory(memory)
+        memory.working_memory.append(
+            scope=SessionScope(
+                tenant_id=DEFAULT_TENANT_ID,
+                agent_id=AGENT_ID,
+                session_id="shared-session",
+                user_id="user:alpha",
+            ),
+            role="user",
+            content="alpha only wm",
+        )
+        memory.working_memory.append(
+            scope=SessionScope(
+                tenant_id=DEFAULT_TENANT_ID,
+                agent_id=AGENT_ID,
+                session_id="shared-session",
+                user_id="user:beta",
+            ),
+            role="user",
+            content="beta only wm",
+        )
+
+        ctx_alpha, ctx_beta = await asyncio.gather(
+            runtime.retrieve_context(
+                RuntimeContext(
+                    tenant_id=DEFAULT_TENANT_ID,
+                    agent_id=AGENT_ID,
+                    request_id="req-wm-alpha",
+                    user_id="user:alpha",
+                    session_id="shared-session",
+                ),
+                query_text="wm",
+            ),
+            runtime.retrieve_context(
+                RuntimeContext(
+                    tenant_id=DEFAULT_TENANT_ID,
+                    agent_id=AGENT_ID,
+                    request_id="req-wm-beta",
+                    user_id="user:beta",
+                    session_id="shared-session",
+                ),
+                query_text="wm",
+            ),
+        )
+
+        assert [msg.content for msg in ctx_alpha.working_memory] == ["alpha only wm"]
+        assert [msg.content for msg in ctx_beta.working_memory] == ["beta only wm"]
+    finally:
+        memory.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_working_memory_key_normalizes_the_user_subject(tmp_path: Path) -> None:
+    """The turn path writes "user:<id>"; the request path reads the raw id.
+
+    Both must resolve to the same buffer, or process_turn's working memory
+    would be invisible to the retrieval that follows it.
+    """
+    memory = await init_uma_for_tests(tmp_path)
+    try:
+        memory.working_memory.append(
+            scope=SessionScope(
+                tenant_id=DEFAULT_TENANT_ID,
+                agent_id=AGENT_ID,
+                session_id="s1",
+                user_id=normalize_user_id("gamma"),
+            ),
+            role="user",
+            content="written with canonical subject",
+        )
+        messages = memory.working_memory.get_context(
+            SessionScope(
+                tenant_id=DEFAULT_TENANT_ID,
+                agent_id=AGENT_ID,
+                session_id="s1",
+                user_id="gamma",
+            )
+        )
+        assert [msg.content for msg in messages] == ["written with canonical subject"]
+    finally:
+        memory.shutdown()
+
+
+def test_working_memory_buffer_rejects_a_scope_without_a_user() -> None:
+    from uma.memory.working_memory.buffer import WorkingMemoryBuffer
+
+    buffer = WorkingMemoryBuffer(max_tokens=1000)
+    scope = SessionScope(
+        tenant_id=DEFAULT_TENANT_ID,
+        agent_id=AGENT_ID,
+        session_id="s1",
+    )
+    with pytest.raises(ValueError, match="requires SessionScope.user_id"):
+        buffer.append(scope=scope, role="user", content="no user on this scope")
+
+
+@pytest.mark.asyncio
 async def test_retrieval_and_process_turn_overlap_preserve_session_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    memory = await init_uma_for_tests(tmp_path, agent_id="agent-overlap")
+    memory = await init_uma_for_tests(tmp_path)
     try:
         runtime = UMARuntime.from_memory(memory)
         memory._rlm_controller = _EmptyController()
@@ -251,6 +359,7 @@ async def test_retrieval_and_process_turn_overlap_preserve_session_isolation(tmp
             assistant_reply="Good to know.",
             session_id="session-a",
             extra_meta={"request_id": "req-seed-a"},
+            agent_id="agent-overlap",
         )
 
         entered = asyncio.Event()
@@ -271,6 +380,7 @@ async def test_retrieval_and_process_turn_overlap_preserve_session_isolation(tmp
                 assistant_reply="Nice.",
                 session_id="session-b",
                 extra_meta={"request_id": "req-write-b"},
+                agent_id="agent-overlap",
             )
         )
         await asyncio.wait_for(entered.wait(), timeout=1.0)
@@ -379,7 +489,7 @@ async def test_cross_agent_visibility_requires_explicit_promotion(uma_memory) ->
 @pytest.mark.asyncio
 async def test_retrieval_remains_isolated_under_concurrent_requests(uma_memory, monkeypatch: pytest.MonkeyPatch) -> None:
     memory = uma_memory
-    assert memory.agent_id
+    assert AGENT_ID
     barrier = threading.Barrier(2)
     seen_contexts: list[tuple[str, str, str]] = []
 
@@ -400,14 +510,14 @@ async def test_retrieval_remains_isolated_under_concurrent_requests(uma_memory, 
 
     ctx_a = RuntimeContext(
         tenant_id=DEFAULT_TENANT_ID,
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-overlap-a",
         user_id="user:u1",
         session_id="session:user:u1",
     )
     ctx_b = RuntimeContext(
         tenant_id=DEFAULT_TENANT_ID,
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-overlap-b",
         user_id="user:u2",
         session_id="session:user:u2",
@@ -425,24 +535,95 @@ async def test_retrieval_remains_isolated_under_concurrent_requests(uma_memory, 
     ]
 
 
-def test_filter_items_by_owner_drops_foreign_user_items_and_keeps_agent_items() -> None:
+def _alice_scopes() -> tuple[RetrievalScope, ...]:
+    return RetrievalRequest.from_runtime_context(
+        RuntimeContext(
+            tenant_id=DEFAULT_TENANT_ID,
+            agent_id="agent-default",
+            request_id="req-filter",
+            user_id="user:alice",
+        )
+    ).scopes
+
+
+def test_filter_items_by_scope_admits_only_the_requests_own_scopes() -> None:
     from types import SimpleNamespace
     from uma.api.runtime import UMARuntime
 
-    agent_item = SimpleNamespace(owner_type="agent", owner_id="agent-default")
-    own_item = SimpleNamespace(owner_type="user", owner_id="user:alice")
-    foreign_item = SimpleNamespace(owner_type="user", owner_id="user:bob")
-    no_owner_item = SimpleNamespace()  # no owner_type attribute — kept for safety
+    def item(owner_type: str, owner_id: str, tenant_id: str = DEFAULT_TENANT_ID):
+        return SimpleNamespace(
+            tenant_id=tenant_id, owner_type=owner_type, owner_id=owner_id
+        )
 
-    result = UMARuntime._filter_items_by_owner(
-        [agent_item, own_item, foreign_item, no_owner_item],
-        requesting_user_id="user:alice",
+    own_agent_item = item("agent", "agent-default")
+    own_user_item = item("user", "user:alice")
+    foreign_user_item = item("user", "user:bob")
+    foreign_agent_item = item("agent", "agent-other")
+    workspace_item = item("workspace", "ws-1")
+    foreign_tenant_item = item("user", "user:alice", tenant_id="tenant-other")
+
+    result = UMARuntime._filter_items_by_scope(
+        [
+            own_agent_item,
+            own_user_item,
+            foreign_user_item,
+            foreign_agent_item,
+            workspace_item,
+            foreign_tenant_item,
+        ],
+        _alice_scopes(),
+        DEFAULT_TENANT_ID,
     )
 
-    assert agent_item in result
-    assert own_item in result
-    assert foreign_item not in result
-    assert no_owner_item in result
+    assert result == [own_agent_item, own_user_item]
+
+
+def test_filter_items_by_scope_fails_closed_on_unreadable_owner_or_tenant() -> None:
+    """Every lane this runs on returns tenant- and owner-bearing domain objects.
+
+    An item missing either did not come from a store, so it is dropped rather
+    than waved through.
+    """
+    from types import SimpleNamespace
+    from uma.api.runtime import UMARuntime
+
+    no_owner_item = SimpleNamespace()
+    half_owner_item = SimpleNamespace(
+        tenant_id=DEFAULT_TENANT_ID, owner_type="user", owner_id=None
+    )
+    no_tenant_item = SimpleNamespace(
+        tenant_id=None, owner_type="user", owner_id="user:alice"
+    )
+
+    assert UMARuntime._filter_items_by_scope(
+        [no_owner_item, half_owner_item, no_tenant_item],
+        _alice_scopes(),
+        DEFAULT_TENANT_ID,
+    ) == []
+
+
+def test_filter_items_by_scope_matches_either_user_subject_form() -> None:
+    """A row written as "alice" is the same principal as "user:alice"."""
+    from types import SimpleNamespace
+    from uma.api.runtime import UMARuntime
+
+    raw_form = SimpleNamespace(
+        tenant_id=DEFAULT_TENANT_ID, owner_type="user", owner_id="alice"
+    )
+
+    assert UMARuntime._filter_items_by_scope(
+        [raw_form], _alice_scopes(), DEFAULT_TENANT_ID
+    ) == [raw_form]
+
+
+def test_filter_items_by_scope_covers_every_owner_bearing_lane() -> None:
+    """Regression: episodic and skills used to bypass the filter entirely."""
+    import inspect
+    from uma.api.runtime import UMARuntime
+
+    source = inspect.getsource(UMARuntime._assemble_public_context_result)
+    for lane in ("episodic", "facts", "chunks", "skills"):
+        assert f"{lane} = self._filter_items_by_scope(" in source, lane
 
 
 # ── test_tenant_scoped_durable_boundaries ──────────────────────────────────────────
@@ -1122,7 +1303,7 @@ async def test_document_ingest_rejects_missing_owner_id(uma_memory, tmp_path) ->
 
 @pytest.mark.asyncio
 async def test_promotion_rejects_missing_owner_type(uma_memory) -> None:
-    policy = PromotionPolicy(agent_id=uma_memory.agent_id)
+    policy = PromotionPolicy(agent_id=AGENT_ID)
     now = datetime.now(timezone.utc)
     fact = Fact(
         id="fact_missing_owner_type",
@@ -1146,7 +1327,7 @@ async def test_promotion_rejects_missing_owner_type(uma_memory) -> None:
 
 @pytest.mark.asyncio
 async def test_promotion_rejects_missing_owner_id(uma_memory) -> None:
-    policy = PromotionPolicy(agent_id=uma_memory.agent_id)
+    policy = PromotionPolicy(agent_id=AGENT_ID)
     now = datetime.now(timezone.utc)
     fact = Fact(
         id="fact_missing_owner_id",
@@ -1220,25 +1401,29 @@ async def test_ingest_document_persists_explicit_owner_fields(
     finally:
         conn.close()
 
-    if expected_owner_type == "workspace":
-        conn = memory.semantic_core.store._conn()
-        try:
-            fact_rows = memory.semantic_core.store._query_all(
-                conn,
-                """
-                SELECT owner_type, owner_id, workspace_id
-                FROM facts
-                WHERE owner_type=? AND owner_id=? AND meta LIKE ?
-                """,
-                params=["workspace", "workspace:alpha", f"%{report.doc_id}%"],
-                log_context="test_write_owner_ingest_workspace_facts",
-            )
-            assert fact_rows
-            assert all(row["owner_type"] == "workspace" for row in fact_rows)
-            assert all(row["owner_id"] == "workspace:alpha" for row in fact_rows)
-            assert all(row["workspace_id"] == "workspace:alpha" for row in fact_rows)
-        finally:
-            conn.close()
+    # Document-derived facts carry the scope the extractor was handed. The
+    # ingest stage no longer re-stamps tenant or owner onto what comes back,
+    # so this asserts the whole tuple for every owner type rather than just
+    # the workspace case.
+    conn = memory.semantic_core.store._conn()
+    try:
+        fact_rows = memory.semantic_core.store._query_all(
+            conn,
+            """
+            SELECT tenant_id, owner_type, owner_id, workspace_id
+            FROM facts
+            WHERE owner_type=? AND owner_id=? AND meta LIKE ?
+            """,
+            params=[expected_owner_type, expected_owner_id, f"%{report.doc_id}%"],
+            log_context="test_write_owner_ingest_facts",
+        )
+        assert fact_rows, f"no document-derived facts for {expected_owner_type}"
+        assert all(row["tenant_id"] == "default" for row in fact_rows)
+        assert all(row["owner_type"] == expected_owner_type for row in fact_rows)
+        assert all(row["owner_id"] == expected_owner_id for row in fact_rows)
+        assert all(row["workspace_id"] == expected_workspace_id for row in fact_rows)
+    finally:
+        conn.close()
 
 
 @pytest.mark.asyncio
@@ -1522,9 +1707,7 @@ async def _init_memory_with_procedural_feature(tmp_path) -> UMAMemory:
     cfg_path = tmp_path / "uma_test.yaml"
     cfg_path.write_text(yaml.safe_dump(cfg))
 
-    memory = UMAMemory.from_yaml(str(cfg_path)).set_context(
-        agent_id="agent-default"
-    )
+    memory = UMAMemory.from_yaml(str(cfg_path))
     memory._ensure_ingestion_ready()
     return memory
 
@@ -1644,27 +1827,46 @@ async def test_public_procedural_reads_accept_explicit_workspace_scope_without_b
         memory.shutdown()
 
 
-def test_agent_id_setter_is_removed_from_public_surface(uma_memory) -> None:
-    with pytest.raises(AttributeError):
-        uma_memory.agent_id = "agent-deprecated-test"
-
-
-def test_set_context_returns_distinct_immutable_agent_views(uma_memory) -> None:
-    agent_a = uma_memory.set_context(agent_id="agent-a")
-    agent_b = uma_memory.set_context(agent_id="agent-b")
-
-    assert agent_a is not agent_b
-    assert agent_a.agent_id == "agent-a"
-    assert agent_b.agent_id == "agent-b"
-    assert uma_memory.agent_id == "agent-default"
-
-    with pytest.raises(AttributeError, match="immutable"):
-        agent_a._agent_id = "agent-b"
+def test_agent_identity_is_never_held_on_the_instance(uma_memory) -> None:
+    """UMA is multi-agent on one shared runtime: the instance carries no
+    agent identity and offers no way to bind one."""
+    assert not hasattr(uma_memory, "agent_id")
+    assert not hasattr(uma_memory, "set_context")
+    assert not hasattr(uma_memory, "promotion_policy")
 
 
 @pytest.mark.asyncio
-async def test_retrieve_context_raises_if_set_context_not_called(tmp_path) -> None:
-    """_resolve_runtime_context must raise rather than fall back to 'agent-default'."""
+async def test_one_instance_serves_distinct_agents_per_call(uma_memory) -> None:
+    """Two agents retrieve through the same instance; each call's scope is
+    built from that call's agent_id."""
+    seen: list[str] = []
+
+    def _hook(operation: str, ctx) -> None:
+        if ctx is not None:
+            seen.append(ctx.agent_id)
+
+    uma_memory.set_rate_limit_hook(_hook)
+    try:
+        await uma_memory.retrieve_context(
+            query_text="hello",
+            agent_id="agent-a",
+            user_id="user:u1",
+        )
+        await uma_memory.retrieve_context(
+            query_text="hello",
+            agent_id="agent-b",
+            user_id="user:u1",
+        )
+    finally:
+        uma_memory.set_rate_limit_hook(None)
+
+    assert seen == ["agent-a", "agent-b"]
+
+
+@pytest.mark.asyncio
+async def test_retrieve_context_raises_when_agent_id_is_missing(tmp_path) -> None:
+    """_resolve_runtime_context must raise rather than fall back to any
+    instance-level or default agent identity."""
     db_root = tmp_path / "db"
     db_root.mkdir(parents=True, exist_ok=True)
     cfg = build_test_config(db_root=db_root)
@@ -1678,3 +1880,58 @@ async def test_retrieve_context_raises_if_set_context_not_called(tmp_path) -> No
             user_id="user:u1",
         )
     memory.shutdown()
+
+
+def test_session_local_filter_fails_closed_on_missing_isolation_fields() -> None:
+    """Session-local items must prove their tenant and originating agent.
+
+    Every fact written through the turn path stamps both, so a missing value
+    means the row predates the column or did not come from a store. In a
+    runtime serving many agents, neither is admissible on trust.
+    """
+    from types import SimpleNamespace
+
+    from uma.retrieve.rlm.environment import UMAMemoryEnvironment
+
+    request = RetrievalRequest.from_runtime_context(
+        RuntimeContext(
+            tenant_id=DEFAULT_TENANT_ID,
+            agent_id="agent-default",
+            request_id="req-session-filter",
+            user_id="user:alice",
+        )
+    )
+    object.__setattr__(request.context, "session_id", "session-1")
+
+    def item(**kwargs):
+        base = {
+            "tenant_id": DEFAULT_TENANT_ID,
+            "session_id": "session-1",
+            "origin_agent_id": "agent-default",
+        }
+        base.update(kwargs)
+        return SimpleNamespace(**base)
+
+    own = item()
+    no_tenant = item(tenant_id=None)
+    foreign_tenant = item(tenant_id="tenant-other")
+    no_origin_agent = item(origin_agent_id=None)
+    foreign_agent = item(origin_agent_id="agent-other")
+    foreign_session = item(session_id="session-2")
+    # Not session-local: scoped by the owner filter instead, so it passes here.
+    not_session_local = item(session_id=None, origin_agent_id=None)
+
+    kept = UMAMemoryEnvironment._filter_session_local_items(
+        request,
+        [
+            own,
+            no_tenant,
+            foreign_tenant,
+            no_origin_agent,
+            foreign_agent,
+            foreign_session,
+            not_session_local,
+        ],
+    )
+
+    assert kept == [own, not_session_local]

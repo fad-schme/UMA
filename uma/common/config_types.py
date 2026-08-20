@@ -302,6 +302,14 @@ class RetrievalConfig:
     # most often false positives anyway.
     min_trust_score: float = 0.5
 
+    # Gap analysis (reporting only — never filters or reranks). A fact is
+    # flagged stale when its freshest supporting chunk is older than this, and
+    # weakly supported when it rests on a single chunk below the trust bar.
+    # The trust bar sits above `min_trust_score` on purpose: chunks below that
+    # floor are already filtered out of retrieval entirely.
+    gap_max_support_age_days: int = 180
+    gap_min_support_trust: float = 0.6
+
     @classmethod
     def from_dict(cls, d: dict[str, Any], *, profile: str = "lite") -> "RetrievalConfig":
         strict_mode = bool(d.get("strict", True))
@@ -363,6 +371,12 @@ class RetrievalConfig:
 
         trust_weight = max(0.0, min(1.0, float(d.get("trust_weight", 0.15))))
         min_trust_score = max(0.0, min(1.0, float(d.get("min_trust_score", 0.5))))
+        gap_max_support_age_days = int(d.get("gap_max_support_age_days", 180))
+        if gap_max_support_age_days < 0:
+            raise ValueError("'retrieval.gap_max_support_age_days' must be a non-negative integer")
+        gap_min_support_trust = float(d.get("gap_min_support_trust", 0.6))
+        if not 0.0 <= gap_min_support_trust <= 1.0:
+            raise ValueError("'retrieval.gap_min_support_trust' must be between 0 and 1")
         return cls(
             max_episodes=int(d["max_episodes"]),
             max_facts=int(d["max_facts"]),
@@ -380,6 +394,8 @@ class RetrievalConfig:
             rlm=rlm_obj,
             trust_weight=trust_weight,
             min_trust_score=min_trust_score,
+            gap_max_support_age_days=gap_max_support_age_days,
+            gap_min_support_trust=gap_min_support_trust,
         )
 
 

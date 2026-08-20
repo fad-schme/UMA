@@ -6,7 +6,7 @@ scanning, and the management API surface (list/reinstate/purge).
 """
 from __future__ import annotations
 from datetime import datetime, timezone
-from tests.helpers.runtime import init_uma_for_tests
+from tests.helpers.runtime import TEST_AGENT_ID, init_uma_for_tests
 from uma.adapters.db.sqlite_adapter import SQLiteAdapter
 from uma.adapters.vector.base import VectorIndex
 from uma.api.management import list_quarantined, reinstate_quarantined, purge_quarantined
@@ -19,6 +19,8 @@ from uma.stores.procedural_sql import ProceduralSQLStore
 from uma.stores.semantic_sql import SemanticSQLStore
 from unittest.mock import MagicMock
 import pytest
+
+AGENT_ID = TEST_AGENT_ID
 
 class _NoopVI(VectorIndex):
     def upsert(self, ids, vectors, *, tenant_ids, owner_types, owner_ids, extra_metadata=None): pass
@@ -776,6 +778,7 @@ async def test_poisoned_reply_episode_quarantined(tmp_path):
         user_msg="tell me something",
         assistant_reply=_POISONED,
         session_id="s1",
+        agent_id=AGENT_ID,
     )
 
     store = memory._stores["episodic"]
@@ -795,6 +798,7 @@ async def test_poisoned_reply_episode_absent_from_normal_retrieval(tmp_path):
         user_msg="hello",
         assistant_reply=_POISONED,
         session_id="s2",
+        agent_id=AGENT_ID,
     )
 
     store = memory._stores["episodic"]
@@ -823,6 +827,7 @@ async def test_poisoned_user_msg_facts_quarantined(tmp_path):
             user_msg=_POISONED,
             assistant_reply="Noted.",
             session_id="s3",
+            agent_id=AGENT_ID,
         )
 
     store = memory._stores["semantic"]
@@ -849,6 +854,7 @@ async def test_quarantine_disabled_trust_drops_but_no_quarantine(tmp_path):
         user_msg="normal message",
         assistant_reply=_POISONED,
         session_id="s4",
+        agent_id=AGENT_ID,
     )
 
     store = memory._stores["episodic"]

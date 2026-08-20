@@ -6,13 +6,15 @@ integration at each boundary and manifest idempotency.
 """
 from __future__ import annotations
 from datetime import datetime, timezone
-from tests.helpers.runtime import init_uma_for_tests
+from tests.helpers.runtime import TEST_AGENT_ID, init_uma_for_tests
 from uma.common.integrity import hash_episode_content
 from uma.ingest.ingest_service import capture_source, curate_compiled_memory, derive_memory_artifacts
 from uma.ingest.types import IngestConfig
 from uma.stores.document_sql import DocumentRecord
 import json
 import pytest
+
+AGENT_ID = TEST_AGENT_ID
 
 # ── test_pr1_ingest_end_to_end ──────────────────────────────────────────
 
@@ -170,6 +172,7 @@ async def test_episode_has_content_hash_and_trust_score_after_process_turn(uma_m
         user_msg="I enjoy hiking in the mountains.",
         assistant_reply="That sounds like a great hobby.",
         session_id="session-pr1-ep",
+        agent_id=AGENT_ID,
     )
 
     epi_store = mem._stores["episodic"]
@@ -199,6 +202,7 @@ async def test_facts_have_content_hash_and_trust_score_after_process_turn(uma_me
         user_msg="I like hiking and rock climbing.",
         assistant_reply="Those are excellent outdoor activities.",
         session_id="session-pr1-facts",
+        agent_id=AGENT_ID,
     )
 
     sem_store = mem._stores["semantic"]
@@ -362,6 +366,7 @@ async def test_poisoned_reply_episode_trust_zero(tmp_path):
             user_msg=_CLEAN_USER,
             assistant_reply=_POISONED_REPLY,
             session_id="session-pr3-ep",
+            agent_id=AGENT_ID,
         )
 
         epi_store = mem._stores["episodic"]
@@ -399,6 +404,7 @@ async def test_poisoned_user_msg_facts_trust_zero(tmp_path):
                 user_msg=_POISONED_USER,
                 assistant_reply=_CLEAN_REPLY,
                 session_id="session-pr3-facts",
+                agent_id=AGENT_ID,
             )
 
         sem_store = mem._stores["semantic"]
@@ -426,6 +432,7 @@ async def test_clean_turn_trust_score_unaffected(tmp_path):
             user_msg=_CLEAN_USER,
             assistant_reply=_CLEAN_REPLY,
             session_id="session-pr3-clean",
+            agent_id=AGENT_ID,
         )
 
         epi_store = mem._stores["episodic"]
@@ -593,6 +600,7 @@ async def test_process_turn_poisoned_reply_quarantined_not_ranked(tmp_path):
         user_msg="hello",
         assistant_reply=_POISONED,
         session_id="s-pr5",
+        agent_id=AGENT_ID,
     )
 
     store = memory._stores["episodic"]

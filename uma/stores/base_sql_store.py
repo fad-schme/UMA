@@ -39,7 +39,6 @@ from ..adapters.db.base import DBAdapter, DBConnection
 _T = TypeVar("_T")
 
 logger = logging.getLogger(__name__)
-DEFAULT_TENANT_ID = "default"
 
 # ---------------------------------------------------------------------------
 # SQL identifier whitelists — Pattern A fix (Bandit B608)
@@ -74,6 +73,25 @@ _ALLOWED_SCHEMA_COLUMNS: frozenset = frozenset({
     # the vector index, so procedural search cannot leak them.
     "kind", "focus_areas", "profile_embedding",
 })
+# ---------------------------------------------------------------------------
+# LIKE escaping
+# ---------------------------------------------------------------------------
+# SQLite has no default ESCAPE character: "\%" in a pattern matches a literal
+# backslash followed by any sequence, not a literal percent. Escaping a term
+# therefore only works when the LIKE clause also carries `ESCAPE '\'`, so the
+# two are defined together here and must be used together. Without it, a query
+# containing % or _ silently becomes a wildcard scan of the whole column.
+LIKE_ESCAPE_SQL = " ESCAPE '\\'"
+
+
+def escape_like(term: str) -> str:
+    """Escape LIKE wildcards in a user-supplied term.
+
+    The clause consuming the result MUST append :data:`LIKE_ESCAPE_SQL`.
+    """
+    return (term or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 # Column type definitions used in ALTER TABLE ADD COLUMN statements.
 _ALLOWED_COLUMN_DEFS: frozenset = frozenset({
     "TEXT",

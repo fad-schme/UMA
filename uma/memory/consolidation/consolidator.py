@@ -35,6 +35,7 @@ from uma.adapters.llm.base import LLMInterface, EmbeddingInterface
 from uma.memory.semantic.extractor import FactExtractor
 from uma.memory.semantic.scorer import SalienceScorer
 from uma.common.identity import normalize_user_id
+from uma.common.types.types_scope import DEFAULT_TENANT_ID
 
 from .clusterer import EpisodeClusterer
 from .summarizer import ConsolidationSummarizer
@@ -76,7 +77,12 @@ class Consolidator:
     # PUBLIC ENTRYPOINT
     # ------------------------------------------------------------------
 
-    async def run_once(self, user_id: str) -> list[Fact]:
+    async def run_once(
+        self,
+        user_id: str,
+        *,
+        tenant_id: str = DEFAULT_TENANT_ID,
+    ) -> list[Fact]:
         """
         Run one full consolidation cycle:
             1. Fetch episodes
@@ -85,12 +91,19 @@ class Consolidator:
             4. Extract facts
         5. Upsert facts
         6. Prune episodes
+
+        Scope is per call. Consolidation reads and writes user-owned lanes
+        only, so it takes ``tenant_id`` and ``user_id`` and has no agent
+        dimension — the same shape as UMA's other owner-scoped maintenance
+        entrypoints.
         """
 
         normalized_user_id = normalize_user_id(user_id)
 
         # STEP 1: Fetch recent episodes
-        episodes = await self._fetch_recent_episodes(normalized_user_id)
+        episodes = await self._fetch_recent_episodes(
+            normalized_user_id, tenant_id=tenant_id
+        )
         if not episodes:
             logger.info("Consolidator: no episodes for user=%s", user_id)
             return []
@@ -124,6 +137,7 @@ class Consolidator:
                 if self.episodic_core is not None:
                     await self.episodic_core.upsert_cluster_summary(
                         user_id=normalized_user_id,
+                        tenant_id=tenant_id,
                         owner_type="user",
                         owner_id=normalized_user_id,
                         episode_ids=episode_ids,
@@ -137,6 +151,7 @@ class Consolidator:
                 new_facts = await self.extractor.extract_user_facts(
                     subject="user",
                     text=summary,
+                    tenant_id=tenant_id,
                     owner_type="user",
                     owner_id=normalized_user_id,
                     min_fact_words=0,
@@ -149,7 +164,7 @@ class Consolidator:
         await self._persist_facts(distilled_facts)
 
         # STEP 5: Prune obsolete / redundant episodes
-        await self._prune(normalized_user_id)
+        await self._prune(normalized_user_id, tenant_id=tenant_id)
 
         logger.info(
             "Consolidator: completed cycle for user=%s → %d distilled facts",
@@ -163,28 +178,31 @@ class Consolidator:
     # INTERNAL HELPERS
     # ------------------------------------------------------------------
 
-    async def _fetch_recent_episodes(self, user_id: str) -> list[Episode]:
+    async def _fetch_recent_episodes(
+        self,
+        user_id: str,
+        *,
+        tenant_id: str,
+    ) -> list[Episode]:
         """
         Fetch recent episodes deterministically using timestamp ordering.
         Replaces embedding-based episode search.
+
+        Failures propagate. This is step 1 of the cycle: returning an empty
+        list on error is indistinguishable from "this user has no episodes",
+        which reports a broken cycle as a successful no-op. ``run_once``'s
+        caller (``ConsolidationFeature.consolidation_run``) is the boundary
+        that turns the error into a FeatureResult.
         """
-        try:
-            if self.episodic_core is None:
-                return []
-            normalized_user_id = normalize_user_id(user_id)
-            episodes = await self.episodic_core.list_recent(
-                self.memory.tenant_id,
-                owner_type="user",
-                owner_id=normalized_user_id,
-                n=self.max_episodes,
-            )
-            return episodes
-        except Exception:
-            logger.exception(
-                "Consolidator: failed to fetch recent episodes for user=%s",
-                user_id,
-            )
+        if self.episodic_core is None:
             return []
+        normalized_user_id = normalize_user_id(user_id)
+        return await self.episodic_core.list_recent(
+            tenant_id,
+            owner_type="user",
+            owner_id=normalized_user_id,
+            n=self.max_episodes,
+        )
 
     def _cluster_text(self, cluster: list[Episode]) -> list[str]:
         """
@@ -289,7 +307,7 @@ class Consolidator:
         # ------------------------------------------------------------------
     # Episodic + Semantic Pruning
     # ------------------------------------------------------------------
-    async def _prune(self, user_id: str) -> None:
+    async def _prune(self, user_id: str, *, tenant_id: str) -> None:
         """
         Prune episodic and semantic memory in a deterministic, safe way.
 
@@ -312,7 +330,7 @@ class Consolidator:
                 episodes = []
             else:
                 episodes = await self.episodic_core.list_recent(
-                    self.memory.tenant_id,
+                    tenant_id,
                     owner_type="user",
                     owner_id=normalized_user_id,
                     n=self.max_episodes,
@@ -350,7 +368,7 @@ class Consolidator:
                             break
                         await self.episodic_core.delete_episode(
                             ep_id,
-                            tenant_id=self.memory.tenant_id,
+                            tenant_id=tenant_id,
                             owner_type="user",
                             owner_id=normalized_user_id,
                         )
@@ -368,7 +386,7 @@ class Consolidator:
                 semantic_facts = []
             else:
                 semantic_facts = await self.semantic_core.list_facts_for_owner(
-                    tenant_id=self.memory.tenant_id,
+                    tenant_id=tenant_id,
                     owner_type="user",
                     owner_id=normalized_user_id,
                 )
@@ -407,7 +425,7 @@ class Consolidator:
                         break
                     await self.semantic_core.delete_fact(
                         fact_id,
-                        tenant_id=self.memory.tenant_id,
+                        tenant_id=tenant_id,
                         owner_type="user",
                         owner_id=normalized_user_id,
                     )

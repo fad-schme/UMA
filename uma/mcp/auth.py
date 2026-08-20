@@ -34,6 +34,8 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from uma.common.types.types_scope import DEFAULT_TENANT_ID
+
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 
 from uma.mcp.tokens import TokenStore
@@ -134,7 +136,7 @@ class UMAJWTVerifier(TokenVerifier):
         issuer: str,
         audience: str,
         jwks_uri: Optional[str] = None,
-        tenant_id: str = "default",
+        tenant_id: str = DEFAULT_TENANT_ID,
         required_scopes: Optional[list[str]] = None,
     ) -> None:
         # Deferred import so `uma[mcp]` (Phase 2) still works without

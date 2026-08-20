@@ -103,7 +103,7 @@ Architecture`):
 - **Post-write artifact content** — every Fact, Episode, Skill, and
   Chunk carries a SHA-256 `content_hash`. `verify_integrity`
   recomputes and quarantines on mismatch.
-- **Cross-tenant content** — impossible by construction. `tenant_id`,
+- **Cross-owner content** — prevented at the storage layer. `owner_type`,
   `owner_type`, `owner_id` are pushed into every vector query's
   `WHERE` clause before the k-nearest cap, and applied to every SQL
   read. See `.claude/skills/vector-contract.md`.
@@ -161,10 +161,9 @@ trust class is fixed by the entry point, not by the value.
 | **Query text** (`query_text`) | `retrieve_context`, `retrieve_memory` | Adversarial | Scanned; severity propagates to downstream LLM hops which skip amplification on medium/high. |
 | **Document content** | `ingest_document` | Adversarial | MIME/size/page-count gates before parsing; HTML/Markdown sanitized; every chunk scanned; high-severity chunks quarantined and dropped before fact extraction. |
 | **Memory bootstrap file** (`MEMORY.md`, diary) | `load_memory_bootstrap`, `load_daily_diary_bootstrap` | Adversarial | Same as document content — routed through the ingest pipeline including MIME check, sanitization, and per-chunk scan. Treat these files as untrusted input, not privileged config. |
-| **Operator profile file** (`USER.md`, `SOUL.md`) | `load_userprofile`, `load_agentprofile` | **Trusted** | Loaded into an in-memory profile cache without scanning. Do NOT stage user-supplied content here — anything read via these paths is treated as operator-authored. |
 | **Tool output** | Any of the above (as `user_msg`, `assistant_reply`, or document) | Adversarial (same as whichever entry point receives it) | UMA has no tool-use primitive of its own; if your agent has one, its output arrives through one of the above entry points and inherits that class. Do not smuggle raw tool output past the scanner by writing directly to the SQLite store. |
 | **Configuration** (`uma.yaml`, `custom_patterns_path`) | `UMAMemory.from_yaml` | Trusted | Loaded once at startup; no runtime validation for maliciousness. Write access to the YAML equals write access to the process. |
-| **Caller-registered hooks** | `set_rate_limit_hook`, `promotion_policy`, custom pattern catalog | Trusted | Called at every write/retrieval boundary. Register only code you control. |
+| **Caller-registered hooks** | `set_rate_limit_hook`, custom pattern catalog | Trusted | Called at every write/retrieval boundary. Register only code you control. |
 
 ### Failure modes
 
@@ -180,7 +179,7 @@ mitigations that still apply:
 
 - `min_trust_score` filtering still drops any artifact whose source classifier assigned a low trust — user-message facts start at 0.9, assistant-reply facts at 0.7, so a bypass that also convinces the classifier is required to reach retrieval with default settings.
 - `verify_integrity` can quarantine the artifact after the fact if the content is later flagged (run `lint_memory_drift` on a schedule).
-- Cross-tenant isolation still holds: a bypass poisons the writer's own scope, not other tenants'.
+- Owner isolation still holds: a bypass poisons the writer's own scope, not another agent's or user's.
 - Once identified, the specific pattern gets added to `custom_patterns_path` and all matching quarantined records surface via `list_quarantined`.
 
 **Storage-adapter compromise.** If a vector adapter or SQL store is
@@ -189,7 +188,7 @@ malicious modification of the SQLite file on disk):
 
 - **SQLite tampering**: `content_hash` on every Fact / Episode / Skill / Chunk lets `verify_integrity` detect post-hoc modification. Rows that fail verification are quarantined and excluded from retrieval. Detection is on-demand — schedule `lint_memory_drift` if you need continuous coverage.
 - **Vector-adapter compromise**: the vector store is a rebuildable accelerator; SQL is authoritative. `await memory.rebuild_vector_indexes(tenant_id=...)` regenerates the index from SQL. A misbehaving adapter can degrade retrieval quality but cannot fabricate content that survives cross-check against SQL.
-- **Cross-tenant leak via adapter**: the C1 isolation contract refuses empty isolation values at upsert and pushes `tenant_id` / `owner_type` / `owner_id` into the vector query before the k-nearest cap. An adapter that does not honour these — including a hostile third-party backend — is treated as broken. Regression tests in `tests/test_isolation_and_tenancy.py` guard the contract; run them against any custom backend.
+- **Cross-owner leak via adapter**: the C1 isolation contract refuses empty isolation values at upsert and pushes `owner_type` / `owner_id` into the vector query before the k-nearest cap. An adapter that does not honour these — including a hostile third-party backend — is treated as broken. Regression tests in `tests/test_isolation_and_tenancy.py` guard the contract; run them against any custom backend.
 - **What UMA cannot detect**: an attacker who can write to the SQLite file can also rewrite the `content_hash` column. Disk-level integrity and encryption are the operator's concern.
 
 **Hostile hook.** A caller-registered rate-limit hook or promotion policy
@@ -316,7 +315,7 @@ We consider the following in scope for a security report:
 
 - Prompt-injection payloads that reach durable storage without being
   scanned, trust-reduced, or quarantined.
-- Cross-tenant leakage — any query or retrieval path that returns rows
+- Cross-owner leakage — any query or retrieval path that returns rows
   scoped to a different `tenant_id`, `owner_type`, or `owner_id` than
   the caller supplied.
 - Bypasses of `min_trust_score` or `quarantined_at IS NULL` filters in
@@ -342,6 +341,47 @@ resolution unless we're wrong about the trust model):
   (`google-re2`, `lancedb`, etc.) — that belongs to your dependency
   audit, not to UMA.
 - Latency observations without a corresponding DoS argument.
+
+---
+
+## Standards Mapping
+
+These tables were moved out of the README so the security claims sit next
+to the threat model that qualifies them. Read them together with
+[Known Unsupported Threats](#known-unsupported-threats) above — that
+section, not this one, is the honest boundary of what UMA defends.
+
+### Defense-in-Depth Against Memory Poisoning (ASI06)
+
+Memory poisoning is a stateful attack — a single injection can permanently corrupt an agent's knowledge base across all future sessions. Single-layer defenses are rarely enough. UMA implements the [four-layer defense-in-depth model](https://vectorize.io/articles/how-to-prevent-ai-memory-poisoning) recommended for production agent memory:
+
+| Layer | What it means | UMA's implementation |
+| --- | --- | --- |
+| **1. Pre-Write Sanitization** | Block malicious content before it enters memory stores | Two-layer injection scanning: advisory pre-LLM gate (`scan_user_input`) + write-time boundary scan (`scan_artifact_text`) at every storage boundary. Bundled English, French, Spanish, German, and Simplified Chinese YAML catalogs are aligned with [OWASP Agent Memory Guard](https://owasp.org/www-project-agent-memory-guard/). High severity → quarantine + trust=0.0; medium/low → trust reduction. |
+| **2. Provenance Tracking** | Tag and trace the origin of every stored artifact | Every Fact, Episode, Skill, and Chunk carries `source_chunk_ids`, `content_hash`, `trust_score`, and a `meta.security.audit_log`. `verify_integrity` re-derives SHA-256 hashes and quarantines on mismatch. `lint_memory_drift` detects compiled artifacts whose raw evidence has drifted. Source trust is classifier-derived: user turn (0.9) > document (0.7) > assistant reply (0.7) > tool output (0.5). |
+| **3. Temporal Decay** | Reduce influence of older memories so corrupted data doesn't anchor permanently | **Not implemented in UMA.** Trust scores are set at write time and do not decay automatically. Time-weighted ranking or TTL policies are caller responsibility. |
+| **4. Memory Isolation** | Strict per-owner isolation so one poisoned interaction can't infect others | `owner_type` / `owner_id` enforced at every SQL read and at the vector layer (LanceDB pushes isolation into the `WHERE` clause before the k-nearest cap — cross-owner leakage is prevented at the storage layer, not by application convention). |
+
+### Mapping to OWASP Top 10 for LLM Applications 2025
+
+The [OWASP Top 10 for LLM Applications 2025](https://genai.owasp.org/llm-top-10/) is the de-facto reference for AI application security. UMA is a memory SDK — not every category applies. Here's the honest mapping:
+
+| OWASP 2025 Category | Scope | UMA's contribution |
+| --- | --- | --- |
+| 🟢 **ASI03: Identity & Privilege Abuse** (Agentic AI) | Partial — memory-layer | Explicit `tenant_id` / `owner_type` / `owner_id` on every artifact, enforced at the storage layer. `agent_id` and `user_id` are required arguments on every public call and are never held on the instance, so a shared runtime cannot leak one agent's identity into another's request. Authenticating the claimed identity remains the caller's concern. |
+| 🟢 **ASI05: Unexpected Code Execution** (Agentic AI) | Partial — ingest-only | User input and file injection scanning. MIME consistency check rejects executables; HTML/Markdown sanitized before storage. |
+| 🟢 **ASI06: Memory Poisoning** (Agentic AI) | In scope | User input and file injection scanning + quarantine at every storage boundary. Quarantined artifacts never enter retrieval and never seed fact extraction. |
+| 🟢 **LLM01: Prompt Injection** | In scope | Two-layer scanning: advisory pre-LLM gate (`scan_user_input`) + write-time per-artifact scan. High severity → quarantine; medium/low → trust reduction. |
+| 🟢 **LLM02: Sensitive Information Disclosure** | Partial | Audit log stores a SHA-256 query digest plus a bounded 80-character preview — never the full query. HTML sanitization strips scripts and active URLs at ingest. |
+| 🟢 **LLM04: Data and Model Poisoning** | In scope (RAG path) | Quarantined chunks dropped before fact extraction. SHA-256 `content_hash` + `verify_integrity` detect post-hoc tampering. |
+| 🟢 **LLM08: Vector and Embedding Weaknesses** | In scope — primary | The C1 isolation contract: LanceDB pushes `tenant_id` / `owner_type` / `owner_id` as a SQL `WHERE` clause into the engine *before* the k-nearest cap — without this, heavy users in one tenant would occupy top-k globally and starve others. SQL stores add the same filter on every read path. Cross-tenant leakage is impossible by construction. User input and file injection scanning also addresses the RAG poisoning problem. |
+| 🟢 **LLM09: Misinformation** | Partial | Every fact carries provenance back to source chunks. `LatestWinsFactResolver` picks the canonical row by most-recent `updated_at`; quarantined facts are excluded from retrieval at the SQL layer (`AND quarantined_at IS NULL`) so they never surface to callers even if chosen as canonical. |
+| 🟢 **LLM10: Unbounded Consumption** | Partial | Ingest side: `max_file_bytes` and `pdf_max_pages` cap resource use — UMA-owned. Retrieval side: `set_rate_limit_hook` exposes a single plug-point on every public method for the caller's own rate limiter. UMA ships no default limiter and owns no throttling policy — the caller decides accounting, storage, timeouts, and refusal semantics. |
+
+**Three of ten ASI categories apply.** UMA is a memory SDK, not an agent. The remaining seven belong to the agent layer above UMA — they require tool use, autonomy, or inter-agent communication that UMA doesn't have.
+
+
+**Six of ten LLM categories apply** (LLM01, LLM02 partial, LLM04, LLM08, LLM09 partial, LLM10 partial). There is no security theater — the four categories marked out of scope genuinely require capabilities UMA does not have: output rendering (LLM05), autonomous tool use (LLM06), system prompt management (LLM07), and model supply-chain procurement (LLM03). UMA makes an adjacent contribution to LLM03 at the document ingest boundary, but the core supply-chain threat — model provenance and dependency integrity — belongs to the layer above UMA.
 
 ---
 

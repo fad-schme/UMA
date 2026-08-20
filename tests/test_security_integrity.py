@@ -8,6 +8,10 @@ from tests.helpers.runtime import init_uma_for_tests
 import json
 import pytest
 
+from tests.helpers.runtime import TEST_AGENT_ID
+
+AGENT_ID = TEST_AGENT_ID
+
 # ── test_pr7_verify_integrity_match ──────────────────────────────────────────
 
 
@@ -522,6 +526,7 @@ async def test_lint_detects_tampered_fact(tmp_path):
         [clean, tampered],
         user_id="user:pr7-lint",
         tenant_id="default",
+        agent_id=AGENT_ID,
     )
 
     assert result["status"] == "issues_found"
@@ -568,6 +573,7 @@ async def test_lint_clean_records_produce_no_findings(tmp_path):
         [fact, ep],
         user_id="user:pr7-lint",
         tenant_id="default",
+        agent_id=AGENT_ID,
     )
 
     assert result["status"] == "ok"
@@ -601,6 +607,7 @@ async def test_lint_tampered_record_is_quarantined_after_lint(tmp_path):
         [fact],
         user_id="user:pr7-lint",
         tenant_id="default",
+        agent_id=AGENT_ID,
     )
 
     fetched = await store.get_fact("lint-quarantine-fact", **_SCOPE)
@@ -657,6 +664,7 @@ async def test_lint_mixed_lanes_detects_tampered_episode(tmp_path):
         [fact, ep, skill],
         user_id="user:pr7-lint",
         tenant_id="default",
+        agent_id=AGENT_ID,
     )
 
     assert result["status"] == "issues_found"

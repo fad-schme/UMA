@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from uma.stores.base_sql_store import DEFAULT_TENANT_ID
+from uma.common.types.types_scope import DEFAULT_TENANT_ID
 from .indexer import EpisodeIndexer
 from .archive import EpisodicArchive
 from .mapper import EpisodeMapper

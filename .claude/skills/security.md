@@ -13,7 +13,7 @@ The security model has five primitives. They compose:
 2. **Trust scoring + quarantine** — every artifact carries `trust_score` and `quarantined_at`
 3. **Content hashing + integrity verification** — every typed artifact carries `content_hash`
 4. **Ingest gating** — MIME consistency, file size limits, HTML sanitization
-5. **Retrieval audit** — every retrieve call is logged with a hashed query preview
+5. **Retrieval audit** — every retrieve call is logged with a query digest and a bounded preview
 
 ---
 

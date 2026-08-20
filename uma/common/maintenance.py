@@ -11,7 +11,7 @@ import logging
 from collections import defaultdict
 from typing import Any, Optional
 
-from uma.stores.base_sql_store import DEFAULT_TENANT_ID
+from uma.common.types.types_scope import DEFAULT_TENANT_ID
 from uma.common.types import Fact
 from uma.common.types import OwnershipRef, Skill
 from uma.common.identity import normalize_user_id

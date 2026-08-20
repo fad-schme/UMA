@@ -48,7 +48,101 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `pyproject.toml` / `setup.py` markers and refuses to run outside a
   project root.
 
+### Removed
+- **`agent_id` on `UMAMemory.ingest_document` and on `uma ingest document`.**
+  Uploading a file is a user action, and a document is scoped by its durable
+  `(tenant_id, owner_type, owner_id)` tuple — that tuple alone decides who can
+  read it back. The argument was validated and then discarded, so it recorded
+  nothing while implying an agent-level authorization that did not exist. The
+  CLI `--agent` flag for this subcommand is gone with it. The `ingest_document`
+  **MCP tool** keeps its `agent_id` parameter: there it resolves the owner
+  tuple for an agent-owned document rather than travelling with the ingest.
+- **`set_context()` and `ScopedUMAMemory`.** Agent identity is no longer bound
+  to an instance. UMA is multi-agent on one shared runtime, so binding an agent
+  to an object meant one `UMAMemory` per agent and made the identity of a call
+  depend on which object you happened to hold. `UMAMemory.agent_id` and
+  `UMAMemory.promotion_policy` are gone with it.
+- **`--agent` on `uma health` / `uma doctor`.** `health_check()` probes
+  dependency readiness, which is shared by every agent on the runtime, so the
+  flag scoped nothing.
+- **USER.md / SOUL.md profile overlay** (`load_userprofile`, `load_agentprofile`,
+  `AnimusProfileProvider`). Loading was public but consumption was internal-only,
+  so no supported caller could read the overlay back. `set_agent_profile` and the
+  `load_*_bootstrap` methods are unaffected.
+
+### Changed
+- **`agent_id` is a required per-call argument** on every request-scoped
+  public API: `retrieve_context`, `retrieve_memory`, `process_turn`,
+  `load_memory_bootstrap`, `load_daily_diary_bootstrap`, `set_agent_profile`,
+  `get_agent_profile`, and the `explain_result` / `lint_memory_drift`
+  management functions. Omitting it raises `ValueError`; there is no
+  instance-level or default fallback. `UMAMemory.ingest_document` is
+  deliberately not on that list — see Removed.
+- **MCP tools require `agent_id` on every call** — a required parameter in the
+  tool schema for `retrieve_context`, `retrieve_memory`, `process_turn`, and
+  `ingest_document`, with no default and no environment fallback.
+  `UMA_CONFIG_PATH` is the only environment variable the server reads; one
+  `uma-mcp` process serves every agent.
+- **`tenant_id` is a parameter on every public method**, defaulting to
+  `DEFAULT_TENANT_ID`. UMA Lite is single-tenant, but the value is carried
+  explicitly alongside `agent_id` and `user_id` rather than assumed at the
+  storage boundary.
+- **`DEFAULT_TENANT_ID` lives in `uma.common.types.types_scope`** with the rest
+  of the identity vocabulary, and every `"default"` tenant literal across the
+  public API, MCP server, and domain types references it.
+- **Promotion policy is bound to the turn's `agent_id`** inside the pipeline
+  instead of being carried on the memory instance, so concurrent agents cannot
+  promote into each other's KB.
+- **`uma ingest document` requires `--agent`** in addition to `--owner-type` /
+  `--owner-id`. The agent records who performed the ingest; the owner tuple
+  still determines what the document is scoped to.
+- **`get_context_messages(render_mode=...)`**: `"animus_v1"` renamed to
+  `"guarded"` (still the default). `"raw_rendered"` unchanged.
+- Trimmed the README security section and moved the OWASP/ASI mappings to
+  [`SECURITY.md`](SECURITY.md).
+
+### Security
+- **Promotion no longer carries the originating user into a shared scope.**
+  A fact promoted from a user into an agent's KB — which every user of that
+  agent reads — travelled with `origin_user_id` and `origin_session_id` on the
+  `Fact` itself and with `promotion.source_owner_id` / `source_session_id` in
+  its metadata, which surfaces on `ContextBundle.facts` and in
+  `provenance.derivation`. Content promotion is gated against user-identifying
+  subjects; the lineage reinstated the identity that gate refuses. Both
+  carriers are now redacted whenever a promotion lands on an owner other than
+  the source's. `source_fact_id` is preserved, so the audit chain still
+  resolves to the source row and its owner. Session-to-user promotion keeps
+  the same principal and is unaffected.
+
 ### Fixed
+- **Retrieval's public-boundary scope filter ignored `tenant_id`.**
+  `UMARuntime._filter_items_by_scope` — the defense-in-depth pass over the
+  facts, chunks, episodic, and skills lanes — matched only `(owner_type,
+  owner_id)`, so an item from another tenant with the same owner tuple would
+  have passed it. Store reads were already tenant-scoped, so nothing leaked in
+  practice; the boundary check now verifies the tenant too and fails closed on
+  a missing one.
+- **Session-local retrieval filtering failed open.** Items missing `tenant_id`,
+  or session-local items missing `origin_agent_id`, were admitted rather than
+  dropped — the opposite convention to every other isolation check. Both now
+  fail closed.
+- **`uma health` / `uma doctor` exited 4 on a healthy install.** A `skipped`
+  check forced overall `degraded`, and graph — disabled by default — always
+  reported `skipped`, so container healthchecks and CI gates failed everywhere.
+  Disabled optional subsystems now report a neutral `disabled` status.
+- **Health reported `[ok]` for unreachable LLM and embedding providers.** Both
+  checks only asserted the adapter object existed. Health now calls the
+  providers and reports `error` with provider, host, and cause. `--offline` is
+  unchanged.
+- **The MCP docs were never committed.** `.gitignore` excluded `docs/`, so
+  `docs/mcp/*` never appeared in `git status` while README linked to it. Docs
+  rewritten, `.gitignore` narrowed, and the `docs-lint` CI job is now blocking
+  for repo-relative links.
+- **Examples crashed on first use.** They called `.get()` on `ContextBundle` and
+  `MemoryResult`, which are Pydantic models. All rewritten against the typed
+  API; added `examples/README.md`.
+- **`CODEOWNERS` was inert** — it lived in `.github/workflows/`, which GitHub
+  does not read. Moved to `.github/`.
 - **`[ollama]` install extra pulled the wrong package.** It declared the
   `ollama` client, which UMA never imports. Ollama is reached over its
   OpenAI-compatible HTTP API through `OpenAICompatibleLLM` /
@@ -201,8 +295,7 @@ First release published to PyPI.
 
 ### Added
 - **Qdrant vector adapter** moved to the Enterprise tier. The Lite core now
-  ships three adapters: LanceDB (default, recommended for multi-tenant),
-  FAISS (single-tenant, in-process), and InMemory (testing and CI).
+  ships three adapters: LanceDB, FAISS (in-process), and InMemory (testing and CI).
 - **Multilingual injection catalog** (`injection_patterns.l10n.yaml`) is now
   loaded automatically alongside the English catalog. Covers French, Spanish,
   German, and Simplified Chinese. CJK fast-path skips non-CJK content on the

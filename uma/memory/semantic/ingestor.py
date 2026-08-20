@@ -48,7 +48,14 @@ class SemanticIngestor:
         self.threshold = float(salience_threshold)
         logger.debug("SemanticIngestor initialized (threshold=%.2f, decay_days=%.0f).", self.threshold, salience_decay_days)
 
-    async def extract(self, user_id: str, text: str, *, extra_meta: dict | None = None) -> list[Fact]:
+    async def extract(
+        self,
+        user_id: str,
+        text: str,
+        *,
+        tenant_id: str,
+        extra_meta: dict | None = None,
+    ) -> list[Fact]:
         if self.extractor is None:
             logger.debug("SemanticIngestor.extract: extractor unavailable; returning [].")
             return []
@@ -56,6 +63,7 @@ class SemanticIngestor:
             return await self.extractor.extract_user_facts(
                 subject="user",
                 text=text,
+                tenant_id=tenant_id,
                 owner_type="user",
                 owner_id=user_id,
                 extra_meta=extra_meta,
@@ -69,6 +77,7 @@ class SemanticIngestor:
         user_id: str,
         text: str,
         *,
+        tenant_id: str,
         extra_meta: dict | None = None,
         fact_transform: Optional[Callable[[Fact], None]] = None,
     ) -> list[Fact]:
@@ -79,7 +88,9 @@ class SemanticIngestor:
             logger.debug("SemanticIngestor.ingest: semantic_store unavailable; returning [].")
             return []
 
-        candidates = await self.extract(user_id, text, extra_meta=extra_meta)
+        candidates = await self.extract(
+            user_id, text, tenant_id=tenant_id, extra_meta=extra_meta
+        )
         if not candidates:
             return []
 

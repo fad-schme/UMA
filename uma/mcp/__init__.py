@@ -12,13 +12,30 @@ Requires the ``mcp`` optional extra:
 Configuration is via environment variables read by the server module:
 
     UMA_CONFIG_PATH   Absolute path to uma.yaml (required).
-    UMA_AGENT_ID      Agent identity bound to this server (default:
-                      "agent-default"). Immutable per process — spawn
-                      one uma-mcp per agent identity.
+
+The server holds no agent, user, or tenant identity. Each tool call carries
+its own ``agent_id`` (required) and ``user_id``, so a single uma-mcp process
+serves every agent.
 
 Client configuration lives in ``docs/mcp/STDIO_CLIENTS.md``.
 """
 
-from uma.mcp.server import main
+from typing import Any
 
 __all__ = ["main"]
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve ``main`` on first access rather than at package import.
+
+    ``uma.mcp.server`` requires the ``mcp`` optional extra, but the sibling
+    modules ``tokens`` and ``auth`` are stdlib-only. Importing the server
+    eagerly here made ``import uma.mcp.tokens`` fail whenever the extra was
+    absent. The ``uma-mcp`` console script targets ``uma.mcp.server:main``
+    directly and never went through this re-export.
+    """
+    if name == "main":
+        from uma.mcp.server import main
+
+        return main
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

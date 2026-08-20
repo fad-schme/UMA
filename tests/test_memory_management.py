@@ -18,15 +18,17 @@ from uma.memory import wiki as wiki_module
 import pytest
 import uma.api.management as management_api
 
+from tests.helpers.runtime import TEST_AGENT_ID
+
+AGENT_ID = TEST_AGENT_ID
+
 # ── test_management_api ──────────────────────────────────────────
 
 
 
 
 
-def test_memory_public_surface_keeps_animus_support_and_drops_management_methods() -> None:
-    assert hasattr(UMAMemory, "load_userprofile")
-    assert hasattr(UMAMemory, "load_agentprofile")
+def test_memory_public_surface_keeps_bootstrap_and_drops_management_methods() -> None:
     assert hasattr(UMAMemory, "load_memory_bootstrap")
     assert hasattr(UMAMemory, "load_daily_diary_bootstrap")
     assert not hasattr(UMAMemory, "expand_evidence")
@@ -49,18 +51,6 @@ def test_management_module_exports_supported_operations_only() -> None:
     ]
 
 
-def test_animus_profile_loaders_remain_public_and_functional(uma_memory, tmp_path) -> None:
-    user_profile = tmp_path / "USER.md"
-    agent_profile = tmp_path / "SOUL.md"
-    user_profile.write_text("# User\nlikes coffee\n", encoding="utf-8")
-    agent_profile.write_text("# Agent\nprefers concise answers\n", encoding="utf-8")
-
-    assert uma_memory.load_userprofile(str(user_profile)) is uma_memory
-    assert uma_memory.load_agentprofile(str(agent_profile)) is uma_memory
-    assert "likes coffee" in uma_memory.animus_profile_provider.get_user_profile_text()
-    assert "prefers concise answers" in uma_memory.animus_profile_provider.get_agent_profile_text()
-
-
 @pytest.mark.asyncio
 async def test_management_explain_uses_canonical_provenance(uma_memory, tmp_path) -> None:
     memory = uma_memory
@@ -73,7 +63,7 @@ async def test_management_explain_uses_canonical_provenance(uma_memory, tmp_path
     runtime = UMARuntime.from_memory(memory)
     context = RuntimeContext(
         tenant_id="default",
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-management",
         user_id="user:u1",
     )
@@ -85,7 +75,7 @@ async def test_management_explain_uses_canonical_provenance(uma_memory, tmp_path
     )
 
     artifact = memory_result.debug["compiled_answer"]
-    explanation = await explain_result(memory, artifact, user_id="user:u1")
+    explanation = await explain_result(memory, artifact, user_id="user:u1", agent_id=AGENT_ID)
 
     assert explanation["evidence"]
     assert explanation["chunk_ids"] == artifact["provenance"]["source_chunk_ids"]
@@ -112,7 +102,7 @@ async def test_management_lint_reports_invalid_parent_lineage_without_rewriting(
         parent_artifacts=[manual_parent],
     )["compiled_artifact"]
 
-    lint_result = await lint_memory_drift(memory, [child], user_id="user:u1", stale_after_seconds=0)
+    lint_result = await lint_memory_drift(memory, [child], user_id="user:u1", stale_after_seconds=0, agent_id=AGENT_ID)
 
     issues = {finding["issue"] for finding in lint_result["findings"]}
     assert lint_result["status"] == "issues_found"
@@ -168,7 +158,7 @@ async def test_update_trust_updates_fact_and_records_audit_history(uma_memory) -
 
     ctx = RuntimeContext(
         tenant_id="default",
-        agent_id=uma_memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-trust-once",
         user_id="user:u1",
     )
@@ -208,7 +198,7 @@ async def test_update_trust_accumulates_history_in_order(uma_memory) -> None:
     await uma_memory.semantic_core.upsert_fact(fact, embedding)
     ctx = RuntimeContext(
         tenant_id="default",
-        agent_id=uma_memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-trust-twice",
         user_id="user:u1",
     )
@@ -242,7 +232,7 @@ async def test_update_trust_rejects_out_of_range_scores_without_mutation(uma_mem
     await uma_memory.semantic_core.upsert_fact(fact, embedding)
     ctx = RuntimeContext(
         tenant_id="default",
-        agent_id=uma_memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-trust-invalid-score",
         user_id="user:u1",
     )
@@ -276,7 +266,7 @@ async def test_update_trust_rejects_empty_reason_without_mutation(uma_memory) ->
     await uma_memory.semantic_core.upsert_fact(fact, embedding)
     ctx = RuntimeContext(
         tenant_id="default",
-        agent_id=uma_memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-trust-empty-reason",
         user_id="user:u1",
     )
@@ -308,7 +298,7 @@ async def test_update_trust_hides_other_agent_fact_from_unrelated_context(uma_me
     await uma_memory.semantic_core.upsert_fact(fact, embedding)
     ctx = RuntimeContext(
         tenant_id="default",
-        agent_id=uma_memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-trust-other-agent",
         user_id="user:u1",
     )
@@ -340,7 +330,7 @@ async def test_update_trust_hides_cross_tenant_fact_from_mismatched_context(uma_
     await uma_memory.semantic_core.upsert_fact(fact, embedding)
     ctx = RuntimeContext(
         tenant_id="tenant-a",
-        agent_id=uma_memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-trust-other-tenant",
         user_id="user:u1",
     )
@@ -438,7 +428,7 @@ async def test_provenance_chain_supports_fact_memory_and_wiki_artifact_expansion
     runtime = UMARuntime.from_memory(memory)
     context = RuntimeContext(
         tenant_id="default",
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-provenance",
         user_id="user:u1",
     )
@@ -453,11 +443,11 @@ async def test_provenance_chain_supports_fact_memory_and_wiki_artifact_expansion
     assert memory_result.debug["compiled_memory_index"]
     assert memory_result.debug["compiled_memory_log"]
 
-    fact_evidence = await explain_result(memory, fact, user_id="user:u1")
+    fact_evidence = await explain_result(memory, fact, user_id="user:u1", agent_id=AGENT_ID)
     assert fact_evidence["evidence"]
     assert fact_evidence["chunk_ids"]
 
-    answer_evidence = await explain_result(memory, memory_result.debug["compiled_answer"], user_id="user:u1")
+    answer_evidence = await explain_result(memory, memory_result.debug["compiled_answer"], user_id="user:u1", agent_id=AGENT_ID)
     assert answer_evidence["evidence"]
     assert answer_evidence["chunk_ids"]
 
@@ -503,7 +493,7 @@ async def test_provenance_chain_supports_fact_memory_and_wiki_artifact_expansion
     assert wiki_artifact["compiled_memory_index"]["artifact_id"] == wiki_artifact["id"]
     assert wiki_artifact["compiled_memory_log"][0]["event_type"] == "wiki_artifact_created"
 
-    wiki_evidence = await explain_result(memory, wiki_artifact, user_id="user:u1")
+    wiki_evidence = await explain_result(memory, wiki_artifact, user_id="user:u1", agent_id=AGENT_ID)
     assert wiki_evidence["chunk_ids"] == [raw_chunk.id]
 
 
@@ -520,7 +510,7 @@ async def test_compiled_memory_artifact_builds_index_log_and_transitive_raw_evid
     runtime = UMARuntime.from_memory(memory)
     context = RuntimeContext(
         tenant_id="default",
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-compiled-artifact",
         user_id="user:u1",
     )
@@ -551,7 +541,7 @@ async def test_compiled_memory_artifact_builds_index_log_and_transitive_raw_evid
     assert artifact["compiled_memory_log"][0]["event_type"] == "wiki_artifact_created"
     assert artifact["compiled_memory_log"][0]["parent_artifact_ids"] == [memory_result.debug["compiled_answer"]["id"]]
 
-    expanded = await explain_result(memory, artifact, user_id="user:u1")
+    expanded = await explain_result(memory, artifact, user_id="user:u1", agent_id=AGENT_ID)
     assert expanded["chunk_ids"] == artifact["provenance"]["source_chunk_ids"]
     assert expanded["direct_chunk_ids"] == []
     assert expanded["lineage"][0]["parent_artifact_ids"] == [memory_result.debug["compiled_answer"]["id"]]
@@ -620,7 +610,7 @@ async def test_compiled_memory_artifact_update_and_conflicts_remain_visible(uma_
         "conflict_detected",
     ]
 
-    expanded = await explain_result(memory, artifact, user_id="user:u1")
+    expanded = await explain_result(memory, artifact, user_id="user:u1", agent_id=AGENT_ID)
     assert expanded["provenance"]["conflicts"] == [conflict]
     assert expanded["chunk_ids"] == [chunk_id]
 
@@ -738,7 +728,7 @@ async def test_expand_evidence_is_cycle_safe_for_parent_artifact_lineage(uma_mem
     artifact_a["parent_artifacts"] = [artifact_b]
     artifact_a["parent_artifact_ids"] = [artifact_b["id"]]
 
-    expanded = await explain_result(memory, artifact_b, user_id="user:u1")
+    expanded = await explain_result(memory, artifact_b, user_id="user:u1", agent_id=AGENT_ID)
     assert expanded["chunk_ids"] == [chunk_id]
     assert expanded["transitive_chunk_ids"] == [chunk_id]
     assert expanded["missing_chunk_ids"] == []
@@ -774,7 +764,7 @@ async def test_regenerated_wiki_page_is_canonical_record_with_evidence_links(uma
     runtime = UMARuntime.from_memory(memory)
     context = RuntimeContext(
         tenant_id="default",
-        agent_id=memory.agent_id,
+        agent_id=AGENT_ID,
         request_id="req-wiki-canonical",
         user_id="user:u1",
     )
@@ -847,7 +837,7 @@ async def test_wiki_lint_reports_invalid_parent_lineage(uma_memory) -> None:
         parent_artifacts=[manual_parent["compiled_artifact"]],
     )
 
-    lint_result = await lint_memory_drift(uma_memory, [child], user_id="user:u1")
+    lint_result = await lint_memory_drift(uma_memory, [child], user_id="user:u1", agent_id=AGENT_ID)
 
     issues = {finding["issue"] for finding in lint_result["findings"]}
     assert lint_result["status"] == "issues_found"

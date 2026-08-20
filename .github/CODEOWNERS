@@ -1,0 +1,21 @@
+# GitHub only reads CODEOWNERS from the repository root, .github/, or docs/.
+# This file was previously under .github/workflows/, where it was inert.
+
+# All files require maintainer review
+* @fad-schme
+
+# Security and runtime critical paths
+uma/retrieve/                         @fad-schme
+uma/memory/                           @fad-schme
+uma/common/                           @fad-schme
+uma/api/                              @fad-schme
+uma/adapters/scanner/injection_patterns.yaml    @fad-schme
+
+# Governance, licensing, and repository control
+.github/                              @fad-schme
+CLA.md                                @fad-schme
+NOTICE                                @fad-schme
+LICENSE                               @fad-schme
+README.md                             @fad-schme
+ARCHITECTURE.md                       @fad-schme
+CONTRIBUTING.md                       @fad-schme
