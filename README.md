@@ -5,21 +5,17 @@
                                  \___/|_|  |___/ \_\
 ```
 
-> ## Live documentation
->
-> To help you get up to speed quickly, UMA ships interactive documentation as a set of skills that can answer your questions directly in your workflow.
->
-> 🌐 Website: [uma.ai-mem-engineering.com](https://uma.ai-mem-engineering.com)  
-> 📄 Full docs: [uma.ai-mem-engineering.com/docs.html](https://uma.ai-mem-engineering.com/docs.html)
-
-
-## Universal Memory Architecture
+## Unified Memory Architecture
 
 UMA is a memory and context runtime SDK for developers building AI agents. It ingests data and exposes six public `lane_filter` lanes. The planner also uses `profile` (a semantic-store projection) and optional `graph`, for eight architectural lane names in total. **UMA manages memory only** — your application owns prompts, tool use, reasoning, and final responses.
 
 UMA does not generate assistant replies and does not perform agent reasoning.
 Developers bring their own LLM or agent loop and use UMA strictly for memory
 management.
+
+
+> 🌐 Website: [uma.ai-mem-engineering.com](https://uma.ai-mem-engineering.com)  
+> 📄 Full docs: [uma.ai-mem-engineering.com/docs.html](https://uma.ai-mem-engineering.com/docs.html)
 
 ---
 
@@ -58,8 +54,6 @@ Threat model, what UMA does *not* defend against, and the OWASP/ASI mappings: [`
 
 ## Quickstart
 
-The distribution is `uma-mem`; the import package and CLI are `uma`.
-
 ```bash
 pip install uma-mem
 ```
@@ -80,20 +74,20 @@ async def main():
     # agent_id and user_id are required on every call.
     # tenant_id is optional and defaults to "default".
     context = await memory.retrieve_context(
-        query_text=user_message,
-        agent_id="agent-default",
-        user_id="user-123",
-        session_id="session-1",
+        query_text=<user_message>,
+        agent_id=<agent-abc>,
+        user_id=<user-123>,
+        session_id=<session-xyz>,
     )
 
     reply = await your_llm(context, user_message)   # you own this
 
     await memory.process_turn(
-        agent_id="agent-default",
-        user_id="user-123",
-        user_msg=user_message,
-        assistant_reply=reply,
-        session_id="session-1",
+        agent_id=<agent-abc>,
+        user_id=<user-123>,
+        user_msg=<user_message>,
+        assistant_reply=<reply>,
+        session_id=<session-xyz>,
     )
 
 
@@ -127,7 +121,7 @@ uma --config /path/to/uma.yaml --format json config validate
 | `uma security scan TEXT` | Run the injection scanner. Use exactly one of `TEXT`, `--file`, or `--stdin`. |
 | `uma dev check` | Run predefined `quick` or `full` development checks without installing tools or applying fixes. |
 | `uma retrieve context` / `retrieve memory` | Run agent/user-scoped retrieval and report the retrieval-audit write effect. |
-| `uma ingest document` / `turn` / `memory-bootstrap` / `diary-bootstrap` | Run the corresponding scoped public ingestion API. |
+| `uma ingest document` / `turn` | Run the corresponding scoped public ingestion API. |
 | `uma audit list` / `quarantine list` | List records within one resolved tenant or durable-owner scope. |
 | `uma quarantine reinstate` / `purge` | Mutate exactly one tenant/owner/lane/record target. Purge requires `--reason`. |
 | `uma index rebuild-vectors` / `rebuild-derived` | Rebuild all records in one exact tenant/owner/lane scope. |
