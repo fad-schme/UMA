@@ -67,3 +67,5 @@ Desktop.ini
 
 # Logs
 *.log
+resources/
+scripts
