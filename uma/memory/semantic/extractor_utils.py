@@ -23,7 +23,7 @@ from uma.common.types import Fact
 from uma.common.storage_metadata import normalize_fact_metadata
 from uma.common.integrity import hash_fact_content
 from uma.ingest.types import DocumentChunk
-from uma.retrieve.user_query_helper import get_generic_terms
+from uma.common.text import get_generic_terms
 from .scorer import SalienceScorer
 
 logger = logging.getLogger(__name__)

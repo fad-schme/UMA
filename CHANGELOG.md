@@ -69,6 +69,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `AnimusProfileProvider`). Loading was public but consumption was internal-only,
   so no supported caller could read the overlay back. `set_agent_profile` and the
   `load_*_bootstrap` methods are unaffected.
+- **`ContextPackBuilder`** (`uma.retrieve.context_pack_builder`) and the
+  `UMARuntime.render_context` / `get_context_messages` methods that used it.
+  This was a second, unused context-assembly path: no production caller
+  remained, and every bundled example already hand-rolled its own renderer
+  over `ContextBundle` instead. Anyone importing `ContextPackBuilder` from
+  `uma.retrieve` must migrate to their own `ContextBundle → str` rendering.
 
 ### Changed
 - **`agent_id` is a required per-call argument** on every request-scoped
@@ -96,8 +102,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **`uma ingest document` requires `--agent`** in addition to `--owner-type` /
   `--owner-id`. The agent records who performed the ingest; the owner tuple
   still determines what the document is scoped to.
-- **`get_context_messages(render_mode=...)`**: `"animus_v1"` renamed to
-  `"guarded"` (still the default). `"raw_rendered"` unchanged.
 - Trimmed the README security section and moved the OWASP/ASI mappings to
   [`SECURITY.md`](SECURITY.md).
 

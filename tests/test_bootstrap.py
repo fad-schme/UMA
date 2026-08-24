@@ -291,10 +291,10 @@ def test_memory_module_no_longer_contains_bootstrap_ingest_mechanics() -> None:
 
 def test_bootstrap_ingest_service_reuses_shared_capture_and_manifest_helpers() -> None:
     ingest_source = Path("uma/ingest/ingest_service.py").read_text(encoding="utf-8")
-    retrieve_source = Path("uma/retrieve/user_query_helper.py").read_text(encoding="utf-8")
+    text_helper_source = Path("uma/common/text.py").read_text(encoding="utf-8")
 
     assert "_capture_bootstrap_source(" in ingest_source
     assert "_load_existing_manifest(" in ingest_source
     assert "_upsert_source_manifest(" in ingest_source
-    assert "_build_memory_bootstrap_signature" not in retrieve_source
-    assert "_persist_bootstrap_manifest" not in retrieve_source
+    assert "_build_memory_bootstrap_signature" not in text_helper_source
+    assert "_persist_bootstrap_manifest" not in text_helper_source

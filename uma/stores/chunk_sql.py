@@ -23,6 +23,7 @@ from .base_sql_store import LIKE_ESCAPE_SQL, escape_like
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex
 from uma.stores.metadata import ensure_store_metadata
+from uma.common.text import build_query_term_set
 from uma.common.types import Chunk, SCOPE_MODEL_VERSION
 from uma.common.storage_metadata import normalize_chunk_metadata
 
@@ -431,9 +432,7 @@ class ChunkSQLStore(BaseVectorSQLStore):
             logger.error("ChunkSQLStore.lexical_search requires owner_type and owner_id")
             raise ValueError("ChunkSQLStore.lexical_search requires owner_type and owner_id")
 
-        from uma.retrieve.user_query_helper import build_query_term_set
-
-        # Consistent with user_query_helper: use the extracted keywords + phrases when available.
+        # Consistent with uma.common.text: use the extracted keywords + phrases when available.
         term_set = build_query_term_set(query_text, max_terms=12, max_phrases=12)
         terms = list(term_set.terms) if term_set else []
         phrases = list(term_set.phrases) if term_set else []

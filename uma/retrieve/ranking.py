@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterable, Optional, Sequence
 
 from uma.common.accessors import get_attr_or_key
-from uma.retrieve.user_query_helper import extract_keywords_and_phrases, build_fact_embedding_text
+from uma.common.text import extract_keywords_and_phrases, build_fact_embedding_text
 
 logger = logging.getLogger(__name__)
 

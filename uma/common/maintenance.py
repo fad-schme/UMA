@@ -21,7 +21,7 @@ from uma.common.results import (
     LaneRebuildStatus,
     VectorRebuildReport,
 )
-from uma.retrieve.user_query_helper import build_fact_embedding_text
+from uma.common.text import build_fact_embedding_text
 
 logger = logging.getLogger(__name__)
 

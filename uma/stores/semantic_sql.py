@@ -46,7 +46,7 @@ _QUARANTINE_FILTER = " AND quarantined_at IS NULL"
 _NO_FILTER = ""
 
 from ..common.types.types_scope import DEFAULT_TENANT_ID
-from uma.retrieve.user_query_helper import extract_keywords_and_phrases
+from uma.common.text import extract_keywords_and_phrases
 from .base_sql_store import LIKE_ESCAPE_SQL, escape_like
 from ..adapters.db.base import DBAdapter
 from ..adapters.vector.base import VectorIndex

@@ -16,7 +16,7 @@ import logging
 from typing import Any, Callable, Optional
 
 from uma.common.types import Fact
-from uma.retrieve.user_query_helper import build_fact_embedding_text
+from uma.common.text import build_fact_embedding_text
 from .extractor import FactExtractor
 from .scorer import SalienceScorer
 

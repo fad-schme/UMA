@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from uma.adapters.llm.controller import LLMCallContext, generate_model
 
-from uma.retrieve.user_query_helper import build_fact_embedding_text, extract_keywords_and_phrases, get_stopwords
+from uma.common.text import build_fact_embedding_text, extract_keywords_and_phrases, get_stopwords
 
 logger = logging.getLogger(__name__)
 

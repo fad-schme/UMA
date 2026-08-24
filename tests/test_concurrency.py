@@ -21,7 +21,7 @@ from uma.common.types import SessionScope
 from uma.common.types import Skill
 from uma.ingest import ingest_service
 from uma.memory.working_memory.buffer import WorkingMemoryBuffer
-from uma.retrieve.user_query_helper import build_fact_embedding_text
+from uma.common.text import build_fact_embedding_text
 from uma.common.types.types_scope import DEFAULT_TENANT_ID
 import asyncio
 import pytest

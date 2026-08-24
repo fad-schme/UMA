@@ -30,7 +30,7 @@ from uma.common.storage_metadata import normalize_document_metadata
 from uma.common.integrity import hash_fact_content
 from uma.common.trust import SourceDescriptor, score_source
 from uma.adapters.scanner.injection_scan import scan_artifact_text
-from uma.retrieve.user_query_helper import build_fact_embedding_text
+from uma.common.text import build_fact_embedding_text
 logger = logging.getLogger(__name__)
 
 _INGEST_PIPELINE_VERSION = "doc_ingest_v1"

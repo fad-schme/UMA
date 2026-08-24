@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from uma.common.accessors import get_attr_or_key
+from uma.common.text import get_stopwords
 
 logger = logging.getLogger(__name__)
 
@@ -367,7 +368,6 @@ def _normalize_object_phrase(phrase: str) -> str:
     if not tokens:
         return ""
 
-    from uma.retrieve.user_query_helper import get_stopwords
     stop = get_stopwords()
     while tokens and tokens[0] in stop:
         tokens.pop(0)

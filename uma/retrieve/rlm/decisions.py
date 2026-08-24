@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .domain import PREFERENCE_PREDICATES, filter_facts_by_domains
 from .entity_seed import extract_candidate_entities
-from uma.retrieve.user_query_helper import extract_keywords_and_phrases
+from uma.common.text import extract_keywords_and_phrases
 
 logger = logging.getLogger(__name__)
 

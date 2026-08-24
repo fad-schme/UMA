@@ -14,7 +14,7 @@ import logging
 import re
 from typing import Any
 
-from uma.retrieve.user_query_helper import extract_keywords_and_phrases
+from uma.common.text import extract_keywords_and_phrases
 
 
 logger = logging.getLogger(__name__)

@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from tests.helpers.context_bundle import make_context_bundle
 from tests.helpers.graph_adapter import RecordingGraphAdapter
 from tests.helpers.runtime import TEST_AGENT_ID, init_uma_for_tests
-from typing import Any
 from uma.api.memory import UMAMemory
 from uma.api.runtime import UMARuntime
 from uma.common.results import Confidence, MemoryResult, Provenance
@@ -86,33 +85,20 @@ async def test_runtime_retrieval_delegates_directly(uma_memory) -> None:
             debug={"memory_intent": memory_intent} if include_debug else None,
         )
 
-    async def fake_messages(
-        bound_context: RuntimeContext,
-        *,
-        query_text: str,
-        render_mode: str = "guarded",
-    ) -> dict[str, Any]:
-        seen.append(("messages", bound_context, f"{query_text}:{render_mode}"))
-        return {"messages": [{"role": "system", "content": "rendered context"}], "meta": {"render_mode": render_mode}}
-
     runtime.retrieve_context = fake_context  # type: ignore[method-assign]
     runtime.retrieve_memory = fake_memory  # type: ignore[method-assign]
-    runtime.get_context_messages = fake_messages  # type: ignore[method-assign]
 
     structured = await runtime.retrieve_context(context, query_text="hello world", lane_filter=["semantic"])
     memory_payload = await runtime.retrieve_memory(context, query_text="hello world")
-    messages = await runtime.get_context_messages(context, query_text="hello world", render_mode="raw_rendered")
 
     assert structured.product == "context"
     assert structured.debug.lane_filter == ["semantic"]
     assert structured.documents == []
     assert memory_payload.provenance_valid is True
     assert memory_payload.facts[0]["source_chunk_ids"] == ["chunk-1"]
-    assert messages["meta"]["render_mode"] == "raw_rendered"
     assert seen == [
         ("context", context, "hello world"),
         ("memory", context, "hello world"),
-        ("messages", context, "hello world:raw_rendered"),
     ]
 
 

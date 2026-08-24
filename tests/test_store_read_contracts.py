@@ -69,7 +69,7 @@ def test_query_terms_are_wildcard_free_before_reaching_a_like_clause(query: str)
     is the layer this asserts: if extraction ever stops sanitizing, the
     store's own ESCAPE clause is what keeps the pattern literal.
     """
-    from uma.retrieve.user_query_helper import build_query_term_set, extract_keywords_and_phrases
+    from uma.common.text import build_query_term_set, extract_keywords_and_phrases
 
     extracted = extract_keywords_and_phrases(query)
     term_set = build_query_term_set(query, max_terms=12, max_phrases=12)

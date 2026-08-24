@@ -26,6 +26,7 @@ from uma.common.types.types_scope import DEFAULT_TENANT_ID
 from uma.common.types import Chunk
 from uma.retrieve.ranking import fuse_candidates
 from uma.common.dedupe import dedupe_by_id
+from uma.common.text import build_query_term_set, text_matches_query_terms
 
 logger = logging.getLogger(__name__)
 
@@ -436,7 +437,6 @@ class ChunkCore:
 
     @staticmethod
     def _apply_term_filter(chunks: list[Chunk], query_text: str) -> list[Chunk]:
-        from uma.retrieve.user_query_helper import build_query_term_set, text_matches_query_terms
         term_set = build_query_term_set(query_text)
         if not term_set or (not term_set.terms and not term_set.phrases):
             return chunks

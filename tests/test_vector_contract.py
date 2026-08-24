@@ -21,7 +21,7 @@ from uma.ingest.normalizer import _clean_page_text, _drop_repeated_lines_across_
 from uma.ingest.types import NormalizedSection
 from uma.memory.chunk.core import ChunkCore
 from uma.retrieve.rlm.entity_seed import extract_candidate_entities
-from uma.retrieve.user_query_helper import build_query_term_set
+from uma.common.text import build_query_term_set
 from uma.stores.chunk_sql import ChunkSQLStore
 import pytest
 import yaml
