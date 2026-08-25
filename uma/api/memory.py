@@ -283,6 +283,16 @@ class UMAMemory:
                     )
         return self._runtime
 
+    def get_store(self, key: str) -> Any:
+        """Return the initialized store for `key` ("semantic", "episodic",
+        "procedural", "chunk", ...), or None if not yet initialized.
+
+        The named accessor for `_stores` — callers outside this class (e.g.
+        `uma.api.management`) should use this instead of reaching into the
+        private registry directly.
+        """
+        return self._stores.get(key)
+
     def _build_secrets_provider(
         self,
         secrets_cfg: Optional[SecretsProviderConfig],

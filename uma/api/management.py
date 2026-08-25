@@ -272,7 +272,7 @@ async def verify_integrity(
     store_key = _LANE_STORE_KEY.get(lane)
     if store_key is None:
         raise ValueError(f"verify_integrity: unknown lane {lane!r}")
-    store = memory._stores.get(store_key)
+    store = memory.get_store(store_key)
     if store is None:
         raise RuntimeError(f"verify_integrity: store for lane={lane!r} not found")
 
@@ -385,7 +385,7 @@ async def list_quarantined(
         store_key = _LANE_STORE_KEY.get(ln)
         if store_key is None:
             raise ValueError(f"list_quarantined: unknown lane {ln!r}")
-        store = memory._stores.get(store_key)
+        store = memory.get_store(store_key)
         if store is None:
             continue
 
@@ -488,7 +488,7 @@ async def reinstate_quarantined(
     store_key = _LANE_STORE_KEY.get(lane)
     if store_key is None:
         raise ValueError(f"reinstate_quarantined: unknown lane {lane!r}")
-    store = memory._stores.get(store_key)
+    store = memory.get_store(store_key)
     if store is None:
         raise RuntimeError(f"reinstate_quarantined: store for lane={lane!r} not found")
 
@@ -532,7 +532,7 @@ async def purge_quarantined(
     store_key = _LANE_STORE_KEY.get(lane)
     if store_key is None:
         raise ValueError(f"purge_quarantined: unknown lane {lane!r}")
-    store = memory._stores.get(store_key)
+    store = memory.get_store(store_key)
     if store is None:
         raise RuntimeError(f"purge_quarantined: store for lane={lane!r} not found")
 

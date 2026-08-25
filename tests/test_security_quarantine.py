@@ -890,6 +890,7 @@ def _make_stores(tmp_path):
 def _mock_memory(stores):
     m = MagicMock()
     m._stores = stores
+    m.get_store.side_effect = stores.get
     return m
 
 
