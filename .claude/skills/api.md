@@ -313,6 +313,7 @@ from uma.api.management import (
     reinstate_quarantined,
     purge_quarantined,
     list_retrieval_audit,
+    consolidate,
 )
 ```
 
@@ -411,6 +412,25 @@ rows = await list_retrieval_audit(
 ```
 
 Each retrieval call (`retrieve_context`, `retrieve_memory`) records a SHA-256 query digest (`query_hash`, for correlating one query across log lines), the first 80 characters of the query (`query_preview`, for human auditing), and metadata. The full query is never stored. The audit store is enabled by default; disable via `security.retrieval_audit_enabled: false` in your YAML.
+
+### `consolidate` — Run one consolidation cycle
+
+```python
+result = await consolidate(
+    memory,
+    user_id="user-123",
+    tenant_id="default",     # optional; defaults to "default"
+)
+# FeatureResult: result.data = {"facts": list[Fact], "fact_count": int}
+```
+
+Clusters the user's recent episodes, summarizes each cluster, extracts high-salience facts into the semantic lane, then prunes low-value memory.
+
+**Destructive.** The underlying `Pruner` deletes episodes and facts, so gate this the way you gate `purge_quarantined` — with a confirmation, not silently. The CLI equivalent (`uma maintenance consolidate`) requires `--yes` or an interactive confirmation.
+
+Takes no `agent_id`: consolidation touches user-owned lanes only. Scope is per call like every other public entry point — one runtime serves every user, so there is no instance to read it from.
+
+Consolidation is **caller-invoked**. Nothing in UMA schedules it; that is deliberate, not an unfinished state.
 
 ---
 

@@ -460,6 +460,7 @@ from uma.api.management import (
     reinstate_quarantined,
     purge_quarantined,
     list_retrieval_audit,
+    consolidate,
 )
 
 # Initialize
