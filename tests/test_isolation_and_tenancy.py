@@ -151,7 +151,7 @@ async def test_multi_tenant_isolation_holds_with_matching_scope_tokens(tmp_path:
             content="tenant b wm",
         )
 
-        runtime = UMARuntime.from_memory(memory)
+        runtime = memory.runtime
         memory._rlm_controller = _EmptyController()
         ctx_a_context = RuntimeContext(
             tenant_id="tenant-a",
@@ -189,7 +189,7 @@ async def test_multi_tenant_isolation_holds_with_matching_scope_tokens(tmp_path:
 async def test_multi_user_retrieval_isolates_user_owned_data_but_keeps_agent_kb_shared(uma_memory, tmp_path: Path) -> None:
     memory = uma_memory
     assert AGENT_ID
-    runtime = UMARuntime.from_memory(memory)
+    runtime = memory.runtime
 
     agent_doc = tmp_path / "agent_shared.txt"
     agent_doc.write_text(
@@ -250,7 +250,7 @@ async def test_working_memory_isolates_users_sharing_one_session_id(tmp_path: Pa
     """
     memory = await init_uma_for_tests(tmp_path)
     try:
-        runtime = UMARuntime.from_memory(memory)
+        runtime = memory.runtime
         memory.working_memory.append(
             scope=SessionScope(
                 tenant_id=DEFAULT_TENANT_ID,
@@ -350,7 +350,7 @@ def test_working_memory_buffer_rejects_a_scope_without_a_user() -> None:
 async def test_retrieval_and_process_turn_overlap_preserve_session_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     memory = await init_uma_for_tests(tmp_path)
     try:
-        runtime = UMARuntime.from_memory(memory)
+        runtime = memory.runtime
         memory._rlm_controller = _EmptyController()
 
         await memory.process_turn(
@@ -506,7 +506,7 @@ async def test_retrieval_remains_isolated_under_concurrent_requests(uma_memory, 
         return make_context_bundle(query=query_text)
 
     monkeypatch.setattr(UMARuntime, "retrieve_context", fake_structured)
-    runtime = UMARuntime.from_memory(memory)
+    runtime = memory.runtime
 
     ctx_a = RuntimeContext(
         tenant_id=DEFAULT_TENANT_ID,

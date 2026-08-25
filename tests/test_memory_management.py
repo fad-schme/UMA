@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uma.api.management import explain_result, lint_memory_drift
 from uma.api.memory import UMAMemory
-from uma.api.runtime import UMARuntime
 from uma.common.storage_metadata import normalize_chunk_metadata, normalize_fact_metadata
 from uma.common.types import Chunk, Fact, RuntimeContext, SCOPE_MODEL_VERSION
 from uma.ingest.ingest_service import capture_source, curate_compiled_memory, derive_memory_artifacts
@@ -61,7 +60,7 @@ async def test_management_explain_uses_canonical_provenance(uma_memory, tmp_path
     )
     await memory.ingest_document(str(path), owner_type="user", owner_id="user:u1")
 
-    runtime = UMARuntime.from_memory(memory)
+    runtime = memory.runtime
     context = RuntimeContext(
         tenant_id="default",
         agent_id=AGENT_ID,
@@ -426,7 +425,7 @@ async def test_provenance_chain_supports_fact_memory_and_wiki_artifact_expansion
     assert fact.meta["provenance"]["source_chunk_ids"]
     assert fact.meta["provenance"]["valid"] is True
 
-    runtime = UMARuntime.from_memory(memory)
+    runtime = memory.runtime
     context = RuntimeContext(
         tenant_id="default",
         agent_id=AGENT_ID,
@@ -508,7 +507,7 @@ async def test_compiled_memory_artifact_builds_index_log_and_transitive_raw_evid
     )
 
     await memory.ingest_document(str(path), owner_type="user", owner_id="user:u1")
-    runtime = UMARuntime.from_memory(memory)
+    runtime = memory.runtime
     context = RuntimeContext(
         tenant_id="default",
         agent_id=AGENT_ID,
@@ -762,7 +761,7 @@ async def test_regenerated_wiki_page_is_canonical_record_with_evidence_links(uma
     )
     await memory.ingest_document(str(path), owner_type="user", owner_id="user:u1")
 
-    runtime = UMARuntime.from_memory(memory)
+    runtime = memory.runtime
     context = RuntimeContext(
         tenant_id="default",
         agent_id=AGENT_ID,

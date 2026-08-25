@@ -257,11 +257,30 @@ class UMAMemory:
 
     @property
     def runtime(self) -> UMARuntime:
-        """Return the shared internal runtime view over this memory instance."""
+        """Return the shared internal runtime view over this memory instance.
+
+        Ensures retrieval readiness before snapshotting dependencies into the
+        runtime, since `UMARuntime` holds them as plain attributes rather than
+        reading them live off this instance.
+        """
         if self._runtime is None:
             with self._lifecycle_lock:
                 if self._runtime is None:
-                    self._runtime = UMARuntime.from_memory(self)
+                    self._ensure_retrieval_ready()
+                    self._runtime = UMARuntime(
+                        config=self.cfg,
+                        stores=self._stores,
+                        llm=self.llm,
+                        retrieval_cfg=self.retrieval_cfg,
+                        chunk_core=self.chunk_core,
+                        semantic_core=self.semantic_core,
+                        episodic_core=self.episodic_core,
+                        procedural_core=self.procedural_core,
+                        working_memory=self.working_memory,
+                        rlm_controller=self._rlm_controller,
+                        memory_env=self.memory_env,
+                        metadata={"source": "UMAMemory"},
+                    )
         return self._runtime
 
     def _build_secrets_provider(

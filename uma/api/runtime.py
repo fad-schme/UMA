@@ -54,9 +54,12 @@ logger = logging.getLogger(__name__)
 class UMARuntime:
     """Shared UMA infrastructure container.
 
-    Request scope must never be stored on this object. UMAMemory owns
-    initialized services; this runtime reads them through the attached memory
-    bridge when present while keeping request-scoped execution canonical here.
+    Request scope must never be stored on this object. Retrieval-only
+    dependencies (stores, cores, the RLM controller, config) are passed in
+    explicitly at construction — this runtime holds no reference back to a
+    `UMAMemory` instance and is constructible standalone. `UMAMemory.runtime`
+    is the sole place that builds one, snapshotting its own already-ready
+    dependencies.
     """
 
     def __init__(
@@ -65,55 +68,34 @@ class UMARuntime:
         config: Any = None,
         stores: Optional[Mapping[str, Any]] = None,
         llm: Any = None,
-        memory_bridge: Any = None,
+        retrieval_cfg: Any = None,
+        chunk_core: Any = None,
+        semantic_core: Any = None,
+        episodic_core: Any = None,
+        procedural_core: Any = None,
+        working_memory: Any = None,
+        rlm_controller: Any = None,
+        memory_env: Any = None,
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> None:
-        self._config = config
-        self._stores: dict[str, Any] = dict(stores or {})
-        self._llm = llm
-        self.memory_bridge = memory_bridge
+        self.config = config
+        self.stores: dict[str, Any] = dict(stores or {})
+        self.llm = llm
+        self.retrieval_cfg = retrieval_cfg
+        self.chunk_core = chunk_core
+        self.semantic_core = semantic_core
+        self.episodic_core = episodic_core
+        self.procedural_core = procedural_core
+        self.working_memory = working_memory
+        self.rlm_controller = rlm_controller
+        self.memory_env = memory_env
         self.metadata: dict[str, Any] = dict(metadata or {})
 
-    @classmethod
-    def from_memory(cls, memory: Any) -> "UMARuntime":
-        """Build a runtime view over an existing UMAMemory instance."""
-        return cls(
-            memory_bridge=memory,
-            metadata={"source": "UMAMemory"},
-        )
-
-
-    def _require_memory_bridge(self) -> Any:
-        memory = self.memory_bridge
-        if memory is None:
-            raise RuntimeError("UMARuntime operation requires a memory_bridge.")
-        return memory
-
-    @property
-    def config(self) -> Any:
-        memory = self.memory_bridge
-        if memory is not None:
-            return getattr(memory, "cfg", None)
-        return self._config
-
-    @property
-    def stores(self) -> dict[str, Any]:
-        memory = self.memory_bridge
-        if memory is not None:
-            return dict(getattr(memory, "_stores", None) or {})
-        return self._stores
-
-    @property
-    def llm(self) -> Any:
-        memory = self.memory_bridge
-        if memory is not None:
-            return getattr(memory, "llm", None)
-        return self._llm
-
     def ensure_retrieval_ready(self) -> None:
-        """Ensure retrieval-only dependencies are initialized."""
-        memory = self._require_memory_bridge()
-        memory._ensure_retrieval_ready()
+        """No-op: dependencies are guaranteed ready by `UMAMemory.runtime`
+        before this object is ever constructed. Kept so retrieval call sites
+        that call it need no changes."""
+        return None
 
     # ------------------------------------------------------------------
     # CR3 — Retrieval audit log
@@ -268,21 +250,20 @@ class UMARuntime:
         `wiki` explicitly so memory-path lane selection is honest about the
         compiled-memory-first intent.
         """
-        memory = self.memory_bridge
         stores = self.stores or {}
-        ctx_cfg = getattr(getattr(memory, "retrieval_cfg", None), "context", None)
+        ctx_cfg = getattr(self.retrieval_cfg, "context", None)
         lanes: list[str] = []
-        if getattr(memory, "chunk_core", None) is not None or stores.get("chunk") is not None:
+        if self.chunk_core is not None or stores.get("chunk") is not None:
             lanes.extend([RAW_LANE, WIKI_LANE])
-        if getattr(memory, "semantic_core", None) is not None or stores.get("semantic") is not None:
+        if self.semantic_core is not None or stores.get("semantic") is not None:
             lanes.extend([SEMANTIC_LANE, PROFILE_LANE])
         if (
-            (getattr(memory, "episodic_core", None) is not None or stores.get("episodic") is not None)
+            (self.episodic_core is not None or stores.get("episodic") is not None)
             and bool(getattr(ctx_cfg, "include_episodic", True))
         ):
             lanes.append(EPISODIC_LANE)
         if (
-            (getattr(memory, "procedural_core", None) is not None or stores.get("procedural") is not None)
+            (self.procedural_core is not None or stores.get("procedural") is not None)
             and bool(getattr(ctx_cfg, "include_procedural", True))
         ):
             lanes.append(PROCEDURAL_LANE)
@@ -413,10 +394,9 @@ class UMARuntime:
         self,
         runtime_context: RuntimeContext,
     ) -> list[Any]:
-        memory = self._require_memory_bridge()
         try:
             wm_scope = self._working_memory_scope_set_context(runtime_context)
-            wm_core = getattr(memory, "working_memory", None)
+            wm_core = self.working_memory
             return (
                 wm_core.get_context(wm_scope)
                 if wm_core is not None and wm_scope is not None
@@ -572,8 +552,7 @@ class UMARuntime:
 
         with timed("uma.get_structured_context.latency"):
             working_memory = self._load_working_memory_for_context(runtime_context)
-            memory = self._require_memory_bridge()
-            controller = getattr(memory, "_rlm_controller", None)
+            controller = self.rlm_controller
             if controller is None:
                 raise RuntimeError(
                     "UMARuntime.retrieve_context: RLM controller not initialized."
@@ -763,8 +742,7 @@ class UMARuntime:
     ) -> dict[str, Any]:
         self.ensure_retrieval_ready()
         request = self._build_retrieval_request(runtime_context)
-        memory = self._require_memory_bridge()
-        env = getattr(memory, "memory_env", None)
+        env = self.memory_env
         if env is None:
             raise RuntimeError("UMARuntime.expand_evidence: memory environment is not initialized.")
 
@@ -954,9 +932,7 @@ class UMARuntime:
         # Gap analysis runs on the raw domain objects, not the serialized
         # projections: `_chunk_payload` drops `created_at` and `trust_score`,
         # which are exactly the two signals this needs.
-        max_support_age_days, min_support_trust = gap_thresholds(
-            getattr(self._require_memory_bridge(), "retrieval_cfg", None)
-        )
+        max_support_age_days, min_support_trust = gap_thresholds(self.retrieval_cfg)
         gaps = assess_gaps(
             facts=context.facts,
             chunks=chunks,

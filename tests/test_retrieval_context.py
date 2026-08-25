@@ -11,7 +11,6 @@ from tests.helpers.context_bundle import make_context_bundle
 from tests.helpers.graph_adapter import RecordingGraphAdapter
 from tests.helpers.runtime import TEST_AGENT_ID, init_uma_for_tests
 from uma.api.memory import UMAMemory
-from uma.api.runtime import UMARuntime
 from uma.common.results import Confidence, MemoryResult, Provenance
 from uma.common.types import RuntimeContext
 from uma.common.types.types_fact import Fact
@@ -44,7 +43,7 @@ AGENT_ID = TEST_AGENT_ID
 @pytest.mark.asyncio
 async def test_runtime_retrieval_delegates_directly(uma_memory) -> None:
     memory = uma_memory
-    runtime = UMARuntime.from_memory(memory)
+    runtime = memory.runtime
     context = RuntimeContext(
         tenant_id="tenant-1",
         agent_id=AGENT_ID,
@@ -104,7 +103,7 @@ async def test_runtime_retrieval_delegates_directly(uma_memory) -> None:
 
 @pytest.mark.asyncio
 async def test_runtime_retrieval_requires_user_id(uma_memory) -> None:
-    runtime = UMARuntime.from_memory(uma_memory)
+    runtime = uma_memory.runtime
     context = RuntimeContext(
         tenant_id="tenant-1",
         agent_id=AGENT_ID,
@@ -206,7 +205,7 @@ async def test_umamemory_public_retrieval_surface_delegates_by_intent(uma_memory
 
 @pytest.mark.asyncio
 async def test_runtime_memory_retrieval_surfaces_explicit_evidence_only_fallback(uma_memory) -> None:
-    runtime = UMARuntime.from_memory(uma_memory)
+    runtime = uma_memory.runtime
     context = RuntimeContext(
         tenant_id="tenant-1",
         agent_id=AGENT_ID,
@@ -260,7 +259,7 @@ async def test_runtime_memory_retrieval_surfaces_explicit_evidence_only_fallback
 
 @pytest.mark.asyncio
 async def test_runtime_memory_retrieval_can_expose_debug_payload(uma_memory) -> None:
-    runtime = UMARuntime.from_memory(uma_memory)
+    runtime = uma_memory.runtime
     context = RuntimeContext(
         tenant_id="tenant-1",
         agent_id=AGENT_ID,
@@ -322,7 +321,7 @@ async def test_runtime_memory_retrieval_can_expose_debug_payload(uma_memory) -> 
 
 @pytest.mark.asyncio
 async def test_runtime_memory_zero_evidence_returns_honest_fallback_debug_shape(uma_memory) -> None:
-    runtime = UMARuntime.from_memory(uma_memory)
+    runtime = uma_memory.runtime
     context = RuntimeContext(
         tenant_id="tenant-1",
         agent_id=AGENT_ID,
@@ -397,7 +396,7 @@ async def test_runtime_memory_zero_evidence_returns_honest_fallback_debug_shape(
 
 @pytest.mark.asyncio
 async def test_runtime_context_trace_surfaces_lane_plan(uma_memory) -> None:
-    runtime = UMARuntime.from_memory(uma_memory)
+    runtime = uma_memory.runtime
     context = RuntimeContext(
         tenant_id="tenant-1",
         agent_id=AGENT_ID,
@@ -474,7 +473,7 @@ async def test_bound_context_workspace_id_does_not_broaden_retrieval_owner_suppo
     await memory.ingest_document(str(agent_doc), owner_type="agent", owner_id=AGENT_ID)
     await memory.ingest_document(str(user_doc), owner_type="user", owner_id="user:u1")
 
-    runtime = UMARuntime.from_memory(memory)
+    runtime = memory.runtime
     context = RuntimeContext(
         tenant_id=DEFAULT_TENANT_ID,
         agent_id=AGENT_ID,
@@ -740,7 +739,7 @@ async def test_evidence_expansion_fetches_chunks_by_source_fact_owner_scope() ->
 @pytest.mark.asyncio
 async def test_bound_context_retrieval_is_isolated_across_agents_on_shared_runtime(uma_memory, tmp_path) -> None:
     memory = uma_memory
-    runtime = UMARuntime.from_memory(memory)
+    runtime = memory.runtime
 
     doc_a = tmp_path / "agent_a.txt"
     doc_a.write_text(

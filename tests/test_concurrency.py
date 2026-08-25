@@ -374,13 +374,13 @@ def test_memory_runtime_singleton_is_thread_safe(tmp_path: Path, monkeypatch: py
     entered = threading.Event()
     release = threading.Event()
 
-    def fake_from_memory(mem: UMAMemory) -> object:
+    def fake_runtime_ctor(**kwargs: object) -> object:
         created.append(object())
         entered.set()
         assert release.wait(timeout=2.0)
         return created[-1]
 
-    monkeypatch.setattr(memory_module.UMARuntime, "from_memory", staticmethod(fake_from_memory))
+    monkeypatch.setattr(memory_module, "UMARuntime", fake_runtime_ctor)
 
     seen: list[object] = []
 
