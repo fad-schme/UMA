@@ -109,6 +109,8 @@ def _validate_operation_args(args: Any) -> None:
         _require(args, "owner_type", "owner_id", "lane")
     elif args.command == "integrity":
         _require(args, "owner_type", "owner_id", "lane", "record_id")
+    elif args.command == "maintenance":
+        _require(args, "user_id")
 
 
 def _operation_effects(args: Any) -> list[str]:
@@ -132,12 +134,14 @@ def _operation_effects(args: Any) -> list[str]:
             "quarantine_state_write_on_mismatch",
             "security_audit_write_on_mismatch",
         ]
+    if args.command == "maintenance" and args.operation == "consolidate":
+        return ["memory_write", "memory_delete", "vector_index_delete"]
     return []
 
 
 def _is_guarded_operation(args: Any) -> bool:
     return (
-        args.command in {"index", "integrity"}
+        args.command in {"index", "integrity", "maintenance"}
         or (
             args.command == "quarantine"
             and args.operation in {"reinstate", "purge"}
@@ -146,6 +150,12 @@ def _is_guarded_operation(args: Any) -> bool:
 
 
 def _confirmation_target(args: Any) -> dict[str, Any]:
+    if args.command == "maintenance":
+        return {
+            "tenant_id": args.tenant_id,
+            "user_id": args.user_id,
+            "record_scope": "all consolidation-eligible episodes and facts for this user",
+        }
     target = {
         "tenant_id": args.tenant_id,
         "owner_type": args.owner_type,
@@ -207,6 +217,8 @@ def _result_outcome(args: Any, result: Any) -> tuple[str, int]:
         and args.operation in {"reinstate", "purge"}
         and result is not True
     ):
+        return "error", 1
+    if args.command == "maintenance" and not getattr(result, "ok", False):
         return "error", 1
     return "ok", 0
 
@@ -386,6 +398,17 @@ async def _run_scoped_operation(
                 **_owner_scope(args),
                 "lane": args.lane,
                 "record_scope": "all records in this exact owner/lane",
+            }
+
+        elif args.command == "maintenance":
+            result = await management_api.consolidate(
+                memory,
+                user_id=args.user_id,
+                tenant_id=args.tenant_id,
+            )
+            scope = {
+                "tenant_id": args.tenant_id,
+                "user_id": args.user_id,
             }
 
         else:

@@ -8,6 +8,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [unreleased]
 
 ### Added
+- **`uma maintenance consolidate --user ... [--tenant ...]`** CLI command and
+  `uma.api.management.consolidate(memory, user_id=..., tenant_id=...)`, the
+  first reachable entry point for consolidation (clustering, fact extraction,
+  pruning). Consolidation remains caller-invoked only — UMA core still never
+  schedules it (ADR-0004) — this just makes the existing capability callable.
+  Destructive (deletes episodes and facts), so it's gated behind the same
+  `--yes` / interactive confirmation as `quarantine purge`.
 - **MCP server** (`uma-mcp` console script) exposes UMA's public API as MCP
   tools. Install with `pip install 'uma-mem[mcp]'`. Stdio mode wires Claude
   Code, Codex, Cursor, Windsurf, and Claude Desktop (local bridge) via a
@@ -75,6 +82,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   remained, and every bundled example already hand-rolled its own renderer
   over `ContextBundle` instead. Anyone importing `ContextPackBuilder` from
   `uma.retrieve` must migrate to their own `ContextBundle → str` rendering.
+- **`consolidation_run` / `consolidation_health`** on `UMAMemory`. These were
+  `setattr`-attached by `ConsolidationFeature`, invisible to static readers
+  and mypy, and reachable by nothing except a test workaround — no CLI and no
+  documented caller ever existed. Replaced by
+  `uma.api.management.consolidate(memory, user_id=..., tenant_id=...)`, in
+  the same shape as `purge_quarantined`/`reinstate_quarantined` rather than a
+  `UMAMemory` method, since consolidation is destructive like those
+  operations. See **Added** for the new entry point.
 
 ### Changed
 - **`agent_id` is a required per-call argument** on every request-scoped

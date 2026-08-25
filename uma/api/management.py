@@ -17,8 +17,10 @@ from uma.common.integrity import (
     hash_fact_content,
     hash_skill_content,
 )
+from uma.common.maintenance import _ensure_async_lock
 from uma.common.provenance import provenance_for_artifact
-from uma.common.types.types_scope import DEFAULT_TENANT_ID
+from uma.common.registry import FeatureResult
+from uma.common.types.types_scope import DEFAULT_TENANT_ID, validate_tenant_id
 from uma.memory import wiki as wiki_module
 
 if TYPE_CHECKING:
@@ -565,6 +567,65 @@ async def purge_quarantined(
     return True
 
 
+# ---------------------------------------------------------------------------
+# Consolidation
+# ---------------------------------------------------------------------------
+
+
+async def consolidate(
+    memory: "UMAMemory",
+    *,
+    user_id: str,
+    tenant_id: str = DEFAULT_TENANT_ID,
+) -> FeatureResult:
+    """
+    Run one consolidation cycle for a user: cluster recent episodes, extract
+    and persist semantic facts, then prune. Destructive — the underlying
+    `Pruner` deletes episodes and facts, so callers should gate this the same
+    way as `purge_quarantined` (confirmation, not silent).
+
+    Scope is per call, like every other public UMA entrypoint: one runtime
+    serves every user concurrently, so there is no instance to read it from.
+    Consolidation touches user-owned lanes only and therefore takes no
+    agent_id.
+
+    Returns
+    -------
+    FeatureResult
+        data = {"facts": list[Fact], "fact_count": int}
+    """
+    if not user_id or not isinstance(user_id, str):
+        logger.warning("consolidate: invalid user_id=%r.", user_id)
+        return FeatureResult.failure(["invalid user_id"], data={"facts": [], "fact_count": 0})
+
+    # Optional features attach during ingestion warmup, which `from_yaml`
+    # schedules in the background rather than awaiting. Force it here so a
+    # fresh UMAMemory's first call can be `consolidate` without a race.
+    memory._ensure_ingestion_ready()
+
+    feature = memory.features.get("consolidation")
+    if feature is None:
+        logger.error("consolidate: consolidation feature not attached (consolidation_enabled=False?).")
+        return FeatureResult.failure(["consolidation is not enabled"], data={"facts": [], "fact_count": 0})
+
+    resolved_tenant_id = validate_tenant_id(tenant_id or DEFAULT_TENANT_ID)
+    lock = _ensure_async_lock(memory, "_consolidation_lock")
+    async with lock:
+        try:
+            facts = await feature.consolidator.run_once(user_id, tenant_id=resolved_tenant_id)
+            logger.info(
+                "consolidate: tenant_id=%s user_id=%s facts=%d",
+                resolved_tenant_id, user_id, len(facts),
+            )
+            return FeatureResult.success({"facts": facts, "fact_count": len(facts)})
+        except Exception as exc:
+            logger.exception(
+                "consolidate failed (tenant_id=%s user_id=%s).",
+                resolved_tenant_id, user_id,
+            )
+            return FeatureResult.failure([str(exc)], data={"facts": [], "fact_count": 0})
+
+
 __all__ = [
     "explain_result",
     "lint_memory_drift",
@@ -575,6 +636,7 @@ __all__ = [
     "IntegrityVerificationResult",
     "verify_integrity",
     "list_retrieval_audit",
+    "consolidate",
 ]
 
 

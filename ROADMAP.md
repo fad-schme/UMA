@@ -305,13 +305,16 @@ Recorded so these do not resurface as proposals.
 ### Consolidation scheduling — by design, not missing
 
 `Consolidator` (`uma/memory/consolidation/consolidator.py`) is fully implemented:
-`run_once`, clustering, summarizing, `_persist_facts`, `_prune`. It is exposed as a
-public feature method, `await memory_client.consolidation_run(user_id)`
-(`uma/memory/consolidation/feature.py`), config-gated by `consolidation_enabled`.
+`run_once`, clustering, summarizing, `_persist_facts`, `_prune`. It is exposed as
+`await uma.api.management.consolidate(memory, user_id=..., tenant_id=...)` and
+via `uma maintenance consolidate` on the CLI, config-gated by
+`consolidation_enabled`. It is deliberately not a `UMAMemory` method — same
+shape as `purge_quarantined`/`reinstate_quarantined`, since consolidation is
+destructive (the `Pruner` deletes episodes and facts) like those operations.
 
 Nothing invokes it automatically **on purpose**. In UMA core, consolidation is
 caller-invoked; users who want a scheduler wire one themselves against that public
-method. Automation and full orchestration are **enterprise-tier**. `CHANGELOG.md`
+function. Automation and full orchestration are **enterprise-tier**. `CHANGELOG.md`
 records that the earlier `consolidation_trigger.py` auto-trigger scaffolding was
 intentionally removed, not left unfinished.
 

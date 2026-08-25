@@ -444,6 +444,22 @@ def _build_parser() -> argparse.ArgumentParser:
     add_record_scope_arguments(integrity_enforce_parser)
     _add_yes_argument(integrity_enforce_parser)
 
+    maintenance_parser = commands.add_parser(
+        "maintenance",
+        help="Run manual maintenance jobs. Caller-invoked only; UMA core never schedules these.",
+    )
+    maintenance_commands = maintenance_parser.add_subparsers(
+        dest="operation",
+        required=True,
+    )
+    consolidate_parser = maintenance_commands.add_parser(
+        "consolidate",
+        help="Run one consolidation cycle for a user: cluster episodes, extract "
+        "facts, then prune. Destructive — deletes episodes and facts.",
+    )
+    add_audit_scope_arguments(consolidate_parser)
+    _add_yes_argument(consolidate_parser)
+
     security_parser = commands.add_parser("security", help="Run UMA security tools.")
     security_commands = security_parser.add_subparsers(dest="security_command", required=True)
     scan_parser = security_commands.add_parser("scan", help="Scan text for prompt injection patterns.")
@@ -491,6 +507,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "quarantine",
         "index",
         "integrity",
+        "maintenance",
     }:
         command_name = f"{args.command}.{args.operation}"
 
@@ -595,6 +612,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "quarantine",
             "index",
             "integrity",
+            "maintenance",
         }:
             from .operations import run_scoped_operation
 

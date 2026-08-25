@@ -191,8 +191,8 @@ class Consolidator:
         Failures propagate. This is step 1 of the cycle: returning an empty
         list on error is indistinguishable from "this user has no episodes",
         which reports a broken cycle as a successful no-op. ``run_once``'s
-        caller (``ConsolidationFeature.consolidation_run``) is the boundary
-        that turns the error into a FeatureResult.
+        caller (``uma.api.management.consolidate``) is the boundary that
+        turns the error into a FeatureResult.
         """
         if self.episodic_core is None:
             return []

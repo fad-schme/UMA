@@ -2,18 +2,15 @@
 ConsolidationFeature
 ====================
 
-Optional UMA plugin that exposes memory consolidation as:
-
-    await memory_client.consolidation_run(user_id)
-
-This feature does not run automatically; you must call it from:
-- A scheduler
-- A nightly batch job
-- A pipeline hook (“after N turns”)
+Optional UMA plugin. Builds and holds the `Consolidator` for a `UMAMemory`
+instance under `memory_client.features["consolidation"]`. The public entry
+point is `uma.api.management.consolidate(memory, ...)`, called from the CLI
+(`uma maintenance consolidate`) or wired into a caller's own scheduler — this
+feature does not run automatically.
 
 Coding Agent Instructions
 -------------------------
-- Must NOT modify UMAMemory internals beyond adding the public method.
+- Must NOT modify UMAMemory internals beyond registering under `features`.
 - Must fail gracefully; never raise exceptions that break agents.
 """
 
@@ -22,8 +19,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from uma.common.registry import FeatureContext, FeatureHandle, FeatureResult, UMAFeature
-from uma.common.types.types_scope import DEFAULT_TENANT_ID, validate_tenant_id
+from uma.common.registry import FeatureContext, FeatureHandle, UMAFeature
 from .consolidator import Consolidator
 
 if TYPE_CHECKING:
@@ -71,9 +67,10 @@ class ConsolidationFeature(UMAFeature):
 
     def attach(self, context: FeatureContext) -> FeatureHandle:
         """
-        Attach consolidation_run(user_id) to UMAMemory.
-
-        This method is a safe "thin wrapper" that defers all logic to Consolidator.
+        Register this feature (and its `Consolidator`) under
+        `memory_client.features["consolidation"]`. Exposes no methods on
+        `UMAMemory` — `uma.api.management.consolidate` reads the consolidator
+        from `features` directly.
         """
         memory_client = context.memory
 
@@ -96,89 +93,9 @@ class ConsolidationFeature(UMAFeature):
             )
             return FeatureHandle(name=self.name, methods=())
 
-        def _health() -> FeatureResult:
-            missing_deps = []
-            if self.consolidator is None:
-                missing_deps.append("consolidator")
-            if self._episodic_core is None:
-                missing_deps.append("episodic_core")
-            if self._semantic_core is None:
-                missing_deps.append("semantic_core")
-            if self._embedder is None:
-                missing_deps.append("embedder")
-            if self._llm is None:
-                missing_deps.append("llm")
-            if missing_deps:
-                return FeatureResult.failure([f"missing: {', '.join(missing_deps)}"])
-            return FeatureResult.success()
-
-        async def consolidation_run(
-            *,
-            user_id: str,
-            tenant_id: str = DEFAULT_TENANT_ID,
-        ) -> FeatureResult:
-            """
-            Run consolidation for one user in one tenant.
-
-            Scope is per call, like every other public UMA entrypoint: one
-            runtime serves every user concurrently, so there is no instance
-            to read it from. Consolidation touches user-owned lanes only and
-            therefore takes no agent_id.
-
-            Returns
-            -------
-            FeatureResult
-                data = {"facts": List[Fact], "fact_count": int}
-            """
-            if not user_id or not isinstance(user_id, str):
-                logger.warning(
-                    "ConsolidationFeature.consolidation_run: invalid user_id=%r.",
-                    user_id,
-                )
-                return FeatureResult.failure(["invalid user_id"], data={"facts": [], "fact_count": 0})
-            resolved_tenant_id = validate_tenant_id(tenant_id or DEFAULT_TENANT_ID)
-            try:
-                facts = await self.consolidator.run_once(
-                    user_id, tenant_id=resolved_tenant_id
-                )
-                logger.info(
-                    "ConsolidationFeature.consolidation_run: tenant_id=%s user_id=%s facts=%d",
-                    resolved_tenant_id,
-                    user_id,
-                    len(facts),
-                )
-                return FeatureResult.success(
-                    {"facts": facts, "fact_count": len(facts)}
-                )
-            except Exception as exc:
-                logger.exception(
-                    "ConsolidationFeature.consolidation_run failed "
-                    "(tenant_id=%s user_id=%s).",
-                    resolved_tenant_id,
-                    user_id,
-                )
-                return FeatureResult.failure(
-                    [str(exc)],
-                    data={"facts": [], "fact_count": 0},
-                )
-
-        try:
-            memory_client._register_methods(
-                self.name,
-                {
-                    "consolidation_health": _health,
-                    "consolidation_run": consolidation_run,
-                },
-            )
-        except Exception:
-            logger.exception("ConsolidationFeature.attach: method registration failed.")
-            return FeatureHandle(name=self.name, methods=())
         memory_client.features[self.name] = self
         logger.info("ConsolidationFeature attached to UMAMemory.")
-        return FeatureHandle(
-            name=self.name,
-            methods=("consolidation_health", "consolidation_run"),
-        )
+        return FeatureHandle(name=self.name, methods=())
 
     @classmethod
     def validate_config(cls, config: dict) -> None:

@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from uma.api.management import consolidate
 from uma.common.registry import FeatureContext
 from uma.common.types import Episode, Fact
 from uma.common.types.types_scope import DEFAULT_TENANT_ID
@@ -213,11 +214,19 @@ async def test_no_episodes_is_a_clean_empty_cycle() -> None:
     assert await consolidator.run_once(USER, tenant_id=TENANT) == []
 
 
-# ── the public feature entrypoint ─────────────────────────────────────
+# ── the public entrypoint: uma.api.management.consolidate ─────────────
 
 
-def _consolidation_run(consolidator: Consolidator):
-    """Pull `consolidation_run` out of attach() without booting a UMAMemory."""
+class _MemoryStub:
+    def __init__(self, feature: ConsolidationFeature) -> None:
+        self.features: dict[str, Any] = {"consolidation": feature}
+
+    def _ensure_ingestion_ready(self) -> None:
+        """Features are already attached; nothing to warm up in this stub."""
+
+
+def _memory_for(consolidator: Consolidator) -> _MemoryStub:
+    """Attach a ConsolidationFeature wrapping the given Consolidator, without booting a UMAMemory."""
     feature = ConsolidationFeature(
         episodic_core=consolidator.episodic_core,
         semantic_core=consolidator.semantic_core,
@@ -227,31 +236,24 @@ def _consolidation_run(consolidator: Consolidator):
     # attach() wires the feature's own Consolidator; swap in the stubbed one.
     feature.consolidator = consolidator
 
-    registered: dict[str, Any] = {}
-
-    class _MemoryStub:
-        features: dict[str, Any] = {}
-
-        def _register_methods(self, name, methods):
-            registered.update(methods)
-
+    memory = _MemoryStub(feature)
     feature.attach(
         FeatureContext(
-            memory=_MemoryStub(),
+            memory=memory,
             config={},
             services={},
             logger=logging.getLogger("test"),
         )
     )
-    return registered["consolidation_run"]
+    return memory
 
 
 @pytest.mark.asyncio
 async def test_consolidation_run_carries_tenant_and_user_per_call() -> None:
     episodic = RecordingEpisodicCore([_episode("ep1")])
-    run = _consolidation_run((_build(episodic, RecordingSemanticCore())))
+    memory = _memory_for(_build(episodic, RecordingSemanticCore()))
 
-    result = await run(user_id=USER, tenant_id=TENANT)
+    result = await consolidate(memory, user_id=USER, tenant_id=TENANT)
 
     assert result.ok
     assert episodic.calls[0][1]["tenant_id"] == TENANT
@@ -259,9 +261,9 @@ async def test_consolidation_run_carries_tenant_and_user_per_call() -> None:
 
 @pytest.mark.asyncio
 async def test_consolidation_run_rejects_a_missing_user() -> None:
-    run = _consolidation_run((_build(RecordingEpisodicCore(), RecordingSemanticCore())))
+    memory = _memory_for(_build(RecordingEpisodicCore(), RecordingSemanticCore()))
 
-    result = await run(user_id="")
+    result = await consolidate(memory, user_id="")
 
     assert not result.ok
     assert "invalid user_id" in result.errors
@@ -275,9 +277,9 @@ async def test_consolidation_run_surfaces_a_broken_cycle_as_a_failure() -> None:
         async def list_recent(self, *args, **kwargs):
             raise RuntimeError("episodic store is down")
 
-    run = _consolidation_run((_build(BrokenEpisodicCore(), RecordingSemanticCore())))
+    memory = _memory_for(_build(BrokenEpisodicCore(), RecordingSemanticCore()))
 
-    result = await run(user_id=USER, tenant_id=TENANT)
+    result = await consolidate(memory, user_id=USER, tenant_id=TENANT)
 
     assert not result.ok
     assert any("episodic store is down" in error for error in result.errors)
