@@ -20,7 +20,6 @@ from uma.ingest.chunker import chunk_sections
 from uma.ingest.normalizer import _clean_page_text, _drop_repeated_lines_across_pages
 from uma.ingest.types import NormalizedSection
 from uma.memory.chunk.core import ChunkCore
-from uma.retrieve.rlm.entity_seed import extract_candidate_entities
 from uma.common.text import build_query_term_set
 from uma.stores.chunk_sql import ChunkSQLStore
 import pytest
@@ -472,16 +471,16 @@ def test_dedupe_by_id_handles_dicts_and_objects():
     assert [getattr(x, "id", x.get("id")) for x in out] == ["a", "b"]
 
 
-# ── test_entity_seed ──────────────────────────────────────────
+# ── test_entity_extraction ──────────────────────────────────────────
 
 
-def test_extract_candidate_entities_includes_acronyms_and_is_bounded() -> None:
+def test_query_term_set_entities_includes_acronyms_and_is_bounded() -> None:
     q = "How do IAM and VPC integrate with KMS for TLS?"
-    out = extract_candidate_entities(q, facts=[], chunks=[], limit=3)
-    assert out == ["IAM", "VPC", "KMS"]
+    out = build_query_term_set(q).entities
+    assert out[:3] == ["iam", "vpc", "kms"]
 
 
-def test_extract_candidate_entities_dedupes_case_insensitive() -> None:
+def test_query_term_set_entities_dedupes_case_insensitive() -> None:
     q = "IAM iam VPC vpc"
-    out = extract_candidate_entities(q, facts=[], chunks=[], limit=10)
-    assert out[:2] == ["IAM", "VPC"]
+    out = build_query_term_set(q).entities
+    assert out[:2] == ["iam", "vpc"]

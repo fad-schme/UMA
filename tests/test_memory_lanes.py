@@ -21,6 +21,7 @@ from uma.ingest.types import DocumentChunk, NormalizedSection
 from uma.memory.chunk.core import ChunkSearchOptions
 from uma.memory.episodic.indexer import EpisodeIndexer
 from uma.memory.semantic.extractor import FactExtractor
+from uma.memory.semantic.ingestor import SemanticIngestor
 from uma.memory.working_memory.core import WorkingMemoryCore
 from uma.retrieve.rlm.snippet_refiner import SnippetRefiner
 from uma.common.types.types_scope import DEFAULT_TENANT_ID
@@ -394,6 +395,46 @@ async def test_chunk_quarantined_excluded_from_fetch(tmp_path):
 
     fetched = await store.fetch_by_ids(["chunk_q1"], **_SCOPE)
     assert fetched == []
+
+
+@pytest.mark.asyncio
+async def test_chunk_lexical_search_bm25_ranks_rare_term_over_common(tmp_path):
+    """BM25's IDF must outrank a common-term match with a rare-term match at
+    equal term frequency — the old constant-weight LIKE scoring had no
+    document-frequency signal and couldn't express this at all."""
+    store = _chunk(tmp_path)
+
+    # Eight filler chunks share "wombat", establishing a high document
+    # frequency for it across the ten-chunk scope.
+    filler_text = (
+        "The quick brown fox jumps over the lazy dog near the calm river bank "
+        "today under grey skies while a wombat watches quietly"
+    )
+    for i in range(8):
+        ch = Chunk(
+            id=f"chunk_common_{i}", doc_id="doc1", text=filler_text,
+            page_range=(0, 1), position=i, source_path="doc.pdf", source_hash="abc",
+            created_at=_NOW, updated_at=_NOW, **_SCOPE,
+        )
+        await store.upsert_chunk(ch, _VEC)
+
+    # One chunk mentions "quokka" instead — same length and structure, so
+    # length-normalization doesn't confound the comparison, only IDF does.
+    rare_text = filler_text.replace("wombat", "quokka")
+    ch_rare = Chunk(
+        id="chunk_rare", doc_id="doc1", text=rare_text,
+        page_range=(0, 1), position=8, source_path="doc.pdf", source_hash="abc",
+        created_at=_NOW, updated_at=_NOW, **_SCOPE,
+    )
+    await store.upsert_chunk(ch_rare, _VEC)
+
+    results = await store.lexical_search("wombat quokka", **_SCOPE, k=10)
+    ids = [r.id for r in results]
+    assert "chunk_rare" in ids, "Expected the rare-term chunk to be retrieved at all"
+    assert ids.index("chunk_rare") < ids.index("chunk_common_0"), (
+        "BM25 should rank the rare-term match above a common-term match at "
+        "equal term frequency, since document rarity increases IDF"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1077,6 +1118,32 @@ class FakeEmbedder:
 
     async def embed(self, texts):
         return await fake_embed(texts=list(texts), dimension=self.dimension)
+
+
+@pytest.mark.asyncio
+async def test_semantic_ingest_tags_facts_with_candidate_entities(tmp_path):
+    """SemanticIngestor.ingest must tag a persisted fact's meta with the
+    candidate entities extracted from its own text — the ingest-time half of
+    the entity-linking retrieval boost (uma.retrieve.ranking's entity_ratio
+    term reads this same meta["entities"] field back at query time)."""
+    store = _sem(tmp_path)
+    ingestor = SemanticIngestor(
+        llm=None, embedder=FakeEmbedder(dimension=16), semantic_store=store, salience_threshold=0.0
+    )
+    fact = Fact(
+        id="fact_ent1", subject="Quokka", predicate="LIVES_IN", object="Rottnest Island",
+        created_at=_NOW, updated_at=_NOW, owner_type="user", owner_id="user:test",
+        tenant_id="default", salience=1.0, confidence=0.9,
+    )
+
+    async def _fake_extract(user_id, text, *, tenant_id, extra_meta=None):
+        return [fact]
+
+    ingestor.extract = _fake_extract
+
+    persisted = await ingestor.ingest("user:test", "irrelevant source text", tenant_id="default")
+    assert persisted, "expected the fake-extracted fact to be persisted"
+    assert "quokka" in (persisted[0].meta.get("entities") or [])
 
 
 def test_episode_indexer_builds_episode_with_valid_embedding_shape():

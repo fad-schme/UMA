@@ -7,10 +7,17 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from datetime import datetime
 from typing import Any, Optional
 
 from .base_vector_sql_store import BaseVectorSQLStore
+
+# Standard BM25 tuning constants (Robertson/Sparck-Jones defaults, the same
+# values Lucene/Elasticsearch ship with) — term-frequency saturation point
+# and document-length normalization strength, respectively.
+_BM25_K1 = 1.5
+_BM25_B = 0.75
 
 # B608: _QUARANTINE_FILTER and _NO_FILTER are the only two values ever
 # interpolated into the quarantine toggle position. Both are static SQL
@@ -417,8 +424,13 @@ class ChunkSQLStore(BaseVectorSQLStore):
         k: int = 10,
     ) -> list[Chunk]:
         """
-        Lightweight lexical fallback for chunk retrieval.
-        Uses SQL LIKE against chunk text (case-insensitive).
+        BM25-ranked lexical search over chunk text, scoped to tenant/owner.
+
+        Two SQL passes (corpus stats, then a broad LIKE-matched candidate
+        pool) feed a standard BM25 scorer (Robertson/Sparck-Jones IDF,
+        k1=1.5, b=0.75) computed in Python — per-document term frequency
+        isn't cheap to express via SQL LIKE the way document-level
+        presence/absence is, so exact scoring happens after fetch.
         """
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("ChunkSQLStore.lexical_search STARTED")
@@ -450,10 +462,9 @@ class ChunkSQLStore(BaseVectorSQLStore):
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "ChunkSQLStore.lexical_search terms=%r phrases=%r phrase_primacy=%s",
+                "ChunkSQLStore.lexical_search terms=%r phrases=%r",
                 terms,
                 phrases,
-                bool(phrases),
             )
 
         # Scope is mandatory and already validated above, so it is always the
@@ -465,95 +476,125 @@ class ChunkSQLStore(BaseVectorSQLStore):
             "owner_id": owner_id,
         }
 
-        # Weighted SQL scoring, using extracted phrases/keywords.
-        # Phrase weight > keyword weight to favor coherent multi-word matches.
-        # Tuning knobs (keep these as simple constants for now).
-        # Baseline values (pre-tuning) were: phrase_weight=5.0, keyword_weight=1.0.
-        phrase_weight = 5.0
-        keyword_weight = 1.0
-        # Pre-tuning threshold behavior: allow keyword-only queries to pass with a lower score.
-        min_score = 3.0 if phrases else 2.0
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                "ChunkSQLStore.lexical_search weights phrase_weight=%.2f keyword_weight=%.2f min_score=%.2f",
-                phrase_weight,
-                keyword_weight,
-                min_score,
-            )
+        # BM25 treats phrases and single-word terms as one flat set of query
+        # tokens — a phrase's rarity (low document frequency) outweighs a
+        # common single word via IDF on its own, so no hand-tuned
+        # phrase_weight constant is needed the way the old LIKE-scoring
+        # required.
+        bm25_terms = list(dict.fromkeys([p.lower() for p in phrases] + [t.lower() for t in terms]))[:24]
 
-        phrase_terms: list[str] = []
-        for i, phrase in enumerate(phrases):
-            key = f"p{i}"
-            phrase_terms.append(
-                f"CASE WHEN LOWER(text) LIKE :{key}{LIKE_ESCAPE_SQL} THEN :phrase_weight ELSE 0.0 END"
-            )
-            params[key] = f"%{escape_like(phrase.lower())}%"
-
-        keyword_terms: list[str] = []
-        for i, term in enumerate(terms):
-            key = f"t{i}"
-            keyword_terms.append(
-                f"CASE WHEN LOWER(text) LIKE :{key}{LIKE_ESCAPE_SQL} THEN :keyword_weight ELSE 0.0 END"
-            )
-            params[key] = f"%{escape_like(term.lower())}%"
-
-        phrase_expr = " + ".join(phrase_terms) if phrase_terms else "0.0"
-        keyword_expr = " + ".join(keyword_terms) if keyword_terms else "0.0"
-
-        # Pre-primacy scoring: always add phrase + keyword scores.
         where_sql = " AND ".join(where)
-        # nosec B608 — three dynamic parts, all safe:
-        # phrase_expr/keyword_expr: "CASE WHEN LOWER(text) LIKE :p0 THEN :phrase_weight ELSE 0.0 END + ..."
-        #   structure is hardcoded; all LIKE values bound as :p0/:t0 named params.
-        # where_sql: " AND ".join(where) where `where` is the fixed three-element
-        #   literal list above ("tenant_id = :tenant_id", ...); the scope values
-        #   are bound as named params, so no user data becomes SQL structure.
-        sql = f"""
-            WITH scored AS (
-                SELECT *,
-                       ({phrase_expr}) AS phrase_score,
-                       ({keyword_expr}) AS keyword_score
-                FROM chunks
-                WHERE {where_sql}
-                AND quarantined_at IS NULL
-                AND LENGTH(text) >= :min_len
-            )
-            SELECT *,
-                   (phrase_score + keyword_score) AS score
-            FROM scored
-            WHERE score >= :min_score
-            ORDER BY score DESC, position ASC
-            LIMIT :limit
+        min_len = 80
+        params["min_len"] = min_len
+
+        # --- Pass 1: corpus stats in scope (doc count, avg length, per-term
+        # document frequency). BM25's IDF is a property of the whole scope,
+        # not the candidate pool, so this has to be a separate query.
+        df_exprs: list[str] = []
+        for i, term in enumerate(bm25_terms):
+            key = f"bm{i}"
+            df_exprs.append(f"COUNT(CASE WHEN LOWER(text) LIKE :{key}{LIKE_ESCAPE_SQL} THEN 1 END) AS df{i}")
+            params[key] = f"%{escape_like(term)}%"
+        df_select = (", " + ", ".join(df_exprs)) if df_exprs else ""
+
+        # nosec B608 — df_exprs entries are built only from the fixed
+        # template above (`i` is a Python loop index, not user data); every
+        # LIKE value is bound as a named :bmN param, and where_sql is the
+        # fixed three-element scope predicate with values bound as named
+        # params. No user data becomes SQL structure.
+        stats_sql = f"""
+            SELECT COUNT(*) AS n_docs,
+                   AVG(LENGTH(text) - LENGTH(REPLACE(text, ' ', '')) + 1) AS avg_len
+                   {df_select}
+            FROM chunks
+            WHERE {where_sql}
+            AND quarantined_at IS NULL
+            AND LENGTH(text) >= :min_len
         """
-        params["limit"] = int(k)
-        params["min_score"] = float(min_score)
-        params["min_len"] = 80
-        params["phrase_weight"] = float(phrase_weight)
-        params["keyword_weight"] = float(keyword_weight)
-        # min_score already accounts for presence/absence of phrases (baseline behavior).
+
+        # --- Pass 2: broad candidate pool — any chunk matching at least one
+        # term/phrase. This only needs to be a superset of the true top-k;
+        # exact BM25 scoring happens in Python below, since term-frequency-
+        # within-document isn't cheap to express via LIKE-based CASE
+        # expressions the way document-level presence/absence is.
+        match_exprs: list[str] = []
+        for i, term in enumerate(bm25_terms):
+            key = f"m{i}"
+            match_exprs.append(f"LOWER(text) LIKE :{key}{LIKE_ESCAPE_SQL}")
+            params[key] = f"%{escape_like(term)}%"
+        match_sql = " OR ".join(match_exprs)
+        candidate_limit = max(int(k) * 8, 100)
+        params["candidate_limit"] = candidate_limit
+
+        # nosec B608 — match_exprs entries and where_sql follow the same
+        # fixed-template / bound-param structure as stats_sql above.
+        candidates_sql = f"""
+            SELECT * FROM chunks
+            WHERE {where_sql}
+            AND quarantined_at IS NULL
+            AND LENGTH(text) >= :min_len
+            AND ({match_sql})
+            ORDER BY position ASC
+            LIMIT :candidate_limit
+        """
 
         def _sync():
             conn = self._conn()
             try:
-                rows = self._query_all(conn, sql, params=params, log_context="chunk_lexical_search")
+                stats_rows = self._query_all(conn, stats_sql, params=params, log_context="chunk_lexical_stats")
+                stats = stats_rows[0] if stats_rows else None
+                n_docs = int(stats["n_docs"]) if stats and stats["n_docs"] is not None else 0
+                if n_docs == 0:
+                    return []
+                avg_len = float(stats["avg_len"]) if stats["avg_len"] is not None else 1.0
+                avg_len = avg_len or 1.0
+
+                # Robertson/Sparck-Jones IDF, the "+1" variant used by
+                # Lucene/Elasticsearch — always non-negative, unlike the
+                # classic ln((N-df+0.5)/(df+0.5)) which goes negative once a
+                # term appears in over half the scope.
+                idf: dict[str, float] = {
+                    term: math.log(1.0 + (n_docs - int(stats[f"df{i}"] or 0) + 0.5) / (int(stats[f"df{i}"] or 0) + 0.5))
+                    for i, term in enumerate(bm25_terms)
+                }
+
+                rows = self._query_all(conn, candidates_sql, params=params, log_context="chunk_lexical_search")
+                scored: list[tuple[float, dict[str, Any]]] = []
+                for row in rows:
+                    d = dict(row)
+                    text_lower = (d.get("text") or "").lower()
+                    # Word count via space-count proxy, matching the avg_len
+                    # calculation in stats_sql above — approximate but
+                    # consistent on both sides of the ratio.
+                    doc_len = max(1, text_lower.count(" ") + 1)
+                    score = 0.0
+                    for term in bm25_terms:
+                        # Substring occurrence count, not word-boundary
+                        # matching — consistent with this store's existing
+                        # LIKE-based substring semantics.
+                        tf = text_lower.count(term)
+                        if tf <= 0:
+                            continue
+                        denom = tf + _BM25_K1 * (1.0 - _BM25_B + _BM25_B * (doc_len / avg_len))
+                        score += idf[term] * (tf * (_BM25_K1 + 1.0)) / denom
+                    if score > 0.0:
+                        d["score"] = score
+                        scored.append((score, d))
+
+                scored.sort(key=lambda item: (-item[0], item[1].get("position") or 0))
+                top = scored[: int(k)]
+
                 if logger.isEnabledFor(logging.INFO):
-                    avg_score = 0.0
-                    try:
-                        scores = [float(r.get("score") or 0.0) for r in (rows or []) if hasattr(r, "get")]
-                        avg_score = (sum(scores) / len(scores)) if scores else 0.0
-                    except Exception:
-                        avg_score = 0.0
+                    avg_score = (sum(s for s, _ in top) / len(top)) if top else 0.0
                     logger.info(
-                        "ChunkSQLStore.lexical_search query_len=%d terms=%d phrases=%d returned=%d avg_score=%.2f top_terms=%r top_phrases=%r",
+                        "ChunkSQLStore.lexical_search query_len=%d terms=%d candidates=%d returned=%d avg_score=%.2f",
                         len(query_text),
-                        len(terms),
-                        len(phrases),
+                        len(bm25_terms),
                         len(rows or []),
+                        len(top),
                         avg_score,
-                        terms[:3],
-                        phrases[:2],
                     )
-                return [self._row_to_object(r) for r in rows]
+                return [self._row_to_object(d) for _score, d in top]
             except Exception:
                 logger.exception("ChunkSQLStore.lexical_search failed.")
                 raise

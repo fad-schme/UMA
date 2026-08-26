@@ -786,6 +786,7 @@ class UMAMemoryEnvironment:
                 owner_id=lane_owner_id,
                 k=k,
                 query_text=query_text,
+                query_scan_severity=request.query_scan_severity,
             )
 
         if a == "search_episodic":

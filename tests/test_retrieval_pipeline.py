@@ -9,10 +9,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uma.common.storage_metadata import EPISODIC_LANE, PROCEDURAL_LANE, PROFILE_LANE, RAW_LANE, SEMANTIC_LANE, WIKI_LANE
 from uma.common.types import Chunk, Fact, OwnershipRef, Skill
-from uma.memory.chunk.core import ChunkSearchOptions
+from uma.memory.chunk.core import ChunkSearchOptions, dedupe_chunks_by_text
 from uma.retrieve.planner import build_retrieval_plan
 from uma.retrieve.policy import RetrievalPolicy, should_stop
-from uma.retrieve.ranking import Ranker, fuse_candidates, rerank_candidates
+from uma.retrieve.ranking import Ranker, compute_rerank_score, fuse_candidates, rerank_candidates
 from uma.retrieve.rlm.snippet_refiner import SnippetRefiner
 import ast
 import pytest
@@ -209,6 +209,33 @@ def test_fuse_candidates_sparse_precedes_and_dedupes_with_rrf() -> None:
     assert [x["id"] for x in out] == ["b", "a", "c"]
 
 
+def test_dedupe_chunks_by_text_keeps_first_occurrence_drops_exact_duplicates() -> None:
+    """Regression for retrieval-ranking-gap ticket 03: LoCoMo's sliding-window
+    ingest pairing (and any similar turn-pairing adapter) stores the same turn
+    text twice under different chunk ids, wasting half of every top-k
+    candidate pool. dedupe_chunks_by_text must collapse exact-text duplicates
+    while preserving rank order (first occurrence wins) and never dropping
+    genuinely distinct chunks, including ones that differ only by whitespace."""
+    now = datetime.now(timezone.utc)
+
+    def make(cid: str, text: str) -> Chunk:
+        return Chunk(
+            id=cid, doc_id="d1", text=text, page_range=(1, 1), position=0,
+            source_path="/tmp/x", source_hash="h", created_at=now, updated_at=now,
+            owner_type="user", owner_id="user:u1",
+        )
+
+    chunks = [
+        make("a", "Melanie: I just signed up for a pottery class."),
+        make("b", "Melanie: I just signed up for a pottery class."),
+        make("c", "Caroline: We went camping at the beach last weekend."),
+        make("d", "  Melanie:  I just signed up for a pottery class.  "),  # whitespace-only variant
+        make("e", "Caroline: I'm keen on counseling as a career."),
+    ]
+    deduped = dedupe_chunks_by_text(chunks)
+    assert [ch.id for ch in deduped] == ["a", "c", "e"]
+
+
 def test_score_card_emission_follows_request_debug_flag() -> None:
     """`score_card` is opt-in per request and must not leak by default.
 
@@ -338,6 +365,52 @@ def test_rerank_candidates_preserves_membership_and_is_deterministic() -> None:
     # but within each group, overlaps should bubble up.
     assert [x["id"] for x in out1][:2] == ["b", "a"]
     assert [x["id"] for x in out1][2:] == ["c", "d"]
+
+
+def test_rerank_candidates_ranks_entity_overlap_fact_higher() -> None:
+    """A candidate tagged with an entity the query also names must outrank an
+    otherwise-identical candidate with no entity overlap (issue 03: entity
+    linking in uma.retrieve.ranking's compute_rerank_score)."""
+    items = [
+        {
+            "id": "no_entity", "owner_type": "user", "owner_id": "user:u1",
+            "text": "marsupial facts", "meta": {"vector_score": 0.0},
+        },
+        {
+            "id": "has_entity", "owner_type": "user", "owner_id": "user:u1",
+            "text": "marsupial facts", "meta": {"vector_score": 0.0, "entities": ["quokka"]},
+        },
+    ]
+    ranked = rerank_candidates("Tell me about Quokka", items)
+    assert [x["id"] for x in ranked][0] == "has_entity"
+
+
+def test_compute_rerank_score_prefers_high_vector_over_incidental_term_overlap() -> None:
+    """Regression for retrieval-ranking-gap ticket 01 (conv-26_q13 shape): a
+    semantically strong but lexically distant candidate must be able to
+    outrank a lexically-adjacent but topically generic one. Before the fix,
+    log1p(vector_score) topped out under 0.7 and could never compete with the
+    0-6 point range of term/phrase overlap, so the gold answer chunk (high
+    vector similarity, zero literal term overlap) lost to generic chatter
+    that merely mentioned the same common words as the query."""
+    terms = ["career", "path", "caroline", "pursue"]
+    semantically_strong = {
+        "id": "gold", "owner_type": "user", "owner_id": "user:u1",
+        "text": "I'm keen on counseling or working in mental health.",
+        "meta": {"vector_score": 0.9},
+    }
+    lexically_adjacent_generic = {
+        "id": "filler", "owner_type": "user", "owner_id": "user:u1",
+        "text": "Thanks, Caroline! Appreciate your kind words about my career choices along this path.",
+        "meta": {"vector_score": 0.1},
+    }
+    strong_score = compute_rerank_score(
+        query_text="career path", candidate=semantically_strong, terms=terms, entities=[]
+    )
+    generic_score = compute_rerank_score(
+        query_text="career path", candidate=lexically_adjacent_generic, terms=terms, entities=[]
+    )
+    assert strong_score > generic_score
 
 
 def test_rank_facts_prefers_specific_answer_bearing_fact_over_generic_placeholder() -> None:

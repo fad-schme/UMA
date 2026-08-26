@@ -360,7 +360,7 @@ def test_topical_graph_expansion_seeds_from_entities_not_user_id() -> None:
     actions = [a for a in decision.actions if a.action == "expand_graph"]
     assert actions, "expected topical graph expansion actions"
     assert all(a.subject != "user:123" for a in actions)
-    assert actions[0].subject in {"IAM", "VPC"}
+    assert actions[0].subject in {"iam", "vpc"}
 
 
 def test_personal_graph_expansion_keeps_user_anchor() -> None:

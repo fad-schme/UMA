@@ -14,16 +14,21 @@ Design constraints
 from __future__ import annotations
 
 import logging
-import math
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional, Sequence
 
 from uma.common.accessors import get_attr_or_key
-from uma.common.text import extract_keywords_and_phrases, build_fact_embedding_text
+from uma.common.text import extract_keywords_and_phrases, build_fact_embedding_text, build_query_term_set
 
 logger = logging.getLogger(__name__)
+
+# Weight applied to vector_score (already normalized to (0, 1]) in
+# compute_rerank_score, on a comparable scale to term_ratio (0-2) + phrase_ratio
+# (0-3) + exact_query_hit (0-1) so semantically strong but lexically distant
+# candidates can compete with lexically-adjacent but topically generic ones.
+VECTOR_SCORE_WEIGHT = 3.0
 
 
 def _safe_float(val: Any, *, default: float = 0.0) -> float:
@@ -74,6 +79,11 @@ def extract_terms(query_text: str) -> list[str]:
             continue
         out.append(t)
     return out
+
+
+def extract_query_entities(query_text: str) -> list[str]:
+    """Extract normalised candidate entities from a query for entity-overlap scoring."""
+    return build_query_term_set(query_text or "").entities
 
 
 def _update_meta(obj: Any, updates: dict[str, Any]) -> None:
@@ -144,7 +154,13 @@ def _fact_specificity_adjustment(candidate: Any, terms: Sequence[str], *, exact_
     return (1.25 * object_hit_ratio) + (0.75 * predicate_hit_ratio) + (1.0 * specificity_bonus) - generic_penalty
 
 
-def compute_rerank_score(*, query_text: str, candidate: Any, terms: Optional[Sequence[str]] = None) -> float:
+def compute_rerank_score(
+    *,
+    query_text: str,
+    candidate: Any,
+    terms: Optional[Sequence[str]] = None,
+    entities: Optional[Sequence[str]] = None,
+) -> float:
     """
     Compute a deterministic rerank score using upstream signals and query overlap.
 
@@ -152,13 +168,23 @@ def compute_rerank_score(*, query_text: str, candidate: Any, terms: Optional[Seq
     """
     m = _meta(candidate)
     v_raw = _safe_float(m.get("vector_score", 0.0) or 0.0, default=0.0)
-    v = math.log1p(max(0.0, v_raw))
+    # vector_score is already normalized to (0, 1] by the vector backends
+    # (e.g. exp(-distance) in LanceDBIndex.query). log1p compressed an
+    # already-bounded score into (0, log(2)] =~ (0, 0.69], leaving vector
+    # similarity unable to compete with the 0-6 point range of term/phrase
+    # overlap below — a semantically strong, lexically-distant candidate
+    # could never outrank a lexically-adjacent but topically generic one.
+    # Clamp (defends against out-of-range values from callers/tests) and
+    # weight on a comparable scale to term/phrase overlap instead.
+    v = VECTOR_SCORE_WEIGHT * min(max(0.0, v_raw), 1.0)
     lex = _safe_float(m.get("lexical_score", m.get("lexical_confidence", 0.0)) or 0.0, default=0.0)
     lex = max(0.0, lex)
 
     q = str(query_text or "").strip().lower()
     if terms is None:
         terms = extract_terms(q)
+    if entities is None:
+        entities = extract_query_entities(q)
     text = _candidate_text_for_rerank(candidate).lower()
 
     term_hits = 0
@@ -178,13 +204,23 @@ def compute_rerank_score(*, query_text: str, candidate: Any, terms: Optional[Seq
     phrase_ratio = float(phrase_hits) / n_terms
     specificity = _fact_specificity_adjustment(candidate, terms or [], exact_query_hit=exact_query_hit)
 
+    # Entity overlap: candidates tagged with a query entity (facts get tagged
+    # at ingest time, in meta["entities"]) rank above otherwise-identical
+    # candidates with no entity overlap. Untagged candidates (chunks,
+    # episodes, skills — not tagged by this pass) simply score 0 here.
+    candidate_entities = {str(e).strip().lower() for e in (m.get("entities") or []) if e}
+    entity_hits = sum(1 for e in (entities or []) if e in candidate_entities)
+    n_entities = max(1, len(entities or []))
+    entity_ratio = float(entity_hits) / n_entities if entities else 0.0
+
     return (
         v
-        + min(lex, 1.0)           # clamp lexical to [0, 1] — same scale as log1p(vector)
+        + min(lex, 1.0)           # clamp lexical to [0, 1]
         + (2.0 * term_ratio)      # 0–2.0
         + (3.0 * phrase_ratio)    # 0–3.0 (sub-score of term coverage)
         + float(exact_query_hit)  # 0–1
         + float(specificity)      # prefer concrete answer-bearing facts over generic placeholders
+        + (2.0 * entity_ratio)    # 0–2.0 — same order of magnitude as term_ratio
     )
 
 
@@ -204,6 +240,7 @@ def rerank_candidates(query_text: str, candidates: Sequence[Any]) -> list[Any]:
         return []
 
     terms = extract_terms(query_text or "")
+    entities = extract_query_entities(query_text or "")
 
     groups: list[tuple[str, str]] = []
     bucket: dict[tuple[str, str], list[tuple[float, str, int, Any]]] = {}
@@ -213,7 +250,7 @@ def rerank_candidates(query_text: str, candidates: Sequence[Any]) -> list[Any]:
         if key not in bucket:
             bucket[key] = []
             groups.append(key)
-        score = compute_rerank_score(query_text=query_text or "", candidate=it, terms=terms)
+        score = compute_rerank_score(query_text=query_text or "", candidate=it, terms=terms, entities=entities)
         _update_meta(it, {"rerank_score": float(score)})
         bucket[key].append((float(score), _id(it), idx, it))
 
@@ -411,10 +448,11 @@ class Ranker:
             return []
 
         terms = extract_terms(query_text or "")
+        entities = extract_query_entities(query_text or "")
 
         scored: list[tuple[float, str, Any]] = []
         for f in items:
-            rerank = compute_rerank_score(query_text=query_text or "", candidate=f, terms=terms)
+            rerank = compute_rerank_score(query_text=query_text or "", candidate=f, terms=terms, entities=entities)
             sal = _safe_float(get_attr_or_key(f, "salience", 0.0) or 0.0, default=0.0)
             conf = _safe_float(get_attr_or_key(f, "confidence", 0.5) or 0.5, default=0.5)
             quality = (max(0.0, sal) + max(0.0, conf)) / 2.0
@@ -435,13 +473,14 @@ class Ranker:
             return []
 
         terms = extract_terms(query_text or "")
+        entities = extract_query_entities(query_text or "")
 
         scored: list[tuple[int, float, str, int, str, Any]] = []
         for ch in items:
             m = _meta(ch)
             route = str(m.get("retrieval_route") or "")
             method = str(m.get("retrieval_method") or "")
-            rerank = compute_rerank_score(query_text=query_text or "", candidate=ch, terms=terms)
+            rerank = compute_rerank_score(query_text=query_text or "", candidate=ch, terms=terms, entities=entities)
             final = self._route_weight(route) + self._method_weight(method) + float(rerank)
             trust_raw = getattr(ch, "trust_score", None)
             trust = max(0.0, min(1.0, _safe_float(trust_raw if trust_raw is not None else 1.0)))
@@ -462,10 +501,11 @@ class Ranker:
             return []
         now = datetime.now(timezone.utc)
         terms = extract_terms(query_text or "")
+        entities = extract_query_entities(query_text or "")
         scored: list[tuple[float, str, Any]] = []
         for ep in items:
             sid = _id(ep)
-            rerank = compute_rerank_score(query_text=query_text or "", candidate=ep, terms=terms)
+            rerank = compute_rerank_score(query_text=query_text or "", candidate=ep, terms=terms, entities=entities)
 
             recency = 0.0
             try:
@@ -492,10 +532,11 @@ class Ranker:
         if not items:
             return []
         terms = extract_terms(query_text or "")
+        entities = extract_query_entities(query_text or "")
         scored: list[tuple[float, str, Any]] = []
         for sk in items:
             sid = _id(sk)
-            rerank = compute_rerank_score(query_text=query_text or "", candidate=sk, terms=terms)
+            rerank = compute_rerank_score(query_text=query_text or "", candidate=sk, terms=terms, entities=entities)
             phrases = get_attr_or_key(sk, "trigger_phrases", []) or []
             patterns = get_attr_or_key(sk, "trigger_patterns", []) or []
             diversity = len(set(phrases)) + len(set(patterns))

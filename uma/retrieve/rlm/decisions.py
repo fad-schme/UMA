@@ -28,8 +28,7 @@ from typing import Annotated, Any, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
 
 from .domain import PREFERENCE_PREDICATES, filter_facts_by_domains
-from .entity_seed import extract_candidate_entities
-from uma.common.text import extract_keywords_and_phrases
+from uma.common.text import build_query_term_set, extract_keywords_and_phrases
 
 logger = logging.getLogger(__name__)
 
@@ -444,12 +443,10 @@ def _decide_graph(pack: Any, coverage: Any, cfg: dict[str, Any]) -> list[Retriev
         predicate = preds[0] if preds else None
         fallback_reason = "no_relevant_predicates_for_graph"
 
-    entities = extract_candidate_entities(
-        query_text=getattr(pack, "query_text", "") or "",
-        facts=list(facts),
-        chunks=list(chunks),
-        limit=5,
-    )
+    # Canonical entity extraction (uma.common.text) is query-text-only — no
+    # evidence-blob fallback over facts/chunks the way the retired
+    # entity_seed.py had. Query text is the primary signal in practice.
+    entities = build_query_term_set(getattr(pack, "query_text", "") or "").entities[:5]
     excluded_reasons: list[str] = []
     if intent in {"topical", "mixed"} and "user_profile" not in set(active_domains or []):
         try:

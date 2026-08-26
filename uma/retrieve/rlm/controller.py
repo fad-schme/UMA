@@ -89,8 +89,16 @@ class RLMController:
     IMPORTANT:
     - This controller NEVER answers questions.
     - It ONLY decides what memory to retrieve next.
-    - Navigation decisions are fully deterministic (coverage heuristics).
-    - The LLM is used only for fact pruning after retrieval, not for navigation.
+    - The decision algorithm itself is deterministic (coverage heuristics) —
+      the same ContextPack + CoverageReport always yields the same action
+      list. It is not end-to-end deterministic across a run: chunk search
+      (ChunkCore.search_chunks_for_rlm) may call an LLM to decompose a broad
+      query into sub-queries before this controller ever sees the resulting
+      ContextPack, so the retrieved content — and therefore the trajectory —
+      can vary run-to-run even though each individual decision is a pure
+      function of what's already been collected.
+    - Besides that pre-navigation decomposition step, the LLM is used only
+      for fact pruning after retrieval, never for navigation itself.
 
     Guarantees
     ----------

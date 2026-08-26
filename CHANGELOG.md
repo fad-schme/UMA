@@ -119,6 +119,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   still determines what the document is scoped to.
 - Trimmed the README security section and moved the OWASP/ASI mappings to
   [`SECURITY.md`](SECURITY.md).
+- **Chunk lexical search now scores with BM25** instead of constant-weight
+  `LIKE` matching (`phrase_weight`/`keyword_weight`). Document-rarity (IDF)
+  and length normalization now drive ranking, so a term that appears in few
+  chunks outranks a common term at equal match count — the old scheme had
+  no document-frequency signal at all.
+- **Facts are tagged with candidate entities at ingest time** and reranking
+  now boosts a candidate whose tagged entities overlap the query's. Retired
+  the separate, narrower entity extractor under `uma/retrieve/rlm/` in favor
+  of the one already feeding lexical search's term set, so there is one
+  canonical entity-extraction path instead of two.
 
 ### Security
 - **Promotion no longer carries the originating user into a shared scope.**

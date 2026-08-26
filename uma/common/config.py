@@ -301,6 +301,14 @@ class UMAConfig(dict):
                 val = rlm.get("chunk_fallback_k_multiplier")
                 if not isinstance(val, int) or val <= 0:
                     raise ValueError("'retrieval.rlm.chunk_fallback_k_multiplier' must be a positive integer")
+            if "query_decomposition_enabled" in rlm and not isinstance(rlm["query_decomposition_enabled"], bool):
+                raise ValueError("'retrieval.rlm.query_decomposition_enabled' must be boolean")
+            if "query_decomposition_max_sub_queries" in rlm:
+                val = rlm.get("query_decomposition_max_sub_queries")
+                if not isinstance(val, int) or val <= 0:
+                    raise ValueError(
+                        "'retrieval.rlm.query_decomposition_max_sub_queries' must be a positive integer"
+                    )
 
             if "predicate_allowlist" in rlm:
                 pal = rlm.get("predicate_allowlist")

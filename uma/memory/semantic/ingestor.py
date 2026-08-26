@@ -16,7 +16,7 @@ import logging
 from typing import Any, Callable, Optional
 
 from uma.common.types import Fact
-from uma.common.text import build_fact_embedding_text
+from uma.common.text import build_fact_embedding_text, build_query_term_set
 from .extractor import FactExtractor
 from .scorer import SalienceScorer
 
@@ -117,7 +117,7 @@ class SemanticIngestor:
             return []
 
         persisted: list[Fact] = []
-        for fact, vec in zip(selected, vectors):
+        for fact, vec, embed_text in zip(selected, vectors, embed_texts):
             try:
                 if fact_transform is not None:
                     fact_transform(fact)
@@ -126,6 +126,12 @@ class SemanticIngestor:
                     fact.owner_type = "user"
                 if not getattr(fact, "owner_id", None):
                     fact.owner_id = user_id
+                # Tag candidate entities once at ingest time (reusing the same
+                # text already built for embedding) so retrieval-time entity
+                # matching doesn't need to re-extract from stored facts.
+                entities = build_query_term_set(embed_text).entities
+                if entities:
+                    fact.meta = {**(fact.meta or {}), "entities": entities}
                 await self.semantic_store.upsert_fact(fact, vec)
                 persisted.append(fact)
             except Exception:

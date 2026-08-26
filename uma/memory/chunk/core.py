@@ -27,6 +27,8 @@ from uma.common.types import Chunk
 from uma.retrieve.ranking import fuse_candidates
 from uma.common.dedupe import dedupe_by_id
 from uma.common.text import build_query_term_set, text_matches_query_terms
+from uma.retrieve.rlm.intent import QueryIntent, classify_query_intent
+from uma.retrieve.rlm.query_decomposition import decompose_query
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +76,35 @@ class ChunkSearchOptions:
     shortlist_max_per_doc: Optional[int] = None
 
 
+# LoCoMo's sliding-window ingest pairing (and any adapter with similar
+# turn-pairing) stores the same turn text twice under different chunk ids —
+# once as a user_msg, once as the prior turn's assistant_reply. Uncorrected,
+# these exact-duplicate rows fill half of every top-k candidate pool with
+# zero added information, halving the pool's effective diversity for
+# broad/enumeration-style queries where the answer is scattered across many
+# distinct turns. Over-fetching by this multiplier before deduping restores
+# the caller's requested k in genuinely distinct candidates.
+_DEDUPE_OVERFETCH_MULTIPLIER = 2
+
+
+def _normalize_chunk_text(text: Optional[str]) -> str:
+    return " ".join((text or "").split()).strip().lower()
+
+
+def dedupe_chunks_by_text(chunks: Sequence[Chunk]) -> list[Chunk]:
+    """Drop exact-duplicate-text chunks, keeping the first (highest-ranked) occurrence."""
+    seen: set[str] = set()
+    out: list[Chunk] = []
+    for ch in chunks or []:
+        key = _normalize_chunk_text(getattr(ch, "text", None))
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        out.append(ch)
+    return out
+
+
 class ChunkCore:
     """
     High-level interface for UMA chunk memory.
@@ -118,6 +149,7 @@ class ChunkCore:
         owner_id: str,
         k: int,
         query_text: Optional[str],
+        query_scan_severity: Optional[str] = None,
     ) -> list[Chunk]:
         """
         RLM-friendly chunk retrieval wrapper.
@@ -144,12 +176,55 @@ class ChunkCore:
         except Exception:
             shortlist_max_per_doc = 3
 
-        return await self.search_chunks(
+        k = int(k)
+        rlm_cfg = getattr(retrieval_cfg, "rlm", None)
+        decomposition_enabled = bool(getattr(rlm_cfg, "query_decomposition_enabled", True))
+
+        sub_queries: list[str] = []
+        if (
+            decomposition_enabled
+            and query_text
+            and str(query_text).strip()
+            and classify_query_intent(query_text) != QueryIntent.PERSONAL
+        ):
+            max_sub_queries = int(getattr(rlm_cfg, "query_decomposition_max_sub_queries", 4))
+            sub_queries = await decompose_query(
+                getattr(memory, "llm", None),
+                query_text,
+                max_sub_queries=max_sub_queries,
+                query_scan_severity=query_scan_severity,
+            )
+
+        if not sub_queries:
+            return await self.search_chunks(
+                query_embedding=list(query_embedding),
+                tenant_id=tenant_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                k=k,
+                options=ChunkSearchOptions(
+                    query_text=query_text,
+                    filter_terms=bool(query_text and str(query_text).strip()),
+                    expand_neighbors=True,
+                    neighbor_window=neighbor_window,
+                    max_expanded_chunks=max_expanded_chunks,
+                    shortlist_k=shortlist_k,
+                    shortlist_max_per_doc=shortlist_max_per_doc,
+                ),
+            )
+
+        # Split the caller's k budget between the original query and its
+        # decomposed sub-queries rather than searching each at full k: the
+        # merge upstream (RLMController._merge_unique) truncates positionally
+        # at k, so returning more than k here would just have the tail
+        # silently discarded instead of genuinely competing for a slot.
+        primary_k = max(1, k // 2)
+        primary = await self.search_chunks(
             query_embedding=list(query_embedding),
             tenant_id=tenant_id,
             owner_type=owner_type,
             owner_id=owner_id,
-            k=int(k),
+            k=primary_k,
             options=ChunkSearchOptions(
                 query_text=query_text,
                 filter_terms=bool(query_text and str(query_text).strip()),
@@ -160,6 +235,48 @@ class ChunkCore:
                 shortlist_max_per_doc=shortlist_max_per_doc,
             ),
         )
+
+        remaining = max(0, k - primary_k)
+        per_sub_k = max(1, remaining // len(sub_queries)) if remaining > 0 else 0
+        extra: list[Chunk] = []
+        if per_sub_k > 0:
+            embedder = getattr(memory, "embedder", None)
+            sub_embeddings: list[list[float]] = []
+            if embedder is not None:
+                try:
+                    sub_embeddings = await embedder.embed(sub_queries)
+                except Exception:
+                    logger.exception(
+                        "ChunkCore.search_chunks_for_rlm: failed embedding decomposed sub-queries"
+                    )
+                    sub_embeddings = []
+            for sub_q, sub_embedding in zip(sub_queries, sub_embeddings):
+                try:
+                    sub_chunks = await self.search_chunks(
+                        query_embedding=list(sub_embedding),
+                        tenant_id=tenant_id,
+                        owner_type=owner_type,
+                        owner_id=owner_id,
+                        k=per_sub_k,
+                        options=ChunkSearchOptions(
+                            query_text=sub_q,
+                            filter_terms=False,
+                            expand_neighbors=False,
+                        ),
+                    )
+                    extra.extend(sub_chunks)
+                except Exception:
+                    logger.exception(
+                        "ChunkCore.search_chunks_for_rlm: sub-query search failed sub_query=%r", sub_q
+                    )
+
+        logger.debug(
+            "ChunkCore.search_chunks_for_rlm: query decomposed into %d sub-queries, "
+            "primary=%d sub_hits=%d",
+            len(sub_queries), len(primary), len(extra),
+        )
+        combined = dedupe_chunks_by_text(dedupe_by_id(list(primary) + extra))
+        return combined[:k]
 
     async def _search(
         self,
@@ -286,12 +403,18 @@ class ChunkCore:
             tenant_id=tenant_id,
             owner_type=owner_type,
             owner_id=owner_id,
-            k=k,
+            k=k * _DEDUPE_OVERFETCH_MULTIPLIER,
             query_text=opts.query_text,
             doc_id=opts.doc_id,
         )
+        deduped = dedupe_chunks_by_text(chunks)
+        dropped = len(chunks) - len(deduped)
+        chunks = deduped[:k]
         logger.debug(
-            "ChunkCore.search_chunks merged_results=%d lexical_ids=%d filter_terms=%s",
+            "ChunkCore.search_chunks merged_results=%d duplicate_text_dropped=%d kept=%d "
+            "lexical_ids=%d filter_terms=%s",
+            len(deduped) + dropped,
+            dropped,
             len(chunks),
             len(lexical_ids),
             opts.filter_terms,

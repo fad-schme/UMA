@@ -1,18 +1,6 @@
-# =============================================================================
-# UMA — Universal Memory Architecture
-#
-# Single source of truth for packaging, metadata, and optional dependencies.
-# Historically split across setup.py + pyproject.toml with drift; consolidated
-# into this file. See CHANGELOG.md `[unreleased]` for the migration note.
-# =============================================================================
-
 [build-system]
 requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
-
-# -----------------------------------------------------------------------------
-# Project metadata (PEP 621)
-# -----------------------------------------------------------------------------
 
 [project]
 name = "uma-mem"
@@ -37,10 +25,6 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
-# Runtime dependencies (was `install_requires` in setup.py).
-# Every entry here is imported unconditionally by the base install. Parser-only
-# libraries stay in the `parsers` extra — `uma/ingest/parser.py` guards those
-# imports with an install hint, which only makes sense while they are optional.
 dependencies = [
     "pyyaml",
     "numpy",
@@ -65,23 +49,11 @@ Changelog     = "https://github.com/fad-schme/UMA/blob/main/CHANGELOG.md"
 uma = "uma.cli:main"
 uma-mcp = "uma.mcp.server:main"
 
-# -----------------------------------------------------------------------------
-# Optional dependencies — install with `pip install -e '.[<name>]'`
-#
-# Every extra lives here. Do not add a second install_requires block anywhere
-# else in the repo; the old setup.py/pyproject.toml split was the source of
-# finding #24 drift.
-# -----------------------------------------------------------------------------
-
 [project.optional-dependencies]
 
 # LLM providers
 llm      = ["anthropic"]
 openai   = ["openai>=1.0.0"]
-# Ollama is reached through its OpenAI-compatible HTTP API
-# (`OpenAICompatibleLLM`/`OpenAICompatibleEmbedder`, see
-# uma/adapters/llm/provider_registry.py). The `ollama` Python package is never
-# imported; the `openai` client is what the adapter actually needs.
 ollama   = ["openai>=1.0.0"]
 e2e      = ["openai>=1.0.0"]
 
@@ -112,12 +84,6 @@ dev = [
     "mypy",
     "types-PyYAML",
     "matplotlib",
-    # The suite exercises the optional surfaces, so `[dev]` alone must be enough
-    # to run it. Self-reference rather than restating the pins: the parser tests
-    # need beautifulsoup4/markdown/PyPDF2, tests/mcp needs the MCP SDK (it
-    # skips itself silently when absent, which hides real breakage), and
-    # tests/test_cli.py runs `doctor` against an ollama-provider config that
-    # resolves through the OpenAI-compatible adapter.
     "uma-mem[parsers]",
     "uma-mem[mcp]",
     "openai>=1.0.0",

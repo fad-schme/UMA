@@ -365,6 +365,10 @@ class RetrievalConfig:
                 max_graph_expansions_per_step=int(rlm_cfg.get("max_graph_expansions_per_step", 1)),
                 chunk_fallback_enabled=bool(rlm_cfg.get("chunk_fallback_enabled", True)),
                 chunk_fallback_k_multiplier=int(rlm_cfg.get("chunk_fallback_k_multiplier", 2)),
+                query_decomposition_enabled=bool(rlm_cfg.get("query_decomposition_enabled", True)),
+                query_decomposition_max_sub_queries=int(
+                    rlm_cfg.get("query_decomposition_max_sub_queries", 4)
+                ),
             )
         else:
             rlm_obj = RLMConfig(enabled=True)
@@ -426,6 +430,16 @@ class RLMConfig:
     max_graph_expansions_per_step: int = 1
     chunk_fallback_enabled: bool = True
     chunk_fallback_k_multiplier: int = 2
+
+    # Query decomposition (retrieval-ranking-gap ticket 03): for broad/list
+    # queries, split into narrower sub-queries and search each so scattered
+    # answer-bearing chunks a single query embedding ranks far outside the
+    # baseline pool still get a chance to compete for a slot. Skipped for
+    # PERSONAL-intent queries (classify_query_intent) — those are already
+    # well served by direct recall, and decomposition adds an LLM round trip
+    # per query.
+    query_decomposition_enabled: bool = True
+    query_decomposition_max_sub_queries: int = 4
 
 
 @dataclass
