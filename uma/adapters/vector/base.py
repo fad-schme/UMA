@@ -126,6 +126,45 @@ class VectorIndex(ABC):
         """
         raise NotImplementedError
 
+    def get_vectors(
+        self,
+        ids: list[str],
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+    ) -> dict[str, list[float]]:
+        """
+        Return stored embedding vectors for the given ids, keyed by id.
+
+        Not abstract: retrieval-ranking-gap ticket 07 (MMR/diversity-aware
+        chunk selection) is the only caller, and it must degrade to plain
+        top-k selection when vectors aren't available rather than force
+        every backend to support this. The default implementation returns
+        an empty dict, which callers treat as "vectors unavailable" for
+        every id, not as "these ids don't exist" — never partially fill in
+        results for ids you can't verify are in scope.
+
+        Parameters
+        ----------
+        ids:
+            Vector ids to look up. Only ids already known to be in the
+            caller's isolation scope should be passed (e.g. ids returned by
+            a prior `query()` call under the same tenant/owner) — this
+            method does not itself guarantee isolation for arbitrary ids.
+        tenant_id, owner_type, owner_id:
+            Isolation scope, required for backends whose lookup needs it
+            (e.g. LanceDB re-queries by id within this scope) and as a
+            defensive check for backends that can verify it (e.g. in-memory).
+
+        Returns
+        -------
+        Dict[id, vector]. Ids the backend can't cheaply provide a vector for
+        (or that fall outside the given scope) are simply absent from the
+        dict — never a placeholder or zero vector.
+        """
+        return {}
+
     @abstractmethod
     def delete(self, ids: list[str]) -> None:
         """

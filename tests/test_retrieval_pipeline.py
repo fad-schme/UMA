@@ -12,7 +12,7 @@ from uma.common.types import Chunk, Fact, OwnershipRef, Skill
 from uma.memory.chunk.core import ChunkSearchOptions, _primary_query_share, dedupe_chunks_by_text
 from uma.retrieve.planner import build_retrieval_plan
 from uma.retrieve.policy import RetrievalPolicy, should_stop
-from uma.retrieve.ranking import Ranker, compute_rerank_score, fuse_candidates, rerank_candidates
+from uma.retrieve.ranking import Ranker, compute_rerank_score, fuse_candidates, mmr_select, rerank_candidates
 from uma.retrieve.rlm.snippet_refiner import SnippetRefiner
 import ast
 import pytest
@@ -207,6 +207,69 @@ def test_fuse_candidates_sparse_precedes_and_dedupes_with_rrf() -> None:
     out = fuse_candidates(dense=dense, sparse=sparse, strategy="rrf", rrf_k=60)
     # Overlap (b) must win. Remaining are ordered by RRF rank bonus deterministically.
     assert [x["id"] for x in out] == ["b", "a", "c"]
+
+
+def test_mmr_select_at_lambda_one_reproduces_plain_top_k_by_score() -> None:
+    """lambda_diversity=1.0 ignores redundancy entirely -- must be exactly
+    today's top-k-by-score selection, order and membership both."""
+    candidates = [
+        ("a", 0.9, [1.0, 0.0]),
+        ("b", 0.7, [1.0, 0.0]),  # identical direction to "a" -- redundant, but lambda=1.0 shouldn't care
+        ("c", 0.5, [0.0, 1.0]),
+    ]
+    assert mmr_select(candidates, k=2, lambda_diversity=1.0) == ["a", "b"]
+
+
+def test_mmr_select_prefers_diverse_candidate_over_redundant_higher_score() -> None:
+    """Regression for the exact failure mode ticket 02/05/06 diagnosed:
+    near-duplicate candidates crowding out a distinct one. "b" is a near
+    copy of already-selected "a"; "c" points a different direction (a
+    distinct fact) and should win the second slot despite a lower score."""
+    candidates = [
+        ("a", 0.9, [1.0, 0.0]),
+        ("b", 0.85, [0.99, 0.01]),  # near-duplicate of "a"
+        ("c", 0.6, [0.0, 1.0]),  # distinct
+    ]
+    selected = mmr_select(candidates, k=2, lambda_diversity=0.5)
+    assert selected == ["a", "c"]
+
+
+def test_mmr_select_caps_k_at_pool_size() -> None:
+    candidates = [("a", 0.9, [1.0, 0.0]), ("b", 0.5, [0.0, 1.0])]
+    selected = mmr_select(candidates, k=10, lambda_diversity=0.5)
+    assert sorted(selected) == ["a", "b"]
+
+
+def test_mmr_select_empty_candidates_returns_empty() -> None:
+    assert mmr_select([], k=5, lambda_diversity=0.5) == []
+
+
+def test_mmr_select_normalizes_unbounded_relevance_scores() -> None:
+    """Regression for a bug found during ticket 07's real-pipeline
+    verification: an earlier version fed raw, unnormalized relevance scores
+    (e.g. compute_rerank_score's ~[0, 9] range) directly into the lambda
+    tradeoff against redundancy (cosine similarity, ~[0, 1]). Because
+    relevance dwarfed redundancy in magnitude, the diversity term became
+    negligible and lambda=0.5 behaved like lambda≈0.95 -- MMR silently
+    degraded to near-plain-top-k regardless of the configured lambda. Same
+    near-duplicate-vs-distinct shape as the lambda=0.5 test above, but with
+    relevance scores scaled ~9x larger (unnormalized) to prove the tradeoff
+    still holds after normalization."""
+    candidates = [
+        ("a", 9.0, [1.0, 0.0]),
+        ("b", 8.5, [0.99, 0.01]),  # near-duplicate of "a"
+        ("c", 6.0, [0.0, 1.0]),  # distinct, much lower raw score
+    ]
+    selected = mmr_select(candidates, k=2, lambda_diversity=0.5)
+    assert selected == ["a", "c"]
+
+
+def test_mmr_select_never_duplicates_or_invents_ids() -> None:
+    candidates = [(f"c{i}", float(10 - i), [float(i % 3), float((i + 1) % 3), float((i + 2) % 3)]) for i in range(12)]
+    selected = mmr_select(candidates, k=8, lambda_diversity=0.5)
+    assert len(selected) == 8
+    assert len(set(selected)) == 8
+    assert set(selected).issubset({cid for cid, _s, _v in candidates})
 
 
 def test_dedupe_chunks_by_text_keeps_first_occurrence_drops_exact_duplicates() -> None:

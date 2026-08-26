@@ -290,6 +290,18 @@ class RetrievalConfig:
     rlm: Optional[RLMConfig] = None
     chunk_shortlist_k: int = 12
     chunk_shortlist_max_per_doc: int = 3
+
+    # MMR/diversity-aware chunk selection (retrieval-ranking-gap ticket 07).
+    # Off by default: only verified against a 15-question LoCoMo sample on
+    # one vector backend (ticket 06) so far, not at production scale or
+    # across FAISS/InMemory. mmr_lambda=0.6 is ticket 07's chosen default --
+    # see its "Default lambda" finding for the full-sample comparison.
+    # mmr_pool_multiplier widens the candidate pool MMR selects from (vs.
+    # the plain path's 2x dedup-safety margin) -- MMR needs real headroom to
+    # diversify within; 6x matches ticket 06's validated pool/k ratio.
+    mmr_enabled: bool = False
+    mmr_lambda: float = 0.6
+    mmr_pool_multiplier: int = 6
     trust_weight: float = 0.15
     # H3: filter out quarantine-survivors at retrieval. With the boundary-
     # scan tier rubric in effect, a medium-severity hit reduces trust to
@@ -327,6 +339,13 @@ class RetrievalConfig:
         if chunk_shortlist_k < 0:
             raise ValueError("'retrieval.chunk_shortlist_k' must be a non-negative integer")
         chunk_shortlist_max_per_doc = int(d.get("chunk_shortlist_max_per_doc", 5))
+        mmr_enabled = bool(d.get("mmr_enabled", False))
+        mmr_lambda = float(d.get("mmr_lambda", 0.6))
+        if not 0.0 <= mmr_lambda <= 1.0:
+            raise ValueError("'retrieval.mmr_lambda' must be between 0 and 1")
+        mmr_pool_multiplier = int(d.get("mmr_pool_multiplier", 6))
+        if mmr_pool_multiplier < 1:
+            raise ValueError("'retrieval.mmr_pool_multiplier' must be a positive integer")
         if chunk_shortlist_max_per_doc < 0:
             raise ValueError("'retrieval.chunk_shortlist_max_per_doc' must be a non-negative integer")
         hybrid_cfg = d.get("hybrid")
@@ -392,6 +411,9 @@ class RetrievalConfig:
             max_expanded_chunks=max_expanded_chunks,
             chunk_shortlist_k=chunk_shortlist_k,
             chunk_shortlist_max_per_doc=chunk_shortlist_max_per_doc,
+            mmr_enabled=mmr_enabled,
+            mmr_lambda=mmr_lambda,
+            mmr_pool_multiplier=mmr_pool_multiplier,
             context=RetrievalContextConfig.from_dict(d.get("context") or {}, profile=profile),
             strict=strict_mode,
             debug_scores=debug_scores,

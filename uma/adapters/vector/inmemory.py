@@ -214,6 +214,32 @@ class InMemoryVectorIndex(VectorIndex):
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:k]
 
+    def get_vectors(
+        self,
+        ids: list[str],
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+    ) -> dict[str, list[float]]:
+        """Vectors are already held verbatim in memory -- a dict lookup, scoped."""
+        if not isinstance(tenant_id, str) or not tenant_id.strip():
+            raise ValueError("InMemoryVectorIndex.get_vectors: tenant_id must be a non-empty string.")
+        if not isinstance(owner_type, str) or not owner_type.strip():
+            raise ValueError("InMemoryVectorIndex.get_vectors: owner_type must be a non-empty string.")
+        if not isinstance(owner_id, str) or not owner_id.strip():
+            raise ValueError("InMemoryVectorIndex.get_vectors: owner_id must be a non-empty string.")
+        scope_key = (tenant_id.strip(), owner_type.strip(), owner_id.strip())
+        out: dict[str, list[float]] = {}
+        for sid in ids:
+            if not isinstance(sid, str) or not sid:
+                continue
+            if self._scopes.get(sid) != scope_key:
+                continue
+            vec = self._vectors.get(sid)
+            if vec is not None:
+                out[sid] = list(vec)
+        return out
 
     @classmethod
     def fallback_if_faiss_unavailable(cls, dim: int):

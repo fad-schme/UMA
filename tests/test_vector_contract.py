@@ -96,6 +96,137 @@ async def test_chunk_core_preserves_vector_score(tmp_path) -> None:
     assert float(out[0].meta["vector_score"]) >= float(out[1].meta.get("vector_score", -1.0))
 
 
+@pytest.mark.asyncio
+async def test_chunk_core_mmr_selection_prefers_diversity_when_enabled(tmp_path) -> None:
+    """Regression for retrieval-ranking-gap ticket 07 (end-to-end through
+    ChunkCore.search_chunks, not just the pure mmr_select function): with
+    mmr_enabled, a distinct-but-lower-scoring candidate should win a slot
+    over a near-duplicate of an already-selected higher-scoring one. Plain
+    top-2-by-score would pick a+b (both point toward the query, redundant);
+    MMR should pick a+c (diverse)."""
+    db = SQLiteAdapter(str(tmp_path / "uma_test_mmr.sqlite"))
+    vec = InMemoryVectorIndex(dim=2)
+    store = ChunkSQLStore(db_adapter=db, vector_index=vec)
+    memory = SimpleNamespace(retrieval_cfg=SimpleNamespace(mmr_enabled=True, mmr_lambda=0.5))
+    core = ChunkCore(store, memory=memory)
+
+    now = datetime.now(timezone.utc)
+
+    def make(cid: str, text: str, position: int) -> Chunk:
+        return Chunk(
+            id=cid, doc_id="doc1", text=text, page_range=(1, 1), position=position,
+            source_path="/tmp/x", source_hash="h", created_at=now, updated_at=now,
+            owner_type="user", owner_id="user:u1", meta={},
+        )
+
+    await store.upsert_chunk(make("a", "alpha text", 1), embedding=[1.0, 0.0])
+    await store.upsert_chunk(make("b", "alpha text near-duplicate", 2), embedding=[0.99, 0.01])
+    await store.upsert_chunk(make("c", "distinct fact", 3), embedding=[0.0, 1.0])
+
+    out = await core.search_chunks(query_embedding=[1.0, 0.0], owner_type="user", owner_id="user:u1", k=2)
+    assert {c.id for c in out} == {"a", "c"}
+
+
+@pytest.mark.asyncio
+async def test_chunk_core_select_chunks_falls_back_to_top_k_when_vectors_incomplete() -> None:
+    """A backend that can't provide vectors for every candidate must not
+    produce a partial/silent MMR pass -- falls back to plain top-k order."""
+
+    class _PartialVectorIndex:
+        def get_vectors(self, ids, *, tenant_id, owner_type, owner_id):
+            return {}  # simulates a backend with no get_vectors support
+
+    class _Store:
+        vector_index = _PartialVectorIndex()
+
+    memory = SimpleNamespace(retrieval_cfg=SimpleNamespace(mmr_enabled=True, mmr_lambda=0.5))
+    core = ChunkCore(_Store(), memory=memory)
+
+    now = datetime.now(timezone.utc)
+
+    def make(cid: str, score: float) -> Chunk:
+        return Chunk(
+            id=cid, doc_id="doc1", text=cid, page_range=(1, 1), position=0,
+            source_path="/tmp/x", source_hash="h", created_at=now, updated_at=now,
+            owner_type="user", owner_id="user:u1", meta={"vector_score": score},
+        )
+
+    candidates = [make("a", 0.9), make("b", 0.8), make("c", 0.5)]
+    out = await core._select_chunks(
+        candidates, 2, query_text=None, tenant_id="default", owner_type="user", owner_id="user:u1"
+    )
+    assert [c.id for c in out] == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_chunk_core_select_chunks_uses_id_membership_not_count_for_vector_availability() -> None:
+    """Review finding: the original fallback check compared len(vectors) to
+    len(candidates), which is wrong when candidates contains a duplicate id
+    -- vectors (a dict) can never have more entries than unique ids, so a
+    duplicate id alone would trip a spurious fallback even though every id
+    actually resolved. Must check id membership, not count."""
+
+    class _AllVectorsIndex:
+        def get_vectors(self, ids, *, tenant_id, owner_type, owner_id):
+            return {"a": [1.0, 0.0], "b": [0.0, 1.0], "c": [1.0, 1.0]}
+
+    class _Store:
+        vector_index = _AllVectorsIndex()
+
+    memory = SimpleNamespace(retrieval_cfg=SimpleNamespace(mmr_enabled=True, mmr_lambda=0.5))
+    core = ChunkCore(_Store(), memory=memory)
+
+    now = datetime.now(timezone.utc)
+
+    def make(cid: str, score: float) -> Chunk:
+        return Chunk(
+            id=cid, doc_id="doc1", text=cid, page_range=(1, 1), position=0,
+            source_path="/tmp/x", source_hash="h", created_at=now, updated_at=now,
+            owner_type="user", owner_id="user:u1", meta={"vector_score": score},
+        )
+
+    # "a" appears twice: len(candidates)=4 > len(vectors)=3 unique ids, but
+    # every candidate's id is actually present in vectors -- MMR should run,
+    # not fall back. The buggy count-based check would return
+    # candidates[:2] verbatim (both "a" duplicates); the fixed id-based
+    # check lets MMR consider diversity instead.
+    candidates = [make("a", 0.9), make("a", 0.9), make("b", 0.8), make("c", 0.5)]
+    out = await core._select_chunks(
+        candidates, 2, query_text=None, tenant_id="default", owner_type="user", owner_id="user:u1"
+    )
+    assert out != candidates[:2]
+
+
+@pytest.mark.asyncio
+async def test_chunk_core_select_chunks_disabled_by_default() -> None:
+    """mmr_enabled defaults to False -- plain top-k, no vector_index calls."""
+
+    class _ExplodingVectorIndex:
+        def get_vectors(self, ids, *, tenant_id, owner_type, owner_id):
+            raise AssertionError("get_vectors must not be called when mmr_enabled is False")
+
+    class _Store:
+        vector_index = _ExplodingVectorIndex()
+
+    memory = SimpleNamespace(retrieval_cfg=SimpleNamespace(mmr_enabled=False, mmr_lambda=0.5))
+    core = ChunkCore(_Store(), memory=memory)
+
+    now = datetime.now(timezone.utc)
+
+    def make(cid: str, score: float) -> Chunk:
+        return Chunk(
+            id=cid, doc_id="doc1", text=cid, page_range=(1, 1), position=0,
+            source_path="/tmp/x", source_hash="h", created_at=now, updated_at=now,
+            owner_type="user", owner_id="user:u1", meta={"vector_score": score},
+        )
+
+    candidates = [make("a", 0.9), make("b", 0.8), make("c", 0.5)]
+    out = await core._select_chunks(
+        candidates, 2, query_text=None, tenant_id="default", owner_type="user", owner_id="user:u1"
+    )
+    assert [c.id for c in out] == ["a", "b"]
+
+
 # ── test_vector_payload_minimal ──────────────────────────────────────────
 
 
@@ -169,6 +300,38 @@ async def test_chunk_vector_payload_is_minimal_and_excludes_text(tmp_path) -> No
 # ── test_vector_index_delete ──────────────────────────────────────────
 
 
+def test_inmemory_get_vectors_returns_scoped_vectors():
+    """Regression for retrieval-ranking-gap ticket 07 (MMR chunk selection):
+    get_vectors must return only ids within the given isolation scope, and
+    must not invent an entry for an unknown id."""
+    idx = InMemoryVectorIndex(dim=3)
+    idx.upsert(
+        ids=["a", "b", "c"],
+        vectors=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        tenant_ids=["default", "default", "default"],
+        owner_types=["user", "user", "user"],
+        owner_ids=["user:u1", "user:u1", "user:u2"],
+        extra_metadata=[{}, {}, {}],
+    )
+    out = idx.get_vectors(["a", "b", "c", "missing"], tenant_id="default", owner_type="user", owner_id="user:u1")
+    assert out == {"a": [1.0, 0.0, 0.0], "b": [0.0, 1.0, 0.0]}
+
+
+def test_inmemory_get_vectors_rejects_blank_isolation_args():
+    """Matches query()'s own validation -- a blank scope arg should raise,
+    not silently return an empty/partial result (review finding: get_vectors
+    initially skipped this check while query() had it)."""
+    idx = InMemoryVectorIndex(dim=3)
+    with pytest.raises(ValueError):
+        idx.get_vectors(["a"], tenant_id="", owner_type="user", owner_id="user:u1")
+
+
+def test_vector_index_base_get_vectors_defaults_to_empty():
+    """The ABC default (no override) must degrade to 'unavailable', never raise."""
+    spy = _SpyVectorIndex()
+    assert spy.get_vectors(["a", "b"], tenant_id="default", owner_type="user", owner_id="user:u1") == {}
+
+
 def test_inmemory_delete_removes_vectors():
     idx = InMemoryVectorIndex(dim=3)
     idx.upsert(
@@ -230,6 +393,67 @@ def test_lancedb_index_upsert_query_and_filters(tmp_path) -> None:
     index.delete(["doc-a"])
     remaining = index.query([1.0, 0.0, 0.0], tenant_id="default", owner_type="user", owner_id="user:u1", k=2)
     assert all(item_id != "doc-a" for item_id, _ in remaining)
+
+
+def test_lancedb_get_vectors_returns_scoped_vectors(tmp_path) -> None:
+    """Regression for retrieval-ranking-gap ticket 07: the vector column is
+    already fetched by the underlying table read (see LanceDBIndex.query's
+    docstring) -- get_vectors reads it back out, scoped, without re-embedding."""
+    index = LanceDBIndex(dim=3, path=str(tmp_path / "vectors"), table_name="test_get_vectors")
+    index.upsert(
+        ids=["doc-a", "doc-b"],
+        vectors=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        tenant_ids=["default", "default"],
+        owner_types=["user", "workspace"],
+        owner_ids=["user:u1", "ws:1"],
+        extra_metadata=[{"kb_lane": "raw"}, {"kb_lane": "raw"}],
+    )
+
+    out = index.get_vectors(["doc-a", "doc-b", "missing"], tenant_id="default", owner_type="user", owner_id="user:u1")
+    assert list(out.keys()) == ["doc-a"]
+    assert out["doc-a"] == pytest.approx([1.0, 0.0, 0.0])
+
+
+def test_lancedb_get_vectors_rejects_blank_isolation_args(tmp_path) -> None:
+    """Matches query()'s own validation (review finding: get_vectors
+    initially skipped this check while query() had it)."""
+    index = LanceDBIndex(dim=3, path=str(tmp_path / "vectors"), table_name="test_get_vectors_validation")
+    with pytest.raises(ValueError):
+        index.get_vectors(["a"], tenant_id="", owner_type="user", owner_id="user:u1")
+
+
+def test_faiss_get_vectors_reconstructs_scoped_vectors() -> None:
+    """Regression for retrieval-ranking-gap ticket 07: IndexFlatIP stores
+    vectors verbatim, so reconstruct() is a cheap in-memory lookup, not a
+    re-embed. Skipped when the optional faiss-cpu/faiss-gpu extra isn't
+    installed."""
+    pytest.importorskip("faiss")
+    from uma.adapters.vector.faiss_adapter import FaissIndex
+
+    index = FaissIndex(dim=3)
+    index.upsert(
+        ids=["doc-a", "doc-b"],
+        vectors=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        tenant_ids=["default", "default"],
+        owner_types=["user", "workspace"],
+        owner_ids=["user:u1", "ws:1"],
+        extra_metadata=[{}, {}],
+    )
+
+    out = index.get_vectors(["doc-a", "doc-b", "missing"], tenant_id="default", owner_type="user", owner_id="user:u1")
+    assert list(out.keys()) == ["doc-a"]
+    assert out["doc-a"] == pytest.approx([1.0, 0.0, 0.0], abs=1e-5)
+
+
+def test_faiss_get_vectors_rejects_blank_isolation_args() -> None:
+    """Matches query()'s own validation (review finding: get_vectors
+    initially skipped this check while query() had it)."""
+    pytest.importorskip("faiss")
+    from uma.adapters.vector.faiss_adapter import FaissIndex
+
+    index = FaissIndex(dim=3)
+    with pytest.raises(ValueError):
+        index.get_vectors(["a"], tenant_id="", owner_type="user", owner_id="user:u1")
 
 
 @pytest.mark.asyncio

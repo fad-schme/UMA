@@ -17,6 +17,20 @@ except Exception as exc:  # pragma: no cover
     logger.error("Failed to import lancedb: %s", exc)
 
 
+def _id_in_predicate(ids: list[str]) -> Optional[str]:
+    """Build an `id IN (...)` predicate from a list of ids, escaped for SQL.
+
+    Shared by `get_vectors` and `_delete_from_table` -- both need the exact
+    same escaping rule for the same column. Returns None for an empty/all-
+    invalid id list so callers can short-circuit instead of building a
+    predicate that matches nothing.
+    """
+    escaped = [_sql_escape(sid) for sid in ids if isinstance(sid, str) and sid]
+    if not escaped:
+        return None
+    return "id IN ({})".format(", ".join(f"'{sid}'" for sid in escaped))
+
+
 def _sql_escape(value: str) -> str:
     """Escape a string for use as a single-quoted SQL literal.
 
@@ -273,6 +287,52 @@ class LanceDBIndex(VectorIndex):
 
         return results
 
+    def get_vectors(
+        self,
+        ids: list[str],
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+    ) -> dict[str, list[float]]:
+        """
+        Direct table lookup by id, scoped to the isolation predicate.
+
+        LanceDB's `table.search()` (no query vector) already fetches every
+        stored column for matching rows -- the vector column included --
+        so this costs one local read, not a re-embed. Read-only.
+        """
+        if not tenant_id or not tenant_id.strip():
+            raise ValueError("LanceDBIndex.get_vectors: tenant_id must be a non-empty string.")
+        if not owner_type or not owner_type.strip():
+            raise ValueError("LanceDBIndex.get_vectors: owner_type must be a non-empty string.")
+        if not owner_id or not owner_id.strip():
+            raise ValueError("LanceDBIndex.get_vectors: owner_id must be a non-empty string.")
+        id_predicate = _id_in_predicate(ids)
+        if id_predicate is None:
+            return {}
+        table = self._open_table()
+        if table is None:
+            return {}
+        where = (
+            f"({id_predicate}) AND tenant_id = '{_sql_escape(tenant_id.strip())}' "
+            f"AND owner_type = '{_sql_escape(owner_type.strip())}' "
+            f"AND owner_id = '{_sql_escape(owner_id.strip())}'"
+        )
+        try:
+            rows = table.search().where(where).to_list()
+        except Exception:
+            logger.exception("LanceDBIndex.get_vectors failed table=%s", self.table_name)
+            raise
+        wanted = set(ids)
+        out: dict[str, list[float]] = {}
+        for row in rows:
+            sid = row.get("id")
+            vector = row.get("vector")
+            if isinstance(sid, str) and sid in wanted and isinstance(vector, list):
+                out[sid] = [float(v) for v in vector]
+        return out
+
     def delete(self, ids: list[str]) -> None:
         """Delete vectors by ID. Scoped deletes are unnecessary because UMA generates globally unique IDs."""
         if not ids:
@@ -299,10 +359,9 @@ class LanceDBIndex(VectorIndex):
         return self._db.create_table(self.table_name, data=seed_rows)
 
     def _delete_from_table(self, table: Any, ids: list[str]) -> None:
-        escaped = [sid.replace("'", "''") for sid in ids if isinstance(sid, str) and sid]
-        if not escaped:
+        predicate = _id_in_predicate(ids)
+        if predicate is None:
             return
-        predicate = "id IN ({})".format(", ".join(f"'{sid}'" for sid in escaped))
         table.delete(predicate)
 
     @staticmethod

@@ -276,6 +276,51 @@ class FaissIndex(VectorIndex):
         logger.debug("FaissIndex.query: returning %d results", len(results))
         return results
 
+    def get_vectors(
+        self,
+        ids: list[str],
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+    ) -> dict[str, list[float]]:
+        """
+        Reconstruct stored vectors by id, scoped to the isolation triple.
+
+        `IndexFlatIP` (the only index type this adapter builds) keeps every
+        added vector in memory, so `reconstruct` is a cheap in-memory
+        lookup, not a re-embed. Note `upsert` L2-normalizes vectors before
+        adding them (see `_normalize`), so the returned vector is the
+        normalized form, not necessarily byte-identical to the caller's
+        original -- fine for MMR's own cosine math (it renormalizes
+        internally regardless), but not a verbatim echo of the input. Ids
+        outside the given scope, or that fail to reconstruct, are simply
+        absent from the result.
+        """
+        if not tenant_id or not tenant_id.strip():
+            raise ValueError("FaissIndex.get_vectors: tenant_id must be a non-empty string.")
+        if not owner_type or not owner_type.strip():
+            raise ValueError("FaissIndex.get_vectors: owner_type must be a non-empty string.")
+        if not owner_id or not owner_id.strip():
+            raise ValueError("FaissIndex.get_vectors: owner_id must be a non-empty string.")
+        scope_key = (tenant_id.strip(), owner_type.strip(), owner_id.strip())
+        out: dict[str, list[float]] = {}
+        for sid in ids:
+            if not isinstance(sid, str) or not sid:
+                continue
+            if self._scopes.get(sid) != scope_key:
+                continue
+            int_id = self._id_map.get(sid)
+            if int_id is None:
+                continue
+            try:
+                vector = self.index.reconstruct(int_id)
+            except Exception:  # nosec B112 -- reconstruct failure for one id must not abort the batch
+                logger.debug("FaissIndex.get_vectors: reconstruct failed for id=%s", sid, exc_info=True)
+                continue
+            out[sid] = [float(v) for v in vector]
+        return out
+
     def delete(self, ids: list[str]) -> None:
         """Remove vectors from the FAISS index and clear their scope and metadata entries."""
         if not ids:

@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional, Sequence
 
+import numpy as np
+
 from uma.common.accessors import get_attr_or_key
 from uma.common.text import extract_keywords_and_phrases, build_fact_embedding_text, build_query_term_set
 
@@ -260,6 +262,88 @@ def rerank_candidates(query_text: str, candidates: Sequence[Any]) -> list[Any]:
         scored.sort(key=lambda x: (-x[0], x[1], x[2]))
         out.extend([it for _s, _sid, _idx, it in scored])
     return out
+
+
+def mmr_select(
+    candidates: Sequence[tuple[str, float, Sequence[float]]],
+    *,
+    k: int,
+    lambda_diversity: float,
+) -> list[str]:
+    """
+    Maximal Marginal Relevance selection (retrieval-ranking-gap ticket 07).
+
+    Iteratively picks the candidate maximizing
+    ``lambda_diversity * relevance - (1 - lambda_diversity) * redundancy``,
+    where redundancy is the candidate's max cosine similarity to anything
+    already selected. Plain top-k-by-score is the ``lambda_diversity=1.0``
+    special case.
+
+    Exists to counter a specific failure mode ticket 02 diagnosed and
+    ticket 06 confirmed on real data: near-duplicate, topically-adjacent
+    candidates can fill an entire top-k pool and crowd out a scattered but
+    genuinely distinct answer-bearing candidate, even when the pool's
+    aggregate relevance looks fine by any score threshold (a relevance
+    floor cannot detect this -- see ticket 05's reverted attempt).
+
+    Vectorized: normalizes every candidate vector once, then scores the
+    full remaining set against the whole selected set with one matrix-
+    vector product per round (O(n * k) total) instead of a per-pair Python
+    loop (O(n * k * k) scalar calls, ~6s/query for n=200, k=30 in ticket
+    06's initial prototype vs. ~150ms here for the same input).
+
+    Parameters
+    ----------
+    candidates:
+        ``(id, relevance_score, vector)`` triples. Order does not matter.
+        ``relevance_score`` may be on any scale (raw vector similarity,
+        a multi-term rerank formula, anything monotonic in relevance) --
+        it is min-max normalized to ``[0, 1]`` internally so it trades off
+        against redundancy (cosine similarity, naturally bounded ~``[0, 1]``
+        for embeddings) on a comparable scale. Skipping this step is a real
+        footgun, not a formality: an unnormalized relevance score whose
+        typical magnitude is several times larger than 1 makes the
+        redundancy term negligible regardless of ``lambda_diversity``,
+        silently degrading MMR to plain top-k even at low lambda (caught in
+        ticket 07 review -- switching the relevance signal from raw
+        ``vector_score`` (~``[0, 1]``) to ``compute_rerank_score`` (~``[0, 9]``)
+        without this normalization made lambda=0.5 behave like lambda≈0.95).
+    k:
+        Selection size. Capped at ``len(candidates)``.
+    lambda_diversity:
+        1.0 = pure relevance (reproduces top-k-by-score exactly).
+        0.0 = pure diversity (ignores relevance entirely).
+
+    Returns
+    -------
+    Selected ids, in selection order (highest marginal-relevance first).
+    """
+    if not candidates or k <= 0:
+        return []
+    ids = [cid for cid, _score, _vec in candidates]
+    raw_scores = np.asarray([score for _cid, score, _vec in candidates], dtype=np.float64)
+    score_range = raw_scores.max() - raw_scores.min()
+    scores = (raw_scores - raw_scores.min()) / score_range if score_range > 0 else np.zeros_like(raw_scores)
+    vectors = np.asarray([list(vec) for _cid, _score, vec in candidates], dtype=np.float64)
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    normalized = vectors / np.where(norms == 0, 1e-8, norms)
+
+    n = len(ids)
+    k = min(k, n)
+    remaining = np.ones(n, dtype=bool)
+    max_redundancy = np.zeros(n, dtype=np.float64)
+    selected_idxs: list[int] = []
+
+    for _ in range(k):
+        mmr_scores = lambda_diversity * scores - (1 - lambda_diversity) * max_redundancy
+        mmr_scores = np.where(remaining, mmr_scores, -np.inf)
+        best_idx = int(np.argmax(mmr_scores))
+        selected_idxs.append(best_idx)
+        remaining[best_idx] = False
+        similarity_to_new = normalized @ normalized[best_idx]
+        max_redundancy = np.maximum(max_redundancy, similarity_to_new)
+
+    return [ids[i] for i in selected_idxs]
 
 
 def fuse_candidates(

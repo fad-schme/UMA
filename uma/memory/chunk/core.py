@@ -24,7 +24,7 @@ from typing import Any, Optional, Sequence
 
 from uma.common.types.types_scope import DEFAULT_TENANT_ID
 from uma.common.types import Chunk
-from uma.retrieve.ranking import fuse_candidates
+from uma.retrieve.ranking import compute_rerank_score, fuse_candidates, mmr_select
 from uma.common.dedupe import dedupe_by_id
 from uma.common.text import build_query_term_set, text_matches_query_terms
 from uma.retrieve.rlm.intent import QueryIntent, classify_query_intent
@@ -445,18 +445,36 @@ class ChunkCore:
             return []
         opts = options or ChunkSearchOptions()
 
+        memory = getattr(self, "_memory", None)
+        retrieval_cfg = getattr(memory, "retrieval_cfg", None) if memory is not None else None
+        mmr_enabled = bool(getattr(retrieval_cfg, "mmr_enabled", False))
+        # MMR needs real headroom to pick diversity from -- the plain top-k
+        # path's 2x overfetch (enough margin for exact-duplicate dedup) is
+        # too small a pool for MMR to meaningfully diversify within
+        # (retrieval-ranking-gap ticket 07: verified regressing the full
+        # benchmark at the 2x pool before this was widened). 6x matches the
+        # pool/k ratio ticket 06's prototype validated on.
+        overfetch_multiplier = (
+            int(getattr(retrieval_cfg, "mmr_pool_multiplier", 6)) if mmr_enabled else _DEDUPE_OVERFETCH_MULTIPLIER
+        )
         chunks, lexical_ids = await self._execute_hybrid_search(
             query_embedding=query_embedding,
             tenant_id=tenant_id,
             owner_type=owner_type,
             owner_id=owner_id,
-            k=k * _DEDUPE_OVERFETCH_MULTIPLIER,
+            k=k * overfetch_multiplier,
             query_text=opts.query_text,
             doc_id=opts.doc_id,
         )
         deduped = dedupe_chunks_by_text(chunks)
         dropped = len(chunks) - len(deduped)
-        chunks = deduped[:k]
+        # Tag retrieval metadata (lexical_score, retrieval_method) before the
+        # top-k cut, not after: MMR's relevance signal is compute_rerank_score,
+        # which reads lexical_score off chunk.meta -- selection must see it.
+        self._tag_retrieval_metadata(deduped, lexical_ids)
+        chunks = await self._select_chunks(
+            deduped, k, query_text=opts.query_text, tenant_id=tenant_id, owner_type=owner_type, owner_id=owner_id,
+        )
         logger.debug(
             "ChunkCore.search_chunks merged_results=%d duplicate_text_dropped=%d kept=%d "
             "lexical_ids=%d filter_terms=%s",
@@ -466,7 +484,6 @@ class ChunkCore:
             len(lexical_ids),
             opts.filter_terms,
         )
-        self._tag_retrieval_metadata(chunks, lexical_ids)
         if opts.filter_terms and opts.query_text and opts.query_text.strip():
             chunks = self._apply_term_filter(chunks, opts.query_text)
         if opts.expand_neighbors and chunks:
@@ -488,6 +505,95 @@ class ChunkCore:
                 logger.exception("ChunkCore.search_chunks neighbor expansion failed")
                 raise
         return chunks
+
+    async def _select_chunks(
+        self,
+        candidates: list[Chunk],
+        k: int,
+        *,
+        query_text: Optional[str],
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+    ) -> list[Chunk]:
+        """
+        Top-k cut for a deduped candidate pool.
+
+        Plain score-order slice by default. When `retrieval.mmr_enabled` is
+        set, selects via MMR instead (retrieval-ranking-gap ticket 07) --
+        picking for topical diversity against what's already selected, not
+        just highest score, so a scattered but genuinely distinct candidate
+        isn't crowded out by several near-duplicate ones. Falls back to the
+        plain slice whenever the pool is already <= k (nothing to select
+        between) or the vector backend can't provide vectors for every
+        candidate (a partial MMR pass over an incomplete pool would be a
+        silent quality regression, not a diversity improvement).
+
+        MMR's relevance signal is `compute_rerank_score` (the same lexical +
+        vector formula the downstream `Ranker` uses), not raw `vector_score`.
+        An earlier version used vector_score alone and measurably regressed
+        the full pipeline: it competed with, rather than complemented, the
+        reranker that reorders `search_chunks`'s output afterward -- pruning
+        the pool for diversity before the reranker's term/phrase/entity
+        signals ever got a vote meant a candidate that formula would have
+        surfaced could be gone by the time it ran, with no way back in.
+
+        Known tradeoff, not fixed here: `compute_rerank_score` now runs
+        twice for every surviving candidate on an MMR-enabled search --
+        once here, again when the RLM controller's `Ranker.rank_chunks`
+        reorders `search_chunks`'s output downstream. That second pass
+        fully re-sorts by its own score, so MMR only ever determines which
+        k candidates survive, never their final order -- a real "two
+        scoring passes over the same data" situation `ranking.py`'s module
+        docstring says to avoid ("single owner" for ranking math). Verified
+        empirically to still produce a net recall gain with zero
+        regressions on the 15-question benchmark (ticket 07's Findings),
+        so left as a documented cost rather than risking a rearchitecture
+        (MMR living inside `Ranker`, or applied by the controller after
+        `rank_chunks` instead of inside `ChunkCore`) without dedicated
+        verification budget for that redesign.
+        """
+        if len(candidates) <= k:
+            return candidates[:k]
+
+        memory = getattr(self, "_memory", None)
+        retrieval_cfg = getattr(memory, "retrieval_cfg", None) if memory is not None else None
+        if not bool(getattr(retrieval_cfg, "mmr_enabled", False)):
+            return candidates[:k]
+
+        vector_index = getattr(self.store, "vector_index", None)
+        vectors: dict[str, list[float]] = {}
+        if vector_index is not None:
+            try:
+                vectors = vector_index.get_vectors(
+                    [ch.id for ch in candidates],
+                    tenant_id=tenant_id,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                )
+            except Exception:  # nosec B110 -- deliberate fallback to plain top-k, not a masked invariant
+                logger.debug(
+                    "ChunkCore._select_chunks: get_vectors failed; falling back to top-k", exc_info=True
+                )
+                vectors = {}
+
+        missing = [ch.id for ch in candidates if ch.id not in vectors]
+        if missing:
+            logger.debug(
+                "ChunkCore._select_chunks: vectors unavailable for %d/%d candidates; falling back to top-k",
+                len(missing),
+                len(candidates),
+            )
+            return candidates[:k]
+
+        mmr_lambda = float(getattr(retrieval_cfg, "mmr_lambda", 0.6))
+        by_id = {ch.id: ch for ch in candidates}
+        triples = [
+            (ch.id, compute_rerank_score(query_text=query_text or "", candidate=ch), vectors[ch.id])
+            for ch in candidates
+        ]
+        selected_ids = mmr_select(triples, k=k, lambda_diversity=mmr_lambda)
+        return [by_id[sid] for sid in selected_ids if sid in by_id]
 
     async def _execute_hybrid_search(
         self,
