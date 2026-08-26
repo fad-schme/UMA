@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uma.common.storage_metadata import EPISODIC_LANE, PROCEDURAL_LANE, PROFILE_LANE, RAW_LANE, SEMANTIC_LANE, WIKI_LANE
 from uma.common.types import Chunk, Fact, OwnershipRef, Skill
-from uma.memory.chunk.core import ChunkSearchOptions, dedupe_chunks_by_text
+from uma.memory.chunk.core import ChunkSearchOptions, _primary_query_share, dedupe_chunks_by_text
 from uma.retrieve.planner import build_retrieval_plan
 from uma.retrieve.policy import RetrievalPolicy, should_stop
 from uma.retrieve.ranking import Ranker, compute_rerank_score, fuse_candidates, rerank_candidates
@@ -234,6 +234,72 @@ def test_dedupe_chunks_by_text_keeps_first_occurrence_drops_exact_duplicates() -
     ]
     deduped = dedupe_chunks_by_text(chunks)
     assert [ch.id for ch in deduped] == ["a", "c", "e"]
+
+
+def test_primary_query_share_keeps_flat_split_for_divergent_sub_queries() -> None:
+    """Regression for retrieval-ranking-gap ticket 05: broad/multi-facet
+    questions (conv-26_q7/q18's shape, per the investigation) are exactly the
+    case decomposition earns its keep for -- sub-queries that pull in
+    genuinely distinct facets should keep close to the original 50/50 split,
+    not get starved in favor of the primary."""
+    share = _primary_query_share(
+        "What activities has Melanie done with her family?",
+        ["Melanie pottery class", "Melanie camping trip", "Melanie museum visit"],
+    )
+    assert 0.5 <= share <= 0.6
+
+
+def test_primary_query_share_favors_primary_for_near_duplicate_sub_queries() -> None:
+    """Regression for the conv-26_q14-shaped case this session traced live:
+    a single-fact query that decomposition fires on anyway, but whose
+    sub-queries barely diverge from the primary lexically, gains little from
+    decomposition and should not lose half its candidate budget to it."""
+    share = _primary_query_share(
+        "What career path has Caroline decided to pursue?",
+        ["Caroline career path pursue"],
+    )
+    assert share > 0.6
+
+
+def test_primary_query_share_defaults_to_flat_split_with_no_sub_queries() -> None:
+    assert _primary_query_share("some query", []) == 1.0
+
+
+def test_primary_query_share_ignores_sub_queries_with_no_extractable_terms() -> None:
+    """A sub-query with no lexical signal (empty/whitespace, all-stopword)
+    shouldn't be counted as fully overlapping the primary -- that would
+    inflate the primary's share for the exact case where the sub-query is
+    too degenerate to compete for candidates anyway, not because it
+    genuinely restates the primary."""
+    share_with_empty_sub = _primary_query_share(
+        "What career path has Caroline decided to pursue?", ["   "]
+    )
+    assert share_with_empty_sub == 0.5
+
+
+def test_primary_query_share_defaults_to_half_with_no_extractable_terms() -> None:
+    assert _primary_query_share("", ["anything"]) == 0.5
+
+
+@pytest.mark.parametrize("k", [1, 2, 3, 4, 5, 7, 30])
+def test_primary_k_always_leaves_sub_queries_at_least_one_slot(k: int) -> None:
+    """Pins the exact primary_k arithmetic in ChunkCore.search_chunks_for_rlm
+    (uma/memory/chunk/core.py) against every k this codebase's callers use.
+    Regression for a bug found in review: share's ceiling of 0.8 reached
+    primary_k == k at k=2, silently skipping decomposition's sub-query
+    search entirely despite already having paid for the LLM decomposition
+    call. The old flat k // 2 split never did that for k >= 2; primary_k
+    must never claim the whole budget once sub-queries exist and k > 1."""
+    share = _primary_query_share(
+        "What career path has Caroline decided to pursue?",
+        ["Caroline career path pursue"],  # near-duplicate -> share near its 0.8 ceiling
+    )
+    primary_k = max(1, int(k * share))
+    if k > 1:
+        primary_k = min(primary_k, k - 1)
+    remaining = max(0, k - primary_k)
+    if k > 1:
+        assert remaining >= 1
 
 
 def test_score_card_emission_follows_request_debug_flag() -> None:

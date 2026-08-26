@@ -105,6 +105,41 @@ def dedupe_chunks_by_text(chunks: Sequence[Chunk]) -> list[Chunk]:
     return out
 
 
+def _primary_query_share(query_text: Optional[str], sub_queries: list[str]) -> float:
+    """Fraction of the k budget the primary query keeps once decomposition fires.
+
+    A flat 50/50 split (retrieval-ranking-gap ticket 03) taxes the primary
+    query even when its decomposed sub-queries barely diverge from it
+    lexically -- decomposition adds little new signal in that case, so the
+    primary should keep more of its candidate budget. Genuinely divergent
+    sub-queries (broad, multi-facet questions) keep close to the original
+    even split, which is where decomposition earns its keep.
+    """
+    if not sub_queries:
+        return 1.0
+    primary_set = build_query_term_set(query_text or "")
+    primary_terms = set(primary_set.terms) | set(primary_set.phrases)
+    if not primary_terms:
+        return 0.5
+    overlaps: list[float] = []
+    for sub_q in sub_queries:
+        sub_set = build_query_term_set(sub_q or "")
+        sub_terms = set(sub_set.terms) | set(sub_set.phrases)
+        if not sub_terms:
+            # No lexical signal at all -- neither confirms nor contradicts
+            # overlap with the primary, so it shouldn't skew the average
+            # either way (excluding it, not treating it as full overlap).
+            continue
+        union = primary_terms | sub_terms
+        overlaps.append(len(primary_terms & sub_terms) / len(union) if union else 1.0)
+    if not overlaps:
+        return 0.5
+    avg_overlap = sum(overlaps) / len(overlaps)
+    # 0.5 at zero overlap (today's flat split) up to 0.8 at full overlap
+    # (sub-queries that restate the primary keep it well-resourced).
+    return 0.5 + 0.3 * avg_overlap
+
+
 class ChunkCore:
     """
     High-level interface for UMA chunk memory.
@@ -218,7 +253,19 @@ class ChunkCore:
         # merge upstream (RLMController._merge_unique) truncates positionally
         # at k, so returning more than k here would just have the tail
         # silently discarded instead of genuinely competing for a slot.
-        primary_k = max(1, k // 2)
+        # A flat 50/50 split taxes the primary query even when the
+        # sub-queries barely diverge from it lexically (retrieval-ranking-gap
+        # ticket 05: a single-fact query that decomposition fires on anyway
+        # loses candidate slots it didn't need to spend). Weight the split by
+        # how much the sub-queries actually diverge from the primary instead.
+        # int() truncation (not round()) so share=0.5 reproduces the old
+        # k // 2 split exactly; capped at k - 1 so decomposition, once fired,
+        # always leaves the sub-queries at least one slot to compete for
+        # (share's ceiling of 0.8 would otherwise reach k itself at k=2 and
+        # silently skip the sub-query search block entirely).
+        primary_k = max(1, int(k * _primary_query_share(query_text, sub_queries)))
+        if k > 1:
+            primary_k = min(primary_k, k - 1)
         primary = await self.search_chunks(
             query_embedding=list(query_embedding),
             tenant_id=tenant_id,
