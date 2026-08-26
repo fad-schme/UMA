@@ -41,7 +41,19 @@ class SalienceScorer:
     def __init__(self, decay_half_life_days: float = 180.0) -> None:
         self._half_life = max(1.0, float(decay_half_life_days))
 
-    def score(self, fact: Fact) -> float:
+    def score(self, fact: Fact, *, durability: float = 1.0) -> float:
+        """Score a fact's salience.
+
+        `durability` is an optional [0, 1] multiplier for how likely the fact
+        is to remain relevant over time, independent of `confidence` (which
+        measures extraction certainty, not memorability). A transient detail
+        the extractor is fully confident it read correctly ("waiting for the
+        bus") still shouldn't score as salient as a durable one ("has a
+        long-term career goal") — confidence alone can't tell them apart, so
+        callers with a per-fact durability signal (e.g. an LLM-provided
+        durability flag at extraction time) should pass it here rather than
+        folding it into `confidence` itself.
+        """
         now = datetime.now(timezone.utc)
         updated = fact.updated_at.replace(tzinfo=timezone.utc)
 
@@ -49,6 +61,7 @@ class SalienceScorer:
 
         base_conf = fact.confidence if fact.confidence is not None else 0.5
         decay_factor = 0.5 ** (age_days / self._half_life)
+        durability_factor = max(0.0, min(1.0, float(durability)))
 
-        salience = max(0.0, min(1.0, float(base_conf) * float(decay_factor)))
+        salience = max(0.0, min(1.0, float(base_conf) * float(decay_factor) * durability_factor))
         return salience

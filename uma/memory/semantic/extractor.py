@@ -138,17 +138,36 @@ class FactExtractor:
             "- speculative or inferred facts the user did not state\n"
             "- one-off logistics that do not matter across sessions\n"
             "Do NOT paraphrase the whole message—extract only durable user facts.\n\n"
+            "Predicate style: use a short, bare relation label with no auxiliary "
+            "verb (\"goal\", not \"has long-term goal\"; \"researching\", not "
+            "\"is researching\"). Use the same predicate label for the same kind "
+            "of relation every time so facts about the same relation stay "
+            "comparable across calls.\n"
+            "One relation per fact: if a single statement describes one relation "
+            "with a compound object (a location, purpose, or qualifier attached "
+            "to it), keep the whole compound phrase as ONE object in ONE fact — "
+            "do not split the location/purpose/qualifier into a separate fact.\n\n"
             "Return ONLY valid JSON in this schema:\n"
             "{\n"
             '  "facts": [\n'
-            '    {"subject": "user", "predicate": "prefers", "object": "vegetarian food over meat", "confidence": 0.0-1.0, "source_ids": []},\n'
-            '    {"subject": "my friend Maria", "predicate": "likes", "object": "painting landscapes", "confidence": 0.0-1.0, "source_ids": []}\n'
+            '    {"subject": "user", "predicate": "prefers", "object": "vegetarian meals", "confidence": 0.0-1.0, "durable": true, "source_ids": []},\n'
+            '    {"subject": "my friend Maria", "predicate": "likes", "object": "painting landscapes", "confidence": 0.0-1.0, "durable": true, "source_ids": []},\n'
+            '    {"subject": "user", "predicate": "goal", "object": "become a machine learning engineer", "confidence": 0.0-1.0, "durable": true, "source_ids": []},\n'
+            '    {"subject": "user", "predicate": "studies", "object": "computer science at a local university", "confidence": 0.0-1.0, "durable": true, "source_ids": []}\n'
             "  ]\n"
             "}\n"
             f"Rules: return AT MOST {max_facts} facts. "
             f"Each object must be at least {min_fact_words} words long.\n"
             "Each object MUST be a complete, self-contained phrase — not a single word or vague topic label.\n"
             "Do not collapse specific facts into abstractions like 'stability', 'support', or 'food'.\n"
+            "\"durable\": true/false — set false for anything transient or tied "
+            "to this exact moment (current weather, momentarily waiting for "
+            "something, a passing physical sensation) even if directly stated; "
+            "true for anything that stays relevant beyond this moment (goals, "
+            "preferences, ongoing projects, relationships, identity, plans). "
+            "Facts you judge transient should usually not be extracted at all "
+            "per the rules above — \"durable\" is a second check, not a "
+            "replacement for leaving transient filler out entirely.\n"
             "No prose. No markdown."
         )
 
@@ -191,6 +210,7 @@ class FactExtractor:
             obj = item.get("object")
             subj_text = (str(item.get("subject") or "").strip()) or subject
             conf = item.get("confidence", 0.7)
+            durable = item.get("durable", True)
             source_ids = item.get("source_ids", [])
 
             if not predicate or obj is None:
@@ -207,7 +227,7 @@ class FactExtractor:
             # Keep user facts reasonably bounded (still generic).
             subj_n, pred_n, obj_n = utils.enforce_fact_limits(
                 subj=subj_text,
-                pred=str(predicate),
+                pred=utils.canonicalize_predicate(str(predicate)),
                 obj_text=obj_text,
                 object_max_words=utils.DEFAULT_OBJECT_MAX_WORDS,
                 max_fact_tokens=utils.DEFAULT_MAX_FACT_TOKENS_USER,
@@ -249,7 +269,8 @@ class FactExtractor:
             if turn_id:
                 fact.meta["turn_id"] = turn_id
 
-            fact.salience = float(self.scorer.score(fact))
+            durability_factor = 1.0 if utils.safe_bool(durable, default=True) else 0.05
+            fact.salience = float(self.scorer.score(fact, durability=durability_factor))
             out.append(fact)
             kept += 1
 

@@ -21,7 +21,9 @@ from uma.ingest.types import DocumentChunk, NormalizedSection
 from uma.memory.chunk.core import ChunkSearchOptions
 from uma.memory.episodic.indexer import EpisodeIndexer
 from uma.memory.semantic.extractor import FactExtractor
+from uma.memory.semantic.extractor_utils import canonicalize_predicate, safe_bool
 from uma.memory.semantic.ingestor import SemanticIngestor
+from uma.memory.semantic.scorer import SalienceScorer
 from uma.memory.working_memory.core import WorkingMemoryCore
 from uma.retrieve.rlm.snippet_refiner import SnippetRefiner
 from uma.common.types.types_scope import DEFAULT_TENANT_ID
@@ -870,6 +872,135 @@ async def test_extract_user_facts_captures_durable_self_declared_context() -> No
     assert any("counseling" in obj or "mental health" in obj for obj in education_objects)
     assert any("adoption agenc" in obj for obj in adoption_objects)
     assert any("transgender journey" in obj or "trans community" in obj for obj in identity_objects)
+
+
+def test_salience_scorer_durability_multiplier_scales_score() -> None:
+    now = datetime.now(timezone.utc)
+    fact = Fact(
+        id="fact_1",
+        subject="user",
+        predicate="waiting_for",
+        object="the bus",
+        created_at=now,
+        updated_at=now,
+        confidence=0.95,
+    )
+    scorer = SalienceScorer()
+
+    assert scorer.score(fact) == pytest.approx(0.95)
+    assert scorer.score(fact, durability=0.05) == pytest.approx(0.95 * 0.05)
+    assert scorer.score(fact, durability=0.0) == 0.0
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("researching", "researching"),
+        ("is researching", "researching"),
+        ("has long-term goal", "long-term goal"),
+        ("was studying", "studying"),
+        ("prefers", "prefers"),
+        ("  is   researching  ", "researching"),
+    ],
+)
+def test_canonicalize_predicate_strips_leading_auxiliary_verbs(raw: str, expected: str) -> None:
+    assert canonicalize_predicate(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (False, False),
+        (True, True),
+        ("false", False),
+        ("False", False),
+        ("FALSE", False),
+        ("no", False),
+        ("0", False),
+        ("", False),
+        ("true", True),
+        ("anything else", True),
+        (None, True),
+    ],
+)
+def test_safe_bool_treats_stringified_false_as_false(raw, expected: bool) -> None:
+    # Plain `bool("false")` is `True` in Python -- this is the exact defect
+    # class a smaller LLM quoting a boolean literal would trigger silently.
+    assert safe_bool(raw, default=True) is expected
+
+
+class _TransientAwareLLM:
+    """Fake LLM returning durable=False for a transient detail, per-fact."""
+
+    async def generate(self, messages, max_tokens: int = 450, temperature: float = 0.0) -> str:
+        text = messages[-1]["content"]
+        if "waiting for the bus" in text:
+            return json.dumps(
+                {
+                    "facts": [
+                        {
+                            "predicate": "is waiting for",
+                            "object": "the bus",
+                            "confidence": 0.95,
+                            "durable": False,
+                            "source_ids": [],
+                        }
+                    ]
+                }
+            )
+        return json.dumps(
+            {
+                "facts": [
+                    {
+                        "predicate": "is researching",
+                        "object": "memory consolidation for autonomous AI agents",
+                        "confidence": 0.9,
+                        "durable": True,
+                        "source_ids": [],
+                    }
+                ]
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_extract_user_facts_scores_llm_flagged_transient_facts_low_salience() -> None:
+    extractor = FactExtractor(llm=_TransientAwareLLM())
+
+    transient_facts = await extractor.extract_user_facts(
+        subject="user",
+        text="I am waiting for the bus.",
+        tenant_id="default",
+        owner_type="user",
+        owner_id="user:u1",
+    )
+    durable_facts = await extractor.extract_user_facts(
+        subject="user",
+        text="I am researching memory consolidation for autonomous AI agents.",
+        tenant_id="default",
+        owner_type="user",
+        owner_id="user:u1",
+    )
+
+    assert len(transient_facts) == 1
+    assert transient_facts[0].salience < 0.1
+    assert len(durable_facts) == 1
+    assert durable_facts[0].salience > 0.5
+
+
+@pytest.mark.asyncio
+async def test_extract_user_facts_canonicalizes_predicate_from_llm_output() -> None:
+    extractor = FactExtractor(llm=_TransientAwareLLM())
+
+    durable_facts = await extractor.extract_user_facts(
+        subject="user",
+        text="I am researching memory consolidation for autonomous AI agents.",
+        tenant_id="default",
+        owner_type="user",
+        owner_id="user:u1",
+    )
+
+    assert durable_facts[0].predicate == "researching"
 
 
 # ── test_fact_extraction_chunk_selection ──────────────────────────────────────────

@@ -524,6 +524,32 @@ def coerce_object_text(obj: Any) -> str:
         return _normalize_ws(str(obj))
 
 
+_LEADING_AUXILIARY_VERBS = {
+    "is", "am", "are", "was", "were", "be", "been", "being",
+    "has", "have", "had", "does", "do", "did",
+    "will", "would", "can", "could", "shall", "should", "may", "might",
+}
+
+
+def canonicalize_predicate(pred: str) -> str:
+    """Strip leading auxiliary/copula verbs from an LLM-produced predicate.
+
+    LLM extraction drifts on predicate phrasing for the same relation across
+    calls (`"is researching"` vs `"researching"`, `"has long-term goal"` vs
+    `"goal"`) because nothing constrains it to a fixed predicate vocabulary
+    (deliberate -- see `SalienceScorer`'s module docstring: predicates must
+    stay data-agnostic, not hardcoded per domain). This is a grammatical
+    normalization, not a domain synonym table: it only drops leading
+    auxiliary/copula/modal verbs so `"is researching"` and `"researching"`
+    canonicalize to the same predicate, without asserting what the "real"
+    predicate for any given relation should be.
+    """
+    words = (pred or "").split()
+    while words and words[0].lower() in _LEADING_AUXILIARY_VERBS:
+        words = words[1:]
+    return " ".join(words).strip() or _normalize_ws(pred)
+
+
 def enforce_fact_limits(
     subj: str,
     pred: str,
@@ -554,6 +580,22 @@ def enforce_fact_limits(
 # ---------------------------------------------------------------------
 def safe_confidence(v: Any, default: float = 0.7) -> float:
     return _clamp01(_safe_float(v, default))
+
+
+def safe_bool(v: Any, default: bool = True) -> bool:
+    """Coerce an LLM JSON field to bool, handling a stringified `"false"`.
+
+    `json.loads` gives a native bool when the model emits an unquoted JSON
+    literal as instructed, but smaller/quantized models sometimes emit a
+    quoted string instead (`"durable": "false"`) -- `bool("false")` is `True`
+    in plain Python since any non-empty string is truthy, silently inverting
+    the field. Treat common falsy string spellings as `False` explicitly.
+    """
+    if isinstance(v, str):
+        return v.strip().lower() not in ("false", "no", "0", "")
+    if v is None:
+        return default
+    return bool(v)
 
 
 def parse_facts_list_into_facts(
