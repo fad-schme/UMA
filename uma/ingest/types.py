@@ -116,7 +116,7 @@ class IngestConfig:
     # attacks. 50 MiB is generous for ordinary documents (books, reports,
     # transcripts) and small enough to refuse decompression bombs.
     max_file_bytes: int = 50 * 1024 * 1024
-    # pdf_max_pages caps the number of pages a PDF can declare. PyPDF2
+    # pdf_max_pages caps the number of pages a PDF can declare. pypdf
     # allocates per page during traversal; a small file claiming millions of
     # pages amplifies into memory exhaustion. 5000 pages covers any
     # legitimate document in normal use.

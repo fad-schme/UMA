@@ -69,7 +69,7 @@ graph    = ["neo4j"]
 security = ["google-re2>=1.1"]
 
 # Document parsers used by the ingest pipeline.
-parsers  = ["PyPDF2>=3.9.0", "beautifulsoup4", "markdown", "pandas"]
+parsers  = ["pypdf>=3.9.0", "beautifulsoup4", "markdown", "pandas"]
 
 # Development / test tools. `pip install -e '.[dev]'` is what
 # requirements.txt resolves to.

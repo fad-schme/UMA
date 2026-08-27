@@ -130,7 +130,7 @@ class TXTParser(ParserStrategy):
 class PDFParser(ParserStrategy):
     """Parse PDFs page-by-page; refuse files declaring excessive page counts.
 
-    H2 defense: PyPDF2 allocates per-page during traversal, so a small file
+    H2 defense: pypdf allocates per-page during traversal, so a small file
     claiming millions of pages amplifies into memory exhaustion. The
     max_pages constructor argument bounds this — a PDF declaring more pages
     than the cap raises ValueError before any text extraction runs.
@@ -150,11 +150,11 @@ class PDFParser(ParserStrategy):
 
     def _open_reader(self, file_path: str):
         try:
-            from PyPDF2 import PdfReader
+            from pypdf import PdfReader
         except Exception as exc:
-            raise ImportError("PDFParser requires PyPDF2: pip install PyPDF2") from exc
+            raise ImportError("PDFParser requires pypdf: pip install pypdf") from exc
         reader = PdfReader(file_path)
-        # Page-count guard: len(reader.pages) is O(1) on PyPDF2 and runs
+        # Page-count guard: len(reader.pages) is O(1) on pypdf and runs
         # before any per-page allocation. Refuse the file if it declares
         # more pages than the cap.
         try:
