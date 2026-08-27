@@ -1,6 +1,6 @@
 # ARCHITECTURE.md — UMA
 
-UMA is a memory and context runtime SDK for AI agents. It ingests data, stores it across typed memory lanes, and exposes two thin retrieval products. It does not generate replies, perform reasoning, or manage tool use — that belongs to the calling application.
+UMA is a memory and context runtime SDK for AI agents. It ingests data, stores it across typed memory lanes, and exposes two thin retrieval products; the calling application owns replies, reasoning, and tool use.
 
 This document covers the architectural invariants. For developer-facing references, see `.claude/skills/overview.md`, `.claude/skills/api.md`, and the topic-specific skills under `.claude/skills/`.
 
@@ -36,7 +36,7 @@ UMA exposes six public `lane_filter` lanes. The planner also uses `profile` (a s
 
 `trace` (`decision_trace`) exists as a kind in `KB_LANES` but is debug metadata only. The planner unconditionally excludes it with reason `trace_is_debug_metadata_not_a_retrieval_lane`; it never participates in retrieval.
 
-Graph is disabled in all public profiles. It is a supporting lane for relationship traversal, not the primary truth.
+Graph is disabled in all public profiles. It is a supporting lane for relationship traversal.
 
 ---
 
@@ -122,9 +122,7 @@ Security in UMA is not an overlay — it is the shape of every code path that to
 4. **Ingest gating** — MIME consistency, file size limits, PDF page caps, HTML/Markdown sanitization
 5. **Retrieval audit log** — every retrieval call records a query digest plus a bounded 80-character preview (never the full query), scope, severity, and result counts
 
-OWASP mapping (Top 10 for LLM Applications 2025): primitives 1, 2, and 4 address **LLM01 (Prompt Injection)**. Primitives 2, 3, and ingest scanning address **LLM04 (Data and Model Poisoning)**. The C1 vector isolation contract (next section) addresses **LLM08 (Vector and Embedding Weaknesses)** — isolation is pushed into the vector engine before the k-nearest cap so no tenant can starve another, and write-time scanning addresses the RAG poisoning sub-problem. Ingest size caps (`max_file_bytes`, `pdf_max_pages`) address the ingest side of **LLM10 (Unbounded Consumption)** — UMA-owned. The retrieval side is only partially covered: `set_rate_limit_hook` exposes a single plug-point that fires at the top of every public retrieval/ingest call, but UMA ships no default limiter and owns no throttling policy. The caller registers a hook backed by whatever accounting, storage, timeout, and refusal semantics fits their deployment. The hashed-preview audit log addresses parts of **LLM02 (Sensitive Information Disclosure)**. Every fact carries provenance back to source chunks and quarantined facts are excluded at the SQL retrieval layer, giving partial coverage of **LLM09 (Misinformation)**. **LLM03 (Supply Chain)** is out of scope as a model-supply-chain concern — UMA has no training or fine-tuning pipeline — but `PickleParser` removal and MIME consistency checks harden the document ingest boundary against executable payloads. **LLM05 (Improper Output Handling)**, **LLM06 (Excessive Agency)**, and **LLM07 (System Prompt Leakage)** are structurally out of scope: UMA returns context, not generated output; it has no tool use or autonomy; and system prompts live in the calling application.
-
-OWASP Agentic Security Initiative mapping: **ASI06 (Memory Poisoning)** is the primary design target — every write boundary enforces write-time scanning, trust scoring, and quarantine. **ASI03 (Identity & Privilege Abuse)** is addressed at the storage layer via mandatory `tenant_id` / `owner_type` / `owner_id` on every artifact, enforced in SQL and pushed down into every vector query before the candidate cap. **ASI05 (Unexpected Code Execution, ingest path)** is addressed by the removal of `PickleParser`, MIME consistency checks that reject executables before parsing, and HTML/Markdown sanitization before chunking. UMA is a memory SDK, not an agent — the remaining ASI categories require tool use, autonomy, or inter-agent communication that UMA does not have.
+Coverage highlights: primitives 1/2/4 address **LLM01 (Prompt Injection)**; the C1 vector isolation contract addresses **LLM08**; ingest size caps address the ingest side of **LLM10**; the hashed-preview audit log addresses part of **LLM02**; provenance and quarantine exclusion give partial coverage of **LLM09**. `set_rate_limit_hook` is a caller-owned plug-point for the retrieval side of LLM10 — UMA ships no default limiter. Full OWASP LLM Top 10 and ASI mapping, including scope boundaries: [`SECURITY.md`](SECURITY.md).
 
 ### Injection Scanning
 
@@ -523,7 +521,7 @@ UMA Lite uses a single embedded profile: SQLite (authoritative) + LanceDB (vecto
 |--------|-----|
 | `config/uma.yaml` | Convention — any accessible path works |
 
-LLM and embedding values in `uma.yaml` are user-customizable baselines — set provider, model, and host to match your environment. All initialization goes through the same path: `UMAMemory.from_yaml(path)`. The OpenAI and Anthropic provider packages are optional extras (`pip install -e '.[openai]'` or `pip install -e '.[llm]'`); no provider package is needed for the base install, whose only storage dependency is `lancedb>=0.25.3`.
+LLM and embedding values in `uma.yaml` are user-customizable baselines — set provider, model, and host to match your environment. All initialization goes through the same path: `UMAMemory.from_yaml(path)`. See [`configure.md`](.claude/skills/configure.md) for the install extras needed per provider.
 
 ---
 

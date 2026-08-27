@@ -19,22 +19,7 @@ Three paths set `quarantined_at`:
 
 ### 1. Write-time injection scan (high severity)
 
-Every storage write boundary scans the artifact text against the injection pattern catalog. High-severity hits trigger quarantine:
-
-```python
-# uma/adapters/scanner/injection_scan.py::scan_artifact_text
-def scan_artifact_text(text, trust, meta, *, log_context, now=None):
-    result = scan_content(text)
-    if result.severity == "high" and quarantine_enabled():
-        trust = 0.0
-        meta["security"]["injection_scan"] = {...}
-        return trust, meta, datetime.utcnow()   # quarantined_at set
-    elif result.severity == "medium":
-        trust *= 0.5                            # not quarantined
-    elif result.severity == "low":
-        trust *= 0.8                            # not quarantined
-    return trust, meta, None
-```
+Every storage write boundary scans the artifact text against the injection pattern catalog via `scan_artifact_text` (`uma/adapters/scanner/injection_scan.py`). A high-severity hit sets `trust_score` to `0.0` and `quarantined_at`; medium and low severities reduce trust without quarantining — see the severity table under "Composition With Trust Scoring" below for the exact multipliers.
 
 This fires on:
 
@@ -303,9 +288,6 @@ Run this nightly. The typed lane artifacts are auto-routed through `verify_integ
 
 ---
 
-## What Quarantine Is Not
+## Scope
 
-- **Not a moderation system.** UMA's pattern catalog detects prompt-injection-shaped content. It does not detect toxicity, PII, copyright issues, etc. Pair with a separate moderation layer if you need those.
-- **Not deletion.** Quarantined records stay in the database. Use `purge_quarantined` for actual deletion.
-- **Not a security guarantee against motivated adversaries.** Pattern matching is a baseline defense, not a complete one. For high-risk deployments, layer a model-based classifier and allow-list known-good sources.
-- **Not free.** Each quarantined record still consumes SQL row space and a vector-index entry. Purge periodically if your scanner is aggressive.
+UMA's pattern catalog detects prompt-injection-shaped content — not toxicity, PII, or copyright issues, and not novel or obfuscated injection phrasing. Pair with a separate moderation layer or classifier for those. Quarantined records still consume SQL row space and a vector-index entry, so purge periodically if your scanner is aggressive.

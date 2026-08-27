@@ -1,8 +1,10 @@
 # UMA examples
 
 Four runnable examples, ordered by how much they ask of you. Every one takes
-`--config path/to/uma.yaml` — UMA never ships a config, and there is no required
-location for it. You author it, and you pass the path.
+`--config path/to/uma.yaml` — the SDK has no default location it reads, so you
+always pass the path explicitly. [`../config/uma.yaml`](../config/uma.yaml) is
+a reference config in this repo for the examples to copy and edit; it is not
+a config UMA loads automatically.
 
 ## Before you start
 
@@ -21,10 +23,10 @@ uma --config path/to/uma.yaml health
 Exit code 0 means you are ready. If a provider is unreachable the output names
 it, the host, and why.
 
-> **First call is slow.** A local provider such as Ollama loads the model into
-> memory on the first request after boot — that can take over a minute, while
-> later calls return in milliseconds. `uma health` warms both models, so running
-> it first makes the examples feel instant.
+> **First call is slow.** A local model provider loads the model into memory on
+> first use, so the first request after boot is much slower than later ones.
+> `uma health` warms both models, so running it first makes the examples feel
+> instant.
 
 ## Where UMA stops
 

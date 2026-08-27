@@ -15,7 +15,7 @@ from uma import UMAMemory
 runtime = UMAMemory.from_yaml("/path/to/your/uma.yaml")
 ```
 
-`from_yaml` accepts any path — absolute or relative to the working directory of the running process. `"config/uma.yaml"` is the convention used throughout the examples, but the file can live anywhere accessible to your application at runtime (e.g. `"./uma.yaml"`, `"/etc/myapp/uma.yaml"`, or any other location you choose). There is one initialization path — no `init_lite()` or `init_cont()` variants.
+`from_yaml` is the one initialization path for every profile.
 
 ### Identity is per call, never per instance
 
@@ -38,10 +38,9 @@ context_b = await memory.retrieve_context(
 )
 ```
 
-There is no `set_context`, no bound `agent_id` attribute, and no ambient
-scope. Two agents calling the same instance concurrently cannot see each
-other's agent-owned rows, because each call builds its own `RuntimeContext`
-from its own arguments.
+Two agents calling the same instance concurrently cannot see each other's
+agent-owned rows, because each call builds its own `RuntimeContext` from its
+own arguments rather than reading ambient state.
 
 `ingest_document` is the exception to both: a document is scoped by its
 durable `(tenant_id, owner_type, owner_id)` tuple rather than by a request

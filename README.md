@@ -7,11 +7,7 @@
 
 ## Unified Memory Architecture
 
-UMA is a memory and context runtime SDK for developers building AI agents. It ingests data and exposes six public `lane_filter` lanes. The planner also uses `profile` (a semantic-store projection) and optional `graph`, for eight architectural lane names in total. **UMA manages memory only** — your application owns prompts, tool use, reasoning, and final responses.
-
-UMA does not generate assistant replies and does not perform agent reasoning.
-Developers bring their own LLM or agent loop and use UMA strictly for memory
-management.
+UMA is a memory and context runtime SDK for developers building AI agents. It ingests data and exposes six public `lane_filter` lanes. The planner also uses `profile` (a semantic-store projection) and optional `graph`, for eight architectural lane names in total. **UMA manages memory only**: it retrieves and stores context; your application brings its own LLM or agent loop and owns prompts, tool use, reasoning, and final responses.
 
 
 > 🌐 Website: [uma.ai-mem-engineering.com](https://uma.ai-mem-engineering.com)  
@@ -24,8 +20,8 @@ management.
 - 🧠 **Six public filter lanes, eight architectural lane names** — the public `lane_filter` values are working memory, raw, semantic, episodic, procedural, and wiki; the planner also uses profile and optional graph
 - 🪶 **Embedded storage by default** — SQLite + LanceDB require no separate storage service. Configure a local or remote LLM and embedding provider for model-backed operations.
 - 🛡️ **Security at the storage boundary** — every artifact is owner-scoped, trust-scored, and content-hashed before it touches storage, and injection-scanned at every write.
-- 🔍 **Evidence-backed retrieval** — every fact carries provenance back to source chunks. No silent degradation into "vibes-based" RAG.
-- 🏢 **Multi-agent, multi-user** — every artifact is owned by an agent or a user, and that ownership is enforced in SQL and pushed into the vector engine before the k-nearest cap, not applied by application-layer convention.
+- 🔍 **Evidence-backed retrieval** — every fact carries provenance back to source chunks, so every result traces to the source text it came from.
+- 🏢 **Multi-agent, multi-user** — every artifact is owned by an agent or a user, with that ownership enforced in SQL and pushed into the vector engine before the k-nearest cap.
 
 ---
 
@@ -46,7 +42,7 @@ For the full architectural model — invariants, pipelines, and the vector isola
 - **Integrity** — SHA-256 on every artifact; `verify_integrity` re-checks and quarantines on mismatch.
 - **Ingest limits** — MIME checks reject executables, size and page caps bound resource use, HTML/Markdown is sanitized.
 
-The scanner is a regex pre-filter, not a classifier: it catches common phrasings and will miss novel or obfuscated ones. Quarantine and isolation are what limit the damage when it does. If you need adversarial-grade filtering, put a classifier in front of UMA.
+The scanner is a regex pre-filter: it catches common phrasings and will miss novel or obfuscated ones. Quarantine and isolation are what limit the damage when it does. If you need adversarial-grade filtering, put a classifier in front of UMA.
 
 Threat model, what UMA does *not* defend against, and the OWASP/ASI mappings: [`SECURITY.md`](SECURITY.md).
 
@@ -186,8 +182,8 @@ the corresponding `uma.common.results` model.
 Bearer tokens are opaque, SHA-256-hashed in a local SQLite store, and issued
 via `uma auth create <label> --user USER [--tenant TENANT]`. OAuth 2.1 mode
 points UMA at any RFC 8414-compliant IdP (Auth0, Microsoft Entra ID, Google,
-Okta, Keycloak, Authentik) — UMA acts as a pure resource server per the
-current MCP spec direction and never issues tokens itself.
+Okta, Keycloak, Authentik) — UMA acts as a resource server per the current
+MCP spec direction, verifying tokens the IdP issues.
 
 ### Security posture
 
@@ -209,7 +205,7 @@ with per-IdP flag sets).
 
 **You shouldn't have to read tons of documentation to use UMA.** Ask your coding agent instead.
 
-UMA ships nine Agent Skills under `.claude/skills/`. They're structured markdown files with YAML frontmatter that Claude Code (and any [Agent Skills](https://docs.claude.com/en/agents-and-tools/agent-skills/overview)-compatible assistant) automatically loads as context when you ask questions about the project. No setup. No `@` mentions. Just ask:
+UMA ships nine Agent Skills under `.claude/skills/`. They're structured markdown files with YAML frontmatter that Claude Code (and any [Agent Skills](https://docs.claude.com/en/agents-and-tools/agent-skills/overview)-compatible assistant) automatically loads as context when you ask questions about the project. No setup. No `@` mentions. For example:
 
 > *"How do I integrate UMA into my chatbot?"*
 > → `agent-loop.md` loads — end-to-end pattern with code
@@ -217,17 +213,7 @@ UMA ships nine Agent Skills under `.claude/skills/`. They're structured markdown
 > *"What happens when a user sends a prompt injection?"*
 > → `security.md` + `quarantine.md` load — full flow from scan to storage
 
-> *"How do I write a custom vector backend?"*
-> → `vector-contract.md` loads — the contract, atomicity, score normalization
-
-> *"How do I filter by lane?"*
-> → `lanes.md` loads — the six public filter lanes plus the profile and optional graph views
-
-> *"How does fact promotion work?"*
-> → `promotion.md` loads — agent profiles, eligibility gates, scope changes, and provenance
-
-> *"My YAML — can you help me configure Anthropic as the LLM?"*
-> → `configure.md` loads — full YAML reference
+The other seven skills (`api.md`, `configure.md`, `lanes.md`, `vector-contract.md`, `promotion.md`, `overview.md`, `contributions.md`) load the same way for their respective topics.
 
 ---
 

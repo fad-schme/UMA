@@ -168,9 +168,9 @@ This entry was wrong. Verified 2026-08-11: `trust_score` **is** assigned per
 source at write time, and has been.
 
 `uma/common/trust.py` owns the policy — `score_source(SourceDescriptor(...))`
-maps a provenance kind to a score: `turn_user` 0.9 (authenticated session),
-`turn_assistant` 0.7, `document` 0.7, bootstrap 0.8 manual / 0.6 default,
-`tool_output` 0.5, `promotion` inherits the parent, unknown 0.5.
+maps a provenance kind to a score. See `.claude/skills/security.md` for the
+canonical per-kind values; the numbers aren't repeated here so this doc
+doesn't drift out of sync with that reference.
 
 It is wired into every persisted write path:
 
@@ -279,8 +279,8 @@ issues were masking each other:
 - **Store-format mismatch.** `test_episodic_fetch_summaries_owner_scoped` used a
   fixed path outside the test tree, so a DB written by an older build survived
   between runs and tripped the `uma_store_meta` format check with a stale
-  `'uma-rlm'`. `'uma'` is and remains the correct value — nothing in the source
-  ever produced `'uma-rlm'`. Now uses `tmp_path`.
+  `'uma-rlm'`. `'uma'` is the correct value; no current source path produces
+  `'uma-rlm'`. Now uses `tmp_path`.
 - **Entry-point discovery.** `uma_entry_point()` looked only in the interpreter
   scheme's script directory, missing `--user` installs (pip's fallback when the
   base install is not writable). Now checks the user scheme and PATH too.

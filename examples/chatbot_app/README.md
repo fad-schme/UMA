@@ -15,12 +15,9 @@ cp config/uma.yaml config/uma.local.yaml
 ```
 
 4. Update `config/uma.local.yaml` for the backends you actually want to use.
-5. Install any optional extras required by that local config.
-   Examples:
-   `pip install '.[vector]'` for FAISS vector backend
-   `pip install '.[graph]'` for Neo4j
-   `pip install '.[ollama]'` for Ollama-based providers
-6. (Optional) install parser extras for document ingestion, e.g. `pip install '.[parsers]'`
+5. Install the optional extras your config needs — see
+   [`configure.md`](../../.claude/skills/configure.md) for which extra maps to
+   which backend.
 7. Run:
 
 ```bash
@@ -32,11 +29,7 @@ Supported execution mode:
 - Run the example as a module from the repo root.
 - Do not rely on direct script execution such as `python examples/chatbot_app/main.py`; that path can fail on import resolution depending on how Python is launched.
 
-Startup expectations:
-
-- If imports are correct but the configured backends or optional dependencies are missing, startup fails fast with an actionable message.
-- The committed `config/uma.yaml` is a safe baseline, not a personal ready-to-run environment file.
-- Your local `config/uma.local.yaml` may still reference optional infrastructure such as Ollama or custom vector/graph backends. If those are not installed or reachable, update the config or install the matching extras before running the example.
+The committed `config/uma.yaml` is a reference baseline for this repo, not a personal ready-to-run environment file — copy it before editing. If a backend or extra your local config references isn't installed or reachable, startup fails fast with an actionable message.
 
 Commands inside the REPL:
 - `/load` — load documents from `/material` into UMA (document ingestion pipeline).

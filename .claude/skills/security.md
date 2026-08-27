@@ -195,15 +195,25 @@ final_score = (1 - trust_weight) * existing_score + trust_weight * trust_score
 
 After this blend, candidates with `trust_score < min_trust_score` are dropped before truncation.
 
-| Source | Default `trust_score` | Notes |
+`score_source` (`uma/common/trust.py`) assigns the base score per kind at write time:
+
+| Source kind | Default `trust_score` | Notes |
 |---|---|---|
-| `user_msg` facts | 0.9 | User said it directly |
-| `assistant_reply` facts | 0.7 | Assistant may synthesize / hallucinate |
-| Document chunks | 0.5 | Adjusted by `score_source` classifier per ingest config |
-| Injection-low survivor | × 0.8 | Reduced |
-| Injection-medium survivor | × 0.5 | Reduced; below default `min_trust_score` |
-| Injection-high | 0.0 | Quarantined; excluded from retrieval |
-| Integrity-failure | 0.0 | Quarantined via `verify_integrity` |
+| `turn_user` | 0.9 (0.5 if unauthenticated) | User said it directly in an authenticated session |
+| `turn_assistant` | 0.7 (0.5 if unauthenticated) | Assistant may synthesize / hallucinate |
+| `document` | 0.7 | Chunks and facts from `ingest_document` |
+| `bootstrap_memory` / `bootstrap_diary` | 0.8 manual / 0.6 default | Depends on `import_mode` |
+| `tool_output` | 0.5 | No production call site yet |
+| `promotion` | Inherits parent, default 0.5 | Copied fact keeps the source's score |
+
+Independently, injection scanning reduces `trust_score` on the same artifact after it's written:
+
+| Scan severity | Effect | Notes |
+|---|---|---|
+| Low | × 0.8 | Reduced |
+| Medium | × 0.5 | Reduced; below default `min_trust_score` |
+| High | 0.0 | Quarantined; excluded from retrieval |
+| Integrity failure | 0.0 | Quarantined via `verify_integrity` |
 
 `trust_weight` in `config/uma.yaml`:
 
@@ -219,9 +229,9 @@ Setting `trust_weight=0` disables trust influence on ranking. The `min_trust_sco
 
 ## Vector Isolation (C1)
 
-Cross-tenant access is impossible **by construction**:
+Cross-tenant access is enforced at the storage layer, not by application convention:
 
-- **LanceDB** promotes `tenant_id`, `owner_type`, `owner_id` to first-class indexed columns. Queries push these into the engine's `WHERE` clause via DuckDB SQL (single-quote escaped) before the candidate cap is applied. The k-nearest cap can never starve a tenant.
+- **LanceDB** promotes `tenant_id`, `owner_type`, `owner_id` to first-class indexed columns. Queries push these into the engine's `WHERE` clause via DuckDB SQL (single-quote escaped) before the candidate cap is applied, so the k-nearest cap can't starve a tenant.
 - **InMemory** keeps isolation in a parallel `_scopes` dict; isolation is the first filter applied in the query loop.
 - **FAISS** does not support pushed-down predicates. The adapter oversamples (`k × 4`) and post-filters in Python — acceptable for single-tenant deployments; LanceDB is recommended for multi-tenant.
 
@@ -315,7 +325,7 @@ UMA addresses 6 of the 10 OWASP Top 10 for LLM Applications 2025 categories. The
 | **LLM05 Improper Output Handling** | Out of scope | UMA returns context packs, not generated outputs. The calling application owns rendering, escaping, and output validation. |
 | **LLM06 Excessive Agency** | Out of scope | UMA has no tool use, function calling, or autonomous action capability. Pure memory SDK. |
 | **LLM07 System Prompt Leakage** | Out of scope | System prompts live entirely in the calling application. UMA never sees them. |
-| **LLM08 Vector and Embedding Weaknesses** | In scope — primary | C1 isolation contract: `tenant_id` / `owner_type` / `owner_id` pushed as a SQL `WHERE` clause into the vector engine *before* the k-nearest cap is applied — a heavy tenant cannot occupy top-k and starve others. All three adapters (LanceDB, FAISS, InMemory) refuse empty isolation values at upsert. SQL stores apply the same filter on every read path. Cross-tenant leakage is impossible by construction. Write-time injection scanning directly addresses the RAG poisoning sub-problem. |
+| **LLM08 Vector and Embedding Weaknesses** | In scope — primary | C1 isolation contract: `tenant_id` / `owner_type` / `owner_id` pushed as a SQL `WHERE` clause into the vector engine *before* the k-nearest cap is applied — a heavy tenant cannot occupy top-k and starve others. All three adapters (LanceDB, FAISS, InMemory) refuse empty isolation values at upsert. SQL stores apply the same filter on every read path. Two boundary-filter gaps that could have let a mismatched tenant slip through were found and fixed (see CHANGELOG); the enforcement described here is the current, patched behavior. Write-time injection scanning directly addresses the RAG poisoning sub-problem. |
 | **LLM09 Misinformation** | Partial | Every fact carries `source_chunk_ids` (provenance back to source). Quarantined facts excluded at SQL retrieval layer. `provenance_valid` is a top-level field on every `retrieve_memory` result. UMA cannot prevent the LLM from hallucinating — it provides the provenance infrastructure to detect and verify. |
 | **LLM10 Unbounded Consumption** | Partial | Ingest side (UMA-owned): `max_file_bytes` (default 50 MB) and `pdf_max_pages` (default 5000) cap resource use. Retrieval side (caller-owned): `set_rate_limit_hook` exposes a single plug-point that fires at the top of `retrieve_context`, `retrieve_memory`, `process_turn`, and `ingest_document`. UMA ships no default rate limiter and owns no throttling policy — the caller decides accounting, storage, timeouts, and refusal semantics. |
 

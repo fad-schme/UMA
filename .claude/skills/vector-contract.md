@@ -55,7 +55,7 @@ The signatures are non-negotiable. Old-shape calls (`metadata=...` on upsert, `f
 
 Before C1, UMA stored tenant/owner inside a serialized `metadata_json` blob. Filtering happened in Python after the backend returned its top-k. Under multi-tenant load, the top-k could be dominated by one tenant; other tenants saw silent empty results after the Python filter dropped everything.
 
-The new shape enforces isolation **by construction**:
+The new shape enforces isolation at the type level rather than by convention:
 
 - `tenant_ids` / `owner_types` / `owner_ids` are **explicit parallel-list parameters**, not buried inside a metadata dict. Each list must be the same length as `ids`.
 - `query` requires `tenant_id`, `owner_type`, `owner_id` as keyword-only parameters. Empty values raise `ValueError`.
@@ -94,9 +94,7 @@ The cap (`limit`) is applied **after** scope narrowing. Cross-tenant rows cannot
 
 ### SQL Escape
 
-Values are escaped via standard SQL single-quote doubling: `'` → `''`. This is the same pattern LanceDB's `_delete_from_table` already used for id-list construction. DuckDB (LanceDB's underlying SQL engine) accepts it.
-
-A hostile tenant id like `t'malicious` resolves to itself and does **not** collide with a query for tenant `t`. A truly hostile string like `t';DROP TABLE foo;--` round-trips correctly and is matched literally.
+Values are escaped via standard SQL single-quote doubling (`'` → `''`), the same pattern LanceDB's `_delete_from_table` already used for id-list construction, before being interpolated into the `WHERE` clause DuckDB executes.
 
 ### Score Normalization
 
@@ -107,15 +105,7 @@ d = max(0.0, float(distance))
 score = math.exp(-d)
 ```
 
-This:
-
-- Maps `[0, ∞)` to `(0, 1]` — coherent with `trust_score` in `[0, 1]` for the trust-weight blend
-- Is monotonic: smaller distance → larger score
-- For normalized embeddings (L2 distance ∈ `[0, 2]`): score ∈ `[exp(-2), 1] ≈ [0.135, 1]`
-- Handles negative distances defensively (clamped to 0)
-- Handles non-numeric `_distance` defensively (score = 0)
-
-Without this normalization, the trust-weight blend `(1 - tw) * similarity + tw * trust` mixes incompatible scales (unbounded negative similarity vs. `[0, 1]` trust) and produces incoherent rankings.
+This maps `[0, ∞)` to `(0, 1]`, monotonically, so it's coherent with `trust_score ∈ [0, 1]` in the trust-weight blend. Without it, the blend mixes incompatible scales and produces incoherent rankings.
 
 ---
 
@@ -195,7 +185,7 @@ This is a contract guard, not theater. Without it, callers could pass `extra_met
 
 ## Delete
 
-`delete(ids: List[str])` is unchanged from the pre-C1 signature. UMA generates SQL-unique ids across all callers, so cross-tenant id collision is impossible by construction. Scoping deletes by tenant would be ceremonial.
+`delete(ids: List[str])` is unchanged from the pre-C1 signature. UMA generates SQL-unique ids across all callers, so a cross-tenant id collision would require an id generator outside UMA's control. Scoping deletes by tenant would be ceremonial.
 
 ---
 
@@ -242,16 +232,6 @@ We expect this to return `[]` (no real row matches `__health__`). What we're tes
 
 ---
 
-## What This Patch Series Closed
+## Why Filter-Before-Cap Matters
 
-The C1 patch fixed the silent-truncation bug that the M4 patch had only observed. Pre-C1 symptoms:
-
-- Tenant A with 10,000 documents indexed; tenant B with 50
-- Tenant B issues a query for `k=10`; LanceDB cap is `limit=512`
-- LanceDB returns the global top 512 — all tenant A's
-- Python post-filter drops them; tenant B's result is `[]`
-- Tenant B's documents were present in the index but never seen
-
-Post-C1: LanceDB filters by tenant **before** the cap. Tenant B always sees its top-k from its own 50 documents. The cap can never starve a tenant.
-
-The same logic applies to any other multi-tenant vector backend: filter-before-cap is the only way to guarantee tenant fairness under load. Push-down is preferred where supported; oversample-and-post-filter is the documented fallback.
+Filtering by tenant *after* the k-nearest cap (the pre-C1 approach) lets a large tenant's rows fill the entire candidate pool before a small tenant's rows are ever considered, silently truncating that tenant's results to empty even though its documents are in the index. Filtering before the cap — what LanceDB's push-down and FAISS's oversample-and-post-filter both do — is the only way to guarantee a tenant's query sees its own top-k regardless of how much data other tenants have indexed. Push-down is preferred where a backend supports it; oversample-and-post-filter is the documented fallback.

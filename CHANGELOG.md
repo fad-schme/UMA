@@ -217,8 +217,8 @@ First release published to PyPI.
 - **`google-re2` regex backend for the injection scanner** via a new
   `pip install uma-mem[security]` install extra. When installed, `scan_content`
   and every rule-function scorer compile their patterns through RE2, which
-  is linear-time by construction — ReDoS is impossible regardless of what
-  patterns future contributors add. Base install falls back to Python's
+  is linear-time by construction, closing catastrophic-backtracking ReDoS
+  regardless of what patterns future contributors add. Base install falls back to Python's
   `re` with a one-time WARNING at first import. All 200 shipped patterns
   are already RE2-compatible (verified); no pattern rewrites required.
 - **`uma/common/_regex_backend.py`** — single canonical selector for the

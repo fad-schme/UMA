@@ -92,17 +92,13 @@ The promoted fact:
   policy version, and reason under `meta["promotion"]`;
 - remains idempotent for the same source and target.
 
-This copy-based contract makes scope widening explicit and auditable.
-
 ## Safe Defaults
 
 - A scoped instance has a default agent-bound `PromotionPolicy`.
-- No agent profile means no automatic promotion.
 - Preferences and ephemeral predicates are blocked by default.
 - Chat and working-memory sources are blocked.
 - Likely secrets and personal identifiers are blocked.
 - Facts without source provenance or embeddings do not promote.
-- Background failures never broaden access and never fail the turn.
 
 ## Troubleshooting
 

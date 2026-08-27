@@ -19,9 +19,11 @@ pip install 'uma-mem[mcp]'
 
 This puts the `uma-mcp` executable on PATH. UMA requires Python 3.10+.
 
-You also need a working `uma.yaml`. UMA never packages one — it is a file you
-author and edit, and the path is yours to choose. See
-[`configure.md`](../../.claude/skills/configure.md) for the full reference.
+You also need a working `uma.yaml`. The SDK has no default it reads — you
+author and edit one, and the path is yours to choose (the repo's
+`config/uma.yaml` is a reference to copy, not something UMA loads
+automatically). See [`configure.md`](../../.claude/skills/configure.md) for
+the full reference.
 
 Confirm the runtime is healthy before wiring any client, because a client that
 launches a broken server just fails silently:
@@ -194,10 +196,10 @@ The assistant omitted `user_id`. It is a required argument on every retrieval
 and ingestion tool in stdio mode.
 
 **First call is very slow, or times out.**
-A local provider such as Ollama loads the model into memory on the first request
-after boot; that can take over a minute, while later calls return in
-milliseconds. Raise `embedding.config.timeout` and `llms.uma.config.timeout` in
-your `uma.yaml`, or warm the model first with `uma --config <path> health`.
+A local model provider loads the model into memory on first use, so the first
+request after boot is much slower than later ones. Raise
+`embedding.config.timeout` and `llms.uma.config.timeout` in your `uma.yaml`,
+or warm the model first with `uma --config <path> health`.
 
 **Memory appears empty across restarts.**
 Almost always a `db_root` resolving to a different directory than you expect.

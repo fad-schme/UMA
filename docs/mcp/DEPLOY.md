@@ -131,9 +131,6 @@ not match the token, the call is rejected rather than silently overridden:
 user_id='bob' does not match authenticated user (token identifies user='alice')
 ```
 
-That is deliberate. A silent override would let a confused or manipulated client
-believe it wrote to one scope while UMA wrote to another.
-
 `agent_id` is deliberately **not** part of the token, and is not authenticated.
 Over MCP there is no agent to authenticate: the client is a chat application
 driven by a person, and `uma auth create --user alice` issues a credential to
@@ -144,10 +141,6 @@ That means agent-owned memory is shared, by design, across every user of a
 tenant who names that `agent_id`. The confidentiality boundary is the token's
 `(tenant_id, user_id)` pair and the user-owned lane it scopes. Do not put
 anything in an agent-owned lane that one user of the tenant should not see.
-
-(Embedding UMA as a library is the other shape: there the application *is* the
-agent and asserts its own `agent_id` alongside `user_id`, the same way it
-asserts every other scope value.)
 
 Practical consequences:
 

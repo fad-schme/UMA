@@ -16,15 +16,9 @@ The UMA team may invite an external contributor to submit a pull request when:
 
 Pull requests that have not been explicitly invited by a member of the UMA team will be closed without review.
 
-**Why we do not generally accept external code contributions**
+**Why code contributions are invitation-only**
 
-While we appreciated the effort and engagement from the community, is difficult to ensure consistency and security.
-
-As per our experience, many contributions are made without full visibility into the architectural context, system-level constraints, or near-term roadmap considerations that guide UMA development. Reviewing and iterating on these PRs often take more time than implementing the fix directly, and diverted attention from higher-priority work.
-
-The most valuable contributions consistently came developers who demonstrated deep understanding of a problem domain. That expertise is most helpful when shared early -- through detailed bug reports, analysis, and design discussion in issues. Identifying the right solution is typically the hard part; implementing it is comparatively straightforward with the help of UMA shipped skills.
-
-For these reasons, we focus external contributions on discussion, analysis, and feedback, and reserve code changes for cases where a targeted invitation makes sense.
+Reviewing a PR against architectural context, system-level constraints, and roadmap direction that the author doesn't have visibility into costs more maintainer time than implementing the fix directly. Detailed bug reports, analysis, and design discussion in issues are what let a maintainer identify the right solution quickly; from there, implementing it is comparatively fast with the help of UMA's shipped skills. So we focus external contributions on discussion, analysis, and feedback, and reserve code changes for cases where a targeted invitation makes sense.
 
 ### Development workflow
 
@@ -38,7 +32,7 @@ If you are invited by a UMA team member to contribute a PR, here is the recommen
 
 1. **Start with an issue.** Open a new one or comment on an existing discussion so we can agree on the solution before code is written.
 2. **Add or update tests.** A bug fix should generally come with test coverage that fails before your change and passes afterwards. 100% coverage is not required, but aim for meaningful assertions.
-3. **Document behavior.** If your change affects user-facing behavior, update the README, inline help (`UMA --help`), or relevant example projects.
+3. **Document behavior.** If your change affects user-facing behavior, update the README, inline help (`uma --help`), or relevant example projects.
 4. **Keep commits atomic.** Each commit should compile and the tests should pass. This makes reviews and potential rollbacks easier.
 
 ### Opening a pull request (by invitation only)
@@ -84,4 +78,4 @@ No special Git commands, email attachments, or commit footers required.
 
 ### Security & responsible AI
 
-Have you discovered a vulnerability or have concerns about model output? Please e-mail **security@ai-mem-engineering.com** and we will respond promptly.
+Have you discovered a vulnerability or have concerns about model output? Please e-mail **ad-schme@aibestlabs.com** and we will respond promptly.

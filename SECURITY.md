@@ -12,7 +12,7 @@ and the full deep dive in [`.claude/skills/security.md`](.claude/skills/security
 
 ## Reporting a Vulnerability
 
-**Please email [security@ai-mem-engineering.com](mailto:security@ai-mem-engineering.com).**
+**Please email [ad-schme@aibestlabs.com](mailto:ad-schme@aibestlabs.com).**
 
 Do not file GitHub issues for security-relevant findings — those are public
 the moment they are opened. If you would like to send encrypted mail, ask
@@ -374,7 +374,7 @@ The [OWASP Top 10 for LLM Applications 2025](https://genai.owasp.org/llm-top-10/
 | 🟢 **LLM01: Prompt Injection** | In scope | Two-layer scanning: advisory pre-LLM gate (`scan_user_input`) + write-time per-artifact scan. High severity → quarantine; medium/low → trust reduction. |
 | 🟢 **LLM02: Sensitive Information Disclosure** | Partial | Audit log stores a SHA-256 query digest plus a bounded 80-character preview — never the full query. HTML sanitization strips scripts and active URLs at ingest. |
 | 🟢 **LLM04: Data and Model Poisoning** | In scope (RAG path) | Quarantined chunks dropped before fact extraction. SHA-256 `content_hash` + `verify_integrity` detect post-hoc tampering. |
-| 🟢 **LLM08: Vector and Embedding Weaknesses** | In scope — primary | The C1 isolation contract: LanceDB pushes `tenant_id` / `owner_type` / `owner_id` as a SQL `WHERE` clause into the engine *before* the k-nearest cap — without this, heavy users in one tenant would occupy top-k globally and starve others. SQL stores add the same filter on every read path. Cross-tenant leakage is impossible by construction. User input and file injection scanning also addresses the RAG poisoning problem. |
+| 🟢 **LLM08: Vector and Embedding Weaknesses** | In scope — primary | The C1 isolation contract: LanceDB pushes `tenant_id` / `owner_type` / `owner_id` as a SQL `WHERE` clause into the engine *before* the k-nearest cap — without this, heavy users in one tenant would occupy top-k globally and starve others. SQL stores add the same filter on every read path. User input and file injection scanning also addresses the RAG poisoning problem. |
 | 🟢 **LLM09: Misinformation** | Partial | Every fact carries provenance back to source chunks. `LatestWinsFactResolver` picks the canonical row by most-recent `updated_at`; quarantined facts are excluded from retrieval at the SQL layer (`AND quarantined_at IS NULL`) so they never surface to callers even if chosen as canonical. |
 | 🟢 **LLM10: Unbounded Consumption** | Partial | Ingest side: `max_file_bytes` and `pdf_max_pages` cap resource use — UMA-owned. Retrieval side: `set_rate_limit_hook` exposes a single plug-point on every public method for the caller's own rate limiter. UMA ships no default limiter and owns no throttling policy — the caller decides accounting, storage, timeouts, and refusal semantics. |
 

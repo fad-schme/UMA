@@ -74,7 +74,7 @@ storage:
 **`db_root_base`** decides where UMA looks for a relative `db_root`. Two values are accepted:
 
 - **`"config"` (default, recommended)** — relative paths are resolved from the directory of the YAML file itself. The database follows the config file. This is the safe choice for production: launching the process from any working directory reaches the same database.
-- **`"cwd"`** — relative paths are resolved from the process working directory. Useful for per-project sandboxes where each `cd` intentionally selects a different UMA instance. **Warning:** launching the process from a directory that doesn't already contain the DB will silently create a fresh empty one. If a user reports "UMA lost all my memories," the first thing to check is whether they launched from a different `cwd` with `db_root_base: "cwd"` set.
+- **`"cwd"`** — relative paths are resolved from the process working directory. Useful for per-project sandboxes where each `cd` intentionally selects a different UMA instance. **Warning:** launching the process from a directory that doesn't already contain the DB will silently create a fresh empty one.
 
 If `db_root` is an absolute path, `db_root_base` has no effect.
 
@@ -151,7 +151,7 @@ For Anthropic/Claude (install `pip install -e '.[llm]'` first):
 llms:
   uma:
     provider: "anthropic"
-    model: "claude-haiku-4-5-20251001"
+    model: "<current-claude-model>"  # see Anthropic's model list for the latest id
     config:
       api_key: "${ANTHROPIC_API_KEY}"
 ```

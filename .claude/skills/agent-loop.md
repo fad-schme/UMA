@@ -5,7 +5,7 @@ description: End-to-end developer pattern for integrating UMA into an agent loop
 
 # UMA — Agent Loop Integration
 
-UMA does not generate replies. It manages memory and returns context for your LLM. The canonical pattern is:
+UMA manages memory and returns context for your LLM. The canonical pattern is:
 
 ```
 1. scan_user_input         (pre-LLM gate, advisory)
@@ -49,7 +49,7 @@ async def handle_turn(user_msg: str) -> str:
     # 3. Call your LLM — UMA does not do this for you
     system = build_system_prompt(context)   # your code
     response = llm.messages.create(
-        model="claude-opus-4-7",
+        model="<your-model>",
         max_tokens=1024,
         system=system,
         messages=[{"role": "user", "content": user_msg}],
@@ -191,7 +191,7 @@ def build_system_prompt(context: dict) -> str:
     return "\n\n".join(parts)
 ```
 
-If `query_scan_severity` is `medium` or `high`, downstream LLM hops (snippet refiner, fact pruner) have already skipped their refinement step — you got raw chunks instead of LLM-polished snippets. That's deliberate; the refiner won't amplify a hostile query.
+If `query_scan_severity` is `medium` or `high`, downstream LLM hops (snippet refiner, fact pruner) have already skipped their refinement step — you got raw chunks instead of LLM-polished snippets. That's deliberate; it keeps a hostile query out of an LLM refinement step that could otherwise amplify it.
 
 ---
 
@@ -348,7 +348,7 @@ an agent profile, promotion is a no-op. See `promotion.md`.
 
 - `from_yaml` returns when retrieval is ready; ingestion warms up in the background. Calling `ingest_document` immediately after `from_yaml` is safe — it waits internally.
 - `process_turn` is async but does meaningful work (LLM fact extraction, embedding). Don't `await` it on the critical reply path if latency matters; run it as a background task with `asyncio.create_task(memory.process_turn(...))` after you've sent the reply.
-- `retrieve_context` typically runs in 50-300 ms depending on lane filter and corpus size. Adjust `retrieval.context.snippet_max_chars` and the `max_*` caps to trim the response envelope.
+- `retrieve_context` latency scales with lane filter and corpus size. Adjust `retrieval.context.snippet_max_chars` and the `max_*` caps to trim the response envelope.
 - The retrieval audit table grows ~1 row per retrieve call. Prune or rotate periodically if you serve a high volume.
 
 ---

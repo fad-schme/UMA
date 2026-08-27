@@ -14,13 +14,10 @@ UMA (Universal Memory Architecture) is a **memory and context runtime SDK** for 
 
 UMA manages memory only. The calling application owns prompts, tool use, reasoning, and final responses.
 
-## What UMA Is NOT
+## Two things worth calling out explicitly
 
-- Not a chat application or autonomous agent
-- Not a "big prompt builder"
-- Not a knowledge-graph-first system (graph is a supporting lane, not the primary truth)
-- Not a framework that maintains legacy/backward compatibility — obsolete paths are removed
-- Not a security boundary against malicious developers running it locally (UMA defends artifacts in motion through the pipeline; it does not sandbox the operator)
+- **No legacy/backward-compatibility shims.** Obsolete paths are removed rather than kept for compatibility, so pin a version if you need stability across releases.
+- **Security scope stops at the pipeline.** UMA defends artifacts moving through ingest and retrieval (scanning, quarantine, isolation); it is not a sandbox against a malicious developer running it locally.
 
 ## Core Product Principle
 
@@ -49,11 +46,13 @@ Every stored and retrieved artifact must be **owner-scoped**:
 | `tenant_id` | Required for durable artifacts; preserved end-to-end |
 | `session_id` + `agent_id` | Required for session-local artifacts |
 
-Cross-tenant access is impossible **by construction**:
+Cross-tenant access is enforced at the storage layer, not by application convention:
 
 - The vector index (LanceDB) promotes `tenant_id` / `owner_type` / `owner_id` to first-class indexed columns and pushes them into every query's `WHERE` clause before the candidate cap is applied.
 - SQL stores filter by isolation in every read path.
 - Vector adapters refuse empty isolation values at write time.
+
+See `security.md` for the isolation contract in full, including the boundary-filter bugs found and fixed in past releases.
 
 **Practical rule:** If you cannot answer "which user/agent/project is allowed to see this row?" the design is wrong.
 
@@ -66,36 +65,7 @@ Cross-tenant access is impossible **by construction**:
 
 ## Security Primitives (ASI06 / ASI03 / ASI05 + LLM baseline)
 
-UMA is a memory SDK — the OWASP Agentic Security Initiative (ASI) is the most relevant framework because memory is where ASI threats materialise. The three ASI controls below are first-class architectural properties; the LLM Top 10 coverage follows from building the memory layer correctly.
-
-**Seven primitives enforce security on every write and read boundary:**
-
-- **Provenance** — every artifact carries its lineage: origin, owner, derivation chain, and timestamps. A runtime invariant, not a debugging convenience. Enables every other primitive.
-- **Write-time trust scoring** — `uma.common.trust.score_source` assigns `trust_score ∈ [0, 1]` at the moment of write. The score travels with the artifact permanently and is blended into retrieval ranking: `final = (1 - trust_weight) * similarity + trust_weight * trust_score`. Anything below `min_trust_score` (default 0.5) is dropped before results are returned.
-- **Cryptographic integrity** — every Fact, Episode, Skill, and Chunk carries a SHA-256 `content_hash` computed at write time. `verify_integrity` re-derives and compares; a mismatch quarantines the record and appends an audit log entry.
-- **Injection pattern detection** — every artifact is scanned at its write boundary against bundled English, French, Spanish, German, and Simplified Chinese YAML catalogs covering jailbreak prompts, role impersonation, context switching, data exfiltration probes, encoded payloads, alignment breaking, debug spoofing, config leakage, delimiter smuggling, and embedded LLM protocol artifacts. High-severity hits set `trust_score` to 0.0 and quarantine the artifact. The catalog is YAML-configurable via `security.custom_patterns_path`.
-- **Two-layer injection gate** — `scan_user_input` is the pre-LLM advisory gate: synchronous, never raises, caller decides. `process_turn` rescans `user_msg` at the storage boundary (defense-in-depth); on high severity it raises `InjectionDetectedError` and nothing is stored — no working memory, no episode, no chunks, no facts.
-- **Quarantine** — suspicious artifacts are stored with `quarantined_at` set and excluded from every retrieval query (`AND quarantined_at IS NULL`). The record stays in the database for review. `list_quarantined`, `reinstate_quarantined`, and `purge_quarantined` manage the lifecycle.
-- **Ingest boundary hardening** — MIME consistency check rejects executables and extension/content mismatches before any parser runs. File size (`max_file_bytes`, default 50 MB) and PDF page count (`pdf_max_pages`, default 5000) caps prevent resource abuse. HTML and Markdown are sanitized of scripts, iframes, inline event handlers, `javascript:` and `data:` URLs before chunking. Per-category removal counts are recorded in `meta["security"]["sanitization"]`.
-
-**OWASP ASI coverage (primary):** ASI06 Memory Poisoning — primitives 2–6 compose directly. ASI03 Identity & Privilege Abuse — mandatory `tenant_id` / `owner_type` / `owner_id` on every artifact, pushed into SQL and vector queries before the candidate cap (C1 contract). ASI05 Unexpected Code Execution (ingest path) — `PickleParser` removed, MIME checks, HTML sanitization.
-
-**OWASP LLM Top 10 coverage (as a consequence — 6 of 10):**
-
-| Control | Scope | How |
-|---|---|---|
-| **LLM01** Prompt Injection | In scope | Two-layer gate: `scan_user_input` (pre-LLM, advisory) + `process_turn` write-time rescan (raises `InjectionDetectedError` on high severity, drops turn entirely) |
-| **LLM02** Sensitive Information Disclosure | Partial | Retrieval audit log stores a SHA-256 query digest plus a bounded 80-character preview, never the full query. HTML sanitization strips active URLs from ingested documents. |
-| **LLM03** Supply Chain | Out of scope (adjacent) | No model training or plugin registry. `PickleParser` removed; MIME checks reject executables at the document ingest boundary. |
-| **LLM04** Data and Model Poisoning | In scope | Quarantined chunks excluded from fact extraction. SHA-256 `content_hash` + `verify_integrity` detect post-hoc tampering across all lanes. |
-| **LLM05** Improper Output Handling | Out of scope | UMA returns context, not generated output. Caller owns rendering and escaping. |
-| **LLM06** Excessive Agency | Out of scope | No tool use, no function calling, no autonomous action. Pure memory SDK. |
-| **LLM07** System Prompt Leakage | Out of scope | System prompts live in the calling application, not UMA. |
-| **LLM08** Vector and Embedding Weaknesses | In scope — primary | C1 contract: isolation (`tenant_id` / `owner_type` / `owner_id`) pushed into every vector query *before* the k-nearest cap — a heavy tenant cannot starve others. All three adapters refuse empty isolation at upsert. SQL layer adds the same filter. Write-time scanning addresses the RAG poisoning sub-problem. |
-| **LLM09** Misinformation | Partial | Every fact carries provenance back to source chunks. Quarantined facts excluded at SQL retrieval layer (`AND quarantined_at IS NULL`). `provenance_valid` is a top-level field on every `retrieve_memory` result. |
-| **LLM10** Unbounded Consumption | Partial | Ingest side (UMA-owned): `max_file_bytes` and `pdf_max_pages` cap resource use. Retrieval side (caller-owned): `set_rate_limit_hook` exposes a single plug-point on every public method — UMA ships no default limiter and owns no throttling policy (accounting, storage, timeouts, and refusal semantics are the caller's). |
-
-The vector isolation contract (C1) and the rate-limit hook are documented separately; see `security.md` for the full model.
+Seven primitives — provenance, write-time trust scoring, cryptographic integrity, injection pattern detection, the two-layer injection gate, quarantine, and ingest boundary hardening — enforce security on every write and read boundary. Together they cover ASI06 (Memory Poisoning, primary), ASI03 (Identity & Privilege Abuse), ASI05 (Unexpected Code Execution, ingest path), and 6 of the OWASP LLM Top 10. Full primitive descriptions, the ASI/LLM coverage tables, and the vector isolation contract: see `security.md`.
 
 ## One-Sentence Product Test
 

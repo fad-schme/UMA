@@ -1,8 +1,9 @@
 # UMA MCP — OAuth 2.1 (ChatGPT and other IdP-backed clients)
 
 ChatGPT requires an MCP server to authenticate with OAuth 2.1 rather than a
-static bearer token. In this mode UMA acts as a **pure OAuth resource server**:
-it verifies JWTs issued by your identity provider and never mints tokens itself.
+static bearer token. In this mode UMA acts as an OAuth resource server: it
+verifies JWTs issued by your identity provider. The IdP remains the
+authorization server — see "Identity mapping" below.
 
 If your client accepts a static bearer token, [`DEPLOY.md`](DEPLOY.md) is
 simpler. For local coding agents, use [`STDIO_CLIENTS.md`](STDIO_CLIENTS.md).
@@ -69,59 +70,30 @@ Two rules the server enforces at startup rather than at first request:
   auth modes.
 
 The issuer advertised in the RFC 9728 protected-resource metadata is your
-**IdP**, not UMA. UMA is not an authorization server and does not pretend to be
-one.
+**IdP**, not UMA — the IdP issues and manages tokens; UMA only verifies them.
 
 ---
 
 ## Per-IdP flag sets
 
-Replace hostnames and identifiers with your own.
-
-**Auth0** — note the trailing slash on the issuer, which Auth0 includes in `iss`:
+Replace hostnames and identifiers with your own. Worked example for Auth0
+(note the trailing slash on the issuer, which Auth0 includes in `iss`):
 
 ```bash
 --oauth-issuer   https://your-tenant.auth0.com/ \
 --oauth-audience https://memory.example.com/mcp
 ```
 
-**Microsoft Entra ID** (v2.0 endpoint):
+The other supported IdPs follow the same three flags, with JWKS needed only
+where the provider doesn't publish at `{issuer}/.well-known/jwks.json`:
 
-```bash
---oauth-issuer    https://login.microsoftonline.com/<tenant-guid>/v2.0 \
---oauth-audience  api://<application-id> \
---oauth-jwks-uri  https://login.microsoftonline.com/<tenant-guid>/discovery/v2.0/keys
-```
-
-**Google**:
-
-```bash
---oauth-issuer   https://accounts.google.com \
---oauth-audience <your-client-id>.apps.googleusercontent.com \
---oauth-jwks-uri https://www.googleapis.com/oauth2/v3/certs
-```
-
-**Okta**:
-
-```bash
---oauth-issuer   https://your-org.okta.com/oauth2/default \
---oauth-audience api://default
-```
-
-**Keycloak**:
-
-```bash
---oauth-issuer   https://kc.example.com/realms/<realm> \
---oauth-audience uma-mcp \
---oauth-jwks-uri https://kc.example.com/realms/<realm>/protocol/openid-connect/certs
-```
-
-**Authentik**:
-
-```bash
---oauth-issuer   https://auth.example.com/application/o/<slug>/ \
---oauth-audience uma-mcp
-```
+| IdP | `--oauth-issuer` | `--oauth-audience` | `--oauth-jwks-uri` needed? |
+| --- | --- | --- | --- |
+| Microsoft Entra ID (v2.0) | `https://login.microsoftonline.com/<tenant-guid>/v2.0` | `api://<application-id>` | Yes — `.../discovery/v2.0/keys` |
+| Google | `https://accounts.google.com` | `<client-id>.apps.googleusercontent.com` | Yes — `https://www.googleapis.com/oauth2/v3/certs` |
+| Okta | `https://your-org.okta.com/oauth2/default` | `api://default` | No |
+| Keycloak | `https://kc.example.com/realms/<realm>` | `uma-mcp` | Yes — `.../protocol/openid-connect/certs` |
+| Authentik | `https://auth.example.com/application/o/<slug>/` | `uma-mcp` | No |
 
 ---
 

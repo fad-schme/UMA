@@ -215,10 +215,12 @@ tenant_id="default"      # optional; defaults to "default" (single-tenant Lite)
 session_id="session-1"   # required for session-local lanes
 ```
 
-Cross-tenant access is impossible by construction:
+Cross-tenant access is enforced at the storage layer:
 
 - The vector index (LanceDB) promotes `tenant_id` / `owner_type` / `owner_id` to first-class columns and pushes them into every query's `WHERE` clause before the candidate cap is applied.
 - SQL stores filter by `tenant_id AND owner_type AND owner_id` in every read path.
+
+See `security.md` for the full isolation contract.
 
 Cross-agent sharing requires explicit scope widening.
 
