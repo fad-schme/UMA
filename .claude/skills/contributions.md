@@ -1,81 +1,44 @@
 ## Contributing
 
-**External contributions are by invitation only**
+**External contributions are by invitation only.**
 
-At this time, the UMA team does not accept unsolicited code contributions.
+UMA is a memory and context SDK that sits at the storage boundary of every
+agent built on it — every merged line has to be understood well enough to
+reason about its trust model, not just its behaviour. Reviewing a PR against
+architectural context, isolation contracts, and roadmap direction the author
+doesn't have visibility into costs more maintainer time than implementing the
+fix directly. This will change as the project matures.
 
-If you would like to propose a new feature or a change in behavior, please open an issue describing the proposal or upvote an existing enhancement request. We prioritize new features based on community feedback, alignment with our roadmap, and consistency across all UMA surfaces (CLI, IDE extensions, web, etc.).
+The team may invite an external contributor to submit a pull request when the
+problem is well understood, the proposed approach aligns with the intended
+solution, and the issue is high-impact and high-priority. Uninvited PRs are
+closed without review.
 
-If you encounter a bug, please open a bug report or verify that an existing report already covers the issue. If you would like to help, we encourage you to contribute by sharing analysis, reproduction details, root-cause hypotheses, or a high-level outline of a potential fix directly in the issue thread.
+Highest-leverage ways to help: open a bug report, propose a feature, or share
+analysis in an existing issue thread. See `CONTRIBUTING.md` for the
+bug-report and feature-proposal checklists.
 
-The UMA team may invite an external contributor to submit a pull request when:
+### Development workflow (once invited)
 
-- the problem is well understood,
-- the proposed approach aligns with the team’s intended solution, and
-- the issue is deemed high-impact and high-priority.
+- `git clone https://github.com/fad-schme/UMA.git` and `pip install -e ".[dev]"` — Python 3.10+
+- Branch from `main`, keep changes focused, all checks green before push
+- Start with the issue; add tests; document behaviour; keep commits atomic
+- PR template: What? Why? How? — link the issue, keep the branch current,
+  mark Ready for review only when merge-able
+- One maintainer reviews; undiscussed scope may get the PR closed; accepted
+  PRs are squash-merged
 
-Pull requests that have not been explicitly invited by a member of the UMA team will be closed without review.
+### CLA
 
-**Why code contributions are invitation-only**
+Paste on the PR (or reply `recheck` if already signed):
 
-Reviewing a PR against architectural context, system-level constraints, and roadmap direction that the author doesn't have visibility into costs more maintainer time than implementing the fix directly. Detailed bug reports, analysis, and design discussion in issues are what let a maintainer identify the right solution quickly; from there, implementing it is comparatively fast with the help of UMA's shipped skills. So we focus external contributions on discussion, analysis, and feedback, and reserve code changes for cases where a targeted invitation makes sense.
+```text
+I have read the CLA Document and I hereby sign the CLA
+```
 
-### Development workflow
+The CLA-Assistant bot records the signature and marks the status check.
 
-If you are invited by a UMA team member to contribute a PR, here is the recommended development workflow.
+### Security
 
-- Create a _topic branch_ from `main` - e.g. `feat/interactive-config-plus`.
-- Keep your changes focused. Multiple unrelated fixes should be opened as separate PRs.
-- Ensure your change is free of lint warnings and test failures.
-
-### Guidance for invited code contributions
-
-1. **Start with an issue.** Open a new one or comment on an existing discussion so we can agree on the solution before code is written.
-2. **Add or update tests.** A bug fix should generally come with test coverage that fails before your change and passes afterwards. 100% coverage is not required, but aim for meaningful assertions.
-3. **Document behavior.** If your change affects user-facing behavior, update the README, inline help (`uma --help`), or relevant example projects.
-4. **Keep commits atomic.** Each commit should compile and the tests should pass. This makes reviews and potential rollbacks easier.
-
-### Opening a pull request (by invitation only)
-
-- Fill in the PR template (or include similar information) - **What? Why? How?**
-- Include a link to a bug report or enhancement request in the issue tracker
-- Make sure your branch is up-to-date with `main` and that you have resolved merge conflicts.
-- Mark the PR as **Ready for review** only when you believe it is in a merge-able state.
-
-### Review process
-
-1. One maintainer will be assigned as a primary reviewer.
-2. If your invited PR introduces scope or behavior that was not previously discussed and approved, we may close the PR.
-3. We may ask for changes. Please do not take this personally. We value the work, but we also value consistency and long-term maintainability.
-4. When there is consensus that the PR meets the bar, a maintainer will squash-and-merge.
-
-### Community values
-
-- **Be kind and inclusive.** Treat others with respect; we follow the [Contributor Covenant](https://www.contributor-covenant.org/).
-- **Assume good intent.** Written communication is hard - err on the side of generosity.
-- **Teach & learn.** If you spot something confusing, open an issue or discussion with suggestions or clarifications.
-
-### Getting help
-
-If you run into problems setting up the project, would like feedback on an idea, or just want to say _hi_ - please open a Discussion topic or jump into the relevant issue. We are happy to help.
-
-Together we can make UMA CLI an incredible tool. **Happy hacking!** :rocket:
-
-### Contributor license agreement (CLA)
-
-All contributors **must** accept the CLA. The process is lightweight:
-
-1. Open your pull request.
-2. Paste the following comment (or reply `recheck` if you've signed before):
-
-   ```text
-   I have read the CLA Document and I hereby sign the CLA
-   ```
-
-3. The CLA-Assistant bot records your signature in the repo and marks the status check as passed.
-
-No special Git commands, email attachments, or commit footers required.
-
-### Security & responsible AI
-
-Have you discovered a vulnerability or have concerns about model output? Please e-mail **ad-schme@aibestlabs.com** and we will respond promptly.
+Vulnerabilities go to **ad-schme@aibestlabs.com**, not a public issue — see
+`SECURITY.md`.
