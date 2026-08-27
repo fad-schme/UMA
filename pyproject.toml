@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77", "wheel"]
+requires = ["setuptools>=83.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -69,7 +69,7 @@ graph    = ["neo4j"]
 security = ["google-re2>=1.1"]
 
 # Document parsers used by the ingest pipeline.
-parsers  = ["PyPDF2", "beautifulsoup4", "markdown", "pandas"]
+parsers  = ["PyPDF2>=3.9.0", "beautifulsoup4", "markdown", "pandas"]
 
 # Development / test tools. `pip install -e '.[dev]'` is what
 # requirements.txt resolves to.
@@ -84,6 +84,7 @@ dev = [
     "mypy",
     "types-PyYAML",
     "matplotlib",
+    "setuptools>=83.0.0",
     "uma-mem[parsers]",
     "uma-mem[mcp]",
     "openai>=1.0.0",

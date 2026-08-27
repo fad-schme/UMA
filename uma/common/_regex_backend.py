@@ -18,8 +18,11 @@ Contract
 - ``compile(pattern: str, flags: int = 0) -> Pattern`` — same call shape as
   ``re.compile``. The returned object exposes ``.search``, ``.match``,
   ``.finditer``, ``.findall``.
-- ``MULTILINE``, ``IGNORECASE``, ``DOTALL`` — flag constants of the active
-  backend (identical semantics for both engines on the patterns UMA uses).
+- ``MULTILINE``, ``IGNORECASE``, ``DOTALL`` — flag constants owned by this
+  module (not re-exported from either backend — ``google-re2`` has no such
+  constants; it takes an ``Options`` object instead). ``compile()``
+  translates these bits to whichever backend is active so callers see
+  identical semantics either way.
 - ``error`` — the compile-error exception class of the active backend.
 - ``USING_RE2: bool`` — True iff the RE2 backend is active. Tests may
   assert on this to enforce a production posture.
@@ -43,11 +46,17 @@ import re as _stdlib_re
 
 logger = logging.getLogger(__name__)
 
+# Flag bits are ours, not either backend's — ``google-re2`` has no MULTILINE
+# / IGNORECASE / DOTALL constants at all, so there is nothing to re-export.
+IGNORECASE = 1 << 0
+MULTILINE = 1 << 1
+DOTALL = 1 << 2
+
 try:
-    import re2 as _backend  # type: ignore[import-not-found]
+    import re2 as _re2  # type: ignore[import-not-found]
     USING_RE2 = True
 except ImportError:
-    _backend = _stdlib_re
+    _re2 = None
     USING_RE2 = False
     logger.warning(
         "uma.common._regex_backend: google-re2 not installed; falling back "
@@ -57,14 +66,31 @@ except ImportError:
         "backend in production."
     )
 
-# Re-export flag constants and the compile-error exception from whichever
-# backend is active. Both engines expose these with identical semantics for
-# the pattern subset UMA uses.
-MULTILINE = _backend.MULTILINE
-IGNORECASE = _backend.IGNORECASE
-DOTALL = _backend.DOTALL
-error = _backend.error
-compile = _backend.compile
+if USING_RE2:
+    error = _re2.error
+
+    def compile(pattern, flags=0):
+        options = _re2.Options()
+        options.case_sensitive = not bool(flags & IGNORECASE)
+        # RE2's `one_line` defaults to False (^/$ match at line breaks),
+        # the opposite of stdlib `re`'s MULTILINE-off default. Pin it
+        # explicitly every call so both backends agree regardless of which
+        # one is installed.
+        options.one_line = not bool(flags & MULTILINE)
+        options.dot_nl = bool(flags & DOTALL)
+        return _re2.compile(pattern, options=options)
+else:
+    error = _stdlib_re.error
+
+    def compile(pattern, flags=0):
+        stdlib_flags = 0
+        if flags & IGNORECASE:
+            stdlib_flags |= _stdlib_re.IGNORECASE
+        if flags & MULTILINE:
+            stdlib_flags |= _stdlib_re.MULTILINE
+        if flags & DOTALL:
+            stdlib_flags |= _stdlib_re.DOTALL
+        return _stdlib_re.compile(pattern, stdlib_flags)
 
 __all__ = [
     "USING_RE2",
