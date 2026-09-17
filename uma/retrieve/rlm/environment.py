@@ -730,7 +730,9 @@ class UMAMemoryEnvironment:
         # closed on that and returns nothing, which reads as "no data" rather
         # than as the bug it is. Fail loudly instead.
         action_owner_type = getattr(action, "owner_type", None)
-        if action_owner_type and action_owner_type != owner_type:
+        if action_owner_type and (
+            str(action_owner_type).strip().lower() != str(owner_type or "").strip().lower()
+        ):
             raise ValueError(
                 "Environment.execute_action: action owner_type "
                 f"{action_owner_type!r} does not match execution scope "

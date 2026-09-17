@@ -1320,3 +1320,42 @@ async def test_execute_action_forwards_domain_scope_to_graph_expansion(uma_memor
         "execute_action dropped domain_scope; a topical graph walk then runs "
         "unrestricted across the user's user_profile relationships"
     )
+
+
+@pytest.mark.asyncio
+async def test_execute_action_scope_guard_normalizes_case(uma_memory):
+    """The owner_type consistency guard must normalize before comparing.
+
+    `_require_owner_scope` two lines above normalizes with `.strip().lower()`.
+    The guard added alongside it compared raw values, so a scope owner_type
+    that differs only in case from the action's declared owner_type raised a
+    false-positive mismatch instead of being treated as the same scope.
+    """
+    memory = uma_memory
+    env = UMAMemoryEnvironment(memory)
+    request = RetrievalRequest.from_runtime_context(
+        RuntimeContext(
+            tenant_id="tenant-test",
+            agent_id=AGENT_ID,
+            request_id="req-env-scope-case",
+            user_id="user:u1",
+        )
+    )
+
+    async def fake_expand(*, request, subject, predicate=None, hops=1, direction=None,
+                          k=10, domain_scope=None, owner_type="agent", owner_id=None):
+        return []
+
+    env.expand_graph = fake_expand  # type: ignore[method-assign]
+
+    # Same logical scope, different case - must not raise.
+    result = await env.execute_action(
+        request=request,
+        action=ExpandGraphAction(subject="x", owner_type="user", k=5),
+        query_embedding=[1, 2, 3],
+        query_text="q",
+        owner_type="User",
+        owner_id="user:u1",
+        default_k=5,
+    )
+    assert result == []
