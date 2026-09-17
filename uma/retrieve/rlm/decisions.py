@@ -409,12 +409,14 @@ def _decide_graph(pack: Any, coverage: Any, cfg: dict[str, Any]) -> list[Retriev
     # PERSONAL intent: user-based expansion (LIKES/PREFERS lane).
     #
     # Gated on the presence of a user anchor, not on `pack.owner_type`. That
-    # value is `scopes[0].owner_type` - an ordering accident - so gating on it
-    # meant a personal question fell through to topical handling whenever the
-    # agent scope sorted first, which is the ordinary case for a request
-    # carrying both. The action below names the user scope explicitly because
-    # it anchors on pack.user_id; if the request carries no user scope,
-    # _scopes_for_action yields nothing and the expansion is a no-op.
+    # value is `scopes[0].owner_type`, which is the user scope only when
+    # `policy.recall_score >= 0.75` narrowed the scope list; otherwise the
+    # agent scope sorts first and a personal question fell through to topical
+    # handling, leaving the LIKES/PREFERS lane unread. Note the practical
+    # effect: `pack.user_id` is always populated, so this branch now runs for
+    # every personal-intent request rather than only high-recall ones. The
+    # action below names the user scope explicitly because it anchors on
+    # pack.user_id and is meaningful against no other scope.
     if intent == "personal" and getattr(pack, "user_id", None):
         next_scope = cfg.get("next_predicate_scope")
         predicate_scope = next_scope(pack, graph_predicate_limit) if callable(next_scope) else []

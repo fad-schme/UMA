@@ -721,6 +721,22 @@ class UMAMemoryEnvironment:
             context_label="Environment.execute_action",
         )
 
+        # An action that names its own owner_type must only ever be executed
+        # against a scope of that type. The caller (RLMController) guarantees
+        # this by filtering scopes on exactly this field before dispatching,
+        # but nothing here enforced it: owner_type is taken from the action
+        # while owner_id comes from the scope, so a caller that skipped the
+        # filter would silently query a mismatched pair. Every store fails
+        # closed on that and returns nothing, which reads as "no data" rather
+        # than as the bug it is. Fail loudly instead.
+        action_owner_type = getattr(action, "owner_type", None)
+        if action_owner_type and action_owner_type != owner_type:
+            raise ValueError(
+                "Environment.execute_action: action owner_type "
+                f"{action_owner_type!r} does not match execution scope "
+                f"{owner_type!r}; scopes must be filtered before dispatch"
+            )
+
         a = getattr(action, "action", None)
 
         if a == "search_semantic":
@@ -832,11 +848,18 @@ class UMAMemoryEnvironment:
                 owner_id=lane_owner_id,
             )
 
+        # domain_scope must be forwarded on both graph paths. The decision
+        # layer sets it deliberately - ["kb_doc"] for topical expansion,
+        # ["user_profile"] for personal - and it is the only thing stopping a
+        # topical walk from crossing into the user's profile relationships.
+        # Dropping it here silently defeated that restriction, because the
+        # store's ($domains IS NULL OR ...) clause then matched everything.
         if a == "graph_neighbors":
             return await self.graph_neighbors(
                 request=request,
                 node_id=getattr(action, "node_id", None),
                 predicate_scope=getattr(action, "predicate_scope", None),
+                domain_scope=getattr(action, "domain_scope", None),
                 depth=int(getattr(action, "depth", 1) or 1),
                 k=k,
                 owner_type=lane_owner_type,
@@ -851,6 +874,7 @@ class UMAMemoryEnvironment:
                 hops=int(getattr(action, "hops", 1) or 1),
                 direction=getattr(action, "direction", None),
                 k=k,
+                domain_scope=getattr(action, "domain_scope", None),
                 owner_type=lane_owner_type,
                 owner_id=lane_owner_id,
             )

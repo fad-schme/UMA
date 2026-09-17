@@ -19,6 +19,7 @@ from uma.retrieve.rlm.context_pack import ContextPack
 from uma.retrieve.rlm.controller import RLMController
 from uma.retrieve.rlm.decisions import (
     ControllerDecision,
+    ExpandGraphAction,
     SearchSemanticAction,
     deterministic_decision,
 )
@@ -1265,3 +1266,57 @@ def test_should_stop_uses_confidence_key() -> None:
     assert stop is True
     assert reason == "coverage_confident"
 
+
+
+@pytest.mark.asyncio
+async def test_execute_action_forwards_domain_scope_to_graph_expansion(uma_memory):
+    """`domain_scope` on a graph action must reach the store query.
+
+    Both graph branches set it deliberately - `["kb_doc"]` for topical
+    expansion, `["user_profile"]` for personal - and the topical value is the
+    only thing keeping a topical walk out of the user's profile relationships.
+    `execute_action` used to drop it, so the restriction never reached the
+    Cypher `($domains IS NULL OR ...)` clause and every expansion ran
+    domain-unrestricted.
+    """
+    memory = uma_memory
+    env = UMAMemoryEnvironment(memory)
+    request = RetrievalRequest.from_runtime_context(
+        RuntimeContext(
+            tenant_id="tenant-test",
+            agent_id=AGENT_ID,
+            request_id="req-env-graph-domain",
+            user_id="user:u1",
+        )
+    )
+
+    captured = {}
+
+    async def fake_expand(*, request, subject, predicate=None, hops=1, direction=None,
+                          k=10, domain_scope=None, owner_type="agent", owner_id=None):
+        captured["domain_scope"] = domain_scope
+        return []
+
+    env.expand_graph = fake_expand  # type: ignore[method-assign]
+
+    await env.execute_action(
+        request=request,
+        action=ExpandGraphAction(
+            subject="migraine",
+            predicate=None,
+            domain_scope=["kb_doc"],
+            hops=1,
+            direction="both",
+            k=5,
+        ),
+        query_embedding=[1, 2, 3],
+        query_text="policy",
+        owner_type="user",
+        owner_id="user:u1",
+        default_k=5,
+    )
+
+    assert captured["domain_scope"] == ["kb_doc"], (
+        "execute_action dropped domain_scope; a topical graph walk then runs "
+        "unrestricted across the user's user_profile relationships"
+    )
