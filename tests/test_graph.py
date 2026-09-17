@@ -405,3 +405,54 @@ def test_personal_graph_expansion_keeps_user_anchor() -> None:
     assert actions
     assert actions[0].subject == "user:123"
     assert actions[0].predicate == "LIKES"
+
+
+class _CoverageClustersOutstanding:
+    """Coverage where cluster summaries are wanted but unattainable.
+
+    `needs_clusters` is `prefer_clusters and semantic_enough and
+    cluster_summaries < min_cluster_summaries`. Cluster summaries only exist
+    after consolidation, which is caller-invoked by design and may never have
+    run for a given corpus - so this state is permanent, not transient.
+    """
+
+    needs_semantic = False
+    needs_clusters = True
+
+
+def test_graph_expansion_not_blocked_by_unattainable_cluster_coverage() -> None:
+    """Graph traversal must not be gated behind episodic cluster summaries.
+
+    The two are different lanes with no ordering dependency: clusters
+    summarize episodes, graph walks typed relationships. Gating graph on
+    cluster coverage makes graph permanently unreachable on any corpus where
+    consolidation has not been run, even when a graph backend is configured,
+    connected and populated.
+    """
+
+    class _Pack:
+        graph = []
+        facts = [_kb_fact()]
+        chunks = []
+        steps = []
+        query_text = "How should IAM and VPC be used in a multi-tier architecture?"
+        intent = "topical"
+        owner_type = "agent"
+        owner_id = "agent:test"
+        user_id = "user:123"
+
+    decision = deterministic_decision(
+        _Pack(),
+        _CoverageClustersOutstanding(),
+        cfg={
+            "chunk_fallback_enabled": False,
+            "graph_predicate_limit": 2,
+            "graph_expansion_available": True,
+        },
+    )
+    assert decision is not None
+    actions = [a for a in decision.actions if a.action == "expand_graph"]
+    assert actions, (
+        "graph expansion was skipped because cluster coverage was outstanding; "
+        "clusters are an episodic concern and must not gate graph traversal"
+    )

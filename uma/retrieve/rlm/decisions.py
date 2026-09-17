@@ -386,11 +386,16 @@ def _decide_graph(pack: Any, coverage: Any, cfg: dict[str, Any]) -> list[Retriev
     graph = getattr(pack, "graph", []) or []
     facts = getattr(pack, "facts", []) or []
     chunks = getattr(pack, "chunks", []) or []
+    # Cluster coverage deliberately does NOT gate graph expansion. Cluster
+    # summaries are an episodic-lane artifact produced by consolidation, which
+    # is caller-invoked and may never run for a corpus; graph traversal walks
+    # typed relationships and has no ordering dependency on them. Gating one on
+    # the other made graph permanently unreachable whenever consolidation had
+    # not been run, even with a backend configured, connected and populated.
     if (
         graph
         or not (facts or chunks)
         or getattr(coverage, "needs_semantic", False)
-        or getattr(coverage, "needs_clusters", False)
     ):
         return []
     max_items_per_type = int(cfg.get("max_items_per_type", 30))
