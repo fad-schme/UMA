@@ -456,3 +456,47 @@ def test_graph_expansion_not_blocked_by_unattainable_cluster_coverage() -> None:
         "graph expansion was skipped because cluster coverage was outstanding; "
         "clusters are an episodic concern and must not gate graph traversal"
     )
+
+
+def test_topical_graph_expansion_is_not_pinned_to_first_scope() -> None:
+    """Topical graph expansion must span every scope the request carries.
+
+    `pack.owner_type` is assigned from `scopes[0]`, which is an ordering
+    accident, not a statement about where graph data lives. Stamping it onto
+    the action makes `_scopes_for_action` narrow execution to that one scope,
+    so a request carrying both an agent and a user scope only ever queries the
+    first. Graph relationships written under the user scope are then
+    unreachable whenever the agent scope happens to sort first.
+
+    Leaving `owner_type` unset is the existing canonical signal for
+    "scope-agnostic": `_scopes_for_action` returns every scope for it. This
+    widens nothing - the scopes are the ones the caller already granted.
+    """
+
+    class _Pack:
+        graph = []
+        facts = [_kb_fact()]
+        chunks = []
+        steps = []
+        query_text = "How should IAM and VPC be used in a multi-tier architecture?"
+        intent = "topical"
+        owner_type = "agent"  # scopes[0] happened to be the agent scope
+        owner_id = "agent:test"
+        user_id = "user:123"
+
+    decision = deterministic_decision(
+        _Pack(),
+        _Coverage(),
+        cfg={
+            "chunk_fallback_enabled": False,
+            "graph_predicate_limit": 2,
+            "graph_expansion_available": True,
+        },
+    )
+    assert decision is not None
+    actions = [a for a in decision.actions if a.action == "expand_graph"]
+    assert actions, "expected topical graph expansion actions"
+    assert all(a.owner_type is None for a in actions), (
+        "topical expansion pinned owner_type to scopes[0]; graph data owned by "
+        "another scope in the same request becomes unreachable"
+    )

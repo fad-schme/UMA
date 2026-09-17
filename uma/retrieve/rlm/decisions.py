@@ -476,6 +476,17 @@ def _decide_graph(pack: Any, coverage: Any, cfg: dict[str, Any]) -> list[Retriev
         int(score or 0), (entities or [])[:5], fallback_reason, combined_reasons,
     )
     # Keep bounded: expand around at most 2 topical entities per step.
+    #
+    # owner_type is deliberately left unset. `pack.owner_type` is assigned from
+    # `scopes[0]`, which is an ordering accident rather than a statement about
+    # where graph data lives; stamping it here makes `_scopes_for_action`
+    # narrow execution to that single scope, so a request carrying both an
+    # agent and a user scope only ever queried the first and user-owned
+    # relationships were unreachable. An unset owner_type is the existing
+    # canonical signal for "every scope on the request" - it widens nothing,
+    # because those are the scopes the caller already granted. The PERSONAL
+    # branch above keeps its explicit user scope: that one anchors on
+    # pack.user_id and is meaningful only under the user scope.
     for ent in (entities or [])[:2]:
         actions.append(ExpandGraphAction(
             subject=ent,
@@ -484,7 +495,6 @@ def _decide_graph(pack: Any, coverage: Any, cfg: dict[str, Any]) -> list[Retriev
             hops=1,
             direction="both",
             k=min(max_items_per_type, 20),
-            owner_type=getattr(pack, "owner_type", None),
         ))
     return actions
 
