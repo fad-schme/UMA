@@ -500,3 +500,61 @@ def test_topical_graph_expansion_is_not_pinned_to_first_scope() -> None:
         "topical expansion pinned owner_type to scopes[0]; graph data owned by "
         "another scope in the same request becomes unreachable"
     )
+
+
+def _preference_fact() -> Fact:
+    return Fact(
+        id="fact_pref",
+        subject="user:123",
+        predicate="LIKES",
+        object="sushi",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        source_ids=[],
+        meta={"domain": "user_profile", "fact_text": "user likes sushi"},
+        owner_type="user",
+        owner_id="user:123",
+        salience=0.0,
+        confidence=0.7,
+    )
+
+
+def test_personal_graph_expansion_fires_when_agent_scope_sorts_first() -> None:
+    """A personal query must reach the user-anchored graph lane regardless of scope order.
+
+    The branch gate used to require `pack.owner_type == "user"`. That value is
+    `scopes[0].owner_type`, so on a request carrying both an agent and a user
+    scope - the ordinary case - a personal question fell through to topical
+    handling and the LIKES/PREFERS lane was never consulted. The user anchor
+    (`pack.user_id`), not the scope ordering, is what makes personal expansion
+    meaningful.
+    """
+
+    class _Pack:
+        graph = []
+        facts = [_preference_fact()]
+        chunks = []
+        steps = []
+        query_text = "What do I like?"
+        intent = "personal"
+        owner_type = "agent"  # scopes[0] happened to be the agent scope
+        owner_id = "agent:test"
+        user_id = "user:123"
+
+    decision = deterministic_decision(
+        _Pack(),
+        _Coverage(),
+        cfg={
+            "chunk_fallback_enabled": False,
+            "graph_predicate_limit": 2,
+            "next_predicate_scope": lambda _p, _limit: ["LIKES"],
+            "graph_expansion_available": True,
+        },
+    )
+    assert decision is not None
+    actions = [a for a in decision.actions if a.action == "expand_graph"]
+    assert actions, "personal graph expansion did not fire when scopes[0] was the agent scope"
+    assert actions[0].subject == "user:123", "personal expansion must stay anchored on the user id"
+    assert actions[0].owner_type == "user", (
+        "personal expansion anchors on user_id and must execute against the user scope"
+    )

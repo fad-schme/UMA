@@ -407,7 +407,15 @@ def _decide_graph(pack: Any, coverage: Any, cfg: dict[str, Any]) -> list[Retriev
     actions: list[RetrievalAction] = []
 
     # PERSONAL intent: user-based expansion (LIKES/PREFERS lane).
-    if intent == "personal" and getattr(pack, "owner_type", None) == "user":
+    #
+    # Gated on the presence of a user anchor, not on `pack.owner_type`. That
+    # value is `scopes[0].owner_type` - an ordering accident - so gating on it
+    # meant a personal question fell through to topical handling whenever the
+    # agent scope sorted first, which is the ordinary case for a request
+    # carrying both. The action below names the user scope explicitly because
+    # it anchors on pack.user_id; if the request carries no user scope,
+    # _scopes_for_action yields nothing and the expansion is a no-op.
+    if intent == "personal" and getattr(pack, "user_id", None):
         next_scope = cfg.get("next_predicate_scope")
         predicate_scope = next_scope(pack, graph_predicate_limit) if callable(next_scope) else []
         if predicate_scope:
@@ -423,7 +431,10 @@ def _decide_graph(pack: Any, coverage: Any, cfg: dict[str, Any]) -> list[Retriev
                 hops=1,
                 direction="outbound",
                 k=min(max_items_per_type, 20),
-                owner_type=getattr(pack, "owner_type", None),
+                # Named explicitly rather than inherited from the pack: this
+                # action walks user-profile predicates out of pack.user_id, so
+                # the user scope is the only one it is meaningful against.
+                owner_type="user",
             ))
         return actions
 
