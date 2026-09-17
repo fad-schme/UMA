@@ -224,9 +224,11 @@ def _decide_zero_yield_fallback(pack: Any, cfg: dict[str, Any]) -> Optional[Cont
                 "RLM_DECISION trace_id=%s intent=%s domains=%s fallback=search_chunks reason=fetch_more_facts_zero_yield",
                 trace_id, (intent or "").upper(), active_domains,
             )
+            # owner_type intentionally unset - see module docstring in
+            # tests/test_decision_scope.py for why step-loop actions must
+            # span every scope on the request, not just scopes[0].
             action = SearchChunksAction(
                 k=min(max_items_per_type * max(3, chunk_fallback_k_multiplier), 180),
-                owner_type=getattr(pack, "owner_type", None),
             )
             try:
                 setattr(pack, "chunk_fallback_used", True)
@@ -238,9 +240,7 @@ def _decide_zero_yield_fallback(pack: Any, cfg: dict[str, Any]) -> Optional[Cont
             "RLM_DECISION trace_id=%s intent=%s domains=%s fallback=search_semantic reason=fetch_more_facts_zero_yield",
             trace_id, (intent or "").upper(), active_domains,
         )
-        return ControllerDecision(actions=[SearchSemanticAction(
-            k=max_items_per_type, owner_type=getattr(pack, "owner_type", None),
-        )])
+        return ControllerDecision(actions=[SearchSemanticAction(k=max_items_per_type)])
 
     if last_action == "expand_graph" and last_novelty == 0 and last_store == "graph":
         if chunks_allowed and not chunks_used and chunk_fallback_enabled:
@@ -250,7 +250,6 @@ def _decide_zero_yield_fallback(pack: Any, cfg: dict[str, Any]) -> Optional[Cont
             )
             action = SearchChunksAction(
                 k=min(max_items_per_type * max(3, chunk_fallback_k_multiplier), 180),
-                owner_type=getattr(pack, "owner_type", None),
             )
             try:
                 setattr(pack, "chunk_fallback_used", True)
@@ -262,9 +261,7 @@ def _decide_zero_yield_fallback(pack: Any, cfg: dict[str, Any]) -> Optional[Cont
             "RLM_DECISION trace_id=%s intent=%s domains=%s fallback=search_semantic reason=expand_graph_zero_yield",
             trace_id, (intent or "").upper(), active_domains,
         )
-        return ControllerDecision(actions=[SearchSemanticAction(
-            k=max_items_per_type, owner_type=getattr(pack, "owner_type", None),
-        )])
+        return ControllerDecision(actions=[SearchSemanticAction(k=max_items_per_type)])
 
     return None
 
@@ -299,11 +296,14 @@ def _decide_semantic(pack: Any, coverage: Any, cfg: dict[str, Any]) -> list[Retr
         )
         if predicate and score > 0:
             offset = getattr(pack, "get_predicate_offset")(predicate)
+            # owner_type intentionally unset on every action in this
+            # function - see tests/test_decision_scope.py. Facts owned by
+            # any scope on the request stay reachable in the step loop,
+            # matching what _baseline_retrieval already does.
             actions.append(FetchMoreFactsAction(
                 predicate=predicate,
                 k=max_items_per_type,
                 filters={"offset": offset},
-                owner_type=getattr(pack, "owner_type", None),
             ))
             getattr(pack, "bump_predicate_offset")(predicate, max_items_per_type)
         else:
@@ -312,19 +312,13 @@ def _decide_semantic(pack: Any, coverage: Any, cfg: dict[str, Any]) -> list[Retr
                 "RLM_DECISION trace_id=%s intent=%s domains=%s eligible_predicates=%s fallback=search_semantic reason=no_relevant_predicates",
                 trace_id, (intent or "").upper(), active_domains, eligible,
             )
-            actions.append(SearchSemanticAction(
-                k=max_items_per_type,
-                owner_type=getattr(pack, "owner_type", None),
-            ))
+            actions.append(SearchSemanticAction(k=max_items_per_type))
     else:
         logger.info(
             "RLM_DECISION trace_id=%s intent=%s domains=%s fallback=search_semantic reason=no_facts_in_pack",
             trace_id, (intent or "").upper(), active_domains,
         )
-        actions.append(SearchSemanticAction(
-            k=max_items_per_type,
-            owner_type=getattr(pack, "owner_type", None),
-        ))
+        actions.append(SearchSemanticAction(k=max_items_per_type))
     return actions
 
 
@@ -342,9 +336,9 @@ def _decide_chunk_fallback(pack: Any, cfg: dict[str, Any]) -> list[RetrievalActi
     except Exception:
         logger.exception("_decide_chunk_fallback: failed to mark chunk_fallback_used")
         raise
+    # owner_type intentionally unset - see tests/test_decision_scope.py.
     return [SearchChunksAction(
         k=min(max_items_per_type * chunk_fallback_k_multiplier, 120),
-        owner_type=getattr(pack, "owner_type", None),
     )]
 
 
@@ -354,7 +348,8 @@ def _decide_episodic_clusters(pack: Any, coverage: Any, cfg: dict[str, Any]) -> 
     cluster_k = max(1, int(cfg.get("cluster_k", 3)))
     salience_threshold = float(cfg.get("salience_threshold", 0.6))
     max_items_per_type = int(cfg.get("max_items_per_type", 30))
-    owner_type = getattr(pack, "owner_type", None)
+    # owner_type intentionally unset on every action below - see
+    # tests/test_decision_scope.py.
 
     if bool(cfg.get("episodic_clustering_available", False)):
         # Enterprise: compiled cluster summaries are the primary path.
@@ -364,20 +359,13 @@ def _decide_episodic_clusters(pack: Any, coverage: Any, cfg: dict[str, Any]) -> 
             k=cluster_k,
             time_range=None,
             min_salience=salience_threshold,
-            owner_type=owner_type,
         )]
         if not has_cluster and len(getattr(pack, "steps", []) or []) >= 2:
-            actions.append(SearchEpisodicAction(
-                k=max_items_per_type,
-                owner_type=owner_type,
-            ))
+            actions.append(SearchEpisodicAction(k=max_items_per_type))
         return actions
 
     # Lite/cont: no consolidation — direct vector search over raw episodes.
-    return [SearchEpisodicAction(
-        k=max_items_per_type,
-        owner_type=owner_type,
-    )]
+    return [SearchEpisodicAction(k=max_items_per_type)]
 
 
 def _decide_graph(pack: Any, coverage: Any, cfg: dict[str, Any]) -> list[RetrievalAction]:
@@ -438,7 +426,13 @@ def _decide_graph(pack: Any, coverage: Any, cfg: dict[str, Any]) -> list[Retriev
                 # the user scope is the only one it is meaningful against.
                 owner_type="user",
             ))
-        return actions
+            return actions
+        # predicate_scope was empty - no user-profile predicate survived
+        # domain filtering (e.g. active_domains lacks "user_profile"). Fall
+        # through to the topical branch below rather than returning an empty
+        # decision: a personal-intent query can still name a topical entity
+        # ("What do I like about Alice?") worth expanding around, and this
+        # branch has nothing else to offer once its own predicate is empty.
 
     # TOPICAL / MIXED: seed graph expansion from evidence-derived entities, not user_id.
     kb_facts = filter_facts_by_domains(list(facts), allowed_domains={"kb_doc"})

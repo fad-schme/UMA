@@ -558,3 +558,87 @@ def test_personal_graph_expansion_fires_when_agent_scope_sorts_first() -> None:
     assert actions[0].owner_type == "user", (
         "personal expansion anchors on user_id and must execute against the user scope"
     )
+
+
+def _preference_fact_kb_domain() -> Fact:
+    """A preference fact tagged kb_doc, not user_profile.
+
+    Synthetic but deliberate: it isolates the branch's own logic from how
+    domain classification behaves in production. See the ticket for the open
+    question of how often this combination occurs on real corpora.
+    """
+    return Fact(
+        id="fact_pref_kb",
+        subject="user:123",
+        predicate="LIKES",
+        object="sushi",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        source_ids=[],
+        meta={"domain": "kb_doc", "fact_text": "user likes sushi"},
+        owner_type="user",
+        owner_id="user:123",
+        salience=0.0,
+        confidence=0.7,
+    )
+
+
+def test_personal_graph_expansion_falls_through_to_topical_when_predicate_scope_empty() -> None:
+    """A personal query must not lose the topical fallback when no user-profile
+    predicate survives domain filtering.
+
+    Reproduced against the pre-fix commit (1f6eb9f) with an identical pack:
+    old code (gated on `pack.owner_type == "user"`, false here) fell through
+    to the topical branch and returned an ExpandGraphAction seeded from the
+    query's 'alice' entity. New code's wider gate (`pack.user_id` truthy)
+    entered the personal branch, found predicate_scope empty after domain
+    filtering, and returned `[]` unconditionally via the branch's own
+    `return actions` - losing the fallback entirely.
+    """
+
+    class _Pack:
+        graph = []
+        facts = [_preference_fact_kb_domain()]
+        chunks = []
+        steps = []
+        query_text = "What do I like about Alice?"
+        intent = "personal"
+        owner_type = "agent"
+        owner_id = "agent:test"
+        user_id = "user:123"
+        active_domains = ["kb_doc"]  # does not include user_profile
+
+    def next_predicate_scope(pack: object, limit: int) -> list[str]:
+        # Mirrors the controller's real cfg wiring: PREFERENCE_PREDICATES are
+        # stripped whenever "user_profile" is absent from active_domains.
+        from uma.retrieve.rlm.controller import _filter_predicates_for_domains
+        from uma.retrieve.rlm.decisions import next_predicate_scope as raw_scope
+
+        return _filter_predicates_for_domains(
+            raw_scope(
+                facts=getattr(pack, "facts", []) or [],
+                predicate_weights=None,
+                graph_predicate_limit=limit,
+            ),
+            active_domains=set(getattr(pack, "active_domains", []) or []),
+        )
+
+    decision = deterministic_decision(
+        _Pack(),
+        _Coverage(),
+        cfg={
+            "chunk_fallback_enabled": False,
+            "graph_predicate_limit": 2,
+            "graph_expansion_available": True,
+            "next_predicate_scope": next_predicate_scope,
+        },
+    )
+    assert decision is not None, (
+        "personal branch swallowed the topical fallback when predicate_scope "
+        "resolved empty; the query's 'alice' entity should have seeded a "
+        "topical expansion instead"
+    )
+    actions = [a for a in decision.actions if a.action == "expand_graph"]
+    assert actions, "expected a topical fallback ExpandGraphAction"
+    assert actions[0].subject == "alice"
+    assert actions[0].domain_scope == ["kb_doc"]
