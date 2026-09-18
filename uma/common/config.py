@@ -224,10 +224,6 @@ class UMAConfig(dict):
                 raise ValueError("'llm.config' must be a mapping")
 
     def _validate_retrieval(self) -> None:
-        for key in ("max_episodes", "max_facts", "max_skills", "max_graph_items"):
-            self._require_positive_int("retrieval", key)
-        if "strict" in self.retrieval and not isinstance(self.retrieval.get("strict"), bool):
-            raise ValueError("'retrieval.strict' must be boolean")
         if "debug_scores" in self.retrieval and not isinstance(self.retrieval.get("debug_scores"), bool):
             raise ValueError("'retrieval.debug_scores' must be boolean")
         if "max_evidence_chunks" in self.retrieval:
@@ -265,13 +261,6 @@ class UMAConfig(dict):
                     raise ValueError("'retrieval.hybrid.fusion_strategy' must be a non-empty string")
                 if strat.strip().lower() not in ("rrf", "overlap_boost"):
                     raise ValueError("'retrieval.hybrid.fusion_strategy' must be one of: rrf, overlap_boost")
-        context_cfg = self.retrieval.get("context")
-        if context_cfg is not None:
-            if not isinstance(context_cfg, dict):
-                raise ValueError("'retrieval.context' must be a mapping")
-            for key in ("max_working_messages", "max_episodic", "max_semantic", "max_procedural", "max_graph"):
-                if key in context_cfg and (not isinstance(context_cfg[key], int) or context_cfg[key] < 0):
-                    raise ValueError(f"'retrieval.context.{key}' must be a non-negative integer")
 
     def _validate_rlm(self) -> None:
         rlm = self.retrieval.get("rlm")

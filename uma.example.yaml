@@ -141,37 +141,14 @@ llms:
 
 # Retrieval candidate and prompt-context budgets. Higher values may improve
 # recall, but increase latency and the amount of context sent to the LLM.
+# Working memory, semantic, raw-chunk, episodic, and procedural lanes are
+# core UMA functionality and always run — there is no toggle for them.
+# Graph is the one opt-in lane, controlled solely by storage.graph_backend.
 retrieval:
-  # Maximum candidates retrieved from each long-term memory lane.
-  max_episodes: 3
-  max_facts: 5
-  max_skills: 3
-  # This can remain nonzero while graph storage/context is disabled.
-  max_graph_items: 3
   # Maximum supporting document chunks exposed as retrieval evidence.
   max_evidence_chunks: 10
-  # Preserve strict behavior in retrieval components that support this switch.
-  strict: true
   # Enable only while tuning retrieval; score details can make logs verbose.
   debug_scores: false
-  # Final limits used when assembling context for the model.
-  context:
-    max_working_messages: 6
-    max_episodic: 2
-    max_semantic: 4
-    max_chunks: 2
-    # Maximum characters retained for each document snippet.
-    snippet_max_chars: 600
-    # Candidate snippets considered by the enterprise snippet refiner. The lite
-    # profile accepts this setting but does not enable that refiner.
-    snippet_refiner_top_k: 6
-    max_procedural: 2
-    # Toggle memory lanes included in the assembled context.
-    include_working_memory: true
-    include_episodic: true
-    # Keep false while storage.graph_backend is disabled.
-    include_graph: false
-    include_procedural: true
 
 # Minimum 0..1 importance/relevance score required when accepting extracted
 # semantic facts. Raise it to store fewer facts; lower it to retain more.

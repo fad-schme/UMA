@@ -162,32 +162,18 @@ Supported LLM providers: `ollama`, `openai`, `anthropic`. Anthropic is LLM-only 
 
 ```yaml
 retrieval:
-  max_episodes: 3
-  max_facts: 5
-  max_skills: 3
-  max_graph_items: 3
   max_evidence_chunks: 10
 
   # Trust-aware ranking
   trust_weight: 0.15            # final = (1 - tw) * similarity + tw * trust
   min_trust_score: 0.5          # candidates below this are dropped before truncation
 
-  strict: true
   debug_scores: false
-
-  context:                      # parameters for retrieve_context
-    max_working_messages: 6
-    max_episodic: 2
-    max_semantic: 4
-    max_chunks: 2
-    snippet_max_chars: 600
-    snippet_refiner_top_k: 6
-    max_procedural: 2
-    include_working_memory: true
-    include_episodic: true
-    include_graph: false
-    include_procedural: true
 ```
+
+Working memory, semantic, raw-chunk, episodic, and procedural memory are
+core UMA functionality — always on, with no config toggle. Graph is the one
+opt-in lane, controlled solely by `storage.graph_backend`.
 
 **`min_trust_score: 0.5`** filters every medium-severity injection survivor: trust starts at default 0.5, drops to 0.4 on medium hits (50% reduction), so anything flagged medium is dropped from retrieval. High hits already cause quarantine.
 

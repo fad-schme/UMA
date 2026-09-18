@@ -274,12 +274,6 @@ class HybridRetrievalConfig:
 
 @dataclass
 class RetrievalConfig:
-    max_episodes: int
-    max_facts: int
-    max_skills: int
-    max_graph_items: int
-    context: "RetrievalContextConfig"
-    strict: bool = True
     debug_scores: bool = False
     hybrid: HybridRetrievalConfig = field(default_factory=HybridRetrievalConfig)
     max_evidence_chunks: int = 6
@@ -323,8 +317,7 @@ class RetrievalConfig:
     gap_min_support_trust: float = 0.6
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any], *, profile: str = "lite") -> "RetrievalConfig":
-        strict_mode = bool(d.get("strict", True))
+    def from_dict(cls, d: dict[str, Any]) -> "RetrievalConfig":
         debug_scores = bool(d.get("debug_scores", False))
         max_evidence_chunks = int(d.get("max_evidence_chunks", 6))
         if max_evidence_chunks < 0:
@@ -401,10 +394,6 @@ class RetrievalConfig:
         if not 0.0 <= gap_min_support_trust <= 1.0:
             raise ValueError("'retrieval.gap_min_support_trust' must be between 0 and 1")
         return cls(
-            max_episodes=int(d["max_episodes"]),
-            max_facts=int(d["max_facts"]),
-            max_skills=int(d["max_skills"]),
-            max_graph_items=int(d["max_graph_items"]),
             hybrid=hybrid_obj,
             max_evidence_chunks=max_evidence_chunks,
             neighbor_window=neighbor_window,
@@ -414,8 +403,6 @@ class RetrievalConfig:
             mmr_enabled=mmr_enabled,
             mmr_lambda=mmr_lambda,
             mmr_pool_multiplier=mmr_pool_multiplier,
-            context=RetrievalContextConfig.from_dict(d.get("context") or {}, profile=profile),
-            strict=strict_mode,
             debug_scores=debug_scores,
             rlm=rlm_obj,
             trust_weight=trust_weight,
@@ -463,43 +450,6 @@ class RLMConfig:
     query_decomposition_enabled: bool = True
     query_decomposition_max_sub_queries: int = 4
 
-
-@dataclass
-class RetrievalContextConfig:
-    max_working_messages: int = 4
-    max_episodic: int = 3
-    max_semantic: int = 5
-    max_chunks: int = 5
-    max_procedural: int = 3
-    max_graph: int = 3
-    include_working_memory: bool = True
-    include_episodic: bool = True
-    include_graph: bool = True
-    include_procedural: bool = True
-    snippet_max_chars: int = 240
-    snippet_refiner_available: bool = False
-    snippet_refiner_top_k: int = 8
-    episodic_clustering_available: bool = False
-
-    @classmethod
-    def from_dict(cls, d: dict[str, Any], *, profile: str = "lite") -> "RetrievalContextConfig":
-        is_enterprise = profile == "enterprise"
-        return cls(
-            max_working_messages=int(d.get("max_working_messages", 4)),
-            max_episodic=int(d.get("max_episodic", 3)),
-            max_semantic=int(d.get("max_semantic", 5)),
-            max_chunks=int(d.get("max_chunks", 5)),
-            max_procedural=int(d.get("max_procedural", 3)),
-            max_graph=int(d.get("max_graph", 3)),
-            include_working_memory=bool(d.get("include_working_memory", True)),
-            include_episodic=bool(d.get("include_episodic", True)),
-            include_graph=bool(d.get("include_graph", True)),
-            include_procedural=bool(d.get("include_procedural", True)),
-            snippet_max_chars=int(d.get("snippet_max_chars", 240)),
-            snippet_refiner_available=is_enterprise,
-            snippet_refiner_top_k=int(d.get("snippet_refiner_top_k", 8)),
-            episodic_clustering_available=is_enterprise,
-        )
 
 # ---------------------------------------------------------------------------
 # Security config
@@ -629,7 +579,7 @@ class RuntimeConfig:
         embedding_cfg = EmbeddingConfig.from_dict(cfg["embedding"])
         secrets_cfg = SecretsProviderConfig.from_dict(cfg.get("secrets") if isinstance(cfg, dict) else None)
         working_memory_cfg = WorkingMemorySettings.from_dict(cfg["working_memory"])
-        retrieval_cfg = RetrievalConfig.from_dict(cfg["retrieval"], profile=profile)
+        retrieval_cfg = RetrievalConfig.from_dict(cfg["retrieval"])
         features_cfg = FeaturesConfig.from_dict(cfg.get("features") or {})
         consolidation_cfg = ConsolidationConfig.from_dict(cfg.get("consolidation"))
         storage_cfg = StorageConfig.from_dict(cfg["storage"])

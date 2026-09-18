@@ -90,6 +90,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   remained, and every bundled example already hand-rolled its own renderer
   over `ContextBundle` instead. Anyone importing `ContextPackBuilder` from
   `uma.retrieve` must migrate to their own `ContextBundle → str` rendering.
+- **18 dead `retrieval.*` / `retrieval.context.*` config keys**:
+  `max_episodes`, `max_facts`, `max_skills`, `max_graph_items`, `strict`
+  (top level), and the entire `retrieval.context` block —
+  `max_working_messages`, `max_episodic`, `max_semantic`, `max_chunks`,
+  `max_procedural`, `max_graph`, `include_working_memory`,
+  `include_episodic`, `include_graph`, `include_procedural`,
+  `snippet_max_chars`, `snippet_refiner_available`, `snippet_refiner_top_k`,
+  `episodic_clustering_available`. Each was parsed and validated but had no
+  retrieval-time consumer — most read as per-lane candidate budgets or lane
+  toggles but capped or gated nothing; `include_graph` in particular looked
+  like it disabled graph expansion but only affected an unrelated
+  maintenance/index-rebuild parameter of the same name. `RetrievalContextConfig`
+  (`uma.common.config_types`) is removed entirely along with `RetrievalConfig`'s
+  matching fields. Setting any of these keys in `uma.yaml` is now a silently
+  ignored unknown key rather than a silently-ignored known one — no retrieval
+  behavior changes for a correctly configured install, since none of these
+  keys ever did anything. Per-lane candidate counts are actually governed by
+  `retrieval.rlm.max_items_per_type`; graph retrieval is controlled solely by
+  `storage.graph_backend`.
 - **`consolidation_run` / `consolidation_health`** on `UMAMemory`. These were
   `setattr`-attached by `ConsolidationFeature`, invisible to static readers
   and mypy, and reachable by nothing except a test workaround — no CLI and no
@@ -137,6 +156,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   the separate, narrower entity extractor under `uma/retrieve/rlm/` in favor
   of the one already feeding lexical search's term set, so there is one
   canonical entity-extraction path instead of two.
+- **`UMARuntime._available_retrieval_lanes` always advertises episodic and
+  procedural memory.** These two lanes were previously gated by the now-removed
+  `include_episodic`/`include_procedural` config flags on top of a core/store
+  presence check — but `UMAMemory.runtime` guarantees every core is
+  constructed (or raises) before a runtime exists, so the presence check
+  could never be false and the config flags were the only reachable gate.
+  Chunk, semantic, episodic, and procedural memory are core UMA functionality,
+  same as the always-on chunk/semantic lanes; there is no config path to
+  disable any of them. Graph remains the one opt-in lane, unaffected by this
+  change.
 
 ### Security
 - **Promotion no longer carries the originating user into a shared scope.**

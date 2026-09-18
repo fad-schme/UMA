@@ -33,7 +33,7 @@ working_memory:
   keep_recent_token_fraction: 0.1
 ```
 
-**When used:** Always included in `retrieve_context` by default (`include_working_memory: true`). Session-scoped; tied to `session_id`.
+**When used:** Always included in `retrieve_context` — core functionality, no config toggle. Session-scoped; tied to `session_id`.
 
 ---
 
@@ -64,7 +64,7 @@ semantic:
 ```python
 retrieve_context(..., lane_filter=["semantic"])
 ```
-Up to `max_facts: 5` per retrieval by default. Filtered by `quarantined_at IS NULL`.
+Candidate count per retrieval is bounded by `retrieval.rlm.max_items_per_type` (default 30). Filtered by `quarantined_at IS NULL`.
 
 ---
 
@@ -115,7 +115,7 @@ Up to `max_facts: 5` per retrieval by default. Filtered by `quarantined_at IS NU
 ```python
 retrieve_context(..., lane_filter=["episodic"])
 ```
-Up to `max_episodic: 2` per context retrieval by default; up to `max_episodes: 3` in memory retrieval.
+Candidate count is bounded by `retrieval.rlm.max_items_per_type` (default 30).
 
 ---
 
@@ -142,7 +142,7 @@ features:
 ```python
 retrieve_context(..., lane_filter=["procedural"])
 ```
-Up to `max_procedural: 2` per context retrieval. Up to `max_skills: 3` in memory retrieval.
+Candidate count is bounded by `retrieval.rlm.max_items_per_type` (default 30).
 
 ---
 
@@ -195,7 +195,7 @@ All production retrieval follows this exact sequence:
 2. **Fusion** — merge dense + lexical candidates (RRF or boost-on-overlap) into a single candidate pool
 3. **Optional rerank** — reorder within the candidate pool only; never expands the pool
 4. **Trust adjustment** — `final_score = (1 - trust_weight) * existing + trust_weight * trust_score`; candidates below `min_trust_score` (default 0.5) are dropped before truncation
-5. **Selection** — deterministic truncation to `max_chunks` / `max_facts`
+5. **Selection** — deterministic truncation to `max_evidence_chunks` (evidence) / `rlm.max_items_per_type` (per-lane candidates)
 6. **Snippet rendering** — presentation layer: merge adjacency, bound length, preserve traceability. Skips LLM refinement on chunks with medium/high injection severity.
 
 **Policy:** Ranking logic lives only in `uma/retrieve/ranking.py`. Never in stores, snippet rendering, or controller layers.

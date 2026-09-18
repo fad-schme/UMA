@@ -42,25 +42,8 @@ llms:
       timeout: 60.0
 
 retrieval:
-  max_episodes: 3
-  max_facts: 5
-  max_skills: 3
-  max_graph_items: 3
   max_evidence_chunks: 10
-  strict: true
   debug_scores: false
-  context:
-    max_working_messages: 6
-    max_episodic: 2
-    max_semantic: 4
-    max_chunks: 2
-    snippet_max_chars: 600
-    snippet_refiner_top_k: 6
-    max_procedural: 2
-    include_working_memory: true
-    include_episodic: true
-    include_graph: false
-    include_procedural: true
 
 semantic:
   salience_threshold: 0.45

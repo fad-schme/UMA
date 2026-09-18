@@ -34,6 +34,32 @@ def _excluded_reason(plan, lane: str) -> str:
     raise AssertionError(f"lane {lane!r} not found in excluded_lanes")
 
 
+def test_available_retrieval_lanes_always_includes_all_six_non_graph_lanes() -> None:
+    """Chunk, semantic, episodic, and procedural memory are core UMA
+    functionality: `_available_retrieval_lanes` must not gate them behind a
+    config toggle, since `UMAMemory.runtime` guarantees these cores are
+    already constructed before a runtime exists. A duck-typed config object
+    that sets the now-removed `include_episodic`/`include_procedural`
+    attributes to `False` must have no effect."""
+    from uma.api.runtime import UMARuntime
+    from types import SimpleNamespace
+
+    fake_retrieval_cfg = SimpleNamespace(
+        context=SimpleNamespace(include_episodic=False, include_procedural=False)
+    )
+    runtime = UMARuntime(
+        retrieval_cfg=fake_retrieval_cfg,
+        chunk_core=object(),
+        semantic_core=object(),
+        episodic_core=object(),
+        procedural_core=object(),
+    )
+
+    lanes = runtime._available_retrieval_lanes()
+
+    assert set(lanes) == {RAW_LANE, WIKI_LANE, SEMANTIC_LANE, PROFILE_LANE, EPISODIC_LANE, PROCEDURAL_LANE}
+
+
 def test_context_plan_defaults_to_evidence_lanes_for_topical_queries() -> None:
     plan = build_retrieval_plan(
         product="context",

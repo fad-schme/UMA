@@ -244,31 +244,20 @@ class UMARuntime:
     def _available_retrieval_lanes(self) -> list[str]:
         """Advertise the retrieval lanes this runtime can execute today.
 
-        `wiki` currently means the runtime can participate in the compiled-memory
-        lane policy using the existing retrievable document/evidence stack. It is
-        not a separate wiki engine guarantee here; planner/runtime still surface
-        `wiki` explicitly so memory-path lane selection is honest about the
-        compiled-memory-first intent.
+        Chunk, semantic, episodic, and procedural memory are core UMA
+        functionality: `UMAMemory.runtime` guarantees all four cores are
+        constructed (or raises) before a `UMARuntime` is ever built, so
+        these lanes are always available — there is no config toggle for
+        them. `wiki` currently means the runtime can participate in the
+        compiled-memory lane policy using the existing retrievable
+        document/evidence stack; it is not a separate wiki engine guarantee
+        here, but planner/runtime still surface `wiki` explicitly so
+        memory-path lane selection is honest about the compiled-memory-first
+        intent. Graph is deliberately excluded: it is the one opt-in lane,
+        gated elsewhere by `storage.graph_backend`/`graph_core` presence,
+        not by this function.
         """
-        stores = self.stores or {}
-        ctx_cfg = getattr(self.retrieval_cfg, "context", None)
-        lanes: list[str] = []
-        if self.chunk_core is not None or stores.get("chunk") is not None:
-            lanes.extend([RAW_LANE, WIKI_LANE])
-        if self.semantic_core is not None or stores.get("semantic") is not None:
-            lanes.extend([SEMANTIC_LANE, PROFILE_LANE])
-        if (
-            (self.episodic_core is not None or stores.get("episodic") is not None)
-            and bool(getattr(ctx_cfg, "include_episodic", True))
-        ):
-            lanes.append(EPISODIC_LANE)
-        if (
-            (self.procedural_core is not None or stores.get("procedural") is not None)
-            and bool(getattr(ctx_cfg, "include_procedural", True))
-        ):
-            lanes.append(PROCEDURAL_LANE)
-        seen: set[str] = set()
-        return [lane for lane in lanes if not (lane in seen or seen.add(lane))]
+        return [RAW_LANE, WIKI_LANE, SEMANTIC_LANE, PROFILE_LANE, EPISODIC_LANE, PROCEDURAL_LANE]
 
     @staticmethod
     def _build_retrieval_request(

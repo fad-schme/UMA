@@ -43,27 +43,9 @@ llms:
       host: "http://localhost:11434"
 
 retrieval:
-  max_episodes: 5
-  max_facts: 10
-  max_skills: 5
-  max_graph_items: 5
   max_evidence_chunks: 6
-  strict: true
   hybrid:
     enabled: true
     top_k_dense: 0
     top_k_sparse: 15
     fusion_strategy: "rrf"
-  context:
-    max_working_messages: 6
-    max_episodic: 2
-    max_semantic: 4
-    max_chunks: 2
-    max_procedural: 2
-    max_graph: 3
-    include_working_memory: true
-    include_episodic: true
-    include_graph: false
-    include_procedural: true
-    snippet_max_chars: 240
-    snippet_refiner_top_k: 6
