@@ -648,6 +648,27 @@ class UMAMemoryEnvironment:
                     owner_type=owner_type,
                     owner_id=owner_id,
                 )
+                if not items and predicate_scope:
+                    # `predicate` is the planner's guess from the query text,
+                    # and neighbors applies it as ALL(r IN rs WHERE type(r) IN
+                    # $preds) — a wrong guess zeroes an otherwise reachable
+                    # walk. Treat it as a preference: one unfiltered retry per
+                    # seed node, only when the scoped walk yielded nothing.
+                    logger.debug(
+                        "Environment.expand_graph: predicate_scope=%s yielded 0 for node_id=%s, retrying unfiltered",
+                        predicate_scope,
+                        node_id,
+                    )
+                    items = await self.graph_neighbors(
+                        request=request,
+                        node_id=node_id,
+                        predicate_scope=None,
+                        domain_scope=domain_scope,
+                        depth=depth,
+                        k=k,
+                        owner_type=owner_type,
+                        owner_id=owner_id,
+                    )
                 for it in items or []:
                     try:
                         if isinstance(it, dict):

@@ -1,0 +1,30 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "uma-session-start",
+            "type": "command",
+            "command": "UMA_PLUGIN_ROOT=${CLAUDE_PLUGIN_ROOT} bash ${CLAUDE_PLUGIN_ROOT}/scripts/on_session_start.sh",
+            "statusMessage": "Checking UMA health...",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "name": "uma-session-stop",
+            "type": "command",
+            "command": "UMA_PLUGIN_ROOT=${CLAUDE_PLUGIN_ROOT} bash ${CLAUDE_PLUGIN_ROOT}/scripts/on_stop.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

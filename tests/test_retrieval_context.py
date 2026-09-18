@@ -1359,3 +1359,75 @@ async def test_execute_action_scope_guard_normalizes_case(uma_memory):
         default_k=5,
     )
     assert result == []
+
+
+@pytest.mark.asyncio
+async def test_expand_graph_retries_unfiltered_when_predicate_scoped_walk_is_empty(uma_memory):
+    """A predicate that matches no stored edge type must not zero the walk.
+
+    The planner's `predicate` is a guess from the query text. Applied as
+    `ALL(r IN rs WHERE type(r) IN $preds)` it gates the whole traversal, so a
+    wrong guess returns nothing even when the seed node resolves and has
+    neighbors. Treat it as a preference: try it first, then retry the same
+    node unfiltered exactly once.
+    """
+    env = UMAMemoryEnvironment(uma_memory)
+    request = RetrievalRequest.from_runtime_context(
+        RuntimeContext(
+            tenant_id="tenant-test",
+            agent_id=AGENT_ID,
+            request_id="req-expand-graph-retry",
+            user_id="user:u1",
+        )
+    )
+    adapter = RecordingGraphAdapter()
+    adapter.next_results.append([{"node_id": "Caroline"}])  # resolve_nodes
+    adapter.next_results.append([])  # neighbors, predicate-scoped: no match
+    adapter.next_results.append(  # neighbors, unfiltered retry
+        [{"node": {}, "labels": ["Entity"], "properties": {"id": "adoption agencies"}}]
+    )
+    uma_memory.graph_core.adapter = adapter
+
+    out = await env.expand_graph(
+        request=request,
+        subject="caroline",
+        predicate="ASKS_FOR_FEEDBACK_ON_ARTWORK",
+        owner_type="agent",
+        owner_id=AGENT_ID,
+    )
+
+    assert out, "expected the unfiltered retry to surface neighbors"
+    _cypher, params = adapter.queries[-1]
+    assert params["preds"] is None, "retry must drop the predicate filter"
+
+
+@pytest.mark.asyncio
+async def test_expand_graph_does_not_retry_when_predicate_scoped_walk_yields(uma_memory):
+    """The retry is a zero-yield fallback, not a second call on every walk."""
+    env = UMAMemoryEnvironment(uma_memory)
+    request = RetrievalRequest.from_runtime_context(
+        RuntimeContext(
+            tenant_id="tenant-test",
+            agent_id=AGENT_ID,
+            request_id="req-expand-graph-no-retry",
+            user_id="user:u1",
+        )
+    )
+    adapter = RecordingGraphAdapter()
+    adapter.next_results.append([{"node_id": "Caroline"}])  # resolve_nodes
+    adapter.next_results.append(
+        [{"node": {}, "labels": ["Entity"], "properties": {"id": "adoption agencies"}}]
+    )
+    uma_memory.graph_core.adapter = adapter
+
+    out = await env.expand_graph(
+        request=request,
+        subject="caroline",
+        predicate="RESEARCHES",
+        owner_type="agent",
+        owner_id=AGENT_ID,
+    )
+
+    assert out
+    neighbor_queries = [q for q in adapter.queries if "rs*1.." in q[0]]
+    assert len(neighbor_queries) == 1, "a yielding walk must not trigger the retry"

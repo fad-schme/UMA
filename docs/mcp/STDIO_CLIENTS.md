@@ -9,6 +9,10 @@ memory store.
 For a server other machines connect to over HTTP, see [`DEPLOY.md`](DEPLOY.md)
 (bearer tokens) and [`CHATGPT.md`](CHATGPT.md) (OAuth 2.1).
 
+For Claude Code, Codex, or Kimi Code, an installable plugin wraps the setup
+below plus a health-check and turn-capture hook — see
+[`integrations/uma-plugin/README.md`](../../integrations/uma-plugin/README.md).
+
 ---
 
 ## Install

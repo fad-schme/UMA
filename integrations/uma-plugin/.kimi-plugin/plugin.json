@@ -1,0 +1,40 @@
+{
+  "name": "uma",
+  "version": "0.2.1",
+  "description": "Persistent, evidence-backed memory for Kimi Code. Remembers decisions, patterns, and preferences across sessions via the local uma-mcp server.",
+  "author": {
+    "name": "UMA",
+    "email": "support@uma.dev",
+    "url": "https://github.com/fad-schme/UMA"
+  },
+  "homepage": "https://github.com/fad-schme/UMA",
+  "repository": "https://github.com/fad-schme/UMA",
+  "license": "Apache-2.0",
+  "keywords": ["memory", "personalization", "mcp", "semantic-search"],
+  "hooks": [
+    {
+      "event": "SessionStart",
+      "matcher": "^(startup|resume)$",
+      "command": "UMA_PLUGIN=kimi \"$KIMI_PLUGIN_ROOT/scripts/on_session_start.sh\"",
+      "timeout": 15
+    },
+    {
+      "event": "Stop",
+      "command": "UMA_PLUGIN=kimi \"$KIMI_PLUGIN_ROOT/scripts/on_stop.sh\"",
+      "timeout": 30
+    }
+  ],
+  "mcpServers": {
+    "uma": {
+      "command": "uma-mcp",
+      "env": { "UMA_CONFIG_PATH": "${UMA_CONFIG_PATH}" }
+    }
+  },
+  "interface": {
+    "displayName": "UMA",
+    "shortDescription": "Evidence-backed memory layer for AI coding workflows",
+    "longDescription": "UMA adds persistent, evidence-backed memory to Kimi Code via a local uma-mcp server. Curated context and compiled memory are retrieved with provenance, and each session's last exchange is captured automatically so Kimi keeps continuity across restarts.",
+    "developerName": "UMA",
+    "websiteURL": "https://github.com/fad-schme/UMA"
+  }
+}

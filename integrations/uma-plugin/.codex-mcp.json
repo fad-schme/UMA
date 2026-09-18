@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "uma": {
+      "command": "uma-mcp",
+      "env": { "UMA_CONFIG_PATH": "${UMA_CONFIG_PATH}" }
+    }
+  }
+}

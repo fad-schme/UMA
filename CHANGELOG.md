@@ -8,6 +8,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [unreleased]
 
 ### Added
+- **Installable plugins for Claude Code, Codex, and Kimi Code** at
+  `integrations/uma-plugin/` (marketplace manifests at the repo root:
+  `.claude-plugin/`, `.codex-plugin/`, `.kimi-plugin/`). Wires up the
+  existing `uma-mcp` server automatically instead of a hand-edited client
+  config, adds a `SessionStart` health check and a `Stop` hook that captures
+  each session's last exchange via `uma ingest turn`. No new UMA behavior —
+  the plugin is packaging over the existing MCP server and CLI. See
+  [`integrations/uma-plugin/README.md`](integrations/uma-plugin/README.md).
 - **`uma maintenance consolidate --user ... [--tenant ...]`** CLI command and
   `uma.api.management.consolidate(memory, user_id=..., tenant_id=...)`, the
   first reachable entry point for consolidation (clustering, fact extraction,

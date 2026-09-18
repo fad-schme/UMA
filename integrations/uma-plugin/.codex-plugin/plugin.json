@@ -1,0 +1,30 @@
+{
+  "name": "uma",
+  "version": "0.2.1",
+  "description": "Persistent, evidence-backed memory for Codex. Cross-session recall via the local uma-mcp server, plus health checks and automatic turn capture.",
+  "author": {
+    "name": "UMA",
+    "email": "support@uma.dev",
+    "url": "https://github.com/fad-schme/UMA"
+  },
+  "homepage": "https://github.com/fad-schme/UMA",
+  "repository": "https://github.com/fad-schme/UMA",
+  "license": "Apache-2.0",
+  "keywords": ["memory", "personalization", "mcp", "semantic-search"],
+  "mcpServers": "./.codex-mcp.json",
+  "hooks": "./hooks/codex-hooks.json",
+  "interface": {
+    "displayName": "UMA",
+    "shortDescription": "Evidence-backed memory layer for AI coding workflows",
+    "longDescription": "UMA adds persistent, evidence-backed memory to Codex via a local uma-mcp server. Curated context and compiled memory are retrieved with provenance, and each session's last exchange is captured automatically so Codex keeps continuity across restarts.",
+    "developerName": "UMA",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/fad-schme/UMA",
+    "defaultPrompt": [
+      "Retrieve context for this task from UMA",
+      "What does UMA remember about this project?"
+    ],
+    "brandColor": "#4C6EF5"
+  }
+}

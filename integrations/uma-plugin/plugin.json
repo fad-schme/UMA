@@ -1,0 +1,13 @@
+{
+  "id": "uma",
+  "name": "uma",
+  "version": "0.2.1",
+  "description": "Persistent, evidence-backed memory for AI coding agents. Cross-session recall via the local uma-mcp server, plus health checks and automatic turn capture.",
+  "author": { "name": "UMA", "email": "support@uma.dev" },
+  "publisher": "fad-schme",
+  "homepage": "https://github.com/fad-schme/UMA",
+  "repository": "https://github.com/fad-schme/UMA",
+  "license": "Apache-2.0",
+  "keywords": ["memory", "persistence", "personalization", "mcp", "semantic-search"],
+  "contextFileName": "AGENTS.md"
+}

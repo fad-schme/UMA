@@ -1,0 +1,15 @@
+{
+  "name": "uma-plugins",
+  "version": "1",
+  "plugins": [
+    {
+      "id": "uma",
+      "displayName": "UMA",
+      "version": "0.2.1",
+      "description": "Persistent, evidence-backed memory for Kimi Code. Remembers decisions, patterns, and preferences across sessions via the local uma-mcp server.",
+      "homepage": "https://github.com/fad-schme/UMA",
+      "keywords": ["memory", "personalization", "mcp", "semantic-search"],
+      "source": "https://github.com/fad-schme/UMA/tree/main/integrations/uma-plugin"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "name": "uma-plugins",
+  "interface": {
+    "displayName": "UMA Plugins"
+  },
+  "plugins": [
+    {
+      "name": "uma",
+      "source": {
+        "source": "local",
+        "path": "./integrations/uma-plugin"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "NONE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "UMA_PLUGIN=codex ${PLUGIN_ROOT}/scripts/on_session_start.sh",
+            "statusMessage": "Checking UMA health..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "UMA_PLUGIN=codex ${PLUGIN_ROOT}/scripts/on_stop.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

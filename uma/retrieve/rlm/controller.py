@@ -566,7 +566,11 @@ class RLMController:
                 step=step,
             )
             step_counts = [current + new for current, new in zip(step_counts, new_counts)]
-            calls_made += 1
+            # An unpinned action queries every scope on the request, one
+            # store call each (_execute_action -> _scopes_for_action), so the
+            # budget must count per scope, not per action, or max_env_calls
+            # silently allows up to len(scopes)x the real store-call ceiling.
+            calls_made += max(1, len(self._scopes_for_action(scopes, action)))
             limits = (
                 ("max_new_facts_per_step", self.max_new_facts_per_step, step_counts[0]),
                 ("max_new_chunks_per_step", self.max_new_chunks_per_step, step_counts[1]),
@@ -965,23 +969,23 @@ class RLMController:
         if a in {"search_semantic", "fetch_more_facts", "fetch_facts"}:
             pack.facts = _merge_unique(pack.facts, items, self.max_items_per_type)
             pack.facts = self._dedupe_facts_by_signature(pack.facts)
-            pack.apply_novelty(items, "facts")
+            pack.apply_novelty(_kept_items(items, pack.facts), "facts")
             new_facts = novelty
         elif a in {"episodic_clusters", "search_episodic", "fetch_episode_clusters"}:
             pack.episodes = _merge_unique(pack.episodes, items, self.max_items_per_type)
-            pack.apply_novelty(items, "episodes")
+            pack.apply_novelty(_kept_items(items, pack.episodes), "episodes")
         elif a in {"graph_neighbors", "expand_graph"}:
             pack.graph = _merge_unique(pack.graph, items, self.max_items_per_type)
-            pack.apply_novelty(items, "graph")
+            pack.apply_novelty(_kept_items(items, pack.graph), "graph")
             new_graph = 1
         elif a in {"search_chunks", "fetch_chunks"}:
             pack.chunks = _merge_unique(getattr(pack, "chunks", []), items, self.max_items_per_type)
-            pack.apply_novelty(items, "chunks")
+            pack.apply_novelty(_kept_items(items, pack.chunks), "chunks")
             new_chunks = novelty
             self._rebuild_chunk_buckets(pack)
         elif a in {"search_procedural"}:
             pack.skills = _merge_unique(getattr(pack, "skills", []), items, self.max_items_per_type)
-            pack.apply_novelty(items, "skills")
+            pack.apply_novelty(_kept_items(items, pack.skills), "skills")
 
         if store:
             pack.steps.append({
@@ -1272,6 +1276,20 @@ def _merge_unique(existing: list[Any], research: list[Any], limit: int) -> list[
     if limit <= 0:
         return []
     return merged[:limit]
+
+
+def _kept_items(items: list[Any], merged: list[Any]) -> list[Any]:
+    """`items` restricted to ids that survived `_merge_unique` into `merged`.
+
+    Novelty must be counted and marked-seen only for ids that actually
+    entered the pack. Marking a dropped id seen makes it permanently
+    unreachable - a later fetch that would legitimately re-surface it reports
+    novelty=0, even though the pack never received it.
+    """
+    from .context_pack import _collect_ids
+
+    kept_ids = _collect_ids(merged)
+    return [it for it in (items or []) if _collect_ids([it]) & kept_ids]
 
 
 def _get_owner_type(item: Any) -> str:
