@@ -113,22 +113,30 @@ def test_decide_chunk_fallback_does_not_pin_owner_type() -> None:
     assert all(a.owner_type is None for a in actions)
 
 
-def test_decide_episodic_clusters_lite_path_does_not_pin_owner_type() -> None:
+def test_decide_episodic_clusters_tries_clusters_first_without_pinning_owner_type() -> None:
+    # Cluster summaries are per-owner (they exist once consolidation has run
+    # for that user), not gated by a deployment-wide flag - the decision
+    # always attempts them first, with no fallback appended yet on step one.
     pack = _make_pack()
-    actions = _decide_episodic_clusters(
-        pack, _CoverageNeedsClusters(), cfg={"max_items_per_type": 30, "episodic_clustering_available": False}
-    )
-    assert actions, "expected a search_episodic action"
+    actions = _decide_episodic_clusters(pack, _CoverageNeedsClusters(), cfg={"max_items_per_type": 30})
+    assert [a.action for a in actions] == ["fetch_episode_clusters"]
     assert all(a.owner_type is None for a in actions)
 
 
-def test_decide_episodic_clusters_enterprise_path_does_not_pin_owner_type() -> None:
+def test_decide_episodic_clusters_falls_back_to_raw_search_after_two_steps_without_cluster_hit() -> None:
     pack = _make_pack(steps=[{"step": 1}, {"step": 2}])
-    actions = _decide_episodic_clusters(
-        pack, _CoverageNeedsClusters(), cfg={"max_items_per_type": 30, "episodic_clustering_available": True}
-    )
-    assert actions, "expected fetch_episode_clusters plus search_episodic"
+    actions = _decide_episodic_clusters(pack, _CoverageNeedsClusters(), cfg={"max_items_per_type": 30})
+    assert [a.action for a in actions] == ["fetch_episode_clusters", "search_episodic"]
     assert all(a.owner_type is None for a in actions)
+
+
+def test_decide_episodic_clusters_does_not_fall_back_once_a_cluster_is_found() -> None:
+    pack = _make_pack(
+        steps=[{"step": 1}, {"step": 2}],
+        episodes=[{"episode_ids": ["ep_1", "ep_2"]}],
+    )
+    actions = _decide_episodic_clusters(pack, _CoverageNeedsClusters(), cfg={"max_items_per_type": 30})
+    assert [a.action for a in actions] == ["fetch_episode_clusters"]
 
 
 def test_decide_zero_yield_fallback_facts_path_does_not_pin_owner_type() -> None:

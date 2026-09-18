@@ -16,6 +16,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   each session's last exchange via `uma ingest turn`. No new UMA behavior —
   the plugin is packaging over the existing MCP server and CLI. See
   [`integrations/uma-plugin/README.md`](integrations/uma-plugin/README.md).
+- **`retrieval.snippet_refiner_enabled`** (default `false`), plus
+  `retrieval.max_chunks` and `retrieval.snippet_max_chars`. Wires
+  `SnippetRefiner` — previously unreachable from any production code path,
+  exercised only in tests — into `retrieve_memory`'s evidence assembly.
+  When enabled, adjacent retrieved chunks are merged and rewritten into
+  cleaner snippets via one extra LLM call per merged snippet; off by
+  default because that cost (latency + tokens on every `retrieve_memory`
+  call) buys presentation polish only, not retrieval correctness. Does not
+  affect `retrieve_context`: `ContextBundle.chunks` is strictly typed
+  `list[Chunk]` and cannot hold a snippet merged from multiple chunks, so
+  this only ever applies to `retrieve_memory`'s looser `evidence: list[dict]`
+  shape.
 - **`uma maintenance consolidate --user ... [--tenant ...]`** CLI command and
   `uma.api.management.consolidate(memory, user_id=..., tenant_id=...)`, the
   first reachable entry point for consolidation (clustering, fact extraction,
@@ -166,6 +178,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   same as the always-on chunk/semantic lanes; there is no config path to
   disable any of them. Graph remains the one opt-in lane, unaffected by this
   change.
+- **Episodic-cluster retrieval no longer gated on an unreachable
+  `profile == "enterprise"` check.** Both the baseline retrieval step and
+  the step-loop's `_decide_episodic_clusters` now always attempt compiled
+  cluster summaries first and fall back to raw episodic vector search when
+  none exist yet for that owner, instead of picking one path for the life
+  of the controller based on a profile value nothing in the codebase ever
+  produces. Cluster summaries are per-owner (written by
+  `uma.api.management.consolidate` for one user at a time), not a
+  deployment-wide switch, so a static flag could never represent this
+  correctly regardless of what it checked.
 
 ### Security
 - **Promotion no longer carries the originating user into a shared scope.**
@@ -179,6 +201,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   the source's. `source_fact_id` is preserved, so the audit chain still
   resolves to the source row and its owner. Session-to-user promotion keeps
   the same principal and is unaffected.
+- **`SnippetRefiner`'s LLM hop now honors query-level scan severity.**
+  `retrieve_context`'s own contract already claimed query scan severity
+  propagates to "downstream LLM hops (snippet refiner, fact pruner)" to skip
+  amplification on medium/high, but that propagation only existed for the
+  fact pruner — `SnippetRefiner` only checked each chunk's own write-time
+  severity, never the query's, and the query text is embedded verbatim in
+  its refinement prompt. Caught by security review before `SnippetRefiner`
+  had any production caller to exploit it through; now gated the same way
+  the fact pruner is, via the same `_llm_hops_disabled` predicate.
 
 ### Fixed
 - **Retrieval's public-boundary scope filter ignored `tenant_id`.**

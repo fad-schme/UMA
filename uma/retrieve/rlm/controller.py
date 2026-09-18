@@ -171,10 +171,6 @@ class RLMController:
         self.semantic_first = bool(getattr(rlm_cfg, "semantic_first", True))
         self.clusters_first = bool(getattr(rlm_cfg, "clusters_first", True))
 
-        ctx_cfg = getattr(retrieval_cfg, "context", None) if retrieval_cfg else None
-        self.episodic_clustering_available = bool(
-            getattr(ctx_cfg, "episodic_clustering_available", False)
-        )
         self.graph_expansion_available = getattr(memory, "graph_core", None) is not None
 
     # ------------------------------------------------------------------
@@ -529,7 +525,6 @@ class RLMController:
             "chunk_fallback_enabled": self.chunk_fallback_enabled,
             "chunk_fallback_k_multiplier": self.chunk_fallback_k_multiplier,
             "predicate_allowlist": self.predicate_allowlist,
-            "episodic_clustering_available": self.episodic_clustering_available,
             "graph_expansion_available": self.graph_expansion_available,
             "next_predicate_scope": lambda pack, limit: _filter_predicates_for_domains(
                 decisions.next_predicate_scope(
@@ -695,19 +690,21 @@ class RLMController:
 
         episodes = []
         if self._lane_active(pack, "episodic"):
-            if self.episodic_clustering_available:
-                # Enterprise: clusters built by consolidation — primary path.
-                episodes = await self.env.execute_action(
-                    request=request,
-                    action=EpisodicClustersAction(k=self.cluster_k, reason="baseline"),
-                    query_embedding=list(query_embedding),
-                    query_text=pack.query_text,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                    default_k=self.max_items_per_type,
-                )
-            else:
-                # Lite/cont: no consolidation, direct vector search over raw episodes.
+            # Cluster summaries are per-owner: they exist once consolidation
+            # has run for this specific user, not as a deployment-wide
+            # switch. Try them first and fall back to raw episode search
+            # when none exist yet for this owner (fresh user, or
+            # consolidation never run) rather than gating on a static flag.
+            episodes = await self.env.execute_action(
+                request=request,
+                action=EpisodicClustersAction(k=self.cluster_k, reason="baseline"),
+                query_embedding=list(query_embedding),
+                query_text=pack.query_text,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                default_k=self.max_items_per_type,
+            )
+            if not episodes:
                 episodes = await self.env.execute_action(
                     request=request,
                     action=SearchEpisodicAction(k=self.episodic_k, reason="baseline"),

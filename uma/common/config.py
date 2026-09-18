@@ -261,6 +261,18 @@ class UMAConfig(dict):
                     raise ValueError("'retrieval.hybrid.fusion_strategy' must be a non-empty string")
                 if strat.strip().lower() not in ("rrf", "overlap_boost"):
                     raise ValueError("'retrieval.hybrid.fusion_strategy' must be one of: rrf, overlap_boost")
+        if "snippet_refiner_enabled" in self.retrieval and not isinstance(
+            self.retrieval.get("snippet_refiner_enabled"), bool
+        ):
+            raise ValueError("'retrieval.snippet_refiner_enabled' must be boolean")
+        if "max_chunks" in self.retrieval:
+            val = self.retrieval.get("max_chunks")
+            if not isinstance(val, int) or val < 0:
+                raise ValueError("'retrieval.max_chunks' must be a non-negative integer")
+        if "snippet_max_chars" in self.retrieval:
+            val = self.retrieval.get("snippet_max_chars")
+            if not isinstance(val, int) or val < 1:
+                raise ValueError("'retrieval.snippet_max_chars' must be a positive integer")
 
     def _validate_rlm(self) -> None:
         rlm = self.retrieval.get("rlm")

@@ -150,6 +150,16 @@ retrieval:
   # Enable only while tuning retrieval; score details can make logs verbose.
   debug_scores: false
 
+  # Off by default. Affects retrieve_memory only (retrieve_context is
+  # unaffected). When enabled, adjacent evidence chunks are merged and
+  # rewritten into cleaner snippets via one extra LLM call per merged
+  # snippet (up to max_chunks per retrieval) — presentation polish only, it
+  # does not change what's retrieved or its ranking. Enable only if you want
+  # tidier snippets and can accept the added per-call latency and LLM cost.
+  snippet_refiner_enabled: false
+  max_chunks: 3
+  snippet_max_chars: 240
+
 # Minimum 0..1 importance/relevance score required when accepting extracted
 # semantic facts. Raise it to store fewer facts; lower it to retain more.
 semantic:

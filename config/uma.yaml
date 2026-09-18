@@ -45,5 +45,14 @@ retrieval:
   max_evidence_chunks: 10
   debug_scores: false
 
+  # Off by default. Affects retrieve_memory only. When enabled, adjacent
+  # evidence chunks are merged and rewritten via one extra LLM call per
+  # merged snippet (up to max_chunks per retrieval) — presentation polish
+  # only. Enable only if you want tidier snippets and accept the added
+  # per-call latency and LLM cost.
+  snippet_refiner_enabled: false
+  max_chunks: 3
+  snippet_max_chars: 240
+
 semantic:
   salience_threshold: 0.45

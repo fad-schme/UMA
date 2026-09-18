@@ -351,21 +351,20 @@ def _decide_episodic_clusters(pack: Any, coverage: Any, cfg: dict[str, Any]) -> 
     # owner_type intentionally unset on every action below - see
     # tests/test_decision_scope.py.
 
-    if bool(cfg.get("episodic_clustering_available", False)):
-        # Enterprise: compiled cluster summaries are the primary path.
-        episodes = getattr(pack, "episodes", []) or []
-        has_cluster = any(isinstance(ep, dict) and "episode_ids" in ep for ep in episodes)
-        actions: list[RetrievalAction] = [FetchEpisodeClustersAction(
-            k=cluster_k,
-            time_range=None,
-            min_salience=salience_threshold,
-        )]
-        if not has_cluster and len(getattr(pack, "steps", []) or []) >= 2:
-            actions.append(SearchEpisodicAction(k=max_items_per_type))
-        return actions
-
-    # Lite/cont: no consolidation — direct vector search over raw episodes.
-    return [SearchEpisodicAction(k=max_items_per_type)]
+    # Cluster summaries exist per-owner once consolidation has run for that
+    # user, not as a deployment-wide switch — always attempt them, and fall
+    # back to raw episodic search once we've given clustering a couple of
+    # steps to surface something for this owner.
+    episodes = getattr(pack, "episodes", []) or []
+    has_cluster = any(isinstance(ep, dict) and "episode_ids" in ep for ep in episodes)
+    actions: list[RetrievalAction] = [FetchEpisodeClustersAction(
+        k=cluster_k,
+        time_range=None,
+        min_salience=salience_threshold,
+    )]
+    if not has_cluster and len(getattr(pack, "steps", []) or []) >= 2:
+        actions.append(SearchEpisodicAction(k=max_items_per_type))
+    return actions
 
 
 def _decide_graph(pack: Any, coverage: Any, cfg: dict[str, Any]) -> list[RetrievalAction]:

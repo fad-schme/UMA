@@ -668,6 +668,139 @@ async def test_retrieve_memory_include_debug_flag(uma_memory) -> None:
     assert result.debug is not None
 
 
+async def _ingest_refiner_test_doc(memory, tmp_path) -> None:
+    doc = tmp_path / "refiner_doc.txt"
+    doc.write_text(
+        (
+            "Snippet refiner test document. It contains hello world for retrieval. "
+            "This sentence is padding to ensure strict chunk validation passes for ingestion in CI. "
+            "Additional padding words to reach the minimum chunk length requirement.\n"
+        ),
+        encoding="utf-8",
+    )
+    await memory.ingest_document(str(doc), owner_type="agent", owner_id=AGENT_ID)
+
+
+@pytest.mark.asyncio
+async def test_retrieve_memory_snippet_refiner_disabled_by_default(uma_memory, tmp_path, monkeypatch) -> None:
+    """snippet_refiner_enabled defaults to False: SnippetRefiner must never
+    be invoked, and evidence keeps its flat per-chunk shape (a real chunk
+    id, no nested `source`)."""
+    memory = uma_memory
+    await _ingest_refiner_test_doc(memory, tmp_path)
+
+    def _fail_if_called(*args: object, **kwargs: object) -> None:
+        raise AssertionError("SnippetRefiner.refine must not run when snippet_refiner_enabled is False")
+
+    monkeypatch.setattr("uma.api.runtime.SnippetRefiner.refine", _fail_if_called)
+
+    result = await memory.retrieve_memory(
+        query_text="hello world",
+        user_id="user:u1",
+        request_id="req-refiner-off",
+        session_id="session-refiner-off",
+        include_debug=True,
+        agent_id=AGENT_ID,
+    )
+
+    assert result.evidence, "expected evidence from the ingested document"
+    for item in result.evidence:
+        assert item.get("id") and not str(item["id"]).startswith("snippet:")
+        assert "chunk_ids" not in item
+
+
+@pytest.mark.asyncio
+async def test_retrieve_memory_snippet_refiner_enabled_flattens_merged_chunk_ids_into_provenance(
+    uma_memory, tmp_path, monkeypatch
+) -> None:
+    """When enabled, a SnippetRefiner-merged snippet's real source chunk ids
+    (nested under `source.chunk_ids`) must still reach
+    `direct_source_chunk_ids` on the compiled answer — and the snippet's own
+    synthetic `id` must not leak in as a fake chunk id."""
+    memory = uma_memory
+    await _ingest_refiner_test_doc(memory, tmp_path)
+    memory.retrieval_cfg.snippet_refiner_enabled = True
+
+    async def _fake_refine(self, *, query_text, facts, chunks):
+        real_chunk = chunks[0]
+        return [
+            {
+                "id": "snippet:fake-hash",
+                "source": {
+                    "type": "document",
+                    "doc_id": getattr(real_chunk, "doc_id", None),
+                    "chunk_ids": [getattr(real_chunk, "id", None), "chunk-not-in-supporting-evidence"],
+                    "page_range": getattr(real_chunk, "page_range", None),
+                    "source_path": getattr(real_chunk, "source_path", None),
+                    "file_name": "refiner_doc.txt",
+                },
+                "text": "a refined, merged snippet",
+            }
+        ]
+
+    monkeypatch.setattr("uma.api.runtime.SnippetRefiner.refine", _fake_refine)
+
+    result = await memory.retrieve_memory(
+        query_text="hello world",
+        user_id="user:u1",
+        request_id="req-refiner-on",
+        session_id="session-refiner-on",
+        include_debug=True,
+        agent_id=AGENT_ID,
+    )
+
+    assert len(result.evidence) == 1
+    evidence_item = result.evidence[0]
+    assert evidence_item["id"] == "snippet:fake-hash"
+    assert evidence_item["text"] == "a refined, merged snippet"
+    real_chunk_id = evidence_item["chunk_ids"][0]
+    assert evidence_item["chunk_ids"] == [real_chunk_id, "chunk-not-in-supporting-evidence"]
+
+    direct_source_chunk_ids = result.debug["compiled_answer"]["direct_source_chunk_ids"]
+    assert real_chunk_id in direct_source_chunk_ids
+    assert "chunk-not-in-supporting-evidence" in direct_source_chunk_ids
+    assert "snippet:fake-hash" not in direct_source_chunk_ids
+
+
+@pytest.mark.asyncio
+async def test_retrieve_memory_snippet_refiner_skips_llm_hop_on_flagged_query(
+    uma_memory, tmp_path, monkeypatch
+) -> None:
+    """A query the boundary scanner flags medium/high must skip the
+    SnippetRefiner LLM hop even when snippet_refiner_enabled is true — the
+    same query-level gate `_llm_hops_disabled` already applies to the fact
+    pruner. Query-level severity, not just each chunk's own write-time
+    severity, must be checked before refinement runs."""
+    memory = uma_memory
+    await _ingest_refiner_test_doc(memory, tmp_path)
+    memory.retrieval_cfg.snippet_refiner_enabled = True
+
+    from uma.adapters.scanner.injection_scan import InjectionScanResult
+
+    def _fake_scan_content(text: str) -> InjectionScanResult:
+        return InjectionScanResult(severity="medium", matched_rules=["fake_rule"], score=0.6, categories=[])
+
+    monkeypatch.setattr("uma.adapters.scanner.injection_scan.scan_content", _fake_scan_content)
+
+    def _fail_if_called(*args: object, **kwargs: object) -> None:
+        raise AssertionError("SnippetRefiner.refine must not run when the query scan severity is medium/high")
+
+    monkeypatch.setattr("uma.api.runtime.SnippetRefiner.refine", _fail_if_called)
+
+    result = await memory.retrieve_memory(
+        query_text="hello world",
+        user_id="user:u1",
+        request_id="req-refiner-flagged-query",
+        session_id="session-refiner-flagged-query",
+        include_debug=True,
+        agent_id=AGENT_ID,
+    )
+
+    assert result.evidence, "expected unrefined evidence despite the flagged query"
+    for item in result.evidence:
+        assert item.get("id") and not str(item["id"]).startswith("snippet:")
+
+
 # ── test_retrieval_scoped_requests ──────────────────────────────────────────
 
 

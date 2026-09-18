@@ -169,6 +169,16 @@ retrieval:
   min_trust_score: 0.5          # candidates below this are dropped before truncation
 
   debug_scores: false
+
+  # Off by default. Affects retrieve_memory only (retrieve_context is
+  # unaffected). When enabled, adjacent evidence chunks are merged and
+  # rewritten into cleaner snippets via one extra LLM call per merged
+  # snippet (up to max_chunks per retrieval) — presentation polish only, it
+  # does not change what's retrieved or its ranking. Enable only if you want
+  # tidier snippets and can accept the added per-call latency and LLM cost.
+  snippet_refiner_enabled: false
+  max_chunks: 3
+  snippet_max_chars: 240
 ```
 
 Working memory, semantic, raw-chunk, episodic, and procedural memory are

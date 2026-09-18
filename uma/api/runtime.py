@@ -45,7 +45,9 @@ from uma.common.storage_metadata import (
     shared_metadata_view,
 )
 from uma.retrieve.planner import build_retrieval_plan
+from uma.retrieve.rlm.controller import _llm_hops_disabled
 from uma.retrieve.rlm.request import RetrievalRequest, RetrievalScope
+from uma.retrieve.rlm.snippet_refiner import SnippetRefiner
 from uma.memory.working_memory.core import session_scope_from_runtime_context
 
 logger = logging.getLogger(__name__)
@@ -877,6 +879,38 @@ class UMARuntime:
             if isinstance(conflict, Mapping)
         ]
         supporting_evidence = [_chunk_payload(chunk) for chunk in chunks]
+        snippet_refiner_enabled = bool(getattr(self.retrieval_cfg, "snippet_refiner_enabled", False))
+        if chunks and snippet_refiner_enabled and _llm_hops_disabled(context.query_scan_severity):
+            # Same query-level gate as the fact pruner (controller.py): a
+            # boundary scan flagged the query strongly enough that no LLM
+            # hop should touch retrieved content, refinement included.
+            logger.warning(
+                "UMARuntime.retrieve_memory: skipping snippet refinement, query scan "
+                "severity=%s tenant=%s user=%s intent=%s",
+                context.query_scan_severity,
+                runtime_context.tenant_id,
+                runtime_context.user_id,
+                memory_intent,
+            )
+        elif chunks and snippet_refiner_enabled:
+            try:
+                refiner = SnippetRefiner(llm=self.llm, cfg=self.retrieval_cfg)
+                refined_evidence = await refiner.refine(
+                    query_text=query_text.strip(),
+                    facts=list(context.facts),
+                    chunks=chunks,
+                )
+                if refined_evidence:
+                    supporting_evidence = refined_evidence
+            except Exception:
+                logger.exception(
+                    "UMARuntime.retrieve_memory: snippet refinement failed, using unrefined "
+                    "evidence tenant=%s user=%s intent=%s chunks=%d",
+                    runtime_context.tenant_id,
+                    runtime_context.user_id,
+                    memory_intent,
+                    len(chunks),
+                )
         fallback_used = not chunks
         fallback_reason = "no_compiled_memory_available" if fallback_used else None
         compiled_answer = None
@@ -892,8 +926,10 @@ class UMARuntime:
                 topic_key=memory_intent.strip(),
                 derived_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 derivation_type="memory_compiled",
-                direct_source_chunk_ids=[item["id"] for item in supporting_evidence if item.get("id")],
-                direct_source_document_ids=[item.get("doc_id") for item in supporting_evidence if item.get("doc_id")],
+                direct_source_chunk_ids=self._collect_evidence_chunk_ids(supporting_evidence),
+                direct_source_document_ids=[
+                    self._evidence_doc_id(item) for item in supporting_evidence if self._evidence_doc_id(item)
+                ],
                 parent_artifacts=[artifact for artifact in memory_sources if artifact.get("artifact_type") == "compiled_memory_artifact"],
                 parent_artifact_ids=[artifact.get("id") or artifact.get("doc_id") for artifact in memory_sources if artifact.get("id") or artifact.get("doc_id")],
                 related_artifact_ids=[artifact.get("id") or artifact.get("doc_id") for artifact in memory_sources if artifact.get("id") or artifact.get("doc_id")],
@@ -940,7 +976,7 @@ class UMARuntime:
         semantic_retrieved_event = build_compiled_memory_log_event(
             event_type="semantic_retrieved",
             artifact=compiled_answer,
-            source_chunk_ids=[item["id"] for item in supporting_evidence if item.get("id")],
+            source_chunk_ids=self._collect_evidence_chunk_ids(supporting_evidence),
             retrieval_path=trace,
         )
         compiled_memory_index = [
@@ -1032,6 +1068,28 @@ class UMARuntime:
         else:
             payload = _chunk_payload(chunk)
 
+        # SnippetRefiner._build_snippet nests real source pointers under
+        # "source" (doc_id, chunk_ids, source_path, file_name) and gives the
+        # snippet itself a synthetic "id" (a hash of its text) — distinct
+        # from the flat per-chunk shape _chunk_payload produces, where "id"
+        # *is* the real chunk id and there is no "source" mapping.
+        refiner_source = payload.get("source")
+        if isinstance(refiner_source, Mapping):
+            source_path = refiner_source.get("source_path")
+            source_name = refiner_source.get("file_name") or (
+                str(source_path).rsplit("/", 1)[-1] if source_path else None
+            )
+            result: dict[str, Any] = {
+                "id": payload.get("id"),
+                "text": payload.get("text"),
+                "source": source_name,
+                "source_document_id": refiner_source.get("doc_id"),
+            }
+            chunk_ids = refiner_source.get("chunk_ids")
+            if chunk_ids:
+                result["chunk_ids"] = list(chunk_ids)
+            return result
+
         source_path = payload.get("source_path")
         source_name = payload.get("source")
         if not source_name and source_path:
@@ -1043,6 +1101,39 @@ class UMARuntime:
             "source": source_name,
             "source_document_id": payload.get("doc_id") or payload.get("source_document_id"),
         }
+
+    @staticmethod
+    def _evidence_doc_id(item: Mapping[str, Any]) -> Any:
+        """Read an evidence item's doc id, honoring SnippetRefiner's nested `source` shape."""
+        source = item.get("source")
+        return source.get("doc_id") if isinstance(source, Mapping) else item.get("doc_id")
+
+    @staticmethod
+    def _collect_evidence_chunk_ids(items: list[dict[str, Any]]) -> list[str]:
+        """Flatten each evidence item's source chunk id(s) into one ordered, deduped list.
+
+        A flat per-chunk item's own `id` *is* a chunk id. A
+        SnippetRefiner-merged snippet's top-level `id` is a synthetic
+        snippet id (a hash of its text) — its real source chunk ids live at
+        `source["chunk_ids"]` (plural, every chunk it was merged from).
+        Provenance/audit collection must resolve both shapes to the same
+        chunk-id chain, or a merged snippet's evidence either silently
+        vanishes from `direct_source_chunk_ids` / the audit log, or worse,
+        pollutes it with a fake "snippet:..." id that names no real chunk.
+        """
+        ids: list[str] = []
+        seen: set[str] = set()
+        for item in items:
+            source = item.get("source")
+            if isinstance(source, Mapping):
+                candidates = list(source.get("chunk_ids") or [])
+            else:
+                candidates = [item["id"]] if item.get("id") else []
+            for chunk_id in candidates:
+                if chunk_id and chunk_id not in seen:
+                    seen.add(chunk_id)
+                    ids.append(chunk_id)
+        return ids
 
     def _build_public_memory_result(
         self,

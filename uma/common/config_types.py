@@ -280,6 +280,12 @@ class RetrievalConfig:
     neighbor_window: int = 1
     max_expanded_chunks: int = 24
 
+    # Snippet refiner (retrieve_memory only — see uma.example.yaml for the
+    # cost tradeoff). Off by default: adds one LLM call per merged snippet.
+    snippet_refiner_enabled: bool = False
+    max_chunks: int = 3
+    snippet_max_chars: int = 240
+
     # NEW
     rlm: Optional[RLMConfig] = None
     chunk_shortlist_k: int = 12
@@ -341,6 +347,13 @@ class RetrievalConfig:
             raise ValueError("'retrieval.mmr_pool_multiplier' must be a positive integer")
         if chunk_shortlist_max_per_doc < 0:
             raise ValueError("'retrieval.chunk_shortlist_max_per_doc' must be a non-negative integer")
+        snippet_refiner_enabled = bool(d.get("snippet_refiner_enabled", False))
+        max_chunks = int(d.get("max_chunks", 3))
+        if max_chunks < 0:
+            raise ValueError("'retrieval.max_chunks' must be a non-negative integer")
+        snippet_max_chars = int(d.get("snippet_max_chars", 240))
+        if snippet_max_chars < 1:
+            raise ValueError("'retrieval.snippet_max_chars' must be a positive integer")
         hybrid_cfg = d.get("hybrid")
         hybrid_obj = HybridRetrievalConfig.from_dict(hybrid_cfg if isinstance(hybrid_cfg, dict) else None)
         rlm_cfg = d.get("rlm")
@@ -409,6 +422,9 @@ class RetrievalConfig:
             min_trust_score=min_trust_score,
             gap_max_support_age_days=gap_max_support_age_days,
             gap_min_support_trust=gap_min_support_trust,
+            snippet_refiner_enabled=snippet_refiner_enabled,
+            max_chunks=max_chunks,
+            snippet_max_chars=snippet_max_chars,
         )
 
 

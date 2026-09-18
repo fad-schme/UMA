@@ -45,6 +45,24 @@ def test_retrieval_config_from_dict_with_rlm():
     assert cfg.rlm.max_items_per_type == 30
 
 
+def test_retrieval_config_snippet_refiner_disabled_by_default():
+    cfg = RetrievalConfig.from_dict({})
+
+    assert cfg.snippet_refiner_enabled is False
+    assert cfg.max_chunks == 3
+    assert cfg.snippet_max_chars == 240
+
+
+def test_retrieval_config_snippet_refiner_can_be_enabled():
+    cfg = RetrievalConfig.from_dict(
+        {"snippet_refiner_enabled": True, "max_chunks": 5, "snippet_max_chars": 400}
+    )
+
+    assert cfg.snippet_refiner_enabled is True
+    assert cfg.max_chunks == 5
+    assert cfg.snippet_max_chars == 400
+
+
 # ── test_secrets_config ──────────────────────────────────────────
 
 
