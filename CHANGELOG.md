@@ -208,6 +208,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Parser libraries stay in the `parsers` extra rather than the base install —
   `uma/ingest/parser.py` guards those imports with install hints, which only
   holds if they remain optional.
+- **Graph-found facts never reached `retrieve_context` or `retrieve_memory`.**
+  Graph expansion populated `pack.graph` with raw Neo4j node dicts (bare
+  entity/fact ids, no evidence), but nothing resolved those nodes back to
+  their underlying facts — `pack.graph` fed only coverage bookkeeping, and
+  `retrieve_memory` never read it at all, so a graph backend configured,
+  connected, and populated made no measurable difference to either
+  product's output. `RLMController._post_retrieval_finalize` now resolves
+  Fact-labeled graph nodes through the existing owner-scoped,
+  quarantine-filtered fetch path (`fetch_facts_by_ids`) and merges them into
+  `pack.facts`, so graph-found knowledge surfaces as ordinary facts/evidence
+  in both products. No new public field; `pack.graph`/`context.graph` are
+  unchanged. Resolved facts also pass through `Ranker.rank_facts`, so
+  `min_trust_score` and the trust-weighted blend apply to them exactly as
+  they do to facts found by search — the graph layer itself applies no
+  trust scoring, so this is the first trust check these facts see.
+- **Evidence chunks fetched via a fact's `source_ids` bypassed trust
+  screening.** `expand_evidence_chunks_from_facts` merged fetched chunks
+  straight into `pack.chunks`, skipping the `min_trust_score` filter and
+  trust-weighted blend every search-found chunk goes through — a chunk's own
+  `trust_score` was never checked independently of the citing fact's. It now
+  passes through `Ranker.rank_chunks` the same way, when a ranker is
+  supplied.
 
 ---
 

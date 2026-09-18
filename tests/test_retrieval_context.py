@@ -25,7 +25,7 @@ from uma.retrieve.rlm.decisions import (
 )
 from uma.retrieve.rlm.domain import ensure_fact_domain, filter_facts_by_domains
 from uma.retrieve.rlm.environment import UMAMemoryEnvironment
-from uma.retrieve.rlm.evidence import expand_evidence_chunks_from_facts
+from uma.retrieve.rlm.evidence import expand_evidence_chunks_from_facts, expand_facts_from_graph
 from uma.retrieve.rlm.intent import QueryIntent, classify_query_intent
 from uma.retrieve.rlm.request import RetrievalRequest
 from uma.common.types.types_scope import DEFAULT_TENANT_ID
@@ -735,6 +735,239 @@ async def test_evidence_expansion_fetches_chunks_by_source_fact_owner_scope() ->
     ]
     assert {chunk.owner_type for chunk in chunks} == {"agent", "user"}
     assert {chunk.owner_id for chunk in chunks} == {"agent:alpha", "user:u1"}
+
+
+class _ChunkTrustFilterRanker:
+    """Stub standing in for `Ranker.rank_chunks`: drops anything named 'low-trust'.
+
+    Mirrors `_TrustFilterRanker` for facts — isolates the one behavior this
+    test cares about without depending on `compute_rerank_score`/route
+    weighting internals.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, bool]] = []
+
+    def rank_chunks(self, items, *, query_text: str = "", debug: bool = False):
+        self.calls.append((query_text, debug))
+        return [ch for ch in items if ch.id != "agent:chunk-low-trust"]
+
+
+@pytest.mark.asyncio
+async def test_evidence_expansion_applies_ranker_when_provided() -> None:
+    """Ticket 23 (chunks half): evidence chunks go through the same
+    trust-weighted ranking/min_trust_score filter as any other chunk-fetch
+    path when a ranker is supplied — a chunk's own trust_score is checked
+    independently of the citing fact's."""
+    env = _EvidenceEnv()
+    ranker = _ChunkTrustFilterRanker()
+    request = RetrievalRequest.from_runtime_context(
+        RuntimeContext(
+            tenant_id="tenant-1",
+            agent_id="agent:alpha",
+            request_id="req-evidence-ranked",
+            user_id="user:u1",
+        )
+    )
+    pack = ContextPack(
+        user_id="user:u1",
+        query_text="hello world",
+        owner_type="user",
+        owner_id="user:u1",
+        facts=[
+            {
+                "id": "fact-agent",
+                "owner_type": "agent",
+                "owner_id": "agent:alpha",
+                "source_ids": ["chunk-kept", "chunk-low-trust"],
+            },
+        ],
+    )
+
+    chunks = await expand_evidence_chunks_from_facts(
+        env=env,
+        request=request,
+        pack=pack,
+        max_items_per_type=10,
+        ranker=ranker,
+    )
+
+    assert ranker.calls == [("hello world", False)]
+    assert [chunk.id for chunk in chunks] == ["agent:chunk-kept"]
+    assert [chunk.id for chunk in pack.chunks] == ["agent:chunk-kept"]
+
+
+@dataclass
+class _GraphFact:
+    id: str
+    owner_type: str
+    owner_id: str
+    tenant_id: str = "default"
+    source_ids: list = field(default_factory=list)
+    meta: dict = field(default_factory=dict)
+
+
+def _graph_fact_node(fact_id: str, *, owner_type: str, owner_id: str) -> dict:
+    """A raw graph-item dict shaped like `GraphCore.neighbors()`'s real output."""
+    return {
+        "node": {"id": fact_id, "owner_type": owner_type, "owner_id": owner_id},
+        "labels": ["Fact"],
+        "properties": {"id": fact_id, "owner_type": owner_type, "owner_id": owner_id},
+    }
+
+
+def _graph_entity_node(entity_id: str) -> dict:
+    return {
+        "node": {"id": entity_id},
+        "labels": ["Entity"],
+        "properties": {"id": entity_id},
+    }
+
+
+class _GraphResolveEnv:
+    def __init__(self, *, missing_ids: set[str] | None = None) -> None:
+        self.calls: list[tuple[str, str, list[str]]] = []
+        self._missing = missing_ids or set()
+
+    async def fetch_facts_by_ids(self, *, request: RetrievalRequest, ids, owner_type, owner_id):
+        self.calls.append((owner_type, owner_id, list(ids)))
+        return [
+            _GraphFact(id=fact_id, owner_type=owner_type, owner_id=owner_id)
+            for fact_id in ids
+            if fact_id not in self._missing
+        ]
+
+
+@pytest.mark.asyncio
+async def test_expand_facts_from_graph_routes_fact_nodes_into_pack_facts() -> None:
+    """Ticket 22: Fact nodes found via graph traversal must resolve into
+    pack.facts through the owner-scoped fetch path, not sit unread in
+    pack.graph. Entity nodes carry no fact id and must be skipped."""
+    env = _GraphResolveEnv()
+    request = RetrievalRequest.from_runtime_context(
+        RuntimeContext(
+            tenant_id="tenant-1",
+            agent_id="agent:alpha",
+            request_id="req-graph-evidence",
+            user_id="user:u1",
+        )
+    )
+    pack = ContextPack(
+        user_id="user:u1",
+        query_text="what do I like",
+        owner_type="user",
+        owner_id="user:u1",
+        graph=[
+            _graph_fact_node("fact-1", owner_type="user", owner_id="user:u1"),
+            _graph_entity_node("Melanie and others"),
+        ],
+    )
+
+    facts = await expand_facts_from_graph(
+        env=env,
+        request=request,
+        pack=pack,
+        max_items_per_type=10,
+    )
+
+    assert env.calls == [("user", "user:u1", ["fact-1"])]
+    assert [f.id for f in facts] == ["fact-1"]
+    assert [f.id for f in pack.facts] == ["fact-1"]
+    assert pack.facts[0].meta.get("retrieval_route") == "graph_expand"
+    # pack.graph itself is untouched — coverage/novelty bookkeeping unaffected.
+    assert len(pack.graph) == 2
+
+
+@pytest.mark.asyncio
+async def test_expand_facts_from_graph_inherits_quarantine_filtering() -> None:
+    """A Fact node quarantined at the store does not reach pack.facts, because
+    resolution goes through fetch_facts_by_ids -> the store's own
+    `quarantined_at IS NULL` clause, not a bespoke filter in this function."""
+    env = _GraphResolveEnv(missing_ids={"fact-quarantined"})
+    request = RetrievalRequest.from_runtime_context(
+        RuntimeContext(
+            tenant_id="tenant-1",
+            agent_id="agent:alpha",
+            request_id="req-graph-quarantine",
+            user_id="user:u1",
+        )
+    )
+    pack = ContextPack(
+        user_id="user:u1",
+        query_text="what do I like",
+        owner_type="user",
+        owner_id="user:u1",
+        graph=[
+            _graph_fact_node("fact-clean", owner_type="user", owner_id="user:u1"),
+            _graph_fact_node("fact-quarantined", owner_type="user", owner_id="user:u1"),
+        ],
+    )
+
+    facts = await expand_facts_from_graph(
+        env=env,
+        request=request,
+        pack=pack,
+        max_items_per_type=10,
+    )
+
+    assert [f.id for f in facts] == ["fact-clean"]
+    assert [f.id for f in pack.facts] == ["fact-clean"]
+
+
+class _TrustFilterRanker:
+    """Stub standing in for `Ranker.rank_facts`: drops anything named 'low-trust'.
+
+    The real `Ranker.rank_facts` combines relevance scoring with the
+    trust-weighted blend and `min_trust_score` filter; this stub isolates
+    the one behavior this test cares about (facts can be dropped) without
+    depending on `compute_rerank_score`'s internals.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, bool]] = []
+
+    def rank_facts(self, items, *, query_text: str = "", debug: bool = False):
+        self.calls.append((query_text, debug))
+        return [f for f in items if f.id != "fact-low-trust"]
+
+
+@pytest.mark.asyncio
+async def test_expand_facts_from_graph_applies_ranker_when_provided() -> None:
+    """Ticket 23 (facts half): graph-resolved facts go through the same
+    trust-weighted ranking/min_trust_score filter as any other fact-fetch
+    path when a ranker is supplied — they are not a silent exemption."""
+    env = _GraphResolveEnv()
+    ranker = _TrustFilterRanker()
+    request = RetrievalRequest.from_runtime_context(
+        RuntimeContext(
+            tenant_id="tenant-1",
+            agent_id="agent:alpha",
+            request_id="req-graph-ranked",
+            user_id="user:u1",
+        )
+    )
+    pack = ContextPack(
+        user_id="user:u1",
+        query_text="what do I like",
+        owner_type="user",
+        owner_id="user:u1",
+        graph=[
+            _graph_fact_node("fact-kept", owner_type="user", owner_id="user:u1"),
+            _graph_fact_node("fact-low-trust", owner_type="user", owner_id="user:u1"),
+        ],
+    )
+
+    facts = await expand_facts_from_graph(
+        env=env,
+        request=request,
+        pack=pack,
+        max_items_per_type=10,
+        ranker=ranker,
+    )
+
+    assert ranker.calls == [("what do I like", False)]
+    assert [f.id for f in facts] == ["fact-kept"]
+    assert [f.id for f in pack.facts] == ["fact-kept"]
 
 
 @pytest.mark.asyncio
