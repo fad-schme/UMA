@@ -111,6 +111,70 @@ def test_neighbors_enforce_tenant_and_owner_scope_in_query() -> None:
     assert params["owner_id"] == "workspace:alpha"
 
 
+def test_neighbors_excludes_quarantined_fact_nodes_in_query() -> None:
+    """Read-time equivalent of every SQL store's `AND quarantined_at IS
+    NULL` (ticket 14). Non-Fact nodes never carry the property at all, so
+    `IS NULL` passes them through unaffected — verified by the second
+    assertion below with a plain `RecordingGraphAdapter` result."""
+    adapter = RecordingGraphAdapter()
+    adapter.next_results.append([{"node": {"id": "user:u1"}, "labels": ["User"], "properties": {}}])
+    core = GraphCore(adapter)
+
+    out = core.neighbors(
+        user_id="user:u1",
+        node_id="node-1",
+        tenant_id="tenant-1",
+        owner_type="user",
+        owner_id="user:u1",
+    )
+
+    cypher, _params = adapter.queries[0]
+    assert "m.quarantined_at IS NULL" in cypher
+    assert out == [{"node": {"id": "user:u1"}, "labels": ["User"], "properties": {}}]
+
+
+def test_set_fact_quarantine_scopes_the_update_to_owner_and_reports_match() -> None:
+    adapter = RecordingGraphAdapter()
+    adapter.next_results.append([{"id": "fact_1"}])
+    core = GraphCore(adapter)
+
+    updated = core.set_fact_quarantine(
+        "fact_1",
+        "2026-09-18T00:00:00+00:00",
+        tenant_id="tenant-1",
+        owner_type="user",
+        owner_id="user:u1",
+    )
+
+    assert updated is True
+    cypher, params = adapter.queries[0]
+    assert "MATCH (f:Fact {id: $fact_id})" in cypher
+    assert "SET f.quarantined_at = $quarantined_at" in cypher
+    assert params["fact_id"] == "fact_1"
+    assert params["quarantined_at"] == "2026-09-18T00:00:00+00:00"
+    assert params["tenant_id"] == "tenant-1"
+    assert params["owner_type"] == "user"
+    assert params["owner_id"] == "user:u1"
+
+
+def test_set_fact_quarantine_reinstate_clears_the_property() -> None:
+    adapter = RecordingGraphAdapter()
+    adapter.next_results.append([])  # no node in this scope -> no match
+    core = GraphCore(adapter)
+
+    updated = core.set_fact_quarantine(
+        "fact_missing",
+        None,
+        tenant_id="tenant-1",
+        owner_type="user",
+        owner_id="user:u1",
+    )
+
+    assert updated is False
+    _cypher, params = adapter.queries[0]
+    assert params["quarantined_at"] is None
+
+
 def test_resolve_nodes_enforces_tenant_and_owner_scope() -> None:
     adapter = RecordingGraphAdapter()
     adapter.next_results.append([{"node_id": "workspace-node"}])
@@ -153,6 +217,58 @@ def test_insert_fact_triplet_rejects_system_scope() -> None:
         updated_at=datetime.utcnow().isoformat(),
     )
     assert ok is False
+
+
+def test_add_fact_skips_already_quarantined_fact() -> None:
+    """Ticket 14: the turn-path (`GraphCore.add_facts`) and maintenance-path
+    (`uma/common/maintenance.py`) callers both go through
+    `GraphUpdater.add_fact`, which previously wrote every fact regardless of
+    `quarantined_at` — unlike the document-ingest path's `add_facts_batch`,
+    which already skipped them. A fact already quarantined by
+    `SemanticCore.ingest`'s write-time scan must never reach the graph."""
+    adapter = RecordingGraphAdapter()
+    core = GraphCore(adapter)
+    fact = Fact(
+        id="fact_q1",
+        subject="user:u1",
+        predicate="prefers",
+        object="chocolate",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        tenant_id="tenant-1",
+        owner_type="user",
+        owner_id="user:u1",
+        trust_score=0.0,
+        quarantined_at=datetime.now(timezone.utc),
+    )
+
+    core.add_facts([fact])
+
+    assert adapter.queries == [], "a quarantined fact must never reach insert_fact_triplet"
+
+
+def test_add_fact_writes_a_clean_fact_normally() -> None:
+    """Companion to the quarantine-skip test: an ordinary, non-quarantined
+    fact must still reach the graph unaffected by the new check."""
+    adapter = RecordingGraphAdapter()
+    core = GraphCore(adapter)
+    fact = Fact(
+        id="fact_clean",
+        subject="user:u1",
+        predicate="prefers",
+        object="tea",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        tenant_id="tenant-1",
+        owner_type="user",
+        owner_id="user:u1",
+        trust_score=0.7,
+        quarantined_at=None,
+    )
+
+    core.add_facts([fact])
+
+    assert adapter.queries, "a clean fact must still reach insert_fact_triplet"
 
 
 # ── test_graph_lane_retrieval ──────────────────────────────────────────

@@ -188,6 +188,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `uma.api.management.consolidate` for one user at a time), not a
   deployment-wide switch, so a static flag could never represent this
   correctly regardless of what it checked.
+- **Baseline personal-graph retrieval now retries unfiltered on a wrong
+  predicate guess**, matching `expand_graph`'s existing fallback.
+  `RLMController._baseline_retrieval`'s "user-profile graph baseline" block —
+  the *only* graph contribution for personal-intent queries — previously
+  called `Environment.graph_neighbors` directly with no fallback, so a
+  single wrong predicate guess from `decisions.next_predicate_scope` zeroed
+  it exactly as it used to zero `expand_graph` before that path was fixed.
+  Extracted the retry logic into a new shared
+  `Environment.graph_neighbors_with_predicate_retry`, used by both call
+  sites now.
 
 ### Security
 - **Promotion no longer carries the originating user into a shared scope.**
@@ -210,6 +220,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   its refinement prompt. Caught by security review before `SnippetRefiner`
   had any production caller to exploit it through; now gated the same way
   the fact pruner is, via the same `_llm_hops_disabled` predicate.
+- **The graph lane now enforces quarantine at both write and read time.**
+  Write time: `GraphUpdater.add_fact` skips any fact whose `quarantined_at`
+  is already set — previously only the document-ingest path
+  (`add_facts_batch`) did this; the turn-path (`_update_graph`, run on every
+  conversational turn) and the maintenance/consolidation path both wrote
+  facts to the graph unfiltered, so a high-severity injection-scanned fact
+  from a live conversation reached the graph with full provenance. Read
+  time: `GraphCore.neighbors` now filters `AND m.quarantined_at IS NULL`,
+  the same predicate every SQL store applies on read, closing the
+  retroactive-quarantine gap (a `verify_integrity` mismatch or admin
+  reinstate after the fact was already written) via a new
+  `GraphCore.set_fact_quarantine(...)` that syncs the decision onto the
+  graph's Fact node, wired into `verify_integrity` and
+  `reinstate_quarantined`. Graph items remain exempt from trust-weighted
+  reranking by design — documented with reasoning in
+  `.claude/skills/lanes.md` rather than left implicit.
 
 ### Fixed
 - **Retrieval's public-boundary scope filter ignored `tenant_id`.**

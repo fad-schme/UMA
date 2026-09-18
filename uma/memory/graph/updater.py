@@ -193,6 +193,13 @@ class GraphUpdater:
         graph_core.insert_fact_triplet MUST exist.
         """
         try:
+            if getattr(fact, "quarantined_at", None) is not None:
+                logger.info(
+                    "GraphUpdater.add_fact: skipping quarantined fact id=%s",
+                    getattr(fact, "id", "<missing>"),
+                )
+                return
+
             insert = getattr(self.graph_core, "insert_fact_triplet", None)
             if not callable(insert):
                 logger.error("GraphUpdater.add_fact skipped: insert_fact_triplet missing.")

@@ -1797,3 +1797,53 @@ async def test_expand_graph_does_not_retry_when_predicate_scoped_walk_yields(uma
     assert out
     neighbor_queries = [q for q in adapter.queries if "rs*1.." in q[0]]
     assert len(neighbor_queries) == 1, "a yielding walk must not trigger the retry"
+
+
+@pytest.mark.asyncio
+async def test_baseline_personal_graph_retries_unfiltered_when_predicate_scoped_walk_is_empty(
+    uma_memory,
+) -> None:
+    """Ticket 20: unlike `expand_graph`, the baseline "User-profile graph
+    baseline" block (`RLMController._baseline_retrieval`) called
+    `graph_neighbors` directly with no fallback — and it is the *only* graph
+    contribution for personal-intent queries. A predicate guess that matches
+    no stored edge type must not silently zero it when an unfiltered walk
+    would have found the user's neighbors."""
+    env = UMAMemoryEnvironment(uma_memory)
+    controller = RLMController(llm=None, env=env)
+    request = RetrievalRequest.from_runtime_context(
+        RuntimeContext(
+            tenant_id="tenant-test",
+            agent_id=AGENT_ID,
+            request_id="req-baseline-graph-retry",
+            user_id="user:u1",
+        )
+    )
+    pack = ContextPack(
+        user_id="user:u1",
+        query_text="what do I like",
+        owner_type="user",
+        owner_id="user:u1",
+        intent="personal",
+        active_domains=["user_profile"],
+        active_lanes=[],
+    )
+
+    adapter = RecordingGraphAdapter()
+    adapter.next_results.append([])  # neighbors, predicate-scoped: no match
+    adapter.next_results.append(  # neighbors, unfiltered retry
+        [{"node": {}, "labels": ["Entity"], "properties": {"id": "coffee"}}]
+    )
+    uma_memory.graph_core.adapter = adapter
+
+    await controller._baseline_retrieval(
+        request=request,
+        pack=pack,
+        query_embedding=[],
+        owner_type="user",
+        owner_id="user:u1",
+    )
+
+    assert pack.graph, "expected the unfiltered retry to surface user-profile neighbors"
+    _cypher, params = adapter.queries[-1]
+    assert params["preds"] is None, "retry must drop the predicate filter"

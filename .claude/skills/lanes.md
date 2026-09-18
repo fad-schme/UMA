@@ -176,7 +176,31 @@ await lint_memory_drift(memory, artifact, user_id=..., stale_after_seconds=86400
 | Episodic | SQLite (`episodic_sql.py`) | Vector index | ✅ | ✅ |
 | Procedural | SQLite (`procedural_sql.py`) | Vector index | ✅ | ✅ |
 | Wiki | SQLite (document store) | Vector index | — | n/a |
-| Graph (optional) | Graph backend (plugin) | — | — | — |
+| Graph (optional) | Graph backend (plugin) | — | ⚠️ skip-only | ✅ |
+
+**Graph quarantine, by design:** the graph never scans content itself — a
+Fact node is only ever materialized from a `Fact` that `SemanticCore.ingest`
+already scanned, so "write-time scan" for graph means *skip facts already
+quarantined by that scan* (`GraphUpdater.add_fact`), not an independent
+scan. Retroactive quarantine (a `verify_integrity` mismatch, or
+`reinstate_quarantined`) is synced onto the graph's Fact node via
+`GraphCore.set_fact_quarantine`, and `GraphCore.neighbors` filters on it
+(`AND m.quarantined_at IS NULL`) the same way every SQL store filters reads.
+
+**Graph items are exempt from trust weighting, by design.** `Ranker`
+(`uma/retrieve/ranking.py`) has no `rank_graph` — `trust_weight` and
+`min_trust_score` never apply to `pack.graph`. This is intentional, not an
+oversight: the graph is a navigation/routing structure
+(`GraphCore.neighbors`'s own docstring: *"navigation-only... must NOT be
+treated as an authoritative source of truth"*), not evidence in its own
+right. A `Fact`-labeled node found by traversal is resolved back into a real
+`Fact` through the authoritative semantic store
+(`uma/retrieve/rlm/evidence.py:expand_facts_from_graph`, which reuses the
+same quarantine-filtered fetch path `search_semantic` uses) before it is
+ever ranked or returned as evidence — trust weighting applies there, once
+the raw graph node has been exchanged for its authoritative record. The raw
+node dicts in `ContextBundle.graph` remain unranked and unweighted, matching
+their documented "routing, not evidence" role.
 
 **Security primitives:** Each artifact (fact, episode, skill, chunk) carries `trust_score` (float, default 0.5) and `content_hash` (SHA-256 hex, where applicable). Ingested files pass MIME consistency (`mime_check.enforce_mime_consistency`) before parsing; HTML/Markdown is sanitized via `_sanitize_html` with per-category counts recorded in `meta["security"]["sanitization"]`.
 

@@ -731,7 +731,7 @@ class RLMController:
         ):
             pack.graph = _merge_unique(
                 pack.graph,
-                await self.env.graph_neighbors(
+                await self.env.graph_neighbors_with_predicate_retry(
                     request=request,
                     node_id=pack.user_id,
                     predicate_scope=_filter_predicates_for_domains(

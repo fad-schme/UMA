@@ -193,6 +193,66 @@ class GraphCore:
             logger.exception("GraphCore.insert_fact_triplet failed.")
             return False
 
+    def set_fact_quarantine(
+        self,
+        fact_id: str,
+        quarantined_at: Optional[str],
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+    ) -> bool:
+        """
+        Reflect a retroactive quarantine/reinstate decision onto the graph's
+        Fact node, scoped to the owner tuple the fact was written under.
+
+        The graph is a rebuildable navigation index over the authoritative
+        SQL stores, not itself authoritative, but `GraphCore.neighbors`
+        filters on this property at read time — so it must be kept in sync
+        whenever SQL's quarantine state changes *after* the fact was already
+        written. Write-time quarantine is handled separately by refusing to
+        write the node at all (see `GraphUpdater.add_fact`); this method only
+        covers the retroactive case (`verify_integrity` mismatch,
+        `reinstate_quarantined`).
+
+        `quarantined_at` is an ISO timestamp string to quarantine, or `None`
+        to reinstate. Returns True if a matching Fact node was found and
+        updated; False if no such node exists in the graph (e.g. the fact
+        predates graph memory, or graph_backend was disabled at write time)
+        or the owner scope did not match.
+        """
+        try:
+            tenant_id = validate_tenant_id(tenant_id)
+            owner_type = validate_owner_type(owner_type)
+            if owner_type not in {"agent", "user", "workspace"}:
+                raise ValueError(f"GraphCore.set_fact_quarantine: unsupported owner_type={owner_type!r}")
+            if owner_type == "user":
+                owner_id = normalize_user_id(owner_id)
+        except Exception:
+            logger.exception("GraphCore.set_fact_quarantine: invalid scoped graph request")
+            return False
+
+        try:
+            rows = self.adapter.run_query(
+                """
+                MATCH (f:Fact {id: $fact_id})
+                WHERE f.tenant_id = $tenant_id AND f.owner_type = $owner_type AND f.owner_id = $owner_id
+                SET f.quarantined_at = $quarantined_at
+                RETURN f.id AS id
+                """,
+                params={
+                    "fact_id": fact_id,
+                    "tenant_id": tenant_id,
+                    "owner_type": owner_type,
+                    "owner_id": owner_id,
+                    "quarantined_at": quarantined_at,
+                },
+            )
+            return bool(rows)
+        except Exception:
+            logger.exception("GraphCore.set_fact_quarantine failed fact_id=%s", fact_id)
+            return False
+
     def link_episode_to_facts(self, episode: Any, facts: list[Any]) -> None:
         """Link Episode to its extracted Facts."""
         try:
@@ -295,6 +355,7 @@ class GraphCore:
         WHERE ALL(r IN rs WHERE r.tenant_id = $tenant_id AND r.owner_type = $owner_type AND r.owner_id = $owner_id)
         AND ($preds IS NULL OR ALL(r IN rs WHERE type(r) IN $preds))
         AND ($domains IS NULL OR ALL(r IN rs WHERE toLower(coalesce(r.domain, "")) IN $domains))
+        AND m.quarantined_at IS NULL
         RETURN DISTINCT m AS node, labels(m) AS labels, properties(m) AS properties
         LIMIT $limit
         """

@@ -568,6 +568,59 @@ class UMAMemoryEnvironment:
             logger.exception("Environment.graph_neighbors failed")
             raise
 
+    async def graph_neighbors_with_predicate_retry(
+        self,
+        request: RetrievalRequest,
+        node_id: str,
+        predicate_scope: Optional[list[str]] = None,
+        domain_scope: Optional[list[str]] = None,
+        depth: int = 1,
+        k: int = 10,
+        owner_type: str = "agent",
+        owner_id: Optional[str] = None,
+    ) -> list[Any]:
+        """
+        `graph_neighbors`, retried once unfiltered when a predicate guess
+        zeroed the walk.
+
+        `predicate_scope` is a planner guess (`decisions.next_predicate_scope`)
+        applied by `GraphCore.neighbors` as a hard `ALL(r IN rs WHERE
+        type(r) IN $preds)` filter — a single wrong guess zeroes an otherwise
+        reachable walk. Treat it as a preference: retry once unfiltered only
+        when the scoped walk yielded nothing. Shared by `expand_graph` and
+        `RLMController._baseline_retrieval`'s user-profile block so every
+        `graph_neighbors` call site gets the same retry, not just one of
+        them (ticket 20 — the baseline block previously called
+        `graph_neighbors` directly with no fallback).
+        """
+        items = await self.graph_neighbors(
+            request=request,
+            node_id=node_id,
+            predicate_scope=predicate_scope,
+            domain_scope=domain_scope,
+            depth=depth,
+            k=k,
+            owner_type=owner_type,
+            owner_id=owner_id,
+        )
+        if not items and predicate_scope:
+            logger.debug(
+                "Environment.graph_neighbors_with_predicate_retry: predicate_scope=%s "
+                "yielded 0 for node_id=%s, retrying unfiltered",
+                predicate_scope,
+                node_id,
+            )
+            items = await self.graph_neighbors(
+                request=request,
+                node_id=node_id,
+                predicate_scope=None,
+                domain_scope=domain_scope,
+                depth=depth,
+                k=k,
+                owner_type=owner_type,
+                owner_id=owner_id,
+            )
+        return items
 
     async def expand_graph(
         self,
@@ -638,7 +691,7 @@ class UMAMemoryEnvironment:
             merged: list[Any] = []
             seen = set()
             for node_id in node_ids[:4]:
-                items = await self.graph_neighbors(
+                items = await self.graph_neighbors_with_predicate_retry(
                     request=request,
                     node_id=node_id,
                     predicate_scope=predicate_scope,
@@ -648,27 +701,6 @@ class UMAMemoryEnvironment:
                     owner_type=owner_type,
                     owner_id=owner_id,
                 )
-                if not items and predicate_scope:
-                    # `predicate` is the planner's guess from the query text,
-                    # and neighbors applies it as ALL(r IN rs WHERE type(r) IN
-                    # $preds) — a wrong guess zeroes an otherwise reachable
-                    # walk. Treat it as a preference: one unfiltered retry per
-                    # seed node, only when the scoped walk yielded nothing.
-                    logger.debug(
-                        "Environment.expand_graph: predicate_scope=%s yielded 0 for node_id=%s, retrying unfiltered",
-                        predicate_scope,
-                        node_id,
-                    )
-                    items = await self.graph_neighbors(
-                        request=request,
-                        node_id=node_id,
-                        predicate_scope=None,
-                        domain_scope=domain_scope,
-                        depth=depth,
-                        k=k,
-                        owner_type=owner_type,
-                        owner_id=owner_id,
-                    )
                 for it in items or []:
                     try:
                         if isinstance(it, dict):

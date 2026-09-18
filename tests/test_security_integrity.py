@@ -316,6 +316,100 @@ async def test_tampered_fact_is_quarantined_in_store(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_tampered_fact_quarantine_syncs_to_graph(tmp_path):
+    """Ticket 14: a fact quarantined *after* it was already written to the
+    graph (retroactive quarantine — the case GraphCore.neighbors' read-time
+    filter exists to close) must have that decision reflected onto its
+    graph Fact node via GraphCore.set_fact_quarantine, not just in SQL."""
+    from datetime import datetime, timezone
+    from uma.common.types import Fact
+    from uma.api.management import verify_integrity
+    from uma.common.integrity import hash_fact_content
+
+    memory = await init_uma_for_tests(
+        tmp_path,
+        graph_backend="tests.helpers.graph_adapter:RecordingGraphAdapter",
+        graph_config={},
+    )
+    store = memory._stores["semantic"]
+
+    fact = Fact(
+        id="fact-tamper-graph-1",
+        subject="user:pr7-mm",
+        predicate="OWNS",
+        object="bicycle",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        content_hash=hash_fact_content("user:pr7-mm", "OWNS", "bicycle"),
+        **_SCOPE,
+    )
+    await store.upsert_fact(fact, [0.1] * 64)
+    _tamper_fact(store, "fact-tamper-graph-1")
+
+    result = await verify_integrity(memory, record_id="fact-tamper-graph-1", lane="semantic", **_SCOPE)
+    assert result.quarantined is True
+
+    adapter = memory.graph_core.adapter
+    quarantine_calls = [
+        (cypher, params)
+        for cypher, params in adapter.queries
+        if "SET f.quarantined_at = $quarantined_at" in cypher
+    ]
+    assert quarantine_calls, "expected GraphCore.set_fact_quarantine to run against the graph"
+    _cypher, params = quarantine_calls[0]
+    assert params["fact_id"] == "fact-tamper-graph-1"
+    assert params["quarantined_at"] is not None
+    assert params["owner_type"] == _SCOPE["owner_type"]
+    assert params["owner_id"] == _SCOPE["owner_id"]
+
+
+@pytest.mark.asyncio
+async def test_reinstate_quarantined_fact_syncs_to_graph(tmp_path):
+    """Symmetric to the quarantine-sync test: clearing a fact's quarantine
+    must clear it on the graph Fact node too, or a reinstated fact would
+    stay invisible to graph expansion forever."""
+    from datetime import datetime, timezone
+    from uma.common.types import Fact
+    from uma.api.management import reinstate_quarantined
+
+    memory = await init_uma_for_tests(
+        tmp_path,
+        graph_backend="tests.helpers.graph_adapter:RecordingGraphAdapter",
+        graph_config={},
+    )
+    store = memory._stores["semantic"]
+
+    fact = Fact(
+        id="fact-reinstate-graph-1",
+        subject="user:pr7-mm",
+        predicate="OWNS",
+        object="skateboard",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        trust_score=0.0,
+        quarantined_at=datetime.now(timezone.utc),
+        **_SCOPE,
+    )
+    await store.upsert_fact(fact, [0.1] * 64)
+
+    updated = await reinstate_quarantined(
+        memory, record_id="fact-reinstate-graph-1", lane="semantic", reason="false positive", **_SCOPE
+    )
+    assert updated is True
+
+    adapter = memory.graph_core.adapter
+    quarantine_calls = [
+        (cypher, params)
+        for cypher, params in adapter.queries
+        if "SET f.quarantined_at = $quarantined_at" in cypher
+    ]
+    assert quarantine_calls, "expected GraphCore.set_fact_quarantine to run against the graph"
+    _cypher, params = quarantine_calls[0]
+    assert params["fact_id"] == "fact-reinstate-graph-1"
+    assert params["quarantined_at"] is None
+
+
+@pytest.mark.asyncio
 async def test_tampered_fact_has_audit_log_entry(tmp_path):
     from datetime import datetime, timezone
     from uma.common.types import Fact

@@ -351,6 +351,16 @@ async def verify_integrity(
         quarantined_at=now.isoformat(),
         audit_entry=audit_entry,
     )
+    if quarantined and lane == "semantic":
+        graph_core = getattr(memory, "graph_core", None)
+        if graph_core is not None:
+            graph_core.set_fact_quarantine(
+                record_id,
+                now.isoformat(),
+                tenant_id=tenant_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+            )
     logger.warning(
         "verify_integrity: MISMATCH record=%s lane=%s owner=%s:%s quarantined=%s",
         record_id, lane, owner_type, owner_id, quarantined,
@@ -505,6 +515,16 @@ async def reinstate_quarantined(
         owner_id=owner_id,
         audit_entry=audit_entry,
     )
+    if updated and lane == "semantic":
+        graph_core = getattr(memory, "graph_core", None)
+        if graph_core is not None:
+            graph_core.set_fact_quarantine(
+                record_id,
+                None,
+                tenant_id=tenant_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+            )
     if updated:
         logger.info(
             "reinstate_quarantined: record=%s lane=%s owner=%s:%s reason=%r",
