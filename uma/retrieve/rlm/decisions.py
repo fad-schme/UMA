@@ -404,34 +404,48 @@ def _decide_graph(pack: Any, coverage: Any, cfg: dict[str, Any]) -> list[Retriev
     # every personal-intent request rather than only high-recall ones. The
     # action below names the user scope explicitly because it anchors on
     # pack.user_id and is meaningful against no other scope.
+    #
+    # `cfg["next_predicate_scope"]` returns the *unfiltered* predicate scope
+    # (ticket 17) — no `_filter_predicates_for_domains` here. That filter's
+    # own purpose is keeping user_profile predicates out of the TOPICAL
+    # branch below; applying it to the PERSONAL branch's own predicate
+    # scope discarded a real LIKES/PREFERS signal whenever `active_domains`
+    # (a separate, query-level classification) didn't happen to include
+    # "user_profile", even though the branch's walk is already hardcoded to
+    # `domain_scope=["user_profile"]` and needs no such protection.
+    # `next_predicate_scope` always returns at least `["RELATED_TO"]`, so
+    # this branch always has a predicate to try and always returns its own
+    # action — there is no fallthrough to the topical branch for personal
+    # intent. If the guessed predicate yields nothing at execution time,
+    # `Environment.expand_graph`'s retry-unfiltered-on-empty-yield (ticket
+    # 20) already covers that, still scoped to `user_profile`.
     if intent == "personal" and getattr(pack, "user_id", None):
         next_scope = cfg.get("next_predicate_scope")
-        predicate_scope = next_scope(pack, graph_predicate_limit) if callable(next_scope) else []
-        if predicate_scope:
-            logger.info(
-                "RLM_DECISION trace_id=%s intent=%s domains=%s graph_seed=user_id predicate_scope=%s",
-                trace_id, (intent or "").upper(), active_domains,
-                predicate_scope[: max(1, int(graph_predicate_limit))],
-            )
-            actions.append(ExpandGraphAction(
-                subject=getattr(pack, "user_id", None),
-                predicate=predicate_scope[0],
-                domain_scope=["user_profile"],
-                hops=1,
-                direction="outbound",
-                k=min(max_items_per_type, 20),
-                # Named explicitly rather than inherited from the pack: this
-                # action walks user-profile predicates out of pack.user_id, so
-                # the user scope is the only one it is meaningful against.
-                owner_type="user",
-            ))
-            return actions
-        # predicate_scope was empty - no user-profile predicate survived
-        # domain filtering (e.g. active_domains lacks "user_profile"). Fall
-        # through to the topical branch below rather than returning an empty
-        # decision: a personal-intent query can still name a topical entity
-        # ("What do I like about Alice?") worth expanding around, and this
-        # branch has nothing else to offer once its own predicate is empty.
+        predicate_scope = next_scope(pack, graph_predicate_limit) if callable(next_scope) else ["RELATED_TO"]
+        if not predicate_scope:
+            # `next_predicate_scope` (decisions.py) guarantees at least
+            # ["RELATED_TO"]; a `cfg["next_predicate_scope"]` override that
+            # violates this contract falls back here rather than raising
+            # IndexError below.
+            predicate_scope = ["RELATED_TO"]
+        logger.info(
+            "RLM_DECISION trace_id=%s intent=%s domains=%s graph_seed=user_id predicate_scope=%s",
+            trace_id, (intent or "").upper(), active_domains,
+            predicate_scope[: max(1, int(graph_predicate_limit))],
+        )
+        actions.append(ExpandGraphAction(
+            subject=getattr(pack, "user_id", None),
+            predicate=predicate_scope[0],
+            domain_scope=["user_profile"],
+            hops=1,
+            direction="outbound",
+            k=min(max_items_per_type, 20),
+            # Named explicitly rather than inherited from the pack: this
+            # action walks user-profile predicates out of pack.user_id, so
+            # the user scope is the only one it is meaningful against.
+            owner_type="user",
+        ))
+        return actions
 
     # TOPICAL / MIXED: seed graph expansion from evidence-derived entities, not user_id.
     kb_facts = filter_facts_by_domains(list(facts), allowed_domains={"kb_doc"})

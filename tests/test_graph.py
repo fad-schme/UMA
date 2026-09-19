@@ -676,48 +676,29 @@ def test_personal_graph_expansion_fires_when_agent_scope_sorts_first() -> None:
     )
 
 
-def _preference_fact_kb_domain() -> Fact:
-    """A preference fact tagged kb_doc, not user_profile.
+def test_personal_graph_expansion_never_falls_through_to_topical_when_active_domains_lacks_user_profile() -> None:
+    """Ticket 17: a personal query with genuinely `user_profile`-tagged
+    LIKES/PREFERS facts must still get its own `domain_scope=["user_profile"]`
+    walk even when `active_domains` (a separate, query-level classification)
+    doesn't include "user_profile" — and must never fall through to the
+    topical/kb_doc branch instead.
 
-    Synthetic but deliberate: it isolates the branch's own logic from how
-    domain classification behaves in production. See the ticket for the open
-    question of how often this combination occurs on real corpora.
-    """
-    return Fact(
-        id="fact_pref_kb",
-        subject="user:123",
-        predicate="LIKES",
-        object="sushi",
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
-        source_ids=[],
-        meta={"domain": "kb_doc", "fact_text": "user likes sushi"},
-        owner_type="user",
-        owner_id="user:123",
-        salience=0.0,
-        confidence=0.7,
-    )
-
-
-def test_personal_graph_expansion_falls_through_to_topical_when_predicate_scope_empty() -> None:
-    """A personal query must not lose the topical fallback when no user-profile
-    predicate survives domain filtering.
-
-    Reproduced against the pre-fix commit (1f6eb9f) with an identical pack:
-    old code (gated on `pack.owner_type == "user"`, false here) fell through
-    to the topical branch and returned an ExpandGraphAction seeded from the
-    query's 'alice' entity. New code's wider gate (`pack.user_id` truthy)
-    entered the personal branch, found predicate_scope empty after domain
-    filtering, and returned `[]` unconditionally via the branch's own
-    `return actions` - losing the fallback entirely.
+    `_filter_predicates_for_domains` exists to keep user_profile predicates
+    OUT of the *topical* branch's own predicate selection; it must not be
+    applied to the personal branch's own predicate scope, since that branch
+    is already hardcoded to `domain_scope=["user_profile"]` and needs no such
+    protection. Decided: the fallthrough to topical is dropped entirely, not
+    kept as a second-tier attempt — `next_predicate_scope` always returns at
+    least `["RELATED_TO"]`, so the personal branch always has something to
+    try within its own domain.
     """
 
     class _Pack:
         graph = []
-        facts = [_preference_fact_kb_domain()]
+        facts = [_preference_fact()]  # genuinely user_profile-tagged, not domain-mislabeled
         chunks = []
         steps = []
-        query_text = "What do I like about Alice?"
+        query_text = "What do I like about the onboarding redesign?"
         intent = "personal"
         owner_type = "agent"
         owner_id = "agent:test"
@@ -725,18 +706,14 @@ def test_personal_graph_expansion_falls_through_to_topical_when_predicate_scope_
         active_domains = ["kb_doc"]  # does not include user_profile
 
     def next_predicate_scope(pack: object, limit: int) -> list[str]:
-        # Mirrors the controller's real cfg wiring: PREFERENCE_PREDICATES are
-        # stripped whenever "user_profile" is absent from active_domains.
-        from uma.retrieve.rlm.controller import _filter_predicates_for_domains
+        # Mirrors the FIXED controller wiring (`_decision_config`, ticket 17):
+        # the raw predicate scope, unfiltered by active_domains.
         from uma.retrieve.rlm.decisions import next_predicate_scope as raw_scope
 
-        return _filter_predicates_for_domains(
-            raw_scope(
-                facts=getattr(pack, "facts", []) or [],
-                predicate_weights=None,
-                graph_predicate_limit=limit,
-            ),
-            active_domains=set(getattr(pack, "active_domains", []) or []),
+        return raw_scope(
+            facts=getattr(pack, "facts", []) or [],
+            predicate_weights=None,
+            graph_predicate_limit=limit,
         )
 
     decision = deterministic_decision(
@@ -749,12 +726,13 @@ def test_personal_graph_expansion_falls_through_to_topical_when_predicate_scope_
             "next_predicate_scope": next_predicate_scope,
         },
     )
-    assert decision is not None, (
-        "personal branch swallowed the topical fallback when predicate_scope "
-        "resolved empty; the query's 'alice' entity should have seeded a "
-        "topical expansion instead"
-    )
+    assert decision is not None
     actions = [a for a in decision.actions if a.action == "expand_graph"]
-    assert actions, "expected a topical fallback ExpandGraphAction"
-    assert actions[0].subject == "alice"
-    assert actions[0].domain_scope == ["kb_doc"]
+    assert actions, "expected the personal branch's own user-anchored ExpandGraphAction"
+    assert len(actions) == 1, "personal branch must return only its own action, never a topical fallback too"
+    assert actions[0].subject == "user:123", "personal expansion must stay anchored on the user id"
+    assert actions[0].predicate == "LIKES"
+    assert actions[0].domain_scope == ["user_profile"], (
+        "must never fall through to the topical branch's kb_doc domain scope"
+    )
+    assert actions[0].owner_type == "user"

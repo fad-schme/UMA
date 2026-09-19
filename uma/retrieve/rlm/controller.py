@@ -70,7 +70,16 @@ def _filter_predicates_for_domains(predicates: list[str], *, active_domains: set
     """
     Deterministically filter predicate candidates based on active domains.
 
-    Phase 0/1 scope: prevent user_profile predicates from entering topical scope.
+    Phase 0/1 scope: prevent user_profile predicates from entering topical
+    scope. Its one remaining caller is `_baseline_retrieval`'s user-profile
+    graph block, which only invokes it when `"user_profile" in active_domains`
+    is already true — making it a no-op there today; kept for defense in
+    depth rather than removed. Do NOT apply this to `_decide_graph`'s
+    PERSONAL branch (`decisions.py`) — that branch is hardcoded to
+    `domain_scope=["user_profile"]` and needs no protection from its own
+    domain's predicates (ticket 17: applying this filter there discarded a
+    real LIKES/PREFERS signal whenever `active_domains` didn't happen to
+    include "user_profile", an unrelated, separate classification from intent).
     """
     preds = [str(p).upper() for p in (predicates or []) if p]
     if "user_profile" not in (active_domains or set()):
@@ -526,13 +535,16 @@ class RLMController:
             "chunk_fallback_k_multiplier": self.chunk_fallback_k_multiplier,
             "predicate_allowlist": self.predicate_allowlist,
             "graph_expansion_available": self.graph_expansion_available,
-            "next_predicate_scope": lambda pack, limit: _filter_predicates_for_domains(
-                decisions.next_predicate_scope(
-                    facts=getattr(pack, "facts", []) or [],
-                    predicate_weights=self.predicate_weights,
-                    graph_predicate_limit=self.graph_predicate_limit,
-                ),
-                active_domains=set(getattr(pack, "active_domains", []) or []),
+            # Unfiltered on purpose (ticket 17): the sole consumer is
+            # `_decide_graph`'s PERSONAL branch, which is already hardcoded
+            # to `domain_scope=["user_profile"]` and needs no protection
+            # from its own domain's predicates. `_filter_predicates_for_domains`
+            # exists to keep user_profile predicates OUT of the TOPICAL
+            # branch's separate predicate selection — do not reapply it here.
+            "next_predicate_scope": lambda pack, limit: decisions.next_predicate_scope(
+                facts=getattr(pack, "facts", []) or [],
+                predicate_weights=self.predicate_weights,
+                graph_predicate_limit=self.graph_predicate_limit,
             ),
         }
 

@@ -238,6 +238,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `.claude/skills/lanes.md` rather than left implicit.
 
 ### Fixed
+- **A personal-intent graph query with real preference facts could still get
+  routed to the wrong domain.** `_decide_graph`'s PERSONAL branch computed
+  its own predicate scope through a filter (`_filter_predicates_for_domains`)
+  whose actual purpose is keeping user-profile predicates out of the
+  *topical* branch's selection — applying it here discarded genuine
+  `LIKES`/`PREFERS` predicates whenever a query's `active_domains`
+  classification didn't happen to include `"user_profile"` (a separate,
+  unrelated classification from intent), even though the branch's walk is
+  already hardcoded to `domain_scope=["user_profile"]`. The branch then fell
+  through to a `kb_doc`-scoped topical walk instead. Fixed by removing that
+  filter from the personal branch's predicate computation and dropping the
+  fallthrough entirely — `next_predicate_scope` always returns at least
+  `RELATED_TO`, so the branch now always attempts its own user-profile walk.
 - **Retrieval's public-boundary scope filter ignored `tenant_id`.**
   `UMARuntime._filter_items_by_scope` — the defense-in-depth pass over the
   facts, chunks, episodic, and skills lanes — matched only `(owner_type,
