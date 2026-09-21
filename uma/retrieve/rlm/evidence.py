@@ -9,7 +9,7 @@ from uma.retrieve.rlm.request import RetrievalRequest
 logger = logging.getLogger(__name__)
 
 
-async def expand_facts_from_graph(
+async def expand_from_graph(
     *,
     env: Any,
     request: RetrievalRequest,
@@ -17,157 +17,148 @@ async def expand_facts_from_graph(
     max_items_per_type: int,
     ranker: Any = None,
 ) -> list[Any]:
-    """Route graph-found Fact nodes to ordinary facts (bounded).
+    """Route graph-found nodes to ordinary facts and episodes (bounded).
 
     `pack.graph` holds raw Cypher node dicts from graph traversal — a
     supporting/routing lane, not evidence in its own right (ARCHITECTURE.md:
-    "Relationship routing and entity expansion"). A `Fact`-labeled node names
-    a real fact by id; this resolves those ids through the authoritative,
-    owner-scoped, quarantine-filtered fetch path and merges the result into
-    `pack.facts`, so graph-found knowledge reaches both retrieval products as
-    ordinary facts rather than sitting unread in `pack.graph`.
+    "Relationship routing and entity expansion"). Each owned node kind
+    enriches retrieval through its own authoritative, owner-scoped,
+    quarantine-filtered fetch:
 
-    Entity-labeled nodes carry no fact id and are skipped — they have
-    nothing to resolve to.
+      - `Fact` node    -> that fact                    -> `pack.facts`
+      - `Entity` node  -> the owner's facts naming it  -> `pack.facts`
+      - `Episode` node -> that episode                 -> `pack.episodes`
 
-    This function:
-      1) Collects Fact-node ids from `pack.graph`, grouped by the node's own
-         (owner_type, owner_id) properties.
-      2) Fetches per-scope via `env.fetch_facts_by_ids(... owner_type,
-         owner_id ...)` — the same store path `search_semantic` uses, which
-         already enforces `quarantined_at IS NULL` and ownership scoping.
-      3) If `ranker` is given, runs the fetched facts through
-         `ranker.rank_facts` — the same trust-weighted blend and
-         `min_trust_score` filter every other fact-fetch path applies. The
-         graph layer itself applies no trust scoring (ticket 14), so this is
-         the first trust check these facts see.
-      4) Merges deterministically into `pack.facts` and tags provenance in
-         meta.
+    Nodes are grouped by their *own* (owner_type, owner_id) properties and
+    fetched per scope; a node without explicit owner scope routes nowhere.
+    If `ranker` is given, routed facts and episodes go through the same
+    trust-weighted blend and `min_trust_score` filter as every other fetch
+    path — the graph layer applies no trust scoring itself (ticket 14).
 
-    Returns the fetched facts that survived ranking/filtering (may be empty).
+    Returns the routed facts and episodes that survived ranking (may be empty).
     """
-
-    def _fact_node_id(item: Any) -> Optional[str]:
-        if not isinstance(item, dict):
-            return None
-        labels = item.get("labels") or []
-        if "Fact" not in labels:
-            return None
-        props = item.get("properties") or {}
-        node_id = props.get("id")
-        return str(node_id) if node_id else None
-
-    def _fact_node_owner(item: Any) -> tuple[Optional[str], Optional[str]]:
-        props = item.get("properties") or {} if isinstance(item, dict) else {}
-        return (props.get("owner_type"), props.get("owner_id"))
-
-    if not hasattr(env, "fetch_facts_by_ids"):
-        return []
     if not pack.graph:
         return []
-
     max_items = max(0, int(max_items_per_type))
     if not max_items:
         return []
 
-    # Build a bounded, deterministic list of (scope, fact_id) pairs.
-    cited_pairs: list[tuple[tuple[str, str], str]] = []
-    seen_global: set[str] = set()
+    Scope = tuple[str, str]
+    by_kind: dict[str, dict[Scope, list[str]]] = {"Fact": {}, "Entity": {}, "Episode": {}}
+    counts = {kind: 0 for kind in by_kind}
 
     for item in pack.graph:
-        fact_id = _fact_node_id(item)
-        if not fact_id or fact_id in seen_global:
+        if not isinstance(item, dict):
             continue
-        owner_type, owner_id = _fact_node_owner(item)
+        kind = next((label for label in item.get("labels") or [] if label in by_kind), None)
+        props = item.get("properties") or {}
+        node_id = str(props.get("id") or "").strip()
+        if kind is None or not node_id or counts[kind] >= max_items:
+            continue
+        owner_type, owner_id = props.get("owner_type"), props.get("owner_id")
         if not owner_type or not owner_id:
-            logger.debug("expand_facts_from_graph: skipped Fact node without explicit owner scope")
+            logger.debug("expand_from_graph: skipped %s node without explicit owner scope", kind)
             continue
-        seen_global.add(fact_id)
-        cited_pairs.append(((str(owner_type), str(owner_id)), fact_id))
-        if len(cited_pairs) >= max_items:
-            break
+        ids = by_kind[kind].setdefault((str(owner_type), str(owner_id)), [])
+        if node_id not in ids:
+            ids.append(node_id)
+            counts[kind] += 1
 
-    if not cited_pairs:
-        return []
+    # Entities route to the facts that name them; merge those ids into the
+    # Fact routing so each fact is fetched (and scope-checked) exactly once.
+    if by_kind["Entity"] and hasattr(env, "graph_fact_ids_for_entities"):
+        for (s_owner_type, s_owner_id), entity_ids in by_kind["Entity"].items():
+            try:
+                named = await env.graph_fact_ids_for_entities(
+                    request,
+                    entity_ids=entity_ids,
+                    owner_type=s_owner_type,
+                    owner_id=s_owner_id,
+                    limit=max_items,
+                )
+            except Exception:
+                logger.exception(
+                    "expand_from_graph: entity->fact resolution failed owner=%s:%s entities=%d",
+                    s_owner_type,
+                    s_owner_id,
+                    len(entity_ids),
+                )
+                named = []
+            fact_ids = by_kind["Fact"].setdefault((s_owner_type, s_owner_id), [])
+            for fact_id in named:
+                if fact_id not in fact_ids and len(fact_ids) < max_items:
+                    fact_ids.append(fact_id)
 
-    # Group by scope while preserving first-seen order of scopes.
-    scope_order: list[tuple[str, str]] = []
-    by_scope: dict[tuple[str, str], list[str]] = {}
-    for scope, fact_id in cited_pairs:
-        if scope not in by_scope:
-            by_scope[scope] = []
-            scope_order.append(scope)
-        by_scope[scope].append(fact_id)
+    async def _fetch_per_scope(fetch: Any, grouped: dict[Scope, list[str]], label: str) -> list[Any]:
+        out: list[Any] = []
+        for (s_owner_type, s_owner_id), ids in grouped.items():
+            if not ids:
+                continue
+            try:
+                got = await fetch(request=request, ids=ids, owner_type=s_owner_type, owner_id=s_owner_id)
+            except Exception:
+                logger.exception(
+                    "expand_from_graph: %s fetch failed owner=%s:%s ids=%d",
+                    label,
+                    s_owner_type,
+                    s_owner_id,
+                    len(ids),
+                )
+                got = []
+            out.extend(list(got or []))
+        return out
+
+    facts: list[Any] = []
+    if by_kind["Fact"] and hasattr(env, "fetch_facts_by_ids"):
+        facts = await _fetch_per_scope(env.fetch_facts_by_ids, by_kind["Fact"], "fact")
+    episodes: list[Any] = []
+    if by_kind["Episode"] and hasattr(env, "fetch_episodes_by_ids"):
+        episodes = await _fetch_per_scope(env.fetch_episodes_by_ids, by_kind["Episode"], "episode")
 
     logger.debug(
-        "expand_facts_from_graph: ids=%d scopes=%d",
-        len(cited_pairs),
-        len(scope_order),
+        "expand_from_graph: fact_nodes=%d entity_nodes=%d episode_nodes=%d facts=%d episodes=%d",
+        counts["Fact"],
+        counts["Entity"],
+        counts["Episode"],
+        len(facts),
+        len(episodes),
     )
-
-    facts_from_graph: list[Any] = []
-
-    for (s_owner_type, s_owner_id) in scope_order:
-        ids = by_scope.get((s_owner_type, s_owner_id)) or []
-        if not ids:
-            continue
-        try:
-            got = await env.fetch_facts_by_ids(
-                request=request,
-                ids=ids,
-                owner_type=s_owner_type,
-                owner_id=s_owner_id,
-            )
-        except Exception:
-            logger.exception(
-                "expand_facts_from_graph: fetch_facts_by_ids failed owner=%s:%s",
-                s_owner_type,
-                s_owner_id,
-            )
-            got = []
-        if got:
-            facts_from_graph.extend(list(got))
-
-    if not facts_from_graph:
+    if not facts and not episodes:
         return []
 
-    # Attach provenance.
-    try:
-        for f in facts_from_graph:
-            if isinstance(f, dict):
-                continue
-            meta = getattr(f, "meta", None) or {}
-            if not isinstance(meta, dict):
-                meta = {}
-            meta.setdefault("retrieval_route", "graph_expand")
-            meta.setdefault("retrieval_stage", "graph_fact_resolve")
-            f.meta = meta
-    except Exception:
-        logger.exception("expand_facts_from_graph: failed to attach provenance metadata")
-        raise
+    for routed in (*facts, *episodes):
+        if isinstance(routed, dict):
+            continue
+        meta = getattr(routed, "meta", None)
+        if not isinstance(meta, dict):
+            meta = {}
+        meta.setdefault("retrieval_route", "graph_expand")
+        meta.setdefault("retrieval_stage", "graph_node_resolve")
+        routed.meta = meta
 
+    query_text = getattr(pack, "query_text", "") or ""
+    debug = getattr(pack, "debug", False)
     if ranker is not None:
-        before = len(facts_from_graph)
-        facts_from_graph = ranker.rank_facts(
-            facts_from_graph,
-            query_text=getattr(pack, "query_text", "") or "",
-            debug=getattr(pack, "debug", False),
-        )
-        dropped = before - len(facts_from_graph)
+        before_facts, before_episodes = len(facts), len(episodes)
+        if facts:
+            facts = ranker.rank_facts(facts, query_text=query_text, debug=debug)
+        if episodes:
+            episodes = ranker.rank_episodes(episodes, query_text=query_text, debug=debug)
+        dropped = (before_facts - len(facts)) + (before_episodes - len(episodes))
         if dropped:
             logger.info(
-                "expand_facts_from_graph: min_trust_score dropped %d of %d graph-resolved fact(s)",
+                "expand_from_graph: min_trust_score dropped %d of %d graph-routed item(s)",
                 dropped,
-                before,
+                before_facts + before_episodes,
             )
-        if not facts_from_graph:
-            return []
 
     from uma.common.dedupe import dedupe_by_id
 
-    merged = dedupe_by_id(list(getattr(pack, "facts", []) or []) + list(facts_from_graph))
-    pack.facts = merged[:max_items]
-    return facts_from_graph
+    if facts:
+        pack.facts = dedupe_by_id(list(getattr(pack, "facts", []) or []) + list(facts))[:max_items]
+    if episodes:
+        pack.episodes = dedupe_by_id(list(getattr(pack, "episodes", []) or []) + list(episodes))[:max_items]
+    return list(facts) + list(episodes)
 
 
 async def expand_evidence_chunks_from_facts(

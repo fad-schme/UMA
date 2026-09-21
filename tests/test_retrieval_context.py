@@ -12,7 +12,7 @@ from tests.helpers.graph_adapter import RecordingGraphAdapter
 from tests.helpers.runtime import TEST_AGENT_ID, init_uma_for_tests
 from uma.api.memory import UMAMemory
 from uma.common.results import Confidence, MemoryResult, Provenance
-from uma.common.types import RuntimeContext
+from uma.common.types import Episode, RuntimeContext
 from uma.common.types.types_fact import Fact
 from uma.retrieve.policy import should_stop
 from uma.retrieve.rlm.context_pack import ContextPack
@@ -25,7 +25,7 @@ from uma.retrieve.rlm.decisions import (
 )
 from uma.retrieve.rlm.domain import ensure_fact_domain, filter_facts_by_domains
 from uma.retrieve.rlm.environment import UMAMemoryEnvironment
-from uma.retrieve.rlm.evidence import expand_evidence_chunks_from_facts, expand_facts_from_graph
+from uma.retrieve.rlm.evidence import expand_evidence_chunks_from_facts, expand_from_graph
 from uma.retrieve.rlm.intent import QueryIntent, classify_query_intent
 from uma.retrieve.rlm.request import RetrievalRequest
 from uma.common.types.types_scope import DEFAULT_TENANT_ID
@@ -972,7 +972,7 @@ class _GraphResolveEnv:
 
 
 @pytest.mark.asyncio
-async def test_expand_facts_from_graph_routes_fact_nodes_into_pack_facts() -> None:
+async def test_expand_from_graph_routes_fact_nodes_into_pack_facts() -> None:
     """Ticket 22: Fact nodes found via graph traversal must resolve into
     pack.facts through the owner-scoped fetch path, not sit unread in
     pack.graph. Entity nodes carry no fact id and must be skipped."""
@@ -996,7 +996,7 @@ async def test_expand_facts_from_graph_routes_fact_nodes_into_pack_facts() -> No
         ],
     )
 
-    facts = await expand_facts_from_graph(
+    facts = await expand_from_graph(
         env=env,
         request=request,
         pack=pack,
@@ -1012,7 +1012,7 @@ async def test_expand_facts_from_graph_routes_fact_nodes_into_pack_facts() -> No
 
 
 @pytest.mark.asyncio
-async def test_expand_facts_from_graph_inherits_quarantine_filtering() -> None:
+async def test_expand_from_graph_inherits_quarantine_filtering() -> None:
     """A Fact node quarantined at the store does not reach pack.facts, because
     resolution goes through fetch_facts_by_ids -> the store's own
     `quarantined_at IS NULL` clause, not a bespoke filter in this function."""
@@ -1036,7 +1036,7 @@ async def test_expand_facts_from_graph_inherits_quarantine_filtering() -> None:
         ],
     )
 
-    facts = await expand_facts_from_graph(
+    facts = await expand_from_graph(
         env=env,
         request=request,
         pack=pack,
@@ -1065,7 +1065,7 @@ class _TrustFilterRanker:
 
 
 @pytest.mark.asyncio
-async def test_expand_facts_from_graph_applies_ranker_when_provided() -> None:
+async def test_expand_from_graph_applies_ranker_when_provided() -> None:
     """Ticket 23 (facts half): graph-resolved facts go through the same
     trust-weighted ranking/min_trust_score filter as any other fact-fetch
     path when a ranker is supplied — they are not a silent exemption."""
@@ -1090,7 +1090,7 @@ async def test_expand_facts_from_graph_applies_ranker_when_provided() -> None:
         ],
     )
 
-    facts = await expand_facts_from_graph(
+    facts = await expand_from_graph(
         env=env,
         request=request,
         pack=pack,
@@ -1847,3 +1847,118 @@ async def test_baseline_personal_graph_retries_unfiltered_when_predicate_scoped_
     assert pack.graph, "expected the unfiltered retry to surface user-profile neighbors"
     _cypher, params = adapter.queries[-1]
     assert params["preds"] is None, "retry must drop the predicate filter"
+
+
+
+# ── ticket 29: routing covers every owned node kind ───────────────────────
+
+
+def _graph_scoped_node(label: str, node_id: str, *, owner_type: str = "user", owner_id: str = "user:u1") -> dict:
+    props = {"id": node_id, "tenant_id": "tenant-1", "owner_type": owner_type, "owner_id": owner_id}
+    return {"node": dict(props), "labels": [label], "properties": props}
+
+
+@dataclass
+class _GraphEpisode:
+    id: str
+    owner_type: str
+    owner_id: str
+    tenant_id: str = "tenant-1"
+    meta: dict = field(default_factory=dict)
+
+
+class _GraphRouteEnv(_GraphResolveEnv):
+    """Adds the two routing hops ticket 29 introduces: entity -> fact ids,
+    and episode fetch-by-id."""
+
+    def __init__(self, *, entity_facts: dict[str, list[str]] | None = None) -> None:
+        super().__init__()
+        self._entity_facts = entity_facts or {}
+        self.entity_calls: list[tuple[str, str, list[str]]] = []
+        self.episode_calls: list[tuple[str, str, list[str]]] = []
+
+    async def graph_fact_ids_for_entities(self, request, *, entity_ids, owner_type, owner_id, limit):
+        self.entity_calls.append((owner_type, owner_id, list(entity_ids)))
+        return [fid for eid in entity_ids for fid in self._entity_facts.get(eid, [])][:limit]
+
+    async def fetch_episodes_by_ids(self, request, ids, *, owner_type, owner_id):
+        self.episode_calls.append((owner_type, owner_id, list(ids)))
+        return [_GraphEpisode(id=eid, owner_type=owner_type, owner_id=owner_id) for eid in ids]
+
+
+def _route_request() -> RetrievalRequest:
+    return RetrievalRequest.from_runtime_context(
+        RuntimeContext(tenant_id="tenant-1", agent_id="agent:alpha", request_id="req-route", user_id="user:u1")
+    )
+
+
+@pytest.mark.asyncio
+async def test_expand_from_graph_routes_entity_nodes_to_the_owners_facts_naming_them() -> None:
+    env = _GraphRouteEnv(entity_facts={"Caroline": ["fact-a", "fact-b"]})
+    pack = ContextPack(
+        user_id="user:u1", query_text="what does Caroline do", owner_type="user", owner_id="user:u1",
+        graph=[_graph_scoped_node("Entity", "Caroline")],
+    )
+
+    await expand_from_graph(env=env, request=_route_request(), pack=pack, max_items_per_type=10)
+
+    assert env.entity_calls == [("user", "user:u1", ["Caroline"])]
+    assert env.calls == [("user", "user:u1", ["fact-a", "fact-b"])]
+    assert [f.id for f in pack.facts] == ["fact-a", "fact-b"]
+
+
+@pytest.mark.asyncio
+async def test_expand_from_graph_routes_episode_nodes_into_pack_episodes() -> None:
+    env = _GraphRouteEnv()
+    pack = ContextPack(
+        user_id="user:u1", query_text="what happened", owner_type="user", owner_id="user:u1",
+        graph=[_graph_scoped_node("Episode", "ep-1")],
+    )
+
+    await expand_from_graph(env=env, request=_route_request(), pack=pack, max_items_per_type=10)
+
+    assert env.episode_calls == [("user", "user:u1", ["ep-1"])]
+    assert [e.id for e in pack.episodes] == ["ep-1"]
+    assert pack.episodes[0].meta.get("retrieval_route") == "graph_expand"
+
+
+@pytest.mark.asyncio
+async def test_expand_from_graph_skips_nodes_without_owner_scope() -> None:
+    """A node carrying no owner cannot be attributed to anyone, so it routes
+    nowhere — the same rule already applied to Fact nodes."""
+    env = _GraphRouteEnv(entity_facts={"Caroline": ["fact-a"]})
+    unscoped = {"node": {"id": "Caroline"}, "labels": ["Entity"], "properties": {"id": "Caroline"}}
+    pack = ContextPack(
+        user_id="user:u1", query_text="q", owner_type="user", owner_id="user:u1", graph=[unscoped],
+    )
+
+    await expand_from_graph(env=env, request=_route_request(), pack=pack, max_items_per_type=10)
+
+    assert env.entity_calls == [] and env.calls == [] and pack.facts == []
+
+
+@pytest.mark.asyncio
+async def test_environment_fetch_episodes_by_ids_is_owner_scoped(uma_memory) -> None:
+    memory = uma_memory
+    env = UMAMemoryEnvironment(memory)
+    episode = Episode(
+        id="ep-route-1",
+        timestamp=datetime.now(timezone.utc),
+        summary="went hiking",
+        user_id="user:u1",
+        tenant_id=DEFAULT_TENANT_ID,
+        owner_type="user",
+        owner_id="user:u1",
+        session_id="s1",
+    )
+    embedding = (await memory.embedder.embed(["went hiking"]))[0]
+    await memory.episodic_core.add_episode(episode, embedding)
+    request = RetrievalRequest.from_runtime_context(
+        RuntimeContext(tenant_id=DEFAULT_TENANT_ID, agent_id=AGENT_ID, request_id="req-ep-fetch", user_id="user:u1")
+    )
+
+    mine = await env.fetch_episodes_by_ids(request, ["ep-route-1"], owner_type="user", owner_id="user:u1")
+    theirs = await env.fetch_episodes_by_ids(request, ["ep-route-1"], owner_type="user", owner_id="user:u2")
+
+    assert [e.id for e in mine] == ["ep-route-1"]
+    assert theirs == []

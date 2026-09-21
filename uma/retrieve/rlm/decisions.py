@@ -357,12 +357,22 @@ def _decide_episodic_clusters(pack: Any, coverage: Any, cfg: dict[str, Any]) -> 
     # steps to surface something for this owner.
     episodes = getattr(pack, "episodes", []) or []
     has_cluster = any(isinstance(ep, dict) and "episode_ids" in ep for ep in episodes)
+    steps = getattr(pack, "steps", []) or []
+
+    # One cluster attempt per owner per request. `needs_clusters` stays true
+    # for an owner who has never been consolidated, so re-asking on every step
+    # spends a store call on a question already answered with "none" — and,
+    # because this decider's two actions then fill `max_actions_per_step`,
+    # starves the graph decider that is concatenated after it.
+    if _cluster_attempt_returned_nothing(steps):
+        return [SearchEpisodicAction(k=max_items_per_type)]
+
     actions: list[RetrievalAction] = [FetchEpisodeClustersAction(
         k=cluster_k,
         time_range=None,
         min_salience=salience_threshold,
     )]
-    if not has_cluster and len(getattr(pack, "steps", []) or []) >= 2:
+    if not has_cluster and len(steps) >= 2:
         actions.append(SearchEpisodicAction(k=max_items_per_type))
     return actions
 
@@ -763,6 +773,26 @@ def _last_action_result(steps: list[Any]) -> Optional[dict[str, Any]]:
         if isinstance(s, dict) and s.get("event") == "action_result":
             return s
     return None
+
+
+def _cluster_attempt_returned_nothing(steps: list[Any]) -> bool:
+    """True when a cluster fetch already ran this request and found nothing.
+
+    Cluster summaries are written per owner by the caller-invoked
+    `Consolidator`, so their absence is a fact about this owner, not a
+    deployment switch — one empty result settles it for the request.
+    """
+    for s in steps or []:
+        if not isinstance(s, dict) or s.get("event") != "action_result":
+            continue
+        if str(s.get("action") or "").strip() not in {
+            "episodic_clusters",
+            "fetch_episode_clusters",
+        }:
+            continue
+        if not s.get("returned"):
+            return True
+    return False
 
 
 def _did_action(steps: list[Any], action_name: str) -> bool:

@@ -131,6 +131,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   operations. See **Added** for the new entry point.
 
 ### Changed
+- **Replaying a turn stores one episode, not two.** A `process_turn` call
+  whose user, session, message and reply match an earlier turn derives the
+  same turn id; the episodic store's idempotency guard now skips the
+  duplicate episode, as facts already did. The guard always keyed on
+  `meta["turn_id"]` but never fired, because episodes were stored without it.
+- **Graph schema: every node is keyed by owner scope (breaking).** `Entity`,
+  `Fact` and `Episode` nodes and the owner anchor are merged on `id` together
+  with `tenant_id`, `owner_type` and `owner_id`; the anchor is labelled for its
+  owner type (`User`, `Agent` or `Workspace`) instead of `User` for all.
+  Graph reads now match nodes on scope as well as edges. Graphs written by
+  earlier versions contain unscoped nodes that reads ignore and a scoped clear
+  cannot select: drop the graph database and re-materialize each owner with
+  `rebuild_derived_indexes(..., include_graph=True)`. No migration is
+  provided — the graph is derived from SQL.
 - **`agent_id` is a required per-call argument** on every request-scoped
   public API: `retrieve_context`, `retrieve_memory`, `process_turn`,
   `load_memory_bootstrap`, `load_daily_diary_bootstrap`, `set_agent_profile`,
@@ -200,6 +214,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   sites now.
 
 ### Security
+- **No graph node or edge is shared across owners.** `Entity` nodes were
+  merged on their text alone, so two owners whose facts named the same string
+  shared one node — and could share one predicate edge, whose owner the later
+  write re-assigned. The Fact-to-Entity edges (`SUBJECT`, `OBJECT`,
+  `ASSERTS`) carried no scope at all. Every node and edge now carries its
+  owner's scope, and the scoped graph clear used by `rebuild_derived_indexes`
+  removes every node the owner has, `Entity` and anchor included, where it
+  previously left entity text derived from the owner's facts behind.
 - **Promotion no longer carries the originating user into a shared scope.**
   A fact promoted from a user into an agent's KB — which every user of that
   agent reads — travelled with `origin_user_id` and `origin_session_id` on the
@@ -238,6 +260,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `.claude/skills/lanes.md` rather than left implicit.
 
 ### Fixed
+- **Deleted episodes stayed in the graph.** Retention pruning (which runs
+  after every stored episode and caps an owner at `max_episodes`),
+  `EpisodicCore.delete_episode` (used by consolidation) and
+  `purge_quarantined(lane="episodic")` removed episodes from SQL but never
+  from the graph, so their nodes and summaries outlived the data they were
+  derived from. All three now remove the owner's episode nodes through the
+  new scoped `GraphCore.delete_episodes`.
+- **Graph rebuild linked no episode to any fact.** `rebuild_derived_indexes`
+  joins episodes to facts on `meta["turn_id"]`, but only facts stored it —
+  the turn id was dropped before episode storage — so a rebuild wrote zero
+  episode-to-fact and episode-to-entity links while reporting `ok`. Episodes
+  now store their turn id. Episodes stored by earlier versions have none and
+  stay unlinked after a rebuild until their turns are re-ingested.
+- **Graph expansion found nothing it could return.** Owner-scoped walks
+  filter every edge by owner, and the only edges from an entity to the facts
+  naming it were unscoped, so a walk could never reach a `Fact` node; graph
+  results were routed only when they were facts, so retrieval output was
+  identical with the graph on or off. Those edges are now scoped, and routing
+  covers every owned node kind: a `Fact` node yields that fact, an `Entity`
+  node the owner's facts naming it, and an `Episode` node that episode — each
+  through its owner-scoped, quarantine-filtered store fetch and the usual
+  trust ranking, landing in `facts` / `episodes` of both retrieval products.
 - **A personal-intent graph query with real preference facts could still get
   routed to the wrong domain.** `_decide_graph`'s PERSONAL branch computed
   its own predicate scope through a filter (`_filter_predicates_for_domains`)

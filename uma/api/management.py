@@ -575,6 +575,11 @@ async def purge_quarantined(
         await store.delete_fact(record_id, tenant_id=tenant_id, owner_type=owner_type, owner_id=owner_id)
     elif lane == "episodic":
         await store.delete_episode(record_id, tenant_id=tenant_id, owner_type=owner_type, owner_id=owner_id)
+        graph_core = getattr(memory, "graph_core", None)
+        if graph_core is not None:
+            graph_core.delete_episodes(
+                tenant_id=tenant_id, owner_type=owner_type, owner_id=owner_id, episode_ids=[record_id],
+            )
     elif lane == "procedural":
         await store.delete_skill(record_id, tenant_id=tenant_id, owner_type=owner_type, owner_id=owner_id)
     elif lane == "raw":

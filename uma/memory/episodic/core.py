@@ -61,6 +61,10 @@ class EpisodicCore:
         self.mapper = EpisodeMapper()   # ← MUST remain
         self.archive = EpisodicArchive(episodic_store)
         self.policy = retention_policy or EpisodicRetentionPolicy()
+        # Set by UMAMemory once the optional graph backend is up. Episode
+        # deletes are mirrored into it so the derived graph never keeps nodes
+        # for rows SQL no longer holds.
+        self.graph_core: Optional[Any] = None
 
         logger.debug("EpisodicCore initialized (policy=%s)", type(self.policy).__name__)
 
@@ -77,10 +81,17 @@ class EpisodicCore:
         working_memory_context: list[Any],
         turn_context: RuntimeContext,
         extra_meta: Optional[dict] = None,
+        *,
+        turn_id: str,
     ) -> Optional[Episode]:
         """
         Build and persist an Episode from a conversation turn.
         This is the main ingestion entry point used by the memory pipeline.
+
+        `turn_id` is recorded at `meta["turn_id"]`, the same key the turn's
+        facts carry. It is the only link between an episode and its facts that
+        survives in SQL, so a graph rebuild — which has no in-memory turn to
+        work from — depends on it to re-create episode-to-fact links.
         """
 
         try:
@@ -89,9 +100,12 @@ class EpisodicCore:
             # ------------------------------
             wm_context = self.mapper.map_entries(working_memory_context)
 
+            # The indexer lifts `turn_id` from entry metadata into the episode's
+            # `meta["turn_id"]`, where the store's idempotency guard and the
+            # graph rebuild's episode-to-fact join both read it.
             turn_entries = [
-                {"role": "user", "content": user_message},
-                {"role": "assistant", "content": assistant_reply},
+                {"role": "user", "content": user_message, "metadata": {"turn_id": turn_id}},
+                {"role": "assistant", "content": assistant_reply, "metadata": {"turn_id": turn_id}},
             ]
 
             # ------------------------------
@@ -173,12 +187,14 @@ class EpisodicCore:
             prunable = self.policy.select_prunable(episodes)
 
             if prunable:
+                pruned_ids = [ep.id for ep in prunable]
                 await self.archive.delete_many(
-                    [ep.id for ep in prunable],
+                    pruned_ids,
                     tenant_id=tenant_id,
                     owner_type=owner_type,
                     owner_id=owner_id,
                 )
+                self._delete_from_graph(pruned_ids, tenant_id=tenant_id, owner_type=owner_type, owner_id=owner_id)
                 logger.debug(
                     "EpisodicCore: pruned %d episode(s) for owner=%s:%s",
                     len(prunable),
@@ -224,10 +240,22 @@ class EpisodicCore:
                 owner_type=owner_type,
                 owner_id=owner_id,
             )
-            return True
         except Exception:
             logger.exception("EpisodicCore.delete_episode failed id=%s", episode_id)
             return False
+        self._delete_from_graph([episode_id], tenant_id=tenant_id, owner_type=owner_type, owner_id=owner_id)
+        return True
+
+    def _delete_from_graph(self, episode_ids: list[str], *, tenant_id: str, owner_type: str, owner_id: str) -> None:
+        """Mirror episode deletes into the derived graph (no-op without a graph backend)."""
+        if self.graph_core is None or not episode_ids:
+            return
+        self.graph_core.delete_episodes(
+            tenant_id=tenant_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            episode_ids=list(episode_ids),
+        )
 
     async def list_episodes(self, tenant_id: str = DEFAULT_TENANT_ID, owner_type: str = "", owner_id: str = "") -> list[Episode]:
         """
@@ -378,6 +406,27 @@ class EpisodicCore:
             )
         return dedupe_by_id(clusters)
 
+
+    async def fetch_by_ids(
+        self,
+        ids: list[str],
+        *,
+        tenant_id: str = DEFAULT_TENANT_ID,
+        owner_type: str,
+        owner_id: str,
+    ) -> list[Episode]:
+        """Fetch episodes by id within one owner's scope; quarantined rows are excluded by the store."""
+        if self.store is None or not hasattr(self.store, "fetch_by_ids"):
+            return []
+        if not tenant_id or not owner_type or not owner_id:
+            logger.error("EpisodicCore.fetch_by_ids requires tenant_id, owner_type and owner_id")
+            raise ValueError("EpisodicCore.fetch_by_ids requires tenant_id, owner_type and owner_id")
+        return await self.store.fetch_by_ids(
+            ids,
+            tenant_id=tenant_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+        )
 
     async def fetch_summaries(self, ids: list[str], *, tenant_id: str = DEFAULT_TENANT_ID, owner_type: str, owner_id: str) -> list[dict]:
         """

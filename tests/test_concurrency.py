@@ -1203,15 +1203,16 @@ async def test_graph_rebuild_clears_scoped_materialization_before_replay(uma_mem
     )
 
     assert result.status in ("ok", "degraded")
-    assert len(adapter.queries) >= 3
-    clear_queries = adapter.queries[:3]
+    assert len(adapter.queries) >= 2
+    clear_queries = adapter.queries[:2]
     clear_params = [params or {} for _cypher, params in clear_queries]
     assert all(params.get("tenant_id") == "tenant-clear" for params in clear_params)
     assert all(params.get("owner_type") == "user" for params in clear_params)
     assert all(params.get("owner_id") == owner_id for params in clear_params)
     assert "DELETE r" in clear_queries[0][0]
-    assert "DETACH DELETE f" in clear_queries[1][0]
-    assert "DETACH DELETE e" in clear_queries[2][0]
+    # Every graph node carries its owner's scope (ticket 29), so one
+    # label-agnostic delete clears Fact, Episode, Entity and anchor nodes.
+    assert "DETACH DELETE n" in clear_queries[1][0]
 
 
 @pytest.mark.asyncio
@@ -1549,9 +1550,9 @@ async def test_deferred_graph_update_overlap_with_graph_rebuild_keeps_scope_isol
     clear_queries = [
         (cypher, params or {})
         for cypher, params in adapter.queries
-        if "DELETE r" in cypher or "DETACH DELETE f" in cypher or "DETACH DELETE e" in cypher
+        if "DELETE r" in cypher or "DETACH DELETE n" in cypher
     ]
-    assert len(clear_queries) == 3
+    assert len(clear_queries) == 2
     assert all(params.get("tenant_id") == "tenant-a" for _cypher, params in clear_queries)
     assert all(params.get("owner_type") == "user" for _cypher, params in clear_queries)
     assert all(params.get("owner_id") == owner_id for _cypher, params in clear_queries)
@@ -1563,8 +1564,7 @@ async def test_deferred_graph_update_overlap_with_graph_rebuild_keeps_scope_isol
         (params.get("tenant_id") == "tenant-b")
         and (
             "DELETE r" in cypher
-            or "DETACH DELETE f" in cypher
-            or "DETACH DELETE e" in cypher
+            or "DETACH DELETE n" in cypher
         )
         for cypher, params in adapter.queries
     )

@@ -1050,6 +1050,28 @@ async def test_purge_deletes_quarantined_record(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_purge_quarantined_episode_also_removes_it_from_the_graph(tmp_path):
+    """The graph is derived from SQL: a purged episode must not survive as a
+    graph node, just as purge/quarantine already keep Fact nodes in sync."""
+    stores = _make_stores(tmp_path)
+    memory = _mock_memory(stores)
+    ep_q = Episode(
+        id="ep_purge", timestamp=_NOW, summary="bad", user_id="user:alice",
+        **_SCOPE_ALICE, trust_score=0.0, quarantined_at=_NOW,
+    )
+    await stores["episodic"].add_episode(ep_q, _VEC)
+
+    result = await purge_quarantined(
+        memory, record_id="ep_purge", lane="episodic", reason="malicious content", **_SCOPE_ALICE
+    )
+
+    assert result is True
+    memory.graph_core.delete_episodes.assert_called_once_with(
+        tenant_id="default", owner_type="user", owner_id="user:alice", episode_ids=["ep_purge"],
+    )
+
+
+@pytest.mark.asyncio
 async def test_purge_active_record_returns_false(tmp_path):
     stores = _make_stores(tmp_path)
     memory = _mock_memory(stores)

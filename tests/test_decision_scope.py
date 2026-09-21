@@ -29,6 +29,7 @@ from uma.retrieve.rlm.decisions import (
     _decide_episodic_clusters,
     _decide_semantic,
     _decide_zero_yield_fallback,
+    deterministic_decision,
 )
 
 
@@ -321,3 +322,65 @@ def test_pinned_action_queries_only_the_scope_it_names() -> None:
     assert env.calls == [("user", "user:123")], (
         f"a pinned action must reach exactly the scope it names, got {env.calls}"
     )
+
+
+def _empty_cluster_step(step: int = 1) -> dict[str, Any]:
+    """An executed cluster fetch that came back with nothing for this owner."""
+    return {
+        "step": step,
+        "event": "action_result",
+        "action": "fetch_episode_clusters",
+        "store": "episodes",
+        "returned": 0,
+    }
+
+
+def test_decide_episodic_clusters_stops_retrying_after_an_empty_cluster_attempt() -> None:
+    """Cluster availability is decided once per owner per request.
+
+    `needs_clusters` stays true for an owner who has never been consolidated,
+    so without this the decider asks for cluster summaries on every step and
+    each call returns nothing.
+    """
+    pack = _make_pack(steps=[_empty_cluster_step(), {"step": 2}])
+    actions = _decide_episodic_clusters(pack, _CoverageNeedsClusters(), cfg={"max_items_per_type": 30})
+    assert [a.action for a in actions] == ["search_episodic"]
+    assert all(a.owner_type is None for a in actions)
+
+
+def test_decide_episodic_clusters_keeps_trying_clusters_when_an_attempt_returned_items() -> None:
+    """A non-empty attempt is not evidence of absence - keep the cluster path."""
+    step = _empty_cluster_step()
+    step["returned"] = 3
+    pack = _make_pack(steps=[step, {"step": 2}])
+    actions = _decide_episodic_clusters(pack, _CoverageNeedsClusters(), cfg={"max_items_per_type": 30})
+    assert [a.action for a in actions] == ["fetch_episode_clusters", "search_episodic"]
+
+
+def test_graph_expansion_survives_the_step_action_cap_for_an_unconsolidated_owner() -> None:
+    """The regression ticket 28 exists for: episodic actions starving graph.
+
+    `_execute_decision_actions` runs `actions[:max_actions_per_step]`, default
+    2, and the graph decider is concatenated last. Two episodic actions per
+    step therefore cut `expand_graph` off on every step of the loop.
+    """
+    pack = _make_pack(
+        facts=[_fact()],
+        chunks=[{"id": "chunk_1"}],
+        steps=[_empty_cluster_step(), {"step": 2}],
+        # The topical graph branch seeds from entities in the query.
+        query_text="How should IAM and VPC be used in a multi-tier architecture?",
+    )
+    decision = deterministic_decision(
+        pack,
+        _CoverageNeedsClusters(),
+        cfg={
+            "chunk_fallback_enabled": False,
+            "graph_expansion_available": True,
+            "graph_predicate_limit": 2,
+            "max_items_per_type": 30,
+        },
+    )
+    assert decision is not None
+    names = [a.action for a in decision.actions]
+    assert "expand_graph" in names[:2], f"graph starved by {names}"

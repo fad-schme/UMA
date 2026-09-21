@@ -133,9 +133,12 @@ class GraphCore:
                 raise ValueError(f"GraphCore.insert_fact_triplet: unsupported owner_type={owner_type!r}")
             rel_type = self._sanitize_predicate(predicate)
 
+            # Every node is merged on its id *and* owner scope: two owners whose
+            # facts name the same string get separate Entity nodes, so no node
+            # or edge below can ever be shared across owners.
             cypher = f"""
-            MERGE (subj:Entity {{id: $subject}})
-            MERGE (obj:Entity {{id: $object}})
+            MERGE (subj:Entity {{id: $subject, tenant_id: $tenant_id, owner_type: $owner_type, owner_id: $owner_id}})
+            MERGE (obj:Entity {{id: $object, tenant_id: $tenant_id, owner_type: $owner_type, owner_id: $owner_id}})
 
             MERGE (subj)-[r:{rel_type}]->(obj)
               SET
@@ -150,14 +153,11 @@ class GraphCore:
                 r.scope_model_version = $scope_model_version,
                 r.meta_json = $meta_json
 
-            MERGE (f:Fact {{id: $fact_id}})
+            MERGE (f:Fact {{id: $fact_id, tenant_id: $tenant_id, owner_type: $owner_type, owner_id: $owner_id}})
               SET
                 f.subject = $subject,
                 f.predicate = $predicate,
                 f.object = $object,
-                f.tenant_id = $tenant_id,
-                f.owner_type = $owner_type,
-                f.owner_id = $owner_id,
                 f.source_chunk_id = $source_chunk_id,
                 f.created_at = $created_at,
                 f.updated_at = $updated_at,
@@ -165,9 +165,15 @@ class GraphCore:
                 f.scope_model_version = $scope_model_version,
                 f.meta_json = $meta_json
 
-            MERGE (f)-[:SUBJECT]->(subj)
-            MERGE (f)-[:OBJECT]->(obj)
-            MERGE (f)-[:ASSERTS {{predicate: $predicate}}]->(obj)
+            MERGE (f)-[rs:SUBJECT]->(subj)
+              SET rs.tenant_id = $tenant_id, rs.owner_type = $owner_type, rs.owner_id = $owner_id,
+                  rs.domain = $domain, rs.scope_model_version = $scope_model_version
+            MERGE (f)-[ro:OBJECT]->(obj)
+              SET ro.tenant_id = $tenant_id, ro.owner_type = $owner_type, ro.owner_id = $owner_id,
+                  ro.domain = $domain, ro.scope_model_version = $scope_model_version
+            MERGE (f)-[ra:ASSERTS {{predicate: $predicate}}]->(obj)
+              SET ra.tenant_id = $tenant_id, ra.owner_type = $owner_type, ra.owner_id = $owner_id,
+                  ra.domain = $domain, ra.scope_model_version = $scope_model_version
             """
 
             params = {
@@ -252,6 +258,70 @@ class GraphCore:
         except Exception:
             logger.exception("GraphCore.set_fact_quarantine failed fact_id=%s", fact_id)
             return False
+
+    def delete_episodes(
+        self,
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+        episode_ids: list[str],
+    ) -> int:
+        """
+        Remove Episode nodes (and their edges) that SQL no longer holds.
+
+        The graph is derived from the episodic store, so every episode delete
+        there — retention pruning, consolidation, quarantine purge — must also
+        remove the node, or its summary outlives the row it was derived from.
+        Scoped to the owner; returns the number of nodes removed.
+        """
+        ids = [str(e).strip() for e in episode_ids or [] if str(e or "").strip()]
+        if not ids:
+            return 0
+        try:
+            tenant_id = validate_tenant_id(tenant_id)
+            owner_type = validate_owner_type(owner_type)
+            if owner_type not in {"agent", "user", "workspace"}:
+                raise ValueError(f"GraphCore.delete_episodes: unsupported owner_type={owner_type!r}")
+            if owner_type == "user":
+                owner_id = normalize_user_id(owner_id)
+        except Exception:
+            logger.exception("GraphCore.delete_episodes: invalid scoped graph request")
+            return 0
+
+        try:
+            rows = self.adapter.run_query(
+                """
+                MATCH (e:Episode)
+                WHERE e.id IN $episode_ids
+                  AND e.tenant_id = $tenant_id AND e.owner_type = $owner_type AND e.owner_id = $owner_id
+                DETACH DELETE e
+                RETURN count(e) AS deleted
+                """,
+                params={
+                    "episode_ids": ids,
+                    "tenant_id": tenant_id,
+                    "owner_type": owner_type,
+                    "owner_id": owner_id,
+                },
+            )
+            deleted = int((rows[0] or {}).get("deleted") or 0) if rows else 0
+            logger.debug(
+                "GraphCore.delete_episodes: requested=%d deleted=%d owner=%s:%s",
+                len(ids),
+                deleted,
+                owner_type,
+                owner_id,
+            )
+            return deleted
+        except Exception:
+            logger.exception(
+                "GraphCore.delete_episodes failed owner=%s:%s ids=%d",
+                owner_type,
+                owner_id,
+                len(ids),
+            )
+            return 0
 
     def link_episode_to_facts(self, episode: Any, facts: list[Any]) -> None:
         """Link Episode to its extracted Facts."""
@@ -350,9 +420,13 @@ class GraphCore:
             domains = [str(d).strip().lower() for d in domain_scope if d]
             domains = [d for d in domains if d]
 
+        # Nodes are per owner, so several share an id: the seed and every
+        # returned node are matched on scope, not id alone.
         cypher = f"""
         MATCH (n {{id: $node_id}})-[rs*1..{depth_i}]-(m)
-        WHERE ALL(r IN rs WHERE r.tenant_id = $tenant_id AND r.owner_type = $owner_type AND r.owner_id = $owner_id)
+        WHERE n.tenant_id = $tenant_id AND n.owner_type = $owner_type AND n.owner_id = $owner_id
+        AND m.tenant_id = $tenant_id AND m.owner_type = $owner_type AND m.owner_id = $owner_id
+        AND ALL(r IN rs WHERE r.tenant_id = $tenant_id AND r.owner_type = $owner_type AND r.owner_id = $owner_id)
         AND ($preds IS NULL OR ALL(r IN rs WHERE type(r) IN $preds))
         AND ($domains IS NULL OR ALL(r IN rs WHERE toLower(coalesce(r.domain, "")) IN $domains))
         AND m.quarantined_at IS NULL
@@ -444,7 +518,10 @@ class GraphCore:
             rows = self.adapter.run_query(
                 """
                 MATCH (n)-[r]-()
-                WHERE r.tenant_id = $tenant_id
+                WHERE n.tenant_id = $tenant_id
+                  AND n.owner_type = $owner_type
+                  AND n.owner_id = $owner_id
+                  AND r.tenant_id = $tenant_id
                   AND r.owner_type = $owner_type
                   AND r.owner_id = $owner_id
                   AND ($domains IS NULL OR toLower(coalesce(r.domain, "")) IN $domains)
@@ -486,6 +563,75 @@ class GraphCore:
                 logger.debug("graph: node ID extraction failed for row, skipping", exc_info=True)
                 continue
         return out
+
+    def fact_ids_for_entities(
+        self,
+        *,
+        tenant_id: str,
+        owner_type: str,
+        owner_id: str,
+        entity_ids: list[str],
+        limit: int = 30,
+    ) -> list[str]:
+        """Ids of the owner's non-quarantined facts naming any of `entity_ids`.
+
+        Routes an Entity node reached by traversal to the facts that assert
+        something about it, through the SUBJECT/OBJECT edges. Entity, edge
+        and Fact are all matched on the owner's scope; the returned ids are
+        then fetched from the authoritative semantic store, which applies its
+        own scope and quarantine filters.
+        """
+        try:
+            tenant_id = validate_tenant_id(tenant_id)
+            owner_type = validate_owner_type(owner_type)
+            if owner_type not in {"agent", "user", "workspace"}:
+                raise ValueError(f"GraphCore.fact_ids_for_entities: unsupported owner_type={owner_type!r}")
+            if owner_type == "user":
+                owner_id = normalize_user_id(owner_id)
+        except Exception:
+            logger.exception("GraphCore.fact_ids_for_entities: invalid scoped graph request")
+            return []
+
+        ids = [str(e).strip() for e in entity_ids or [] if str(e or "").strip()]
+        if not ids:
+            return []
+        limit_i = max(1, min(100, int(limit)))
+
+        try:
+            rows = self.adapter.run_query(
+                """
+                MATCH (e:Entity)<-[r:SUBJECT|OBJECT]-(f:Fact)
+                WHERE e.id IN $entity_ids
+                  AND e.tenant_id = $tenant_id AND e.owner_type = $owner_type AND e.owner_id = $owner_id
+                  AND r.tenant_id = $tenant_id AND r.owner_type = $owner_type AND r.owner_id = $owner_id
+                  AND f.tenant_id = $tenant_id AND f.owner_type = $owner_type AND f.owner_id = $owner_id
+                  AND f.quarantined_at IS NULL
+                RETURN DISTINCT f.id AS fact_id
+                LIMIT $limit
+                """,
+                params={
+                    "entity_ids": ids,
+                    "tenant_id": tenant_id,
+                    "owner_type": owner_type,
+                    "owner_id": owner_id,
+                    "limit": limit_i,
+                },
+            )
+        except Exception:
+            logger.exception(
+                "GraphCore.fact_ids_for_entities failed owner=%s:%s entities=%d",
+                owner_type,
+                owner_id,
+                len(ids),
+            )
+            return []
+
+        out: list[str] = []
+        for row in rows or []:
+            fact_id = str((row or {}).get("fact_id") or "").strip() if isinstance(row, dict) else ""
+            if fact_id and fact_id not in out:
+                out.append(fact_id)
+        return out[:limit_i]
 
     def query(self, cypher: str, params: Optional[dict] = None) -> list[dict]:
         raise RuntimeError("GraphCore.query is unsafe and not available in normal runtime flow")

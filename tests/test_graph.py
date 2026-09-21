@@ -736,3 +736,330 @@ def test_personal_graph_expansion_never_falls_through_to_topical_when_active_dom
         "must never fall through to the topical branch's kb_doc domain scope"
     )
     assert actions[0].owner_type == "user"
+
+
+# ── ticket 29: every graph node and edge is owner-scoped ─────────────────
+
+import re  # noqa: E402
+
+_NODE_MERGE_RE = re.compile(r"MERGE \((\w+):(\w+) \{([^}]*)\}\)")
+_EDGE_MERGE_RE = re.compile(r"MERGE \(\w+\)-\[(\w*):(\w+)[^\]]*\]->\(\w+\)")
+_SCOPE_KEYS = ("tenant_id", "owner_type", "owner_id")
+
+
+def _scope_violations(cypher: str) -> list[str]:
+    """Every merged node must key on scope; every merged edge must SET scope."""
+    problems: list[str] = []
+    for alias, label, key in _NODE_MERGE_RE.findall(cypher):
+        for field_name in _SCOPE_KEYS:
+            if field_name not in key:
+                problems.append(f"node {alias}:{label} merge key lacks {field_name}")
+    for alias, rel_type in _EDGE_MERGE_RE.findall(cypher):
+        if not alias:
+            problems.append(f"edge :{rel_type} has no alias, so it cannot be scoped")
+            continue
+        for field_name in _SCOPE_KEYS:
+            if f"{alias}.{field_name} = ${field_name}" not in cypher:
+                problems.append(f"edge {alias}:{rel_type} does not set {field_name}")
+    return problems
+
+
+def _episode(owner_type: str, owner_id: str, ep_id: str = "ep1") -> Episode:
+    return Episode(
+        id=ep_id,
+        timestamp=datetime.now(timezone.utc),
+        summary="Test episode",
+        user_id="u1",
+        tenant_id="tenant-1",
+        owner_type=owner_type,
+        owner_id=owner_id,
+    )
+
+
+def _fact(owner_type: str = "user", owner_id: str = "user:u1", fact_id: str = "f1") -> Fact:
+    now = datetime.now(timezone.utc)
+    return Fact(
+        id=fact_id,
+        subject="user",
+        predicate="likes",
+        object="green tea",
+        created_at=now,
+        updated_at=now,
+        source_ids=["c1"],
+        meta={"domain": "user_profile"},
+        owner_type=owner_type,
+        owner_id=owner_id,
+        tenant_id="tenant-1",
+        salience=0.0,
+        confidence=0.9,
+    )
+
+
+def test_every_graph_write_scopes_each_node_and_edge() -> None:
+    """The ownership rule, applied to every write the graph layer issues:
+    no node or edge exists without tenant_id/owner_type/owner_id, and every
+    node is merged on its scope, so two owners can never share one."""
+    adapter = RecordingGraphAdapter()
+    core = GraphCore(adapter)
+    ep1, ep2, fact = _episode("user", "user:u1", "ep1"), _episode("user", "user:u1", "ep2"), _fact()
+
+    core.add_episode(ep1)
+    core.add_episode(ep2)
+    core.add_facts([fact])
+    core.link_episode_to_facts(ep1, [fact])
+    core.link_temporal(ep1, ep2)
+
+    writes = [cypher for cypher, _params in adapter.queries if "MERGE" in cypher]
+    assert len(writes) >= 5, "expected episode, fact, link and temporal writes"
+    problems = [p for cypher in writes for p in _scope_violations(cypher)]
+    assert problems == []
+
+
+def test_structural_fact_edges_carry_the_fact_domain() -> None:
+    """Domain-scoped walks filter every edge on `domain`; the Fact-to-Entity
+    edges must carry it or a domain-scoped walk can never reach a Fact."""
+    adapter = RecordingGraphAdapter()
+    GraphCore(adapter).add_facts([_fact()])
+
+    cypher, params = adapter.queries[0]
+    aliases = re.findall(r"MERGE \(f\)-\[(\w+):(?:SUBJECT|OBJECT|ASSERTS)", cypher)
+    assert len(aliases) == 3, "SUBJECT, OBJECT and ASSERTS must each be aliased so they can be scoped"
+    for rel_alias in aliases:
+        assert f"{rel_alias}.domain = $domain" in cypher
+    assert params["domain"] == "user_profile"
+
+
+def test_identical_fact_text_from_two_owners_is_keyed_apart() -> None:
+    """Same subject/predicate/object text from two owners must resolve to
+    distinct Entity nodes and edges: the merge key carries the owner."""
+    adapter = RecordingGraphAdapter()
+    core = GraphCore(adapter)
+    core.add_facts([_fact(owner_id="user:u1", fact_id="f-u1"), _fact(owner_id="user:u2", fact_id="f-u2")])
+
+    (cypher_a, params_a), (cypher_b, params_b) = adapter.queries
+    assert cypher_a == cypher_b
+    entity_keys = [key for _alias, label, key in _NODE_MERGE_RE.findall(cypher_a) if label == "Entity"]
+    assert entity_keys and all("owner_id: $owner_id" in key for key in entity_keys)
+    assert (params_a["subject"], params_a["object"]) == (params_b["subject"], params_b["object"])
+    assert params_a["owner_id"] != params_b["owner_id"]
+
+
+@pytest.mark.parametrize(
+    "owner_type,owner_id,label",
+    [("user", "user:u1", "User"), ("agent", "agent-alpha", "Agent"), ("workspace", "workspace:w1", "Workspace")],
+)
+def test_episode_anchor_node_is_labelled_for_its_owner_type(owner_type: str, owner_id: str, label: str) -> None:
+    adapter = RecordingGraphAdapter()
+    GraphCore(adapter).add_episode(_episode(owner_type, owner_id))
+
+    cypher, params = next((c, p) for c, p in adapter.queries if "HAS_EPISODE" in c)
+    anchors = [(alias, lbl) for alias, lbl, _key in _NODE_MERGE_RE.findall(cypher) if lbl != "Episode"]
+    assert anchors == [("u", label)]
+    assert params["tenant_id"] == "tenant-1"
+
+
+def test_neighbors_and_resolve_match_nodes_by_scope_not_id_alone() -> None:
+    """Once entities are per owner, several nodes share an id — the seed and
+    every returned node must be matched on scope as well."""
+    adapter = RecordingGraphAdapter()
+    core = GraphCore(adapter)
+    core.neighbors(user_id="user:u1", node_id="Caroline", tenant_id="tenant-1", owner_type="user", owner_id="user:u1")
+    core.resolve_nodes(tenant_id="tenant-1", owner_type="user", owner_id="user:u1", names=["caroline"])
+
+    neighbors_cypher, resolve_cypher = adapter.queries[0][0], adapter.queries[1][0]
+    for alias in ("n", "m"):
+        for field_name in _SCOPE_KEYS:
+            assert f"{alias}.{field_name} = ${field_name}" in neighbors_cypher
+    for field_name in _SCOPE_KEYS:
+        assert f"n.{field_name} = ${field_name}" in resolve_cypher
+
+
+def test_fact_ids_for_entities_is_owner_scoped_and_quarantine_filtered() -> None:
+    adapter = RecordingGraphAdapter()
+    adapter.next_results.append([{"fact_id": "f1"}, {"fact_id": "f2"}, {"fact_id": "f1"}])
+    core = GraphCore(adapter)
+
+    out = core.fact_ids_for_entities(
+        tenant_id="tenant-1", owner_type="user", owner_id="u1", entity_ids=["Caroline"], limit=5,
+    )
+
+    assert out == ["f1", "f2"]
+    cypher, params = adapter.queries[0]
+    for alias in ("e", "r", "f"):
+        for field_name in _SCOPE_KEYS:
+            assert f"{alias}.{field_name} = ${field_name}" in cypher
+    assert "f.quarantined_at IS NULL" in cypher
+    assert params["owner_id"] == "user:u1", "user owner ids are canonicalized like every other graph read"
+
+
+def test_scoped_clear_removes_every_node_the_owner_has() -> None:
+    """Entity and anchor nodes are removed with the owner's facts and
+    episodes — the clear is not limited to particular labels."""
+    from uma.common.maintenance import _clear_scoped_graph_materialization
+
+    adapter = RecordingGraphAdapter()
+    _clear_scoped_graph_materialization(
+        GraphCore(adapter), tenant_id="tenant-1", owner_type="user", owner_id="user:u1",
+    )
+
+    node_deletes = [c for c, _p in adapter.queries if "DETACH DELETE" in c]
+    assert any(re.search(r"MATCH \((\w+)\)\s+WHERE \1\.tenant_id = \$tenant_id", c) for c in node_deletes), (
+        "expected one label-agnostic delete of every node carrying the owner's scope"
+    )
+
+
+# ── ticket 30: a rebuild re-creates the episode-to-fact links ingest wrote ──
+
+
+@pytest.mark.asyncio
+async def test_rebuild_from_real_ingest_links_episodes_to_their_facts(tmp_path):
+    """Drives the production path end to end: `process_turn` writes episodes
+    and facts, then a rebuild from SQL alone must re-link them. Nothing here
+    hand-builds episode metadata — the join key has to come from ingest."""
+    from uma.common.identity import normalize_user_id
+    from uma.common.types.types_scope import DEFAULT_TENANT_ID
+
+    mem = await init_uma_for_tests(
+        tmp_path,
+        graph_backend="tests.helpers.graph_adapter:RecordingGraphAdapter",
+        graph_config={},
+    )
+    try:
+        for user_msg, reply in (("I like sushi.", "Good to know."), ("I also like pizza.", "Pizza is delicious.")):
+            await mem.process_turn(
+                user_id="user:u1",
+                user_msg=user_msg,
+                assistant_reply=reply,
+                session_id="session-a",
+                agent_id=AGENT_ID,
+                extra_meta={"source": "chat-ui"},
+            )
+        owner_id = normalize_user_id("user:u1")
+
+        episodes = await mem.episodic_core.list_episodes(DEFAULT_TENANT_ID, "user", owner_id)
+        facts = await mem.semantic_core.list_facts_for_owner(
+            tenant_id=DEFAULT_TENANT_ID, owner_type="user", owner_id=owner_id,
+        )
+        assert episodes and facts, "ingest must have produced episodes and facts"
+        episode_turns = {(ep.meta or {}).get("turn_id") for ep in episodes}
+        fact_turns = {(f.meta or {}).get("turn_id") for f in facts}
+        assert None not in episode_turns, "every turn episode must carry its turn_id"
+        assert fact_turns <= episode_turns, "each fact's turn must match a stored episode"
+        assert all((ep.meta or {}).get("caller") == {"source": "chat-ui"} for ep in episodes)
+
+        adapter: RecordingGraphAdapter = mem.graph_core.adapter
+        adapter.queries.clear()
+        report = await mem.rebuild_derived_indexes(
+            tenant_id=DEFAULT_TENANT_ID,
+            owner_type="user",
+            owner_id=owner_id,
+            include_episodic=False,
+            include_semantic=False,
+            include_procedural=False,
+        )
+
+        assert report.graph.status == "ok"
+        assert report.graph.episode_fact_links > 0
+        assert any("MENTIONS" in cypher for cypher, _params in adapter.queries)
+    finally:
+        mem.shutdown()
+
+
+# ── episode deletes reach the graph (retention, delete_episode, purge) ──────
+
+
+def test_delete_episodes_is_owner_scoped() -> None:
+    adapter = RecordingGraphAdapter()
+    adapter.next_results.append([{"deleted": 2}])
+    core = GraphCore(adapter)
+
+    deleted = core.delete_episodes(
+        tenant_id="tenant-1", owner_type="user", owner_id="u1", episode_ids=["ep-1", "ep-2"],
+    )
+
+    assert deleted == 2
+    cypher, params = adapter.queries[0]
+    assert "DETACH DELETE e" in cypher
+    for field_name in _SCOPE_KEYS:
+        assert f"e.{field_name} = ${field_name}" in cypher
+    assert params["episode_ids"] == ["ep-1", "ep-2"]
+    assert params["owner_id"] == "user:u1"
+
+
+def _episode_delete_ids(adapter: RecordingGraphAdapter) -> set[str]:
+    return {
+        eid
+        for cypher, params in adapter.queries
+        if "DETACH DELETE e" in cypher
+        for eid in (params or {}).get("episode_ids") or []
+    }
+
+
+@pytest.mark.asyncio
+async def test_retention_pruning_removes_pruned_episodes_from_the_graph(tmp_path):
+    """Retention deletes an owner's overflow episodes from SQL after every
+    store; the same episodes must leave the graph, or their nodes (summaries
+    included) outlive the data they were derived from."""
+    from uma.common.identity import normalize_user_id
+    from uma.common.types.types_scope import DEFAULT_TENANT_ID
+    from uma.memory.episodic.policies import EpisodicRetentionPolicy
+
+    mem = await init_uma_for_tests(
+        tmp_path,
+        graph_backend="tests.helpers.graph_adapter:RecordingGraphAdapter",
+        graph_config={},
+    )
+    try:
+        mem.episodic_core.policy = EpisodicRetentionPolicy(max_episodes=1)
+        for user_msg, reply in (("I like sushi.", "Good to know."), ("I also like pizza.", "Pizza is delicious.")):
+            await mem.process_turn(
+                user_id="user:u1", user_msg=user_msg, assistant_reply=reply,
+                session_id="session-a", agent_id=AGENT_ID,
+            )
+        adapter: RecordingGraphAdapter = mem.graph_core.adapter
+        written = {
+            (params or {}).get("episode_id")
+            for cypher, params in adapter.queries
+            if "HAS_EPISODE" in cypher
+        }
+        kept = {
+            ep.id for ep in await mem.episodic_core.list_episodes(
+                DEFAULT_TENANT_ID, "user", normalize_user_id("user:u1"),
+            )
+        }
+        pruned = written - kept
+        assert len(written) == 2 and len(kept) == 1 and len(pruned) == 1
+        assert pruned <= _episode_delete_ids(adapter)
+        assert not (kept & _episode_delete_ids(adapter)), "a retained episode must stay in the graph"
+    finally:
+        mem.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_delete_episode_removes_the_episode_from_the_graph(tmp_path):
+    """`EpisodicCore.delete_episode` is the path consolidation deletes through."""
+    from uma.common.identity import normalize_user_id
+    from uma.common.types.types_scope import DEFAULT_TENANT_ID
+
+    mem = await init_uma_for_tests(
+        tmp_path,
+        graph_backend="tests.helpers.graph_adapter:RecordingGraphAdapter",
+        graph_config={},
+    )
+    try:
+        await mem.process_turn(
+            user_id="user:u1", user_msg="I like sushi.", assistant_reply="Good to know.",
+            session_id="session-a", agent_id=AGENT_ID,
+        )
+        owner_id = normalize_user_id("user:u1")
+        (episode,) = await mem.episodic_core.list_episodes(DEFAULT_TENANT_ID, "user", owner_id)
+        adapter: RecordingGraphAdapter = mem.graph_core.adapter
+
+        ok = await mem.episodic_core.delete_episode(
+            episode.id, tenant_id=DEFAULT_TENANT_ID, owner_type="user", owner_id=owner_id,
+        )
+
+        assert ok is True
+        assert episode.id in _episode_delete_ids(adapter)
+    finally:
+        mem.shutdown()

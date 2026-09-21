@@ -29,6 +29,11 @@ from uma.common.identity import normalize_user_id
 
 logger = logging.getLogger(__name__)
 
+# Episodes hang off an anchor node for their owner. Cypher labels cannot be
+# bound as parameters, so the label comes from this closed mapping, keyed by
+# an owner type that `_graph_scope_from_object` has already validated.
+_ANCHOR_LABELS = {"user": "User", "agent": "Agent", "workspace": "Workspace"}
+
 
 def _graph_scope_from_object(object: Any) -> tuple[str, str, str, str | None]:
     tenant_id = str(getattr(object, "tenant_id", None) or DEFAULT_TENANT_ID)
@@ -54,7 +59,7 @@ class GraphUpdater:
 
     Responsibilities
     ----------------
-    - Insert Episode nodes and link them to User (HAS_EPISODE)
+    - Insert Episode nodes and link them to their owner's anchor node (HAS_EPISODE)
     - Insert Fact triplets with full provenance (via GraphCore.insert_fact_triplet)
     - Link Episodes ↔ Facts (MENTIONS) WITH ownership
     - Link Episode → Entity (predicate edges) WITH ownership
@@ -137,26 +142,24 @@ class GraphUpdater:
 
     def add_episode_node(self, episode: Any) -> None:
         """
-        Insert an Episode node and link it to its owner User.
+        Insert an Episode node and link it to its owner's anchor node.
 
         Graph shape:
-            (User)-[:HAS_EPISODE {owner_type, owner_id, timestamp}]->(Episode)
+            (User|Agent|Workspace)-[:HAS_EPISODE {owner_type, owner_id, timestamp}]->(Episode)
         """
         try:
             if not hasattr(episode, "id") or not hasattr(episode, "timestamp"):
                 raise ValueError("Invalid episode object")
 
             tenant_id, owner_type, owner_id, scope_model_version = _graph_scope_from_object(episode)
+            anchor_label = _ANCHOR_LABELS[owner_type]
 
             self.graph_core.adapter.run_query(
-                """
-                MERGE (u:User {id: $user_id})
-                MERGE (e:Episode {id: $episode_id})
+                f"""
+                MERGE (u:{anchor_label} {{id: $owner_id, tenant_id: $tenant_id, owner_type: $owner_type, owner_id: $owner_id}})
+                MERGE (e:Episode {{id: $episode_id, tenant_id: $tenant_id, owner_type: $owner_type, owner_id: $owner_id}})
                 SET e.summary = $summary,
                     e.timestamp = $timestamp,
-                    e.tenant_id = $tenant_id,
-                    e.owner_type = $owner_type,
-                    e.owner_id = $owner_id,
                     e.scope_model_version = $scope_model_version
                 MERGE (u)-[r:HAS_EPISODE]->(e)
                 SET r.timestamp = $timestamp,
@@ -166,7 +169,6 @@ class GraphUpdater:
                     r.scope_model_version = $scope_model_version
                 """,
                 {
-                    "user_id": owner_id,
                     "episode_id": str(episode.id),
                     "summary": getattr(episode, "summary", None),
                     "timestamp": episode.timestamp.isoformat(),
@@ -333,8 +335,8 @@ class GraphUpdater:
                 # Episode → Fact (MENTIONS)
                 self.graph_core.run_query(
                     """
-                    MATCH (e:Episode {id: $ep_id})
-                    MATCH (f:Fact {id: $fact_id})
+                    MATCH (e:Episode {id: $ep_id, tenant_id: $tenant_id, owner_type: $owner_type, owner_id: $owner_id})
+                    MATCH (f:Fact {id: $fact_id, tenant_id: $tenant_id, owner_type: $owner_type, owner_id: $owner_id})
                     MERGE (e)-[r:MENTIONS]->(f)
                     SET r.tenant_id = $tenant_id,
                         r.owner_type = $owner_type,
@@ -358,8 +360,8 @@ class GraphUpdater:
 
                 self.graph_core.run_query(
                     f"""
-                    MATCH (e:Episode {{id: $ep_id}})
-                    MERGE (o:Entity {{id: $object}})
+                    MATCH (e:Episode {{id: $ep_id, tenant_id: $tenant_id, owner_type: $owner_type, owner_id: $owner_id}})
+                    MERGE (o:Entity {{id: $object, tenant_id: $tenant_id, owner_type: $owner_type, owner_id: $owner_id}})
                     MERGE (e)-[r:{predicate}]->(o)
                     SET r.tenant_id = $tenant_id,
                         r.owner_type = $owner_type,
@@ -397,8 +399,8 @@ class GraphUpdater:
 
             self.graph_core.adapter.run_query(
                 """
-                MATCH (a:Episode {id: $a})
-                MATCH (b:Episode {id: $b})
+                MATCH (a:Episode {id: $a, tenant_id: $tenant_id, owner_type: $owner_type, owner_id: $owner_id})
+                MATCH (b:Episode {id: $b, tenant_id: $tenant_id, owner_type: $owner_type, owner_id: $owner_id})
                 MERGE (a)-[p:PRECEDES]->(b)
                 SET p.tenant_id = $tenant_id,
                     p.owner_type = $owner_type,

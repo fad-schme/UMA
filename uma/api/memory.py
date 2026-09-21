@@ -1089,6 +1089,10 @@ class UMAMemory:
         # --------------------------------------------------------------
         try:
             self.graph_core = GraphCore(adapter)
+            # Core subsystems start before the graph; hand the episodic core
+            # the graph now so its deletes reach the derived graph too.
+            if self.episodic_core is not None:
+                self.episodic_core.graph_core = self.graph_core
             logger.info(
                 "GraphCore initialized (backend=%s, uri=%s).",
                 backend,

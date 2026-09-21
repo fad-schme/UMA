@@ -425,23 +425,16 @@ def _clear_scoped_graph_materialization(
         """,
         params,
     )
+    # Every graph node carries its owner's scope (Fact, Episode, Entity and
+    # the owner anchor alike), so one label-agnostic delete removes all of it
+    # and nothing belonging to any other owner.
     graph.run_query(
         """
-        MATCH (f:Fact)
-        WHERE f.tenant_id = $tenant_id
-          AND f.owner_type = $owner_type
-          AND f.owner_id = $owner_id
-        DETACH DELETE f
-        """,
-        params,
-    )
-    graph.run_query(
-        """
-        MATCH (e:Episode)
-        WHERE e.tenant_id = $tenant_id
-          AND e.owner_type = $owner_type
-          AND e.owner_id = $owner_id
-        DETACH DELETE e
+        MATCH (n)
+        WHERE n.tenant_id = $tenant_id
+          AND n.owner_type = $owner_type
+          AND n.owner_id = $owner_id
+        DETACH DELETE n
         """,
         params,
     )

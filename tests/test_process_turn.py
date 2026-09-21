@@ -470,7 +470,8 @@ async def test_process_turn_is_idempotent_by_turn_id(uma_memory):
         agent_id=AGENT_ID,
     )
 
-    # Episodes are appended per call even when the derived turn_id is identical.
+    # A replay of the same turn (same user, session, message and reply derives
+    # the same turn_id) stores one episode, just as it stores one set of facts.
     conn = mem._stores["episodic"]._conn()
     try:
         rows = mem._stores["episodic"]._query_all(
@@ -479,7 +480,7 @@ async def test_process_turn_is_idempotent_by_turn_id(uma_memory):
             params=["user", "user:u1"],
             log_context="test_episode_count",
         )
-        assert int(rows[0]["n"]) == 2
+        assert int(rows[0]["n"]) == 1
     finally:
         conn.close()
 

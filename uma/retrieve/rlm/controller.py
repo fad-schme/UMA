@@ -31,7 +31,7 @@ from ..policy import RetrievalPolicy, should_stop
 from uma.common.dedupe import dedupe_by_id
 from uma.memory.chunk.core import merge_chunks_with_precedence, partition_chunks_by_route
 from uma.memory.semantic.query_pruner import prune_facts_for_query, describe_fact
-from .evidence import expand_evidence_chunks_from_facts, expand_facts_from_graph
+from .evidence import expand_evidence_chunks_from_facts, expand_from_graph
 
 
 # CR3: severities that cause the controller and downstream consumers to
@@ -849,17 +849,17 @@ class RLMController:
         (which reads `pack.facts` as a whole) picks up their source chunks
         for free.
         """
-        await self._expand_facts_from_graph(request=request, pack=pack)
+        await self._expand_from_graph(request=request, pack=pack)
         await self._prune_facts_with_llm(pack)
         await self._expand_evidence_chunks_from_facts(request=request, pack=pack)
         self._rebuild_chunk_buckets(pack)
 
-    async def _expand_facts_from_graph(
+    async def _expand_from_graph(
         self,
         request: RetrievalRequest,
         pack: ContextPack,
     ) -> None:
-        await expand_facts_from_graph(
+        await expand_from_graph(
             env=self.env,
             request=request,
             pack=pack,

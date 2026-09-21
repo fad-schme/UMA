@@ -693,6 +693,7 @@ class MemoryPipeline:
                 working_memory_context=wm_context,
                 turn_context=turn_context,
                 extra_meta=extra_meta,
+                turn_id=turn_id,
             )
         except Exception:
             logger.exception("EpisodicCore.store_episode failed.")

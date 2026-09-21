@@ -310,6 +310,45 @@ class UMAMemoryEnvironment:
             logger.exception("Environment.fetch_facts_by_ids failed")
             raise
 
+    async def fetch_episodes_by_ids(
+        self,
+        request: RetrievalRequest,
+        ids: list[str],
+        *,
+        owner_type: str,
+        owner_id: Optional[str] = None,
+    ) -> list[Any]:
+        """Fetch episodes by id within one owner's scope (quarantine-filtered by the store).
+
+        Episodes are cross-session (`session_id` is provenance only), so this
+        returns what the store returns, exactly like `search_episodic` — no
+        session narrowing.
+        """
+        episodic_core = getattr(self._memory, "episodic_core", None)
+        if episodic_core is None:
+            logger.error("Environment.fetch_episodes_by_ids: episodic_core is None")
+            raise RuntimeError("Environment.fetch_episodes_by_ids: episodic_core is None")
+        if not ids:
+            return []
+        try:
+            self._require_request(request)
+            owner_type, resolved_owner_id = self._require_owner_scope(
+                owner_type=owner_type,
+                owner_id=owner_id,
+                context_label="Environment.fetch_episodes_by_ids",
+            )
+            episodes = await episodic_core.fetch_by_ids(
+                ids,
+                tenant_id=request.context.tenant_id,
+                owner_type=owner_type,
+                owner_id=resolved_owner_id,
+            )
+            logger.debug("Environment.fetch_episodes_by_ids: returned %d", len(episodes or []))
+            return list(episodes or [])
+        except Exception:
+            logger.exception("Environment.fetch_episodes_by_ids failed")
+            raise
+
 
     async def fetch_more_facts(
         self,
@@ -510,6 +549,39 @@ class UMAMemoryEnvironment:
             raise
 
         return list(rows or [])[:limit_i]
+
+    async def graph_fact_ids_for_entities(
+        self,
+        request: RetrievalRequest,
+        *,
+        entity_ids: list[str],
+        owner_type: str,
+        owner_id: Optional[str] = None,
+        limit: int = 30,
+    ) -> list[str]:
+        """Owner-scoped ids of the facts that name any of `entity_ids`."""
+        graph_core = getattr(self._memory, "graph_core", None)
+        if graph_core is None:
+            logger.error("Environment.graph_fact_ids_for_entities: graph_core is None")
+            raise RuntimeError("Environment.graph_fact_ids_for_entities: graph_core is None")
+        if not entity_ids:
+            return []
+        self._require_request(request)
+        owner_type, resolved_owner_id = self._require_owner_scope(
+            owner_type=owner_type,
+            owner_id=owner_id,
+            context_label="Environment.graph_fact_ids_for_entities",
+        )
+        return list(
+            graph_core.fact_ids_for_entities(
+                tenant_id=request.context.tenant_id,
+                owner_type=owner_type,
+                owner_id=resolved_owner_id,
+                entity_ids=list(entity_ids),
+                limit=limit,
+            )
+            or []
+        )
 
     async def graph_neighbors(
         self,
