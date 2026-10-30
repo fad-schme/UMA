@@ -161,6 +161,33 @@ async def expand_from_graph(
     return list(facts) + list(episodes)
 
 
+def _interleave_graph_routed(facts: list[Any]) -> list[Any]:
+    """Order facts so graph-routed ones share the evidence budget fairly.
+
+    `expand_from_graph` appends routed facts after everything the RLM loop
+    found, and evidence expansion spends a fixed `max_evidence_chunks` budget
+    first-come, so appended facts were starved of their own source chunks.
+    Alternate between the two groups, each in its own order. With no routed
+    facts the order is unchanged.
+    """
+
+    def _routed(f: Any) -> bool:
+        meta = f.get("meta") if isinstance(f, dict) else getattr(f, "meta", None)
+        return isinstance(meta, dict) and meta.get("retrieval_route") == "graph_expand"
+
+    found = [f for f in facts if not _routed(f)]
+    routed = [f for f in facts if _routed(f)]
+    if not routed:
+        return list(facts)
+    out: list[Any] = []
+    for i in range(max(len(found), len(routed))):
+        if i < len(found):
+            out.append(found[i])
+        if i < len(routed):
+            out.append(routed[i])
+    return out
+
+
 async def expand_evidence_chunks_from_facts(
     *,
     env: Any,
@@ -221,7 +248,7 @@ async def expand_evidence_chunks_from_facts(
     cited_pairs: list[tuple[tuple[str, str], str]] = []
     seen_global: set[str] = set()
 
-    for f in pack.facts:
+    for f in _interleave_graph_routed(pack.facts):
         f_owner_type, f_owner_id = _get_fact_owner(f)
         if not f_owner_type or not f_owner_id:
             logger.debug("expand_evidence_chunks_from_facts: skipped fact without explicit owner scope")

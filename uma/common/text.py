@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 import logging
 from typing import Iterable
 
@@ -163,6 +164,61 @@ def normalize_query_text(text: str) -> str:
     # for consistent substring matching against extracted keywords/phrases.
     cleaned = re.sub(r"[^a-z0-9\\-]+", " ", lowered)
     return re.sub(r"\s+", " ", cleaned).strip()
+
+
+# ------------------------- Query-term matching -------------------------
+
+_MIN_STEM_LEN = 3
+
+
+@lru_cache(maxsize=1024)
+def _match_tokens(text: str) -> frozenset[str]:
+    """Whole tokens of `text`, plus the parts of hyphenated compounds.
+
+    "card-only" contributes both `card-only` and `card`, so a query for either
+    matches, while a longer unrelated word ("cardinal") contributes nothing for
+    `card`.
+    """
+    tokens: set[str] = set()
+    for tok in normalize_query_text(text).split():
+        tok = tok.strip("-")
+        if not tok:
+            continue
+        tokens.add(tok)
+        if "-" in tok:
+            tokens.update(part for part in tok.split("-") if part)
+    return frozenset(tokens)
+
+
+def term_in_text(term: str, text: str) -> bool:
+    """Whether `term` genuinely occurs in `text` (case-insensitive).
+
+    A term is a match only as a whole word: the word itself, its simple plural
+    (`s` / `es`, in either direction), or a part of a hyphenated compound.
+    Being a substring of a longer word does not count — `far` is not in "fare",
+    `sent` is not in "consent". Multi-word terms must match as a phrase on word
+    boundaries, the last word tolerating a plural.
+
+    Used by the reranker. The chunk query-term filter (`text_matches_query_terms`)
+    deliberately keeps its own substring rule for now: it decides which
+    candidates survive at all, so tightening it changes recall, not just order
+    (retrieval-ranking-gap ticket 35).
+    """
+    term = (term or "").strip().lower()
+    if not term or not text:
+        return False
+    if " " in term:
+        words = [re.escape(w) for w in term.split()]
+        pattern = r"(?<![a-z0-9-])" + r"\s+".join(words) + r"(?:s|es)?(?![a-z0-9-])"
+        return re.search(pattern, normalize_query_text(text)) is not None
+    tokens = _match_tokens(text)
+    if term in tokens or term + "s" in tokens or term + "es" in tokens:
+        return True
+    for suffix in ("es", "s"):
+        if term.endswith(suffix) and len(term) - len(suffix) >= _MIN_STEM_LEN:
+            if term[: -len(suffix)] in tokens:
+                return True
+    return False
 
 
 # ------------------------- Keyword / phrase extraction -------------------------

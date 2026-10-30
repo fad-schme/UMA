@@ -22,7 +22,7 @@ from typing import Any, Iterable, Optional, Sequence
 import numpy as np
 
 from uma.common.accessors import get_attr_or_key
-from uma.common.text import extract_keywords_and_phrases, build_fact_embedding_text, build_query_term_set
+from uma.common.text import extract_keywords_and_phrases, build_fact_embedding_text, build_query_term_set, term_in_text
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +192,7 @@ def compute_rerank_score(
     term_hits = 0
     phrase_hits = 0
     for t in terms or []:
-        if t and t in text:
+        if t and term_in_text(t, text):
             term_hits += 1
             if " " in t:
                 phrase_hits += 1

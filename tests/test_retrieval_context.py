@@ -870,6 +870,53 @@ async def test_evidence_expansion_fetches_chunks_by_source_fact_owner_scope() ->
     assert {chunk.owner_id for chunk in chunks} == {"agent:alpha", "user:u1"}
 
 
+def _evidence_fact(fact_id: str, chunk_id: str, *, routed: bool = False) -> dict:
+    meta = {"retrieval_route": "graph_expand"} if routed else {}
+    return {"id": fact_id, "owner_type": "user", "owner_id": "user:u1", "source_ids": [chunk_id], "meta": meta}
+
+
+@pytest.mark.asyncio
+async def test_evidence_expansion_gives_graph_routed_facts_a_share_of_the_cap() -> None:
+    """Ticket 32: routed facts are merged after the facts the RLM loop found,
+    so a first-come evidence cap filled by earlier facts starved them. Both
+    groups must get a fair share of `max_evidence_chunks` (6 here)."""
+    env = _EvidenceEnv()
+    request = RetrievalRequest.from_runtime_context(
+        RuntimeContext(tenant_id="tenant-1", agent_id="agent:alpha", request_id="req-fair", user_id="user:u1")
+    )
+    pack = ContextPack(
+        user_id="user:u1",
+        query_text="q",
+        owner_type="user",
+        owner_id="user:u1",
+        facts=[_evidence_fact(f"found-{i}", f"found-chunk-{i}") for i in range(8)]
+        + [_evidence_fact(f"routed-{i}", f"routed-chunk-{i}", routed=True) for i in range(3)],
+    )
+
+    chunks = await expand_evidence_chunks_from_facts(env=env, request=request, pack=pack, max_items_per_type=30)
+
+    fetched = {c.id for c in chunks}
+    assert len(fetched) == 6
+    assert {f"user:routed-chunk-{i}" for i in range(3)} <= fetched, "every routed fact's chunk fits in its share"
+    assert {f"user:found-chunk-{i}" for i in range(3)} <= fetched, "found facts keep their earliest slots"
+
+
+@pytest.mark.asyncio
+async def test_evidence_expansion_order_is_unchanged_without_routed_facts() -> None:
+    env = _EvidenceEnv()
+    request = RetrievalRequest.from_runtime_context(
+        RuntimeContext(tenant_id="tenant-1", agent_id="agent:alpha", request_id="req-plain", user_id="user:u1")
+    )
+    pack = ContextPack(
+        user_id="user:u1", query_text="q", owner_type="user", owner_id="user:u1",
+        facts=[_evidence_fact(f"f-{i}", f"c-{i}") for i in range(8)],
+    )
+
+    await expand_evidence_chunks_from_facts(env=env, request=request, pack=pack, max_items_per_type=30)
+
+    assert env.calls == [("user", "user:u1", [f"c-{i}" for i in range(6)])]
+
+
 class _ChunkTrustFilterRanker:
     """Stub standing in for `Ranker.rank_chunks`: drops anything named 'low-trust'.
 

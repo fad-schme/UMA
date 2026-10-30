@@ -49,6 +49,7 @@ locomo/runs/
 # Coding-agent instructions belong in the parent working folder, never here.
 CLAUDE.md
 AGENTS.md
+ROADMAP.md
 .codex/
 .claude/settings.local.json
 .claude/skills/dev/

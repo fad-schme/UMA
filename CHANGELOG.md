@@ -260,6 +260,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `.claude/skills/lanes.md` rather than left implicit.
 
 ### Fixed
+- **Chunk lexical scores saturated at the reranker.** `lexical_search` returns
+  raw BM25, which is unbounded, and the reranker clamps its lexical input to 1.0,
+  so every chunk whose score reached 1 tied regardless of how much higher it
+  was. Chunk `lexical_score` is now scaled to the best lexical hit of the same
+  query's pool (order preserved, no new constant), so it stays a usable [0, 1]
+  signal. Chunks without a usable score keep the 0.2 fallback; facts are
+  unchanged.
+- **The reranker credited query terms for words that merely contain them.**
+  Term overlap in `compute_rerank_score` was a plain substring test, so `far`
+  scored a hit in "fare", `sent` in "consent", `where` in "anywhere". A term now
+  matches only as a whole word, its simple plural (`s` / `es`, either
+  direction), or a part of a hyphenated compound; multi-word terms match as a
+  phrase on word boundaries. The chunk query-term filter keeps its previous
+  matching for now, because it decides which candidates survive at all.
+- **Graph-routed facts lost the evidence budget.** Routed facts were queued
+  after every fact the retrieval loop found, and evidence expansion spends a
+  fixed `max_evidence_chunks` first-come, so their source chunks were
+  fetched far less often (44% versus 76% for other facts in a conv-26 run).
+  Evidence expansion now alternates between found and graph-routed facts;
+  order is unchanged when nothing was routed.
 - **Deleted episodes stayed in the graph.** Retention pruning (which runs
   after every stored episode and caps an owner at `max_episodes`),
   `EpisodicCore.delete_episode` (used by consolidation) and

@@ -666,6 +666,19 @@ class ChunkCore:
 
     def _tag_retrieval_metadata(self, chunks: list[Chunk], lexical_ids: set[str]) -> None:
         if lexical_ids:
+            # `lexical_confidence` is raw BM25: unbounded, and comparable only
+            # within one query. The reranker clamps its lexical input to 1.0, so
+            # raw scores tied at the clamp regardless of how far above 1 they
+            # were. Scale to the best lexical hit of this pool instead (order
+            # preserved, no constant), so `lexical_score` is a [0, 1] signal.
+            best_raw = max(
+                (
+                    float((getattr(ch, "meta", None) or {}).get("lexical_confidence") or 0.0)
+                    for ch in chunks
+                    if str(ch.id or "") in lexical_ids
+                ),
+                default=0.0,
+            )
             for ch in chunks:
                 meta = getattr(ch, "meta", None) or {}
                 if not isinstance(meta, dict):
@@ -674,7 +687,8 @@ class ChunkCore:
                 meta.setdefault("retrieval_stage", "search")
                 if str(ch.id or "") in lexical_ids:
                     meta.setdefault("retrieval_method", "lexical")
-                    meta.setdefault("lexical_score", float(meta.get("lexical_confidence", 0.2) or 0.2))
+                    raw = float(meta.get("lexical_confidence") or 0.0)
+                    meta.setdefault("lexical_score", raw / best_raw if raw > 0.0 and best_raw > 0.0 else 0.2)
                 else:
                     meta.setdefault("retrieval_method", "vector")
                 ch.meta = meta
